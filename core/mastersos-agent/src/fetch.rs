@@ -568,7 +568,9 @@ impl Fetcher {
 
     /// `POST /v1/status`. With `cred` the report also carries the device headers, so the server
     /// can tell it from one sent with the school's token alone; they are left off (the report
-    /// still goes) where the device secret may not travel ([`Fetcher::secret_transport`]).
+    /// still goes) where the device secret may not travel ([`Fetcher::secret_transport`]). With
+    /// the headers the request goes through [`Fetcher::device_request`], which never follows a
+    /// redirect, so the secret cannot be carried to another address.
     pub async fn report(
         &self,
         r: &StatusReport,
@@ -576,15 +578,15 @@ impl Fetcher {
         lab: bool,
     ) -> Result<()> {
         let used = self.current_token();
-        let mut req = self.auth_as(
-            self.client.post(format!("{}/v1/status", self.base)).json(r),
-            &used,
-        );
-        if let Some(cred) = cred.filter(|_| self.secret_transport(lab).is_ok()) {
-            req = req
-                .header(DEVICE_HEADER, &cred.device_id)
-                .header(DEVICE_SECRET_HEADER, &cred.secret);
-        }
+        let req = match cred.filter(|_| self.secret_transport(lab).is_ok()) {
+            Some(cred) => self
+                .device_request(reqwest::Method::POST, "/v1/status", cred, &used, lab)?
+                .json(r),
+            None => self.auth_as(
+                self.client.post(format!("{}/v1/status", self.base)).json(r),
+                &used,
+            ),
+        };
         let resp = req.send().await.context("请求 /v1/status 失败")?;
         self.observe(&resp, &used);
         if !resp.status().is_success() {
