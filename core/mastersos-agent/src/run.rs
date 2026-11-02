@@ -1323,7 +1323,9 @@ impl Agent {
         }
         self.last_report = Instant::now();
         let r = self.status_report();
-        let sent = self.fetcher.report(&r).await;
+        let lab = crate::luks::image_is_lab(&self.cfg.root);
+        let cred = self.device_cred();
+        let sent = self.fetcher.report(&r, cred.as_ref(), lab).await;
         if let Err(e) = &sent {
             log::warn!("回报状态失败：{e:#}");
         }
