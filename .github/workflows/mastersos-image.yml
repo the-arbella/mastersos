@@ -3,11 +3,6 @@ on:
   # By hand only
   workflow_dispatch:
     inputs:
-      profile:
-        description: Key set
-        type: choice
-        options: [lab, release]
-        default: lab
       version:
         description: Image version such as 20261102.1; empty means today plus the run number
         required: false
@@ -24,31 +19,20 @@ concurrency:
 
 jobs:
   build:
-    # Lab images hold a test account and stay internal. Release images are built in the public repository: free runners, and
-    # the release environment there needs the owner's approval, a gate private repositories do not get on the free plan.
-    if: >-
-      (inputs.profile == 'lab' && github.repository == 'the-arbella/mastersos-internal') ||
-      (inputs.profile == 'release' && github.repository == 'the-arbella/mastersos')
-    environment: ${{ inputs.profile == 'release' && 'release' || '' }}
+    # The release environment needs the owner's approval and only allows master
+    if: github.repository == 'the-arbella/mastersos'
+    environment: release
     runs-on: ubuntu-26.04
     timeout-minutes: 300
     env:
-      PROFILE: ${{ inputs.profile || 'lab' }}
+      PROFILE: release
     steps:
-      - name: Release builds only from master, by hand, by the owner
-        if: env.PROFILE == 'release' && (github.ref != 'refs/heads/master' || github.event_name != 'workflow_dispatch' || github.triggering_actor != 'dawei101')
-        run: |
-          echo "release images are built from master, by hand, by the owner" >&2
-          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Set up the runner
-        env:
-          MASTERSOS_LAB_KEYS_B64: ${{ env.PROFILE == 'lab' && secrets.MASTERSOS_LAB_KEYS_B64 || '' }}
         run: bash image/ci-runner-setup.sh "$PROFILE"
       - name: Load the release keys
-        if: env.PROFILE == 'release'
         env:
           MASTERSOS_RELEASE_KEYS_AGE_B64: ${{ secrets.MASTERSOS_RELEASE_KEYS_AGE_B64 }}
           MASTERSOS_AGE_PASSPHRASE: ${{ secrets.MASTERSOS_AGE_PASSPHRASE }}
@@ -69,11 +53,9 @@ jobs:
             [[ $INPUT_SNAPSHOT =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || { echo "bad snapshot" >&2; exit 1; }
             export MASTERSOS_SNAPSHOT=$INPUT_SNAPSHOT
           fi
-          args=()
-          if [ "$PROFILE" = lab ]; then args=(--profile lab); fi
           # snapshot.ubuntu.com answers 5xx now and then; a retry keeps mkosi's package cache and only fetches what is missing
           for attempt in 1 2 3; do
-            if image/build.sh "$version" "${args[@]}"; then exit 0; fi
+            if image/build.sh "$version"; then exit 0; fi
             echo "::warning::build attempt $attempt failed"
             sleep 120
           done
@@ -81,12 +63,9 @@ jobs:
       - name: Scan the output for private keys
         id: leak_scan
         if: always()
-        run: |
-          keys=/run/mastersos-release-keys
-          if [ "$PROFILE" = lab ]; then keys=$HOME/mastersos-keys/lab; fi
-          python3 -I image/key-leak-check.py "$keys" image/mkosi.output
+        run: python3 -I image/key-leak-check.py /run/mastersos-release-keys image/mkosi.output
       - name: Wipe the release keys
-        if: always() && env.PROFILE == 'release'
+        if: always()
         run: image/keys-unload.sh
       # A release asset is at most 2 GiB; a bigger file goes up in parts, `cat <file>.part-* > <file>` restores it
       - name: Publish to a GitHub Release

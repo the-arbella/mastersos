@@ -11,6 +11,24 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Nothing private may land here: this repository is the only copy of the system source, with no export step before it
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: python3 -I tools/check-private.py
+        env:
+          MASTERSOS_DENYLIST: ${{ secrets.MASTERSOS_DENYLIST }}
+      - name: gitleaks
+        run: |
+          curl -fsSLO https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks_8.30.1_linux_x64.tar.gz" | sha256sum -c
+          tar -xzf gitleaks_8.30.1_linux_x64.tar.gz gitleaks
+          ./gitleaks dir . --redact --no-banner --exit-code 1 --max-target-megabytes 5
+
   core:
     # The public repository has the faster runners; the test host runs this suite for the internal one
     if: github.repository == 'the-arbella/mastersos' || github.event_name == 'workflow_dispatch'
