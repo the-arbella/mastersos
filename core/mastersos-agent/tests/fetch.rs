@@ -174,6 +174,40 @@ async fn report_carries_device_headers_where_the_secret_may_travel() {
     assert_eq!(h(1, "x-mastersos-device-secret"), None);
 }
 
+/// A report carrying the device secret never follows a redirect: the secret stays with the
+/// configured server.
+#[tokio::test]
+async fn report_with_device_headers_does_not_follow_redirects() {
+    let srv = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/status"))
+        .respond_with(ResponseTemplate::new(307).insert_header("location", "/elsewhere"))
+        .mount(&srv)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/elsewhere"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&srv)
+        .await;
+    let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
+    let cred = mastersos_agent::fetch::DeviceCred {
+        device_id: "d".into(),
+        secret: "s3cret".into(),
+    };
+    let r: StatusReport = serde_json::from_value(serde_json::json!({
+        "device_id": "d",
+        "agent_version": "0.1.0",
+        "group": "default",
+        "group_source": "default",
+        "locked": false,
+        "stale": false,
+        "results": [],
+    }))
+    .unwrap();
+    assert!(f.report(&r, Some(&cred), true).await.is_err());
+}
+
 #[tokio::test]
 async fn report_rejection_is_error() {
     let srv = MockServer::start().await;
