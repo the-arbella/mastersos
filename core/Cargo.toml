@@ -29,7 +29,7 @@ zeroize = "1"
 bech32 = "0.12"
 # 服务端
 axum = "0.8"
-sea-orm = { version = "1", features = ["sqlx-postgres", "runtime-tokio-rustls", "macros"] }
+sea-orm = { version = "2", features = ["sqlx-postgres", "runtime-tokio-rustls", "macros"] }
 sea-orm-migration = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "signal", "fs", "process"] }
 similar = "2"
