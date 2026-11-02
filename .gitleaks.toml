@@ -1,0 +1,14 @@
+# Reviewed false positives: public test vectors, PEM header strings in code and docs, measured hashes, Flathub's public key.
+[extend]
+useDefault = true
+
+[allowlist]
+paths = [
+  '''core/mastersos-bundle/testdata/kit-vectors\.json''',
+  '''core/mastersos-sign/src/lib\.rs''',
+  '''core/mastersos-bundle/docs/manifest-spec\.md''',
+  '''skills/mastersos-admin/reference/settings-reference\.md''',
+  '''image/tests/fixtures/uki-v1-measured\.json''',
+  '''image/mkosi\.extra/usr/share/mastersos/flathub\.flatpakrepo''',
+  '''gitleaks.*''',
+]
