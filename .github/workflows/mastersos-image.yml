@@ -1,6 +1,6 @@
 name: mastersos-image
 on:
-  # By hand only: a build costs about an hour of the free plan's Actions minutes
+  # By hand only
   workflow_dispatch:
     inputs:
       profile:
@@ -24,14 +24,18 @@ concurrency:
 
 jobs:
   build:
-    if: github.repository == 'the-arbella/mastersos-internal'
+    # Lab images hold a test account and stay internal. Release images are built in the public repository: free runners, and
+    # the release environment there needs the owner's approval, a gate private repositories do not get on the free plan.
+    if: >-
+      (inputs.profile == 'lab' && github.repository == 'the-arbella/mastersos-internal') ||
+      (inputs.profile == 'release' && github.repository == 'the-arbella/mastersos')
+    environment: ${{ inputs.profile == 'release' && 'release' || '' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 300
     env:
       PROFILE: ${{ inputs.profile || 'lab' }}
     steps:
-      # GitHub Free has no approval gate for a private repository; this guard is the whole protection (ruled 2026-11-02)
-      - name: Release builds only from master, by hand, by the owner
+            - name: Release builds only from master, by hand, by the owner
         if: env.PROFILE == 'release' && (github.ref != 'refs/heads/master' || github.event_name != 'workflow_dispatch' || github.triggering_actor != 'dawei101')
         run: |
           echo "release images are built from master, by hand, by the owner" >&2

@@ -346,7 +346,7 @@ initrd 另有 `mkosi.initrd.conf/` 里的 `cryptsetup-bin`（`veritysetup`）。
 
 ## 构建（构建机或手动触发的 GitHub Actions）
 
-`.github/workflows/mastersos-image.yml` 只在内部库手动触发，在托管 runner 上跑同一份 `build.sh`，`profile=lab` 用 Secret `MASTERSOS_LAB_KEYS_B64`。`profile=release` 只能由所有者在 master 手动触发，用 `MASTERSOS_RELEASE_KEYS_AGE_B64` 与 `MASTERSOS_AGE_PASSPHRASE`，产物发到内部库的 GitHub Release（`image-<profile>-<版本>`，超过 2 GiB 的文件分段）。
+`.github/workflows/mastersos-image.yml` 手动触发，在托管 runner 上跑同一份 `build.sh`。`profile=lab` 只在内部库，用 Secret `MASTERSOS_LAB_KEYS_B64`。`profile=release` 只在公开库，经环境 `release` 由所有者审批，用环境里的 `MASTERSOS_RELEASE_KEYS_AGE_B64` 与 `MASTERSOS_AGE_PASSPHRASE`。产物发到所在仓库的 GitHub Release（`image-<profile>-<版本>`，超过 2 GiB 的文件分段）。
 
 > 2026-10-30：家里 PVE 的构建机 VM 161/164 与试验 VM 已删，构建机改在学校的 lab-pve 上重建（见仓库根 `CLAUDE.md`）。
 > 下文写的「VM 161」「VM 164」都指这台构建机。
