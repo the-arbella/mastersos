@@ -26,7 +26,7 @@ age = { version = "0.11", default-features = false, features = ["armor"] }
 # bech32 stays on 0.9, the version age already pulls in.
 hkdf = "0.12"
 zeroize = "1"
-bech32 = "0.9"
+bech32 = "0.12"
 # 服务端
 axum = "0.8"
 sea-orm = { version = "1", features = ["sqlx-postgres", "runtime-tokio-rustls", "macros"] }
