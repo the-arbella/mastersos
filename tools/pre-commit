@@ -1,0 +1,3 @@
+#!/bin/sh
+# Install: ln -s ../../tools/pre-commit .git/hooks/pre-commit
+exec python3 -I "$(git rev-parse --show-toplevel)/tools/check-private.py"

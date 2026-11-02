@@ -1,0 +1,11 @@
+# Remote test suites for maintainers. Anyone else: run the same commands locally.
+base: master
+suites:
+  core:
+    setup: rustup toolchain install 1.98 --profile minimal -c rustfmt -c clippy
+    setup_key: [.labtest.yml, core/rust-toolchain.toml]
+    run: cd core && cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --no-fail-fast ${LABTEST_ARGS:---workspace}
+    mem: 4.5G
+    cpus: 8
+    timeout: 30m
+    paths: [core/**, image/keys/**]
