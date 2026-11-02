@@ -6,6 +6,13 @@ updates:
     open-pull-requests-limit: 2
     groups:
       rust-minor: { update-types: [minor, patch] }
+    # sea-orm 2 brings sea-query 1.0, which breaks the cloud server's queries (266 errors on
+    # 2026-11-02); that port is planned separately, not taken from a weekly bump.
+    ignore:
+      - dependency-name: sea-orm
+        update-types: [version-update:semver-major]
+      - dependency-name: sea-orm-migration
+        update-types: [version-update:semver-major]
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
