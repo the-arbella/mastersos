@@ -23,7 +23,7 @@ thiserror = "2"
 # sealed recovery keys; no plugins, no ssh recipients.
 age = { version = "0.11", default-features = false, features = ["armor"] }
 # The recovery kit (plan 6 §5.2): HKDF-SHA256 derivation, bech32m text form, wiped buffers.
-# bech32 stays on 0.9, the version age already pulls in.
+# bech32 0.12 here; age still pulls in 0.9 for its own keys (same wire format).
 hkdf = "0.12"
 zeroize = "1"
 bech32 = "0.12"
