@@ -35,4 +35,4 @@ wiremock.workspace = true
 
 # Ruling 15：网页应用启动器的转义对着 GLib 读回（KeyFile、shell_parse_argv）。只是测试依赖，只在 Linux 上
 [target.'cfg(target_os = "linux")'.dev-dependencies]
-glib = "0.20"
+glib = "0.22"
