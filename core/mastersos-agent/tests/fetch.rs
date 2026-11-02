@@ -118,10 +118,60 @@ async fn report_posts_json_with_token() {
         imported_from_seed_at: None,
         manifest_features: vec![],
     };
-    f.report(&r).await.unwrap();
+    f.report(&r, None, false).await.unwrap();
     let body: serde_json::Value =
         serde_json::from_slice(&srv.received_requests().await.unwrap()[0].body).unwrap();
     assert_eq!(body["device_id"], "d");
+}
+
+/// The device headers ride along where the secret may travel (here http, so only on a lab
+/// image); elsewhere the report still goes, without them.
+#[tokio::test]
+async fn report_carries_device_headers_where_the_secret_may_travel() {
+    let srv = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/status"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(2)
+        .mount(&srv)
+        .await;
+    let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
+    let cred = mastersos_agent::fetch::DeviceCred {
+        device_id: "d".into(),
+        secret: "s3cret".into(),
+    };
+    let r = StatusReport {
+        device_id: "d".into(),
+        serial: None,
+        model: None,
+        os_version: None,
+        agent_version: "0.1.0".into(),
+        bundle_version: None,
+        group: "default".into(),
+        group_source: GroupSource::Default,
+        locked: false,
+        stale: false,
+        last_fetch_ok: None,
+        results: vec![],
+        fresh_until: None,
+        newer_withheld: None,
+        seed_trust_fingerprints: vec![],
+        imported_from_seed_at: None,
+        manifest_features: vec![],
+    };
+    f.report(&r, Some(&cred), true).await.unwrap();
+    f.report(&r, Some(&cred), false).await.unwrap();
+    let got = srv.received_requests().await.unwrap();
+    let h = |i: usize, n: &str| {
+        got[i]
+            .headers
+            .get(n)
+            .map(|v| v.to_str().unwrap().to_owned())
+    };
+    assert_eq!(h(0, "x-mastersos-device").as_deref(), Some("d"));
+    assert_eq!(h(0, "x-mastersos-device-secret").as_deref(), Some("s3cret"));
+    assert_eq!(h(1, "x-mastersos-device"), None);
+    assert_eq!(h(1, "x-mastersos-device-secret"), None);
 }
 
 #[tokio::test]
@@ -151,7 +201,7 @@ async fn report_rejection_is_error() {
         imported_from_seed_at: None,
         manifest_features: vec![],
     };
-    assert!(f.report(&r).await.is_err());
+    assert!(f.report(&r, None, false).await.is_err());
 }
 
 #[tokio::test]

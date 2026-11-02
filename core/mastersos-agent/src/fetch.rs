@@ -566,16 +566,26 @@ impl Fetcher {
             .header(DEVICE_SECRET_HEADER, &cred.secret))
     }
 
-    pub async fn report(&self, r: &StatusReport) -> Result<()> {
+    /// `POST /v1/status`. With `cred` the report also carries the device headers, so the server
+    /// can tell it from one sent with the school's token alone; they are left off (the report
+    /// still goes) where the device secret may not travel ([`Fetcher::secret_transport`]).
+    pub async fn report(
+        &self,
+        r: &StatusReport,
+        cred: Option<&DeviceCred>,
+        lab: bool,
+    ) -> Result<()> {
         let used = self.current_token();
-        let resp = self
-            .auth_as(
-                self.client.post(format!("{}/v1/status", self.base)).json(r),
-                &used,
-            )
-            .send()
-            .await
-            .context("请求 /v1/status 失败")?;
+        let mut req = self.auth_as(
+            self.client.post(format!("{}/v1/status", self.base)).json(r),
+            &used,
+        );
+        if let Some(cred) = cred.filter(|_| self.secret_transport(lab).is_ok()) {
+            req = req
+                .header(DEVICE_HEADER, &cred.device_id)
+                .header(DEVICE_SECRET_HEADER, &cred.secret);
+        }
+        let resp = req.send().await.context("请求 /v1/status 失败")?;
         self.observe(&resp, &used);
         if !resp.status().is_success() {
             bail!("回报状态被拒：{}", resp.status());
