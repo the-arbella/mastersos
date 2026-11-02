@@ -35,7 +35,7 @@ jobs:
     env:
       PROFILE: ${{ inputs.profile || 'lab' }}
     steps:
-            - name: Release builds only from master, by hand, by the owner
+      - name: Release builds only from master, by hand, by the owner
         if: env.PROFILE == 'release' && (github.ref != 'refs/heads/master' || github.event_name != 'workflow_dispatch' || github.triggering_actor != 'dawei101')
         run: |
           echo "release images are built from master, by hand, by the owner" >&2
