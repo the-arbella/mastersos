@@ -1,0 +1,30 @@
+# 未受管机器的首次开机（Ruling 18）：没有种子、也没有本机用户时，mastersos-firstrun 在 tty1 上建第一个本机用户
+# （这台个人电脑的管理员）；有用户就立即退出。恢复出厂后没有本机用户时再跑一次。镜像里没有 gnome-initial-setup。
+# 种子分区（nofail）没挂上时程序自己不动手：判断不了受管与否，不能在受管机器上建出 sudo 账号（Task 10）。
+# 排在显示管理器之前：等人敲完才出登录界面。由 /usr/lib 的 multi-user.target.wants 链接启用（不靠 preset）。
+[Unit]
+Description=MastersOS first run: create the first local user
+Documentation=file:/usr/bin/mastersos-firstrun
+After=systemd-user-sessions.service
+Before=display-manager.service gdm.service
+RequiresMountsFor=/var/lib/mastersos-seed
+ConditionPathExists=!/var/lib/mastersos/seed.toml
+ConditionPathExists=!/var/lib/mastersos-seed/seed.toml
+
+[Service]
+Type=oneshot
+# 没带 splash 时 plymouth 也占着 tty1：先让它退出，提示才看得见、键盘才到得了程序
+ExecStartPre=-/usr/bin/plymouth quit
+# 清屏：开机消息之后接着问话，看不清
+ExecStartPre=-/usr/bin/printf '\\033[H\\033[2J'
+ExecStart=/usr/bin/mastersos-firstrun
+StandardInput=tty
+StandardOutput=inherit
+StandardError=inherit
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TimeoutStartSec=infinity
+
+[Install]
+WantedBy=multi-user.target

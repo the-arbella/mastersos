@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "Hanteras av %s"
+
+msgid "Shut down"
+msgstr "Stäng av"
+
+msgid "Browse as Guest"
+msgstr "Surfa som gäst"
+
+msgid "Add person"
+msgstr "Lägg till person"
+
+msgid "Apps"
+msgstr "Appar"
+
+msgid "Cancel"
+msgstr "Avbryt"
+
+msgid "Retry"
+msgstr "Försök igen"
+
+msgid "Opening the sign-in page…"
+msgstr "Öppnar inloggningssidan …"
+
+msgid "The sign-in page could not be opened."
+msgstr "Det gick inte att öppna inloggningssidan."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Det går inte att nå skolan. Anslut till Wi-Fi från översta fältet och försök igen."
+
+msgid "School email"
+msgstr "Skolans e-post"
+
+msgid "IT local account"
+msgstr "Lokalt IT-konto"
+
+msgid "Username"
+msgstr "Användarnamn"
+
+msgid "This account cannot sign in on this computer."
+msgstr "Det här kontot kan inte logga in på den här datorn."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "Det här kontot kan inte logga in på den här datorn. Använd din skolmejl (%s)."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Du loggade in med ett annat konto. Logga in igen med kontot du valde här."
+
+msgid "Language"
+msgstr "Språk"
+
+msgid "Keyboard"
+msgstr "Tangentbord"
+
+msgid "Continue"
+msgstr "Fortsätt"
+
+msgid "The setting could not be saved. Try again."
+msgstr "Inställningen kunde inte sparas. Försök igen."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "Ditt konto är inaktiverat. Kontakta din administratör."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "Den här enheten är inaktiverad. Kontakta din administratör."
+
+msgid "Sign in with your school account."
+msgstr "Logga in med ditt skolkonto."
+
+msgid "Could not sign in. Please try again."
+msgstr "Det gick inte att logga in. Försök igen."
+
+msgid "Authentication request cancelled"
+msgstr "Autentiseringsbegäran avbröts"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "Maximalt antal autentiseringsförsök har nåtts"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Det gick inte att hämta åtkomsttoken. Försök igen."
+
+msgid "Invalid user name"
+msgstr "Ogiltigt användarnamn"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "Den här datorn har låsts av skolan. Kontakta IT"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "Gästinloggning är inte tillåten på den här datorn"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "Lokala konton kan inte logga in på den här datorn"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "Skolkonton kan inte logga in på den här datorn"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Den här appen kan bara öppnas från inloggningsskärmen"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Den här appen behöver ett nätverk. Anslut till Wi-Fi från översta fältet och försök igen."

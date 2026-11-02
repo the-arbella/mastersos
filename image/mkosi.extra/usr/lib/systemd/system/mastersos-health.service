@@ -1,0 +1,18 @@
+# 开机健康检查：boot-complete.target 之前必须过，systemd-bless-boot 才会把这次启动的 UKI 标成「好」。
+# 失败且确认 ESP 上有可退回的版本时，由 health-check 自己发重启，systemd-boot 的计数用完后退回上一版；
+# 没有计数或没有可退回的版本时 exit 0（不进重启循环）。这里**不设 FailureAction=**：超时、脚本意外退出、
+# 读不懂计数时单元失败 → 不标好、也不重启（不会让单版本的机器循环）。只看镜像本身，见脚本开头。
+# 由 /usr/lib 的 boot-complete.target.requires 链接启用（不靠 preset）。
+[Unit]
+Description=MastersOS image health check
+After=display-manager.service
+Before=boot-complete.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/mastersos/health-check
+TimeoutStartSec=5min
+
+[Install]
+RequiredBy=boot-complete.target

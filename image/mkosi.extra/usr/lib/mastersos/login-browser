@@ -1,0 +1,50 @@
+#!/bin/bash
+# The sign-in card's browser (mastersos-login-browser.service, run as gdm-greeter). The login-screen extension leaves the
+# URL in the greeter's runtime directory; the profile lives in the unit's private /tmp and goes with it. The extension
+# sizes the window.
+set -euo pipefail
+
+XDG_RUNTIME_DIR=/run/user/$(id -u)
+export XDG_RUNTIME_DIR
+export WAYLAND_DISPLAY=wayland-0
+export HOME=/tmp/home
+
+url_file=$XDG_RUNTIME_DIR/mastersos-login-url
+url=$(head -c 4096 "$url_file" | head -n 1)
+rm -f "$url_file"
+case $url in
+https://*) ;;
+*)
+	echo "login-browser: refusing a URL that is not https" >&2
+	exit 64
+	;;
+esac
+
+# The school's page and Chrome's own text follow the computer's language. Chrome on Linux takes its interface language from the
+# environment; --lang sets what the page is told. localectl keeps LANG in /etc/locale.conf; no LANG means English.
+lang=en_US
+if [ -r /etc/locale.conf ]; then
+	while IFS= read -r line; do
+		line=${line#LANG=}
+		line=${line//\"/}
+		line=${line%%[.@]*}
+		if [[ $line =~ ^[a-z]{2,3}(_[A-Z]{2})?$ ]]; then
+			lang=$line
+		fi
+	done </etc/locale.conf
+fi
+export LANGUAGE=$lang LANG=$lang.UTF-8
+
+mkdir -p "$HOME"
+exec /usr/bin/google-chrome-stable \
+	--ozone-platform=wayland \
+	--user-data-dir=/tmp/profile \
+	--app="$url" \
+	--lang="${lang//_/-}" \
+	--no-first-run \
+	--no-default-browser-check \
+	--password-store=basic \
+	--disable-sync \
+	--disable-background-networking \
+	--disable-component-update \
+	--noerrdialogs

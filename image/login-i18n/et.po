@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "Haldab %s"
+
+msgid "Shut down"
+msgstr "Lülita välja"
+
+msgid "Browse as Guest"
+msgstr "Sirvi külalisena"
+
+msgid "Add person"
+msgstr "Lisa isik"
+
+msgid "Apps"
+msgstr "Rakendused"
+
+msgid "Cancel"
+msgstr "Tühista"
+
+msgid "Retry"
+msgstr "Proovi uuesti"
+
+msgid "Opening the sign-in page…"
+msgstr "Sisselogimislehe avamine…"
+
+msgid "The sign-in page could not be opened."
+msgstr "Sisselogimislehte ei õnnestunud avada."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Kooliga ei saa ühendust. Looge ülariba kaudu Wi-Fi-ühendus ja proovige uuesti."
+
+msgid "School email"
+msgstr "Kooli e-post"
+
+msgid "IT local account"
+msgstr "IT kohalik konto"
+
+msgid "Username"
+msgstr "Kasutajanimi"
+
+msgid "This account cannot sign in on this computer."
+msgstr "See konto ei saa selles arvutis sisse logida."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "See konto ei saa selles arvutis sisse logida. Kasutage oma kooli e-posti (%s)."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Logisite sisse teise kontoga. Logige uuesti sisse kontoga, mille siin valisite."
+
+msgid "Language"
+msgstr "Keel"
+
+msgid "Keyboard"
+msgstr "Klaviatuur"
+
+msgid "Continue"
+msgstr "Jätka"
+
+msgid "The setting could not be saved. Try again."
+msgstr "Seadet ei õnnestunud salvestada. Proovige uuesti."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "Teie konto on keelatud. Võtke ühendust administraatoriga."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "See seade on keelatud. Võtke ühendust administraatoriga."
+
+msgid "Sign in with your school account."
+msgstr "Logige sisse oma kooli kontoga."
+
+msgid "Could not sign in. Please try again."
+msgstr "Sisselogimine ebaõnnestus. Proovige uuesti."
+
+msgid "Authentication request cancelled"
+msgstr "Autentimispäring tühistati"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "Autentimiskatsete maksimaalne arv on täis"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Pääsuloa hankimisel tekkis viga. Proovige uuesti."
+
+msgid "Invalid user name"
+msgstr "Kehtetu kasutajanimi"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "Kool on selle arvuti lukustanud; võtke ühendust IT-osakonnaga"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "Külalisena sisselogimine pole selles arvutis lubatud"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "Kohalikud kontod ei saa selles arvutis sisse logida"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "Kooli kontod ei saa selles arvutis sisse logida"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Seda rakendust saab avada ainult sisselogimiskuvalt"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "See rakendus vajab võrku. Looge ülariba kaudu Wi-Fi-ühendus ja proovige uuesti."

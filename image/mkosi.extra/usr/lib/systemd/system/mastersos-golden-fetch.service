@@ -1,0 +1,19 @@
+# Network fallback of the /usr self-repair (usr-self-repair Task 7): download the booted version from the update channel into the
+# golden copy. Not enabled at boot: mastersos-integrity.service starts it (--no-block) for its "network" action, so integrity's
+# local checks never wait on the network or on a 1.66 GB download. Waits for network-online like mastersos-update and gets the same
+# 3 h. golden-fetch --booted starts mastersos-integrity again when the golden copy was fetched (that run requests the repair of the
+# bad active slot) and mastersos-update when the booted version is gone from the channel.
+[Unit]
+Description=MastersOS golden /usr copy download
+Documentation=file:/usr/lib/mastersos/golden-fetch
+Requisite=boot-complete.target
+Wants=network-online.target
+After=boot-complete.target network-online.target time-sync.target
+ConditionVirtualization=!container
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/mastersos/golden-fetch --booted
+TimeoutStartSec=3h
+Nice=19
+IOSchedulingClass=idle

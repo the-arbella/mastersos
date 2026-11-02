@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "Verwaltet vun %s"
+
+msgid "Shut down"
+msgstr "Utmaken"
+
+msgid "Browse as Guest"
+msgstr "As Gast surfen"
+
+msgid "Add person"
+msgstr "Person tofögen"
+
+msgid "Apps"
+msgstr "Apps"
+
+msgid "Cancel"
+msgstr "Afbreken"
+
+msgid "Retry"
+msgstr "Nochmal versöken"
+
+msgid "Opening the sign-in page…"
+msgstr "Anmellsiet warrt opmaakt…"
+
+msgid "The sign-in page could not be opened."
+msgstr "De Anmellsiet leet sik nich opmaken."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "De School is nich to erreken. Verbinn di boven in de Balken mit Wi-Fi un versöök dat nochmal."
+
+msgid "School email"
+msgstr "School-E-Mail"
+
+msgid "IT local account"
+msgstr "Lokaal IT-Konto"
+
+msgid "Username"
+msgstr "Brukernaam"
+
+msgid "This account cannot sign in on this computer."
+msgstr "Dit Konto kann sik op dissen Reekner nich anmellen."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "Dit Konto kann sik op dissen Reekner nich anmellen. Bruuk dien School-E-Mail (%s)."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Du hest di mit en anner Konto anmellt. Mell di nochmal mit dat Konto an, dat du hier utsöcht hest."
+
+msgid "Language"
+msgstr "Spraak"
+
+msgid "Keyboard"
+msgstr "Tastatuur"
+
+msgid "Continue"
+msgstr "Wiedergahn"
+
+msgid "The setting could not be saved. Try again."
+msgstr "De Instellen leet sik nich spiekern. Versöök dat nochmal."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "Dien Konto is sperrt. Snack mit dien Administrator."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "Dit Reedschap is sperrt. Snack mit dien Administrator."
+
+msgid "Sign in with your school account."
+msgstr "Mell di mit dien School-Konto an."
+
+msgid "Could not sign in. Please try again."
+msgstr "Anmellen hett nich klappt. Versöök dat bitte nochmal."
+
+msgid "Authentication request cancelled"
+msgstr "De Anfraag to’n Utwiesen is afbroken wurrn"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "De hööchste Tahl an Versöken to’n Utwiesen is erreekt"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Fehler bi’t Afropen vun den Togriffs-Token. Versöök dat bitte nochmal."
+
+msgid "Invalid user name"
+msgstr "Brukernaam is nich gellig"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "Disse Reekner is vun de School sperrt wurrn; snack bitte mit IT"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "Anmellen as Gast is op dissen Reekner nich verlöövt"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "Lokale Konten köönt sik op dissen Reekner nich anmellen"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "School-Konten köönt sik op dissen Reekner nich anmellen"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Disse App lett sik blots vun den Anmellschirm ut opmaken"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Disse App bruukt en Netz. Verbinn di boven in de Balken mit Wi-Fi un versöök dat nochmal."

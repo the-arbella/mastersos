@@ -1,0 +1,5 @@
+# MastersOS：/etc 里没在策略表上的项都是指回 /usr/share/factory/etc 的链接（etc-policy.conf，Ruling 3）。AppArmor 按解析后的
+# 真实路径判，各配置里写的 @{etc_ro}/nsswitch.conf、@{etc_ro}/hosts 之类管不到 /usr/share/factory/etc/…：
+# unix-chkpwd 读不了 nsswitch.conf，只认 files，查不到 GDM 的动态用户 gdm-greeter，account 失败、登录界面起不来
+# （4b Task 8 在 VM 165 上实测；自动登录的 lab 镜像把它遮住了）。把 factory 的 /etc 也算作只读的 /etc。
+@{etc_ro}+=/usr/share/factory/etc/

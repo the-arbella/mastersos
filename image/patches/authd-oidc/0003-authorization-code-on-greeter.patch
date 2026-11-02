@@ -1,0 +1,315 @@
+diff --git a/authd-oidc-brokers/internal/broker/broker.go b/authd-oidc-brokers/internal/broker/broker.go
+index 5a7fdce..390d0f2 100644
+--- a/authd-oidc-brokers/internal/broker/broker.go
++++ b/authd-oidc-brokers/internal/broker/broker.go
+@@ -119,6 +119,7 @@ type session struct {
+ 
+ 	// Data to pass from one request to another.
+ 	deviceAuthResponse        *oauth2.DeviceAuthResponse
++	authCode                  *authCodeFlow // MastersOS: set instead of deviceAuthResponse, see mastersos_authcode.go
+ 	authInfo                  *token.AuthCachedInfo
+ 	mfaFlowActive             *himmelblau.MFAFlowState
+ 	mfaChallengeInfo          *himmelblau.MFAChallengeInfo
+@@ -1165,6 +1166,24 @@ func (b *Broker) generateUILayout(session *session, authModeID string) (map[stri
+ 		ctx, cancel := context.WithTimeout(context.Background(), maxRequestDuration)
+ 		defer cancel()
+ 
++		// MastersOS: the login screen opens this URL in its browser card.
++		if authCodeEnabled() {
++			flow, authURL, err := startAuthCodeFlow(session.oauth2Config, session.username, authCodeListen, authCodeRedirect)
++			if err != nil {
++				return nil, fmt.Errorf("could not start the sign-in: %v", err)
++			}
++			session.authCode = flow
++			uiLayout = map[string]string{
++				"type":    "qrcode",
++				"label":   "Sign in with your school account.",
++				"wait":    "true",
++				"button":  "Start again",
++				"content": authURL,
++				"code":    "",
++			}
++			break
++		}
++
+ 		var authOpts []oauth2.AuthCodeOption
+ 
+ 		// Workaround to cater for RFC compliant oauth2 server. Public providers do not properly
+@@ -1401,6 +1420,15 @@ func (b *Broker) handleIsAuthenticated(ctx context.Context, session *session, au
+ }
+ 
+ func (b *Broker) deviceAuth(ctx context.Context, session *session) (string, isAuthenticatedDataResponse) {
++	if session.authCode != nil {
++		t, err := session.authCode.token(ctx, b.provider.AuthOptions()...)
++		if err != nil {
++			log.Errorf(context.Background(), "Error retrieving access token: %s", err)
++			return AuthRetry, errorMessage{Message: "Could not sign in. Please try again."}
++		}
++		return b.finishDeviceAuth(ctx, session, t)
++	}
++
+ 	response := session.deviceAuthResponse
+ 	if response == nil {
+ 		log.Error(context.Background(), "device auth response is not set")
+@@ -1428,6 +1456,12 @@ func (b *Broker) deviceAuth(ctx context.Context, session *session) (string, isAu
+ 	}
+ 	log.Debug(ctx, "Exchanged device code for token.")
+ 
++	return b.finishDeviceAuth(ctx, session, t)
++}
++
++func (b *Broker) finishDeviceAuth(ctx context.Context, session *session, t *oauth2.Token) (string, isAuthenticatedDataResponse) {
++	var err error
++
+ 	if t.RefreshToken == "" {
+ 		log.Warningf(context.Background(), "No refresh token returned for user during device code flow. You might have to add the 'offline_access' scope to the 'extra_scopes' setting.")
+ 	}
+diff --git a/authd-oidc-brokers/internal/broker/mastersos_authcode.go b/authd-oidc-brokers/internal/broker/mastersos_authcode.go
+new file mode 100644
+index 0000000..5e25831
+--- /dev/null
++++ b/authd-oidc-brokers/internal/broker/mastersos_authcode.go
+@@ -0,0 +1,141 @@
++package broker
++
++// MastersOS carried patch (image/patches/authd-oidc/0003-authorization-code-on-greeter.patch): with
++// MASTERSOS_AUTH_CODE=1 the "device code" auth modes run the authorization code flow with PKCE instead, redirecting to a
++// listener on this machine. The login screen shows the returned URL in a locked-down browser card, so a person signs in
++// with their email and password on the school's page: no phone, no login code, no consent page.
++
++import (
++	"context"
++	"crypto/rand"
++	"encoding/hex"
++	"errors"
++	"fmt"
++	"net"
++	"net/http"
++	"os"
++	"sync"
++	"time"
++
++	"golang.org/x/oauth2"
++)
++
++const (
++	// authCodeListen is fixed because the identity provider must list the redirect URI.
++	authCodeListen   = "127.0.0.1:48123"
++	authCodeRedirect = "http://127.0.0.1:48123/callback"
++	authCodeTimeout  = 10 * time.Minute
++)
++
++const authCodeDonePage = `<!doctype html><meta charset="utf-8"><title>Signed in</title>
++<body style="font:16px system-ui;text-align:center;padding-top:30vh">Signed in. Starting your session…</body>`
++
++func authCodeEnabled() bool { return os.Getenv("MASTERSOS_AUTH_CODE") == "1" }
++
++type authCodeResult struct {
++	code string
++	err  error
++}
++
++// authCodeFlow is one sign-in in progress: the PKCE verifier, the state and the listener that receives the redirect.
++type authCodeFlow struct {
++	cfg      oauth2.Config
++	verifier string
++	state    string
++	results  chan authCodeResult
++	server   *http.Server
++	listener net.Listener
++}
++
++var (
++	authCodeMu      sync.Mutex
++	authCodeCurrent *authCodeFlow
++)
++
++// startAuthCodeFlow listens on addr and returns the flow and the URL to open. The port is fixed, so a flow still waiting
++// (the person pressed Cancel, or asked for a new page) is closed first.
++func startAuthCodeFlow(cfg oauth2.Config, username, addr, redirect string) (*authCodeFlow, string, error) {
++	authCodeMu.Lock()
++	defer authCodeMu.Unlock()
++	if authCodeCurrent != nil {
++		authCodeCurrent.close()
++		authCodeCurrent = nil
++	}
++
++	nonce := make([]byte, 32)
++	if _, err := rand.Read(nonce); err != nil {
++		return nil, "", fmt.Errorf("could not generate the state: %v", err)
++	}
++	cfg.RedirectURL = redirect
++	f := &authCodeFlow{
++		cfg:      cfg,
++		verifier: oauth2.GenerateVerifier(),
++		state:    hex.EncodeToString(nonce),
++		results:  make(chan authCodeResult, 1),
++	}
++
++	l, err := net.Listen("tcp", addr)
++	if err != nil {
++		return nil, "", fmt.Errorf("could not listen on %s: %v", addr, err)
++	}
++	f.listener = l
++	mux := http.NewServeMux()
++	mux.HandleFunc("/callback", f.handleCallback)
++	f.server = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
++	go func() { _ = f.server.Serve(l) }()
++	authCodeCurrent = f
++
++	url := cfg.AuthCodeURL(f.state,
++		oauth2.S256ChallengeOption(f.verifier),
++		oauth2.SetAuthURLParam("login_hint", username))
++	return f, url, nil
++}
++
++func (f *authCodeFlow) handleCallback(w http.ResponseWriter, r *http.Request) {
++	q := r.URL.Query()
++	if q.Get("state") != f.state {
++		http.Error(w, "unexpected state", http.StatusBadRequest)
++		return
++	}
++	res := authCodeResult{code: q.Get("code")}
++	if e := q.Get("error"); e != "" {
++		res = authCodeResult{err: fmt.Errorf("the identity provider refused the sign-in: %s", e)}
++	} else if res.code == "" {
++		res = authCodeResult{err: errors.New("the redirect carries no code")}
++	}
++	select {
++	case f.results <- res:
++	default: // a repeated redirect: the first one counts
++	}
++	w.Header().Set("Content-Type", "text/html; charset=utf-8")
++	_, _ = w.Write([]byte(authCodeDonePage))
++}
++
++// close frees the port at once: server.Close alone misses a listener that Serve has not picked up yet.
++func (f *authCodeFlow) close() {
++	_ = f.server.Close()
++	_ = f.listener.Close()
++}
++
++// token waits for the redirect and exchanges the code.
++func (f *authCodeFlow) token(ctx context.Context, opts ...oauth2.AuthCodeOption) (*oauth2.Token, error) {
++	defer func() {
++		authCodeMu.Lock()
++		defer authCodeMu.Unlock()
++		f.close()
++		if authCodeCurrent == f {
++			authCodeCurrent = nil
++		}
++	}()
++	ctx, cancel := context.WithTimeout(ctx, authCodeTimeout)
++	defer cancel()
++	select {
++	case <-ctx.Done():
++		return nil, ctx.Err()
++	case res := <-f.results:
++		if res.err != nil {
++			return nil, res.err
++		}
++		return f.cfg.Exchange(ctx, res.code, append(opts, oauth2.VerifierOption(f.verifier))...)
++	}
++}
+diff --git a/authd-oidc-brokers/internal/broker/mastersos_authcode_test.go b/authd-oidc-brokers/internal/broker/mastersos_authcode_test.go
+new file mode 100644
+index 0000000..241f87c
+--- /dev/null
++++ b/authd-oidc-brokers/internal/broker/mastersos_authcode_test.go
+@@ -0,0 +1,96 @@
++package broker
++
++// MastersOS carried patch (image/patches/authd-oidc/0003-authorization-code-on-greeter.patch).
++
++import (
++	"context"
++	"encoding/json"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"net/url"
++	"testing"
++	"time"
++
++	"github.com/stretchr/testify/require"
++	"golang.org/x/oauth2"
++)
++
++func authCodeTestConfig(tokenURL string) oauth2.Config {
++	return oauth2.Config{ClientID: "client", Endpoint: oauth2.Endpoint{AuthURL: "https://idp.test/authorize", TokenURL: tokenURL}}
++}
++
++func TestMastersOSAuthCodeExchange(t *testing.T) {
++	var form url.Values
++	idp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		require.NoError(t, r.ParseForm())
++		form = r.PostForm
++		w.Header().Set("Content-Type", "application/json")
++		require.NoError(t, json.NewEncoder(w).Encode(map[string]string{"access_token": "a", "token_type": "Bearer"}))
++	}))
++	defer idp.Close()
++
++	f, raw, err := startAuthCodeFlow(authCodeTestConfig(idp.URL), "a@school.org", "127.0.0.1:48124", "http://127.0.0.1:48124/callback")
++	require.NoError(t, err)
++	u, err := url.Parse(raw)
++	require.NoError(t, err)
++	q := u.Query()
++	require.Equal(t, "a@school.org", q.Get("login_hint"))
++	require.Equal(t, "S256", q.Get("code_challenge_method"))
++	require.Equal(t, "http://127.0.0.1:48124/callback", q.Get("redirect_uri"))
++
++	res, err := http.Get("http://127.0.0.1:48124/callback?code=c&state=" + q.Get("state"))
++	require.NoError(t, err)
++	_, _ = io.Copy(io.Discard, res.Body)
++	res.Body.Close()
++	require.Equal(t, http.StatusOK, res.StatusCode)
++
++	tok, err := f.token(context.Background())
++	require.NoError(t, err)
++	require.Equal(t, "a", tok.AccessToken)
++	require.Equal(t, "c", form.Get("code"))
++	require.Equal(t, f.verifier, form.Get("code_verifier"))
++}
++
++func TestMastersOSAuthCodeRefusesWrongState(t *testing.T) {
++	f, _, err := startAuthCodeFlow(authCodeTestConfig("http://127.0.0.1:1"), "a", "127.0.0.1:48125", "http://127.0.0.1:48125/callback")
++	require.NoError(t, err)
++	defer f.close()
++
++	res, err := http.Get("http://127.0.0.1:48125/callback?code=c&state=wrong")
++	require.NoError(t, err)
++	res.Body.Close()
++	require.Equal(t, http.StatusBadRequest, res.StatusCode)
++	require.Empty(t, f.results)
++}
++
++func TestMastersOSAuthCodeProviderError(t *testing.T) {
++	f, raw, err := startAuthCodeFlow(authCodeTestConfig("http://127.0.0.1:1"), "a", "127.0.0.1:48126", "http://127.0.0.1:48126/callback")
++	require.NoError(t, err)
++	u, _ := url.Parse(raw)
++
++	res, err := http.Get("http://127.0.0.1:48126/callback?error=access_denied&state=" + u.Query().Get("state"))
++	require.NoError(t, err)
++	res.Body.Close()
++	_, err = f.token(context.Background())
++	require.ErrorContains(t, err, "access_denied")
++}
++
++func TestMastersOSAuthCodeNewFlowReplacesWaitingOne(t *testing.T) {
++	a := "127.0.0.1:48127"
++	first, _, err := startAuthCodeFlow(authCodeTestConfig("http://127.0.0.1:1"), "a", a, "http://"+a+"/callback")
++	require.NoError(t, err)
++	second, _, err := startAuthCodeFlow(authCodeTestConfig("http://127.0.0.1:1"), "a", a, "http://"+a+"/callback")
++	require.NoError(t, err)
++	defer second.close()
++	require.NotEqual(t, first.state, second.state)
++}
++
++func TestMastersOSAuthCodeCancel(t *testing.T) {
++	f, _, err := startAuthCodeFlow(authCodeTestConfig("http://127.0.0.1:1"), "a", "127.0.0.1:48128", "http://127.0.0.1:48128/callback")
++	require.NoError(t, err)
++	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
++	defer cancel()
++	_, err = f.token(ctx)
++	require.ErrorIs(t, err, context.DeadlineExceeded)
++}

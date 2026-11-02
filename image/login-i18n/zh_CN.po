@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "由 %s 管理"
+
+msgid "Shut down"
+msgstr "关机"
+
+msgid "Browse as Guest"
+msgstr "以访客身份浏览"
+
+msgid "Add person"
+msgstr "添加用户"
+
+msgid "Apps"
+msgstr "应用"
+
+msgid "Cancel"
+msgstr "取消"
+
+msgid "Retry"
+msgstr "重试"
+
+msgid "Opening the sign-in page…"
+msgstr "正在打开登录页面…"
+
+msgid "The sign-in page could not be opened."
+msgstr "无法打开登录页面。"
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "无法连接到学校。请从顶部栏连接 Wi-Fi，然后重试。"
+
+msgid "School email"
+msgstr "学校邮箱"
+
+msgid "IT local account"
+msgstr "IT 本地账号"
+
+msgid "Username"
+msgstr "用户名"
+
+msgid "This account cannot sign in on this computer."
+msgstr "此账号无法在这台电脑上登录。"
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "此账号无法在这台电脑上登录。请使用你的学校邮箱（%s）。"
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "你登录的账号与所选账号不同。请使用你在这里选择的账号重新登录。"
+
+msgid "Language"
+msgstr "语言"
+
+msgid "Keyboard"
+msgstr "键盘"
+
+msgid "Continue"
+msgstr "继续"
+
+msgid "The setting could not be saved. Try again."
+msgstr "无法保存设置。请重试。"
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "你的账号已被停用。请联系管理员。"
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "此设备已被停用。请联系管理员。"
+
+msgid "Sign in with your school account."
+msgstr "请使用学校账号登录。"
+
+msgid "Could not sign in. Please try again."
+msgstr "无法登录。请重试。"
+
+msgid "Authentication request cancelled"
+msgstr "身份验证请求已取消"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "已达到身份验证尝试次数上限"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "获取访问令牌时出错。请重试。"
+
+msgid "Invalid user name"
+msgstr "用户名无效"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "这台电脑已被学校锁定，请联系 IT 人员"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "这台电脑不允许访客登录"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "本地账号无法在这台电脑上登录"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "学校账号无法在这台电脑上登录"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "此应用只能从登录界面打开"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "此应用需要网络。请从顶部栏连接 Wi-Fi，然后重试。"

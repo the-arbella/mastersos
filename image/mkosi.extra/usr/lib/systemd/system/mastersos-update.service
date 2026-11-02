@@ -1,0 +1,27 @@
+# 下载并装好新版本（/usr 的另一个槽 + 带 +3 启动计数的 UKI），不重启：下次开机自动换到新版本，
+# 新版本过不了 mastersos-health 就在三次启动后退回。更新源与通道见 /usr/lib/sysupdate.d/（stable）与
+# /etc/sysupdate.d/ (overrides the agent writes for beta or a school cache).
+# update-run runs systemd-sysupdate update; when a school cache is set and that fails, it retries from the
+# official source using the fallback directory the agent wrote (docs/update-channels.md, "School cache").
+# 只在这次启动已经过了健康检查（boot-complete.target 已到达）时才跑：没被标「好」的启动上跑 sysupdate，
+# 会先删掉另一个槽——那正是可退回的好版本——下载再被打断时 ESP 上就只剩坏版本（Task 2 复审 B）。
+# 用 Requisite= 而不是 Requires=：Requires 会在定时器触发时重新拉起已经失败的 mastersos-health.service
+# （重跑检查，甚至在这时才放行到 boot-complete，而 systemd-bless-boot 不会再跑）；Requisite 只看它
+# 现在是不是 active，不是就让这次启动失败、什么都不做。boot-complete.target 由
+# multi-user.target.wants 里的链接保证每次开机都被拉起（不带计数的启动也一样）。
+[Unit]
+Description=MastersOS system update (download, apply on next boot)
+Documentation=file:/usr/lib/sysupdate.d
+Requisite=boot-complete.target
+Wants=network-online.target
+After=boot-complete.target network-online.target time-sync.target
+ConditionVirtualization=!container
+
+[Service]
+Type=oneshot
+# /run/mastersos-slots.lock is shared with mastersos-integrity.service (its restore-inactive writes the inactive slot too)
+ExecStart=/usr/bin/flock /run/mastersos-slots.lock /usr/lib/mastersos/update-run
+# 一次 1.46 GB，慢网上要很久；超时就等下一轮（sysupdate 下载到一半不会动现有的版本）
+TimeoutStartSec=3h
+Nice=10
+IOSchedulingClass=idle

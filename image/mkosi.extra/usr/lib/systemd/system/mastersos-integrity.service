@@ -1,0 +1,24 @@
+# Checks the active /usr slot, the golden copy and (when rolled back to an older version) the ESP UKI and the inactive slot, writes
+# /var/lib/mastersos-system/integrity.json and notifies the user when a repair is requested for the next restart.
+# Runs only after the boot was blessed (Requisite=boot-complete.target, same as mastersos-boot-ok and mastersos-bootloader-update)
+# and after those two have finished writing the ESP. The script throttles its own reads (150 MiB/s): IOSchedulingClass=idle does
+# little under the none and mq-deadline schedulers, it is only a courtesy here.
+# Not wrapped in /run/mastersos-slots.lock (mastersos-update holds it for up to 3 h): the script takes it, non-blocking, only
+# around restore-inactive and restore-uki, the actions that write what sysupdate writes (the inactive slot, EFI/Linux);
+# busy = those actions are skipped this boot.
+[Unit]
+Description=MastersOS /usr integrity check
+Documentation=file:/usr/lib/mastersos/integrity
+Requisite=boot-complete.target
+After=boot-complete.target mastersos-boot-ok.service systemd-bless-boot.service mastersos-bootloader-update.service
+ConditionVirtualization=!container
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/mastersos/integrity
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=30min
+
+[Install]
+WantedBy=multi-user.target

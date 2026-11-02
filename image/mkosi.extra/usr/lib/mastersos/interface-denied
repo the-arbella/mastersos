@@ -1,0 +1,14 @@
+#!/bin/bash
+# In a locked session (the `learning` mode, or a legacy browser-mode Group) mastersos-agent bind-mounts this file over the
+# terminal, file manager and settings executables (core's system/exec_block.rs; `full` unmounts it). When started it only
+# shows a notification and exits 126, opening no window. Arguments are ignored (D-Bus activation and wrapper scripts pass
+# some). When the notification cannot be sent (no session bus) the text goes to stderr only.
+set -euo pipefail
+case ${LANG:-} in
+zh*) msg='这台设备上不能使用此应用' ;;
+th*) msg='แอปนี้ใช้ไม่ได้บนอุปกรณ์นี้' ;;
+*) msg='This app is not available on this device' ;;
+esac
+notify-send --app-name=MastersOS --icon=dialog-information --expire-time=5000 "$msg" >/dev/null 2>&1 || :
+printf '%s\n' "$msg" >&2
+exit 126

@@ -1,0 +1,2 @@
+# 把 A/B 槽、种子分区从 GNOME 的「磁盘」里藏起来
+ENV{ID_PART_ENTRY_NAME}=="_empty|MastersOS_*|mastersos-seed", ENV{UDISKS_IGNORE}="1"

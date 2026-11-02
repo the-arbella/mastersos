@@ -1,0 +1,26 @@
+# Lab Dex on VM 163 (mastersos-s1-idp): gives the laptops an OIDC provider with device code (RFC 8628) in front of VM 105's
+# Kanidm (Kanidm has no device-code endpoint, upstream kanidm#1523; spec §6.10 S1, docs/idp.md "Kanidm: put Dex in front").
+#   https://dex.lan:5554        certificate signed by the lab test CA (VM 161 ~/mastersos-keys/lab/test-ca/, expires 2031)
+#   upstream https://idm.lan:8300   VM 105's Kanidm (10.10.10.7, through VM 163's NIC on vmbr1); its CA is fleetd's own and
+#                               lives only in this container (certs/kanidm-ca.pem, Ruling 12); the laptops do not trust it
+# Deploy: copy this directory to ~/dex/ on VM 163; certs/ holds dex.crt, dex.key (0600, owner 1001 — dex runs as uid 1001
+# in the container) and kanidm-ca.pem; .env holds
+#   KANIDM_CLIENT_SECRET=<secret of the mastersos-dex client in Kanidm> (not in the repo; on the Mac in
+#   ~/.config/testlab/mastersos/oauth2-mastersos-dex.secret)
+#   cd ~/dex && sudo docker compose up -d
+# Dex version (docs/idp.md "Dex 的版本"): v2.45.1. Not v2.46.x until dexidp/dex#5017 is fixed (/token hangs with SQLite);
+# never set DEX_SESSIONS_ENABLED (with it a refresh no longer asks Kanidm, so disabled accounts keep logging in).
+services:
+  dex:
+    image: ghcr.io/dexidp/dex:v2.45.1
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    network_mode: host
+    extra_hosts: ["idm.lan:10.10.10.7"]
+    environment:
+      KANIDM_CLIENT_SECRET: "${KANIDM_CLIENT_SECRET}"
+    volumes:
+      - ./config.yaml:/etc/dex/config.yaml:ro
+      - ./certs:/certs:ro
+      - dexdata:/var/dex
+    restart: unless-stopped
+volumes: { dexdata: {} }

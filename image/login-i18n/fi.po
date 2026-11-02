@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "Ylläpitäjä: %s"
+
+msgid "Shut down"
+msgstr "Sammuta"
+
+msgid "Browse as Guest"
+msgstr "Selaa vieraana"
+
+msgid "Add person"
+msgstr "Lisää henkilö"
+
+msgid "Apps"
+msgstr "Sovellukset"
+
+msgid "Cancel"
+msgstr "Peruuta"
+
+msgid "Retry"
+msgstr "Yritä uudelleen"
+
+msgid "Opening the sign-in page…"
+msgstr "Avataan kirjautumissivua…"
+
+msgid "The sign-in page could not be opened."
+msgstr "Kirjautumissivua ei voitu avata."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Koulua ei tavoiteta. Yhdistä Wi-Fi-verkkoon yläpalkista ja yritä uudelleen."
+
+msgid "School email"
+msgstr "Koulun sähköposti"
+
+msgid "IT local account"
+msgstr "IT-osaston paikallinen tili"
+
+msgid "Username"
+msgstr "Käyttäjänimi"
+
+msgid "This account cannot sign in on this computer."
+msgstr "Tällä tilillä ei voi kirjautua tälle tietokoneelle."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "Tällä tilillä ei voi kirjautua tälle tietokoneelle. Käytä koulun sähköpostiosoitettasi (%s)."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Kirjauduit toisella tilillä. Kirjaudu uudelleen tilillä, jonka valitsit tässä."
+
+msgid "Language"
+msgstr "Kieli"
+
+msgid "Keyboard"
+msgstr "Näppäimistö"
+
+msgid "Continue"
+msgstr "Jatka"
+
+msgid "The setting could not be saved. Try again."
+msgstr "Asetusta ei voitu tallentaa. Yritä uudelleen."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "Tilisi on poistettu käytöstä. Ota yhteyttä ylläpitäjään."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "Tämä laite on poistettu käytöstä. Ota yhteyttä ylläpitäjään."
+
+msgid "Sign in with your school account."
+msgstr "Kirjaudu koulun tilillä."
+
+msgid "Could not sign in. Please try again."
+msgstr "Kirjautuminen epäonnistui. Yritä uudelleen."
+
+msgid "Authentication request cancelled"
+msgstr "Todennuspyyntö peruutettiin"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "Todennusyritysten enimmäismäärä on saavutettu"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Virhe käyttötunnisteen noudossa. Yritä uudelleen."
+
+msgid "Invalid user name"
+msgstr "Virheellinen käyttäjänimi"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "Koulu on lukinnut tämän tietokoneen; ota yhteyttä IT-osastoon"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "Vieraskirjautuminen ei ole sallittu tällä tietokoneella"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "Paikallisilla tileillä ei voi kirjautua tälle tietokoneelle"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "Koulun tileillä ei voi kirjautua tälle tietokoneelle"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Tämän sovelluksen voi avata vain kirjautumisnäkymästä"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Tämä sovellus tarvitsee verkkoyhteyden. Yhdistä Wi-Fi-verkkoon yläpalkista ja yritä uudelleen."

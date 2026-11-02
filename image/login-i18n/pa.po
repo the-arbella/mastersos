@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "%s ਦੁਆਰਾ ਪ੍ਰਬੰਧਿਤ"
+
+msgid "Shut down"
+msgstr "ਬੰਦ ਕਰੋ"
+
+msgid "Browse as Guest"
+msgstr "ਮਹਿਮਾਨ ਵਜੋਂ ਬ੍ਰਾਊਜ਼ ਕਰੋ"
+
+msgid "Add person"
+msgstr "ਵਿਅਕਤੀ ਸ਼ਾਮਲ ਕਰੋ"
+
+msgid "Apps"
+msgstr "ਐਪਾਂ"
+
+msgid "Cancel"
+msgstr "ਰੱਦ ਕਰੋ"
+
+msgid "Retry"
+msgstr "ਮੁੜ ਕੋਸ਼ਿਸ਼ ਕਰੋ"
+
+msgid "Opening the sign-in page…"
+msgstr "ਸਾਈਨ-ਇਨ ਪੰਨਾ ਖੋਲ੍ਹਿਆ ਜਾ ਰਿਹਾ ਹੈ…"
+
+msgid "The sign-in page could not be opened."
+msgstr "ਸਾਈਨ-ਇਨ ਪੰਨਾ ਖੋਲ੍ਹਿਆ ਨਹੀਂ ਜਾ ਸਕਿਆ।"
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "ਸਕੂਲ ਨਾਲ ਸੰਪਰਕ ਨਹੀਂ ਹੋ ਸਕਿਆ। ਉੱਪਰਲੀ ਪੱਟੀ ਤੋਂ Wi-Fi ਨਾਲ ਜੁੜੋ, ਫਿਰ ਮੁੜ ਕੋਸ਼ਿਸ਼ ਕਰੋ।"
+
+msgid "School email"
+msgstr "ਸਕੂਲ ਈਮੇਲ"
+
+msgid "IT local account"
+msgstr "IT ਲੋਕਲ ਖਾਤਾ"
+
+msgid "Username"
+msgstr "ਵਰਤੋਂਕਾਰ ਨਾਮ"
+
+msgid "This account cannot sign in on this computer."
+msgstr "ਇਹ ਖਾਤਾ ਇਸ ਕੰਪਿਊਟਰ ਉੱਤੇ ਸਾਈਨ ਇਨ ਨਹੀਂ ਕਰ ਸਕਦਾ।"
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "ਇਹ ਖਾਤਾ ਇਸ ਕੰਪਿਊਟਰ ਉੱਤੇ ਸਾਈਨ ਇਨ ਨਹੀਂ ਕਰ ਸਕਦਾ। ਆਪਣੀ ਸਕੂਲ ਈਮੇਲ (%s) ਵਰਤੋ।"
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "ਤੁਸੀਂ ਕਿਸੇ ਹੋਰ ਖਾਤੇ ਨਾਲ ਸਾਈਨ ਇਨ ਕੀਤਾ ਹੈ। ਇੱਥੇ ਚੁਣੇ ਖਾਤੇ ਨਾਲ ਦੁਬਾਰਾ ਸਾਈਨ ਇਨ ਕਰੋ।"
+
+msgid "Language"
+msgstr "ਭਾਸ਼ਾ"
+
+msgid "Keyboard"
+msgstr "ਕੀਬੋਰਡ"
+
+msgid "Continue"
+msgstr "ਜਾਰੀ ਰੱਖੋ"
+
+msgid "The setting could not be saved. Try again."
+msgstr "ਸੈਟਿੰਗ ਸੰਭਾਲੀ ਨਹੀਂ ਜਾ ਸਕੀ। ਮੁੜ ਕੋਸ਼ਿਸ਼ ਕਰੋ।"
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "ਤੁਹਾਡਾ ਖਾਤਾ ਅਯੋਗ ਕੀਤਾ ਗਿਆ ਹੈ। ਆਪਣੇ ਪ੍ਰਸ਼ਾਸਕ ਨਾਲ ਸੰਪਰਕ ਕਰੋ।"
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "ਇਹ ਡੀਵਾਈਸ ਅਯੋਗ ਕੀਤਾ ਗਿਆ ਹੈ। ਆਪਣੇ ਪ੍ਰਸ਼ਾਸਕ ਨਾਲ ਸੰਪਰਕ ਕਰੋ।"
+
+msgid "Sign in with your school account."
+msgstr "ਆਪਣੇ ਸਕੂਲ ਖਾਤੇ ਨਾਲ ਸਾਈਨ ਇਨ ਕਰੋ।"
+
+msgid "Could not sign in. Please try again."
+msgstr "ਸਾਈਨ ਇਨ ਨਹੀਂ ਹੋ ਸਕਿਆ। ਕਿਰਪਾ ਕਰਕੇ ਮੁੜ ਕੋਸ਼ਿਸ਼ ਕਰੋ।"
+
+msgid "Authentication request cancelled"
+msgstr "ਪ੍ਰਮਾਣਿਕਤਾ ਬੇਨਤੀ ਰੱਦ ਕੀਤੀ ਗਈ"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "ਪ੍ਰਮਾਣਿਕਤਾ ਕੋਸ਼ਿਸ਼ਾਂ ਦੀ ਵੱਧ ਤੋਂ ਵੱਧ ਗਿਣਤੀ ਪੂਰੀ ਹੋ ਗਈ"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "ਐਕਸੈਸ ਟੋਕਨ ਪ੍ਰਾਪਤ ਕਰਨ ਵਿੱਚ ਗਲਤੀ। ਕਿਰਪਾ ਕਰਕੇ ਮੁੜ ਕੋਸ਼ਿਸ਼ ਕਰੋ।"
+
+msgid "Invalid user name"
+msgstr "ਅਵੈਧ ਵਰਤੋਂਕਾਰ ਨਾਮ"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "ਇਹ ਕੰਪਿਊਟਰ ਸਕੂਲ ਵੱਲੋਂ ਲੌਕ ਕੀਤਾ ਗਿਆ ਹੈ; ਕਿਰਪਾ ਕਰਕੇ IT ਨਾਲ ਸੰਪਰਕ ਕਰੋ"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "ਇਸ ਕੰਪਿਊਟਰ ਉੱਤੇ ਮਹਿਮਾਨ ਸਾਈਨ-ਇਨ ਦੀ ਇਜਾਜ਼ਤ ਨਹੀਂ ਹੈ"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "ਲੋਕਲ ਖਾਤੇ ਇਸ ਕੰਪਿਊਟਰ ਉੱਤੇ ਸਾਈਨ ਇਨ ਨਹੀਂ ਕਰ ਸਕਦੇ"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "ਸਕੂਲ ਖਾਤੇ ਇਸ ਕੰਪਿਊਟਰ ਉੱਤੇ ਸਾਈਨ ਇਨ ਨਹੀਂ ਕਰ ਸਕਦੇ"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "ਇਹ ਐਪ ਸਿਰਫ਼ ਸਾਈਨ-ਇਨ ਸਕ੍ਰੀਨ ਤੋਂ ਹੀ ਖੋਲ੍ਹੀ ਜਾ ਸਕਦੀ ਹੈ"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "ਇਸ ਐਪ ਨੂੰ ਨੈੱਟਵਰਕ ਦੀ ਲੋੜ ਹੈ। ਉੱਪਰਲੀ ਪੱਟੀ ਤੋਂ Wi-Fi ਨਾਲ ਜੁੜੋ, ਫਿਰ ਮੁੜ ਕੋਸ਼ਿਸ਼ ਕਰੋ।"

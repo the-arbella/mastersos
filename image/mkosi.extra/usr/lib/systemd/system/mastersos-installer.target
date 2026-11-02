@@ -1,0 +1,10 @@
+# Default target of the installer UKI (command line systemd.unit=mastersos-installer.target, Ruling 13). Only the base system
+# and the installer: no display manager, agent or getty. An installed machine never enters this target (the main UKI has no
+# such entry).
+[Unit]
+Description=MastersOS installer
+Documentation=file:/usr/bin/mastersos-installer
+Requires=basic.target
+Wants=mastersos-installer.service
+After=basic.target
+AllowIsolate=yes

@@ -1,0 +1,22 @@
+# 常驻的 agent：长轮询拉取、验签、应用设置包并回报（应用在自己的任务里跑，不挡拉取）。
+# 排在 mastersos-agent-local 之后：开机快速应用与它不会同时写 state.json。
+# NetworkManager 连上网时由 /usr/lib/NetworkManager/dispatcher.d/90-mastersos 发 SIGUSR1，立即拉取一次。
+# 进程因 bug 退出（panic = "abort"）由 Restart=on-failure 拉起。
+[Unit]
+Description=MastersOS agent
+Documentation=file:/usr/bin/mastersos-agent
+After=mastersos-agent-local.service NetworkManager.service network.target
+ConditionPathExists=|/var/lib/mastersos/seed.toml
+ConditionPathExists=|/var/lib/mastersos-seed/seed.toml
+
+[Service]
+ExecStart=/usr/bin/mastersos-agent run
+Restart=on-failure
+RestartSec=10s
+# 退出时 agent 最多等 60 秒让正在跑的应用交回结果；这里写明，不依赖发行版的默认值
+TimeoutStopSec=90
+# 命令输出走管道不落盘；再加一层：agent 与它跑的命令看到的是自己的 /tmp
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

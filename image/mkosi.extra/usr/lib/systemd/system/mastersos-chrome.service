@@ -1,0 +1,51 @@
+# Chrome sysext 的唯一更新者（Task 9）：一轮就退出，由 mastersos-chrome.timer 每约 6 小时触发；还没装上时 NetworkManager
+# 连上网也会触发（/usr/lib/NetworkManager/dispatcher.d/90-mastersos）。**不看有没有种子**：浏览器是系统的一部分（spec §3），
+# 未受管的个人电脑也要有。受管的机器上常驻的 mastersos-agent 不更新 Chrome，只读这一轮写下的结果回报（跑完叫醒它）。
+# 同一时刻只有一个：systemd 不会同时起同一个单元两次，mastersos-agent chrome 另外持有 /var/lib/mastersos/chrome 的 flock。
+# IT 的更新时段与暂停（4b Task 23）：主 agent 写进 /var/lib/mastersos-system/system-state.json，这里只读（ProtectSystem=strict 下照样读得到）；
+# 已装了 Chrome 时不在时段内、或在暂停中就不联网、不换版本。
+[Unit]
+Description=MastersOS: update Google Chrome (sysext) from Google's signed apt repository
+Documentation=file:/usr/bin/mastersos-agent
+# 只排在 NetworkManager 自己的等待之后，不拉 network-online.target：没网时这一轮很快失败，连上网时钩子再启动一次。
+# （Task 9 时 systemd-networkd-wait-online.service 还是启用的、每次开机等满 2 分钟超时，network-online.target 跟着晚 2 分钟；
+# 现在 mkosi.finalize 在 /usr 里屏蔽了它，network-online 由 NetworkManager-wait-online.service 负责。）
+After=NetworkManager.service NetworkManager-wait-online.service systemd-sysext.service
+
+[Service]
+Type=oneshot
+# --scheduled：定时器（与 NetworkManager 钩子）触发的轮次。没设更新时段的机器上一次查源不到 6 小时就不联网（每小时一轮只为
+# 时段而设，4b Task 23）；还没装 Chrome 时不受限制。IT 要立刻查一次，在 shell 里跑 mastersos-agent chrome（不带这个参数）。
+ExecStart=/usr/bin/mastersos-agent chrome --scheduled
+# 受管的机器：叫醒常驻的 agent，立即把结果回报上去（没在跑——未受管的机器——时忽略）
+ExecStopPost=-/usr/bin/systemctl kill -s USR1 --kill-whom=main mastersos-agent.service
+# 约 140 MB 的下载 + 解开
+TimeoutStartSec=45min
+
+# 加固：它从网上取东西、在验签之前就要解析 TLS/HTTP，并让 gpgv 读对方给的字节；而它要写的只有两个目录。
+# 合并交给 PID 1 的 systemd-sysext.service（systemctl 经 /run 里的套接字，只读的挂载挡不住），见 chrome_sysext.rs。
+PrivateTmp=yes
+ProtectSystem=strict
+# 工作目录由 systemd 每次启动时建好并放开写（有人删了它也不会让单元因 226/NAMESPACE 起不来）；
+# /var/lib/extensions 由 tmpfiles（mastersos.conf）开机建好
+StateDirectory=mastersos/chrome
+StateDirectoryMode=0700
+ReadWritePaths=/var/lib/extensions
+ProtectHome=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+# 不设 RestrictSUIDSGID：dpkg-deb 要建出 setuid 的 chrome-sandbox（Chrome 的后备沙箱）
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+# dpkg-deb -x 以 root 解包：改属主、保留 chrome-sandbox 的 setuid 位、写进 0700 的目录
+CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_FSETID

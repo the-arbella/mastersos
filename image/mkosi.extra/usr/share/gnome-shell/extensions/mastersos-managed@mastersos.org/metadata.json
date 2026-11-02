@@ -1,0 +1,8 @@
+{
+  "uuid": "mastersos-managed@mastersos.org",
+  "name": "MastersOS Managed Indicator",
+  "description": "Adds 'This device is managed by <school>' with a small logo to the quick settings menu. Reads branding.json. UI-only.",
+  "shell-version": ["50"],
+  "session-modes": ["user", "unlock-dialog"],
+  "settings-schema": ""
+}

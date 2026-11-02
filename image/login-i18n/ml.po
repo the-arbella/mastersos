@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "%s നിയന്ത്രിക്കുന്നു"
+
+msgid "Shut down"
+msgstr "ഷട്ട് ഡൗൺ ചെയ്യുക"
+
+msgid "Browse as Guest"
+msgstr "അതിഥിയായി ബ്രൗസ് ചെയ്യുക"
+
+msgid "Add person"
+msgstr "വ്യക്തിയെ ചേർക്കുക"
+
+msgid "Apps"
+msgstr "ആപ്പുകൾ"
+
+msgid "Cancel"
+msgstr "റദ്ദാക്കുക"
+
+msgid "Retry"
+msgstr "വീണ്ടും ശ്രമിക്കുക"
+
+msgid "Opening the sign-in page…"
+msgstr "സൈൻ ഇൻ പേജ് തുറക്കുന്നു…"
+
+msgid "The sign-in page could not be opened."
+msgstr "സൈൻ ഇൻ പേജ് തുറക്കാൻ കഴിഞ്ഞില്ല."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "സ്കൂളുമായി ബന്ധപ്പെടാൻ കഴിയുന്നില്ല. മുകളിലെ ബാറിൽ നിന്ന് Wi-Fi-യിൽ കണക്റ്റ് ചെയ്ത ശേഷം വീണ്ടും ശ്രമിക്കുക."
+
+msgid "School email"
+msgstr "സ്കൂൾ ഇമെയിൽ"
+
+msgid "IT local account"
+msgstr "IT ലോക്കൽ അക്കൗണ്ട്"
+
+msgid "Username"
+msgstr "ഉപയോക്തൃനാമം"
+
+msgid "This account cannot sign in on this computer."
+msgstr "ഈ അക്കൗണ്ടിന് ഈ കമ്പ്യൂട്ടറിൽ സൈൻ ഇൻ ചെയ്യാൻ കഴിയില്ല."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "ഈ അക്കൗണ്ടിന് ഈ കമ്പ്യൂട്ടറിൽ സൈൻ ഇൻ ചെയ്യാൻ കഴിയില്ല. നിങ്ങളുടെ സ്കൂൾ ഇമെയിൽ (%s) ഉപയോഗിക്കുക."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "നിങ്ങൾ മറ്റൊരു അക്കൗണ്ട് ഉപയോഗിച്ചാണ് സൈൻ ഇൻ ചെയ്തത്. ഇവിടെ തിരഞ്ഞെടുത്ത അക്കൗണ്ട് ഉപയോഗിച്ച് വീണ്ടും സൈൻ ഇൻ ചെയ്യുക."
+
+msgid "Language"
+msgstr "ഭാഷ"
+
+msgid "Keyboard"
+msgstr "കീബോർഡ്"
+
+msgid "Continue"
+msgstr "തുടരുക"
+
+msgid "The setting could not be saved. Try again."
+msgstr "ക്രമീകരണം സംരക്ഷിക്കാൻ കഴിഞ്ഞില്ല. വീണ്ടും ശ്രമിക്കുക."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "നിങ്ങളുടെ അക്കൗണ്ട് പ്രവർത്തനരഹിതമാണ്. നിങ്ങളുടെ അഡ്മിനിസ്ട്രേറ്ററെ ബന്ധപ്പെടുക."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "ഈ ഉപകരണം പ്രവർത്തനരഹിതമാണ്. നിങ്ങളുടെ അഡ്മിനിസ്ട്രേറ്ററെ ബന്ധപ്പെടുക."
+
+msgid "Sign in with your school account."
+msgstr "നിങ്ങളുടെ സ്കൂൾ അക്കൗണ്ട് ഉപയോഗിച്ച് സൈൻ ഇൻ ചെയ്യുക."
+
+msgid "Could not sign in. Please try again."
+msgstr "സൈൻ ഇൻ ചെയ്യാൻ കഴിഞ്ഞില്ല. ദയവായി വീണ്ടും ശ്രമിക്കുക."
+
+msgid "Authentication request cancelled"
+msgstr "ആധികാരികത ഉറപ്പാക്കൽ അഭ്യർത്ഥന റദ്ദാക്കി"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "ആധികാരികത ഉറപ്പാക്കാനുള്ള പരമാവധി ശ്രമങ്ങളുടെ എണ്ണം എത്തി"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "ആക്സസ് ടോക്കൺ ലഭിക്കുന്നതിൽ പിശക്. ദയവായി വീണ്ടും ശ്രമിക്കുക."
+
+msgid "Invalid user name"
+msgstr "അസാധുവായ ഉപയോക്തൃനാമം"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "ഈ കമ്പ്യൂട്ടർ സ്കൂൾ ലോക്ക് ചെയ്തിരിക്കുന്നു; ദയവായി IT-യെ ബന്ധപ്പെടുക"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "ഈ കമ്പ്യൂട്ടറിൽ അതിഥി സൈൻ ഇൻ അനുവദനീയമല്ല"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "ലോക്കൽ അക്കൗണ്ടുകൾക്ക് ഈ കമ്പ്യൂട്ടറിൽ സൈൻ ഇൻ ചെയ്യാൻ കഴിയില്ല"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "സ്കൂൾ അക്കൗണ്ടുകൾക്ക് ഈ കമ്പ്യൂട്ടറിൽ സൈൻ ഇൻ ചെയ്യാൻ കഴിയില്ല"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "ഈ ആപ്പ് സൈൻ ഇൻ സ്ക്രീനിൽ നിന്ന് മാത്രമേ തുറക്കാൻ കഴിയൂ"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "ഈ ആപ്പിന് ഒരു നെറ്റ്‌വർക്ക് ആവശ്യമാണ്. മുകളിലെ ബാറിൽ നിന്ന് Wi-Fi-യിൽ കണക്റ്റ് ചെയ്ത ശേഷം വീണ്ടും ശ്രമിക്കുക."

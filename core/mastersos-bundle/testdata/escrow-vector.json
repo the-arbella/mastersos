@@ -1,0 +1,14 @@
+{
+  "note": "TEST-ONLY: the kits are the fixed, public test masters of kit-vectors.json and the recovery key is made up. Never use them for a school.",
+  "kit_masters_hex": [
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+  ],
+  "recipients": [
+    "age1962wfdvfcg5z5wlmnlkylrjpcvm3lh9vqf22yw9pa2s6jnjqr4sqx26wpu",
+    "age1kfjjl6ewlrterxagu2hj8dj2skdej607kffwvw9myr30wxx53e7qptmwz6"
+  ],
+  "recipients_fp": "e6eb7e49c3d7918263f603d902e95d81793da0e81cb1ec286c4e0060bca96991",
+  "recovery_key": "cbdefghi-jklnrtuv-cbdefghi-jklnrtuv-cbdefghi-jklnrtuv-cbdefghi-jklnrtuv",
+  "recovery_key_age": "-----BEGIN AGE ENCRYPTED FILE-----\nYWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSB5emIxd2xocHMwOXNGM0ZI\nOUQxZmFyMHhwamU2L1BMcmJKZGZjamZCYUNBClRIUjF0emwxcVpLYXhqQjhEUElz\ndjRnVDBweUwxNlpKQnhGSlVTaENuVUUKLT4gWDI1NTE5IHdmaENTVVlIMnI0Y01m\nd0t4STk0dWp3VzZwVUZKUE0zcTMxSVplZlg1M0kKVDlKTW8wVlFrc0o0RFJuOCtG\nM1VTaDVVUURBa0ppLzZ2YkQvVmZUUHJ1OAotPiA7TjkrcmRzLWdyZWFzZSBIZjU0\nO2NuOyBOfU5RXQozWUZxU05Gc0ZQejdjNm02S2lCTkI4VVB5V1RDbjJIWkd3M0xs\nRlR5MjZpVmdyc1FsaVdWWEI5TnpjQnEzSFVjCjNsYXVtcHRaMi9iRG9OUHUrMlFp\nWkNobDIyUjRjV3BRUVJNUXcrSnEzNWVaM2FnNmdrZ056WjMzCi0tLSBJbWdsZjJO\naE5EY0xWQnlzQmh5bkVBcVQ1cEVpbnhCQUV0b2N3QkprY3RZCmBvNOBiAbS9/j7s\n8iF18j+HJRo+tyb/PboA9mtbhu0x3cvCJFBaaQKufSqC6VAZ+2NcgdOYVZgz+Mq6\ne6g6Wimv8jMmqigANP0Ut5JC5PXQASoEupUx94iPH/ssj+SyKfQvbCFpQb4=\n-----END AGE ENCRYPTED FILE-----\n"
+}

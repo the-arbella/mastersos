@@ -1,0 +1,24 @@
+# 临时账号的清理（计划 9，设计 §4.2）：与 mastersos-guest-cleanup.service 同一套机制，按实例名（账号名，例如
+# kiosk-nwea）清理。等这个账号的进程都没了（user-<uid>.slice 不再 active，30 秒后 SIGKILL 再等 5 秒）之后，
+# 卸载它的家目录、清 /tmp、/var/tmp、/dev/shm 里属于它的东西、挂一份新的 tmpfs、写 /run/mastersos/<账号>-ready
+# （PAM 的 pam-session 只认这个标记）。由它的 user manager 停下时、开机时、agent 建删账号之后与点登录被拒时拉起。
+# 访客仍用自己的 mastersos-guest-cleanup.service（guest-cleanup 是 ephemeral-cleanup guest 的别名）。
+# 没有 [Install]：不进 multi-user.target，开机时由 agent 对每个账号拉起一次。
+# 不排在 GDM 之前（复审 M5）：最坏要等 35 秒 slice + 删大量文件，会吃掉健康检查等显示管理器的 120 秒；
+# 没备好时点登录只是被拒（并拉起清理），登录界面不用等它。
+# 失败了 30 秒后再来（复审 I4）：清理可以重复做、每次都往前推进；不重来的话要等到下次开机才进得来
+# 不设 PrivateTmp=：要清的就是系统的 /tmp、/var/tmp（私有的 /tmp 会让它清个空）
+# 排在 mastersos-agent-local 之后：开机快速应用可能刚建出账号，清理要看到它才挂 tmpfs（两者并行时，agent
+# 在清理跑着时发的 start 会并进正在跑的那一次、不再重跑）。agent 那边一律 --no-block，不会等着这里而互相卡住
+[Unit]
+Description=MastersOS: clean up after the temporary account %i
+Documentation=file:/usr/bin/mastersos-agent
+After=local-fs.target systemd-tmpfiles-setup.service mastersos-agent-local.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/mastersos-agent ephemeral-cleanup %i
+Slice=system.slice
+TimeoutStartSec=60
+Restart=on-failure
+RestartSec=30s

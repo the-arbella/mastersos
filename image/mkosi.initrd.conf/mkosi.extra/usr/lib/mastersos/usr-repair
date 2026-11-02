@@ -1,0 +1,441 @@
+#!/bin/bash
+# ExecStart of mastersos-usr-repair.service (initrd only, before the /usr verity device is set up): check the active /usr slot
+# and, when asked or when it is bad, write it back block for block from the golden copy (usr-self-repair Tasks 3 and 6).
+#   1. waits (udevadm wait, 15 s) for the ESP named by LoaderDevicePartUUID (missing -> exit 0), then until udev has initialized
+#      every partition of the boot disk (golden_dev needs their PARTTYPE from the udev database);
+#   2. no golden-sig partition on the boot disk (pilot machine, install USB stick) -> exit 0, the ESP is not touched;
+#   3. waits for the active slot's data and hash partitions, whose PARTUUIDs are the two halves of usrhash= on the UKI command
+#      line; the signature partition is the data partition's number - 2 (golden-lib slot_siblings, by GPT number and type, not by
+#      content: a damaged signature partition must still be found to be rewritten). Data and hash must be on the boot disk (a USB
+#      stick of the same version carries the same usrhash-derived PARTUUIDs);
+#   4. mounts the ESP, reads EFI/MastersOS/{boot-pending,repair-usr,repair-count,repair-inprogress,repair-interrupted}, creates
+#      boot-pending when it is not there, and decides with initrd_plan: skip, verify (the last boot never reached boot-complete, or
+#      integrity asked for a repair in repair-usr: read the active slot through and compare its signature partition with the golden
+#      one byte for byte; bad -> repair; clean -> a request is dropped without writing), repair (a repair was interrupted) or
+#      give-up (two completed repairs of this root hash did not verify). A request is checked first because this script's trust
+#      root is usrhash: a persistent false "bad" in userspace (a loop or dm quirk on some machine) must not rewrite a clean slot,
+#      1.8 GB, on every boot, which repair-count would never stop (every such rewrite verifies);
+#   5. repair_slot: the golden copy must name usrhash and read through with it, then usr (erofs size only), verity and signature
+#      are written over the active slot and the slot is read through again. Only a repair that ran to the end and still does not
+#      verify counts in repair-count; an interrupted one (power cut, unit timeout) leaves repair-inprogress and is retried.
+# Interrupted repairs are bounded too: each boot that finds repair-inprogress naming usrhash counts one interruption in
+# repair-interrupted "<roothash> <k>"; at k = MAX_INTERRUPTED (3) the initrd stops retrying and records the root hash as given up
+# (repair-count "<roothash> 2", the same state as two failed repairs), so a repair that never finishes (a disk too slow for the
+# unit's 10 min) cannot rewrite the slot on every boot. A finished repair removes both files; integrity removes them (with
+# repair-count) once the active slot of that root hash reads clean.
+# Trust root: the usrhash on the UKI command line; no kernel-keyring signature check (verity_check --no-sig, see golden-lib),
+# with one exception: when only the signature area differs from the golden one (pending verify), the golden signature itself is
+# judged by the initrd's kernel keyring (signed verity_check --no-read of the golden copy) before it may overwrite the slot's.
+# Anything but rc 0 (a damaged golden blob, or 3: the keyring cannot judge, e.g. Secure Boot off on a MOK machine) writes
+# nothing and leaves the state files alone, so a damaged golden signature never replaces a good one.
+# The ESP is only mounted while state files are read or written (not during the long reads and writes) and a trap unmounts it on
+# every exit path. Anything unexpected exits 0: this unit must never stop the machine from booting. Only INITRD_TOOLS (golden-lib)
+# and bash builtins are used (tests/usr-repair-test.sh runs the script with nothing else on PATH).
+# Sourced (tests) it only defines functions; paths are variables so tests can point them elsewhere: MASTERSOS_GOLDEN_LIB,
+# MASTERSOS_ESP_MNT, MASTERSOS_CMDLINE, MASTERSOS_BY_PARTUUID, MASTERSOS_PROFILE_FILE, MASTERSOS_CONSOLE, MASTERSOS_VERITY_CHECK
+# (a command used instead of golden-lib's verity_check), plus golden-lib's own (MASTERSOS_LOADER_PARTUUID_FILE, ...).
+set -euo pipefail
+
+GOLDEN_LIB=${MASTERSOS_GOLDEN_LIB:-/usr/lib/mastersos/golden-lib}
+ESP_MNT=${MASTERSOS_ESP_MNT:-/run/mastersos-esp}
+CMDLINE=${MASTERSOS_CMDLINE:-/proc/cmdline}
+BY_PARTUUID=${MASTERSOS_BY_PARTUUID:-/dev/disk/by-partuuid}
+# the initrd's own copy: mkosi.initrd.conf/mkosi.profiles/lab/ puts "lab" there, release initrds have no such file
+PROFILE_FILE=${MASTERSOS_PROFILE_FILE:-/usr/lib/mastersos/profile}
+CONSOLE=${MASTERSOS_CONSOLE:-/dev/console}
+VERITY_CHECK=${MASTERSOS_VERITY_CHECK:-verity_check}
+STATE_DIR=EFI/MastersOS
+MAX_TRIES=2       # completed repairs of one root hash that did not verify before giving up
+MAX_INTERRUPTED=3 # boots that found a repair of one root hash cut off before giving up
+REPAIR_TEXT="Repairing system files, do not power off…"
+ESP_MOUNTED=0
+ESP_PAUSED=0
+
+log() { echo "mastersos-usr-repair: $*"; }
+
+# cmdline_usrhash -> the 64-hex usrhash= value of the kernel command line; 1 when there is none
+cmdline_usrhash() {
+	local h
+	h=$(sed -nE 's/^(.* )?usrhash=([0-9a-f]{64})( .*)?$/\2/p' "$CMDLINE" | head -n 1)
+	[ -n "$h" ] || return 1
+	echo "$h"
+}
+
+# hex_uuid <32 hex> -> 8-4-4-4-12. systemd-repart sets the data partition's PARTUUID to the first 128 bits of the
+# root hash and the hash partition's to the last 128 bits, unchanged (VM 170: usrhash 8e23106e…48477bbb…, sda7
+# 8e23106e-ae00-986c-afdf-5579681645ec, sda6 48477bbb-52f1-986e-508a-9c3139f70be4).
+hex_uuid() { echo "${1:0:8}-${1:8:4}-${1:12:4}-${1:16:4}-${1:20:12}"; }
+
+# esp_mount -> mounts the boot ESP (by LoaderDevicePartUUID) read-write on $ESP_MNT; 1 when it cannot
+esp_mount() {
+	local uuid
+	uuid=$(loader_partuuid) || return 1
+	mkdir -p "$ESP_MNT" || return 1
+	mount -t vfat -o rw,nosuid,nodev,noexec,umask=0077 "$BY_PARTUUID/$uuid" "$ESP_MNT" || return 1
+	ESP_MOUNTED=1
+}
+
+# esp_umount -> sync and unmount the ESP if esp_mount mounted it (a clean unmount clears the FAT dirty bit)
+esp_umount() {
+	[ "$ESP_MOUNTED" = 1 ] || return 0
+	sync
+	if umount "$ESP_MNT"; then
+		ESP_MOUNTED=0
+	else
+		log "cannot unmount $ESP_MNT"
+		return 1
+	fi
+}
+
+# esp_pause / esp_resume: unmount the ESP around a long read or write (a power cut then finds a clean FAT) and mount it again.
+# Both do nothing when the ESP was not mounted by esp_mount (tests pass a plain directory).
+esp_pause() {
+	[ "$ESP_MOUNTED" = 1 ] || return 0
+	esp_umount || return 1
+	ESP_PAUSED=1
+}
+esp_resume() {
+	[ "$ESP_PAUSED" = 1 ] || return 0
+	esp_mount || {
+		log "cannot mount the ESP again"
+		return 1
+	}
+	ESP_PAUSED=0
+}
+
+# dev_of <by-partuuid path> -> /dev/sdXN (lsblk resolves the link; there is no readlink in the initrd)
+dev_of() { lsblk -dnpo NAME "$1" 2>/dev/null | head -n 1; }
+
+# disk_parts_ready -> 0 once udev has initialized every partition of the boot disk (udevadm wait, 15 s); the partition names
+# come from sysfs (lsblk NAME,TYPE), which the kernel fills before udev runs
+disk_parts_ready() {
+	local disk parts
+	disk=$(boot_disk) || return 1
+	parts=$(lsblk -nrpo NAME,TYPE "$disk" 2>/dev/null | sed -n 's/ part$//p')
+	[ -n "$parts" ] || return 1
+	# shellcheck disable=SC2086 # one device name per word
+	udevadm wait --timeout=15 $parts
+}
+
+# sig_bytes <dev-or-file> -> the 16 KiB signature area as hex (no cmp in the initrd)
+sig_bytes() { od -An -v -tx1 -N16384 "$1" 2>/dev/null | tr -d ' \n'; }
+
+# request_hash <repair-usr content> -> the root hash it names; 1 unless it is "<partuuid> <64 hex>"
+request_hash() {
+	[[ $1 =~ ^[0-9a-f-]{36}\ ([0-9a-f]{64})$ ]] || return 1
+	echo "${BASH_REMATCH[1]}"
+}
+
+# tries_of <repair-count content> <roothash> -> the count when it names <roothash>, else 0
+tries_of() {
+	if [[ $1 =~ ^([0-9a-f]{64})\ ([0-9]+)$ ]] && [ "${BASH_REMATCH[1]}" = "$2" ]; then
+		echo "$((10#${BASH_REMATCH[2]}))"
+	else
+		echo 0
+	fi
+}
+
+# initrd_plan <usrhash> <repair-usr> <repair-count> <repair-inprogress> <pending 0|1> -> skip | verify | repair | give-up
+# (the arguments are the files' contents, empty when absent). An interrupted repair of this root hash (repair-inprogress names
+# it) is always retried, even at the cap: it was cut off, not failed. A request or a pending boot is verified first (a request
+# for a slot that reads clean here is dropped) and gives up once repair-count names this root hash with MAX_TRIES or more.
+# Requests and counts for other root hashes are ignored.
+initrd_plan() {
+	local h=$1 req=$2 count=$3 inprog=$4 pending=$5 asked=0 gave_up=0
+	if [ "$inprog" = "$h" ]; then
+		echo repair
+		return 0
+	fi
+	[ "$(request_hash "$req" 2>/dev/null)" = "$h" ] && asked=1
+	[ "$(tries_of "$count" "$h")" -ge "$MAX_TRIES" ] && gave_up=1
+	if [ "$asked" = 1 ] || [ "$pending" = 1 ]; then
+		if [ "$gave_up" = 1 ]; then
+			echo give-up
+		else
+			echo verify
+		fi
+	else
+		echo skip
+	fi
+}
+
+# esp_put <file> <line>: <file>.new, fsync, read back, rename (the same pattern as the ESP writes in userspace)
+esp_put() {
+	local f=$1
+	rm -f "$f.new"
+	if printf '%s\n' "$2" >"$f.new" && sync "$f.new" && [ "$(cat "$f.new")" = "$2" ] && mv -f "$f.new" "$f"; then
+		sync
+		return 0
+	fi
+	rm -f "$f.new"
+	log "cannot write $f"
+	return 1
+}
+
+# show_progress: tell whoever looks at the screen not to power off (plymouth if the initrd has it, else the console)
+show_progress() {
+	if command -v plymouth >/dev/null 2>&1 && plymouth --ping 2>/dev/null; then
+		plymouth display-message --text="$REPAIR_TEXT" 2>/dev/null || true
+	else
+		echo "$REPAIR_TEXT" >"$CONSOLE" 2>/dev/null || true
+	fi
+}
+
+# slot_write <target> <dd operands...>: dd <operands> of=<target> conv=fsync,notrunc while holding an exclusive flock on the
+# target's whole disk (udev takes a shared one before probing), then udevadm settle. notrunc only matters for the tests' files.
+slot_write() {
+	local dst=$1 disk fd rc=0
+	shift
+	disk=$(whole_disk "$dst") || {
+		log "cannot find the disk of $dst"
+		return 1
+	}
+	exec {fd}<"$disk" || return 1
+	if ! flock -x -w 60 "$fd"; then
+		exec {fd}<&-
+		log "cannot lock $disk"
+		return 1
+	fi
+	dd "$@" of="$dst" conv=fsync,notrunc status=none || rc=$?
+	exec {fd}<&-
+	udevadm settle --timeout=30 >/dev/null 2>&1 || true
+	[ "$rc" = 0 ] || log "dd $* of=$dst failed ($rc)"
+	return "$rc"
+}
+
+# since <start-us> -> seconds since then, one decimal
+since() {
+	local us=$((${EPOCHREALTIME/./} - $1))
+	printf '%d.%d' $((us / 1000000)) $((us % 1000000 / 100000))
+}
+
+# repair_slot <golden-sig> <golden-verity> <golden-usr> <slot-sig> <slot-verity> <slot-usr> <esp> <roothash>
+# Rewrites the slot from the golden copy. <esp> is the mounted ESP (state files under EFI/MastersOS). Returns 0 when nothing was
+# written (golden copy unusable: the request is dropped) or the slot verifies afterwards, 1 after a failed attempt.
+# Write order: usr (erofs size), verity, signature; no zeroing first: the initrd finds the active slot by usrhash, not by its
+# signature, and repair-inprogress (written before the first block) makes an interrupted repair run again on the next boot.
+# A dd that fails (I/O error, read-only device) counts like a copy that does not verify, so a disk that cannot be written is
+# not rewritten on every boot. Lab hook (Task 10 acceptance item 8): with the initrd's profile "lab" and
+# EFI/MastersOS/lab-fail-verify on the ESP, the check after the write always fails.
+repair_slot() {
+	local gsig=$1 gverity=$2 gusr=$3 ssig=$4 sverity=$5 susr=$6 h=$8
+	local st=$7/$STATE_DIR grh bytes vbytes lab_fail=0 ok=1 t t0 n
+	grh=$(sig_roothash "$gsig" 2>/dev/null) || grh=""
+	if [ "$grh" != "$h" ]; then
+		log "the golden copy is ${grh:-not valid}, not the running $h: nothing written"
+		rm -f "$st/repair-usr"
+		return 0
+	fi
+	bytes=$(erofs_bytes "$gusr" 2>/dev/null) || bytes=""
+	vbytes=$(verity_data_bytes "$gverity" 2>/dev/null) || vbytes=""
+	if [ -z "$bytes" ] || [ "$bytes" != "$vbytes" ]; then
+		# a copy of the wrong length would never verify, and every boot would rewrite the slot again
+		log "golden usr size ${bytes:-?} (erofs) differs from the verity superblock's ${vbytes:-?}: nothing written"
+		rm -f "$st/repair-usr"
+		return 0
+	fi
+	if [ "$(cat "$PROFILE_FILE" 2>/dev/null)" = lab ] && [ -e "$st/lab-fail-verify" ]; then
+		lab_fail=1
+		log "lab: $STATE_DIR/lab-fail-verify is set, the check after the write will fail"
+	fi
+	esp_pause || return 0
+	t=${EPOCHREALTIME/./}
+	if ! "$VERITY_CHECK" "$gusr" "$gverity" "$gsig" "$h" --no-sig; then
+		log "the golden copy does not verify: nothing written"
+		esp_resume && rm -f "$st/repair-usr"
+		return 0
+	fi
+	log "golden copy read through in $(since "$t") s"
+	esp_resume || return 0
+	if ! mkdir -p "$st" || ! esp_put "$st/repair-inprogress" "$h"; then
+		log "cannot record repair-inprogress: nothing written"
+		return 0
+	fi
+	show_progress
+	log "rewriting the active slot ($susr $sverity $ssig) from the golden copy"
+	esp_pause || true
+	t0=${EPOCHREALTIME/./}
+	t=$t0
+	if slot_write "$susr" if="$gusr" bs=4M iflag=count_bytes count="$bytes"; then
+		log "usr written: $bytes bytes in $(since "$t") s"
+		t=${EPOCHREALTIME/./}
+		if slot_write "$sverity" if="$gverity" bs=4M && slot_write "$ssig" if="$gsig" bs=16K count=1; then
+			log "verity and signature written in $(since "$t") s"
+			t=${EPOCHREALTIME/./}
+			if [ "$lab_fail" = 0 ] && "$VERITY_CHECK" "$susr" "$sverity" "$ssig" "$h" --no-sig; then
+				ok=0
+				log "slot read through in $(since "$t") s"
+			fi
+		fi
+	fi
+	if ! esp_resume; then
+		log "cannot record the result: repair-inprogress stays, the next boot repairs again"
+		return "$ok"
+	fi
+	if [ "$ok" = 0 ]; then
+		rm -f "$st/repair-usr" "$st/repair-inprogress" "$st/repair-interrupted"
+		sync
+		log "repaired: the active slot verifies ($(since "$t0") s for writing and checking)"
+		return 0
+	fi
+	n=$(($(tries_of "$(cat "$st/repair-count" 2>/dev/null)" "$h") + 1))
+	esp_put "$st/repair-count" "$h $n" || true
+	rm -f "$st/repair-inprogress" "$st/repair-interrupted"
+	sync
+	log "repair failed: the slot does not verify after the write (attempt $n of $MAX_TRIES)"
+	return 1
+}
+
+usr_repair_main() {
+	local esp_uuid hash data_link hash_link gsig gverity gusr data hashdev sibs ssig st pending=0 req count inprog intr plan bd k rc
+	local asked clean
+	# shellcheck source-path=SCRIPTDIR source=golden-lib
+	if ! . "$GOLDEN_LIB"; then
+		log "cannot load $GOLDEN_LIB, nothing to do"
+		return 0
+	fi
+	if ! esp_uuid=$(loader_partuuid); then
+		log "no LoaderDevicePartUUID, nothing to do"
+		return 0
+	fi
+	if ! hash=$(cmdline_usrhash); then
+		log "no usrhash= on the command line, nothing to do"
+		return 0
+	fi
+	# the ESP first: golden_dev finds the boot disk through it; the slot partitions only matter when there is a golden copy
+	if ! udevadm wait --timeout=15 "$BY_PARTUUID/$esp_uuid"; then
+		log "the ESP did not show up within 15 s, nothing to do"
+		return 0
+	fi
+	# golden_dev reads PARTTYPE through lsblk, which takes it from the udev database: until udev has processed a partition its
+	# PARTTYPE is empty. Measured on VM 165 (20261027.3): with only the ESP waited for, usr-repair ran at 2.32 s and found
+	# "no golden copy" on a disk that has one. Wait (sysfs names, bounded) until every partition of the boot disk is initialized.
+	if ! disk_parts_ready; then
+		log "the boot disk's partitions are not all initialized by udev within 15 s; looking for the golden copy anyway"
+	fi
+	if ! gsig=$(golden_dev "$GOLDEN_SIG_TYPE"); then
+		log "no golden copy on the boot disk, nothing to do"
+		return 0
+	fi
+	gverity=$(golden_dev "$GOLDEN_VERITY_TYPE") || gverity=""
+	gusr=$(golden_dev "$GOLDEN_USR_TYPE") || gusr=""
+	data_link=$BY_PARTUUID/$(hex_uuid "${hash:0:32}")
+	hash_link=$BY_PARTUUID/$(hex_uuid "${hash:32:32}")
+	if ! udevadm wait --timeout=15 "$data_link" "$hash_link"; then
+		log "the active /usr partitions did not show up within 15 s, nothing to do"
+		return 0
+	fi
+	data=$(dev_of "$data_link")
+	hashdev=$(dev_of "$hash_link")
+	ssig=""
+	bd=$(boot_disk) || bd=""
+	if [ -z "$data" ] || [ -z "$bd" ] || [ "$(whole_disk "$data")" != "$bd" ] || [ "$(whole_disk "$hashdev")" != "$bd" ]; then
+		log "active slot data/hash ${data:-?} ${hashdev:-?} are not on the boot disk ${bd:-?}: not touching them"
+	elif sibs=$(slot_siblings "$data") && [ "${sibs#* }" = "$hashdev" ]; then
+		ssig=${sibs%% *}
+		log "active slot sig/hash/data: $ssig $hashdev $data"
+	else
+		log "active slot data partition $data: cannot find its signature partition, or its hash partition is not ${hashdev:-?}"
+	fi
+	if ! esp_mount; then
+		log "cannot mount the ESP (PARTUUID $esp_uuid), nothing to do"
+		return 0
+	fi
+	st=$ESP_MNT/$STATE_DIR
+	if [ -e "$st/boot-pending" ]; then
+		pending=1
+		log "previous boot pending: the last boot did not reach boot-complete"
+	elif mkdir -p "$st" && : >"$st/boot-pending"; then
+		log "boot-pending set"
+	else
+		log "cannot write $STATE_DIR/boot-pending on the ESP"
+	fi
+	req=$(cat "$st/repair-usr" 2>/dev/null) || req=""
+	count=$(cat "$st/repair-count" 2>/dev/null) || count=""
+	inprog=$(cat "$st/repair-inprogress" 2>/dev/null) || inprog=""
+	if [ -n "$req" ] && [ "$(request_hash "$req" 2>/dev/null)" != "$hash" ]; then
+		log "repair-usr is for another root hash or not valid ($req): removed"
+		rm -f "$st/repair-usr"
+	fi
+	if [ -n "$inprog" ] && [ "$inprog" != "$hash" ]; then
+		log "repair-inprogress is for another root hash ($inprog): removed"
+		rm -f "$st/repair-inprogress"
+	fi
+	intr=$(cat "$st/repair-interrupted" 2>/dev/null) || intr=""
+	if [ -n "$intr" ] && [ "$(tries_of "$intr" "$hash")" = 0 ]; then
+		log "repair-interrupted is for another root hash or not valid ($intr): removed"
+		rm -f "$st/repair-interrupted"
+		intr=""
+	fi
+	if [ "$inprog" = "$hash" ]; then
+		k=$(($(tries_of "$intr" "$hash") + 1))
+		if [ "$k" -lt "$MAX_INTERRUPTED" ]; then
+			esp_put "$st/repair-interrupted" "$hash $k" || true
+			log "the last repair of $hash was interrupted ($k of $MAX_INTERRUPTED): repairing again"
+		elif [ "$(tries_of "$count" "$hash")" -ge "$MAX_TRIES" ] || esp_put "$st/repair-count" "$hash $MAX_TRIES"; then
+			[ "$(tries_of "$count" "$hash")" -ge "$MAX_TRIES" ] || count="$hash $MAX_TRIES"
+			rm -f "$st/repair-inprogress" "$st/repair-interrupted"
+			inprog=""
+			log "the repair of $hash was cut off $k times: no more retries (repair-count: $count)"
+		fi
+	fi
+	plan=$(initrd_plan "$hash" "$req" "$count" "$inprog" "$pending")
+	asked=0
+	[ "$(request_hash "$req" 2>/dev/null)" != "$hash" ] || asked=1
+	case $plan in
+	skip) ;;
+	give-up)
+		log "giving up on $hash: repair-count is '$count' (limit $MAX_TRIES); booting as is"
+		;;
+	verify | repair)
+		if [ -z "$ssig" ]; then
+			log "cannot $plan: the active slot's partitions are not known"
+		elif [ -z "$gverity" ] || [ -z "$gusr" ]; then
+			log "cannot $plan: the golden copy has no verity or usr partition"
+		else
+			if [ "$plan" = verify ]; then
+				clean=0
+				[ "$asked" = 0 ] || log "repair requested for $hash: reading the active slot through first"
+				esp_pause || true
+				# --no-sig only compares the signature area's rootHash: a damaged signature blob would pass it and then fail
+				# usr=signed in systemd-veritysetup, so the area must also equal the golden one (when that names this root hash)
+				if ! "$VERITY_CHECK" "$data" "$hashdev" "$ssig" "$hash" --no-sig; then
+					log "the active slot does not verify: repairing"
+				elif [ "$(sig_roothash "$gsig" 2>/dev/null)" = "$hash" ] && [ "$(sig_bytes "$ssig")" != "$(sig_bytes "$gsig")" ]; then
+					# either blob may be the damaged one: only a golden signature the kernel accepts may replace the slot's
+					rc=0
+					"$VERITY_CHECK" "$gusr" "$gverity" "$gsig" "$hash" --no-read || rc=$?
+					if [ "$rc" = 0 ]; then
+						log "the active slot's signature partition differs from the golden copy's, whose signature verifies: repairing"
+					else
+						log "the active slot's signature partition differs from the golden copy's, but the golden signature does not verify (rc $rc): not writing"
+						plan=skip
+					fi
+				else
+					log "the active slot verifies"
+					plan=skip
+					clean=1
+				fi
+				if ! esp_resume; then
+					plan=skip
+				elif [ "$clean" = 1 ] && [ "$asked" = 1 ]; then
+					# userspace thought the slot bad, this check (trust root: usrhash) reads it clean: nothing to write, nothing
+					# counted; integrity asks again if it still disagrees, and this boot's read is all it costs
+					rm -f "$st/repair-usr"
+					sync
+					log "repair-usr dropped: the active slot reads clean"
+				fi
+			fi
+			[ "$plan" = skip ] || repair_slot "$gsig" "$gverity" "$gusr" "$ssig" "$hashdev" "$data" "$ESP_MNT" "$hash" || true
+		fi
+		;;
+	esac
+	esp_umount || true
+}
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+	trap 'esp_umount || true' EXIT
+	trap 'exit 0' TERM INT
+	usr_repair_main || true
+	exit 0
+fi

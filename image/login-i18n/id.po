@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "Dikelola oleh %s"
+
+msgid "Shut down"
+msgstr "Matikan"
+
+msgid "Browse as Guest"
+msgstr "Jelajahi sebagai Tamu"
+
+msgid "Add person"
+msgstr "Tambah orang"
+
+msgid "Apps"
+msgstr "Aplikasi"
+
+msgid "Cancel"
+msgstr "Batal"
+
+msgid "Retry"
+msgstr "Coba lagi"
+
+msgid "Opening the sign-in page…"
+msgstr "Membuka halaman masuk…"
+
+msgid "The sign-in page could not be opened."
+msgstr "Halaman masuk tidak dapat dibuka."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Tidak dapat terhubung ke sekolah. Sambungkan ke Wi-Fi dari bilah atas, lalu coba lagi."
+
+msgid "School email"
+msgstr "Email sekolah"
+
+msgid "IT local account"
+msgstr "Akun lokal IT"
+
+msgid "Username"
+msgstr "Nama pengguna"
+
+msgid "This account cannot sign in on this computer."
+msgstr "Akun ini tidak dapat masuk di komputer ini."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "Akun ini tidak dapat masuk di komputer ini. Gunakan email sekolah Anda (%s)."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Anda masuk dengan akun yang berbeda. Masuk lagi dengan akun yang Anda pilih di sini."
+
+msgid "Language"
+msgstr "Bahasa"
+
+msgid "Keyboard"
+msgstr "Papan ketik"
+
+msgid "Continue"
+msgstr "Lanjutkan"
+
+msgid "The setting could not be saved. Try again."
+msgstr "Pengaturan tidak dapat disimpan. Coba lagi."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "Akun Anda dinonaktifkan. Hubungi administrator Anda."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "Perangkat ini dinonaktifkan. Hubungi administrator Anda."
+
+msgid "Sign in with your school account."
+msgstr "Masuk dengan akun sekolah Anda."
+
+msgid "Could not sign in. Please try again."
+msgstr "Tidak dapat masuk. Silakan coba lagi."
+
+msgid "Authentication request cancelled"
+msgstr "Permintaan autentikasi dibatalkan"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "Jumlah maksimum percobaan autentikasi tercapai"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Gagal mengambil token akses. Silakan coba lagi."
+
+msgid "Invalid user name"
+msgstr "Nama pengguna tidak valid"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "Komputer ini telah dikunci oleh sekolah; silakan hubungi IT"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "Masuk sebagai tamu tidak diizinkan di komputer ini"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "Akun lokal tidak dapat masuk di komputer ini"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "Akun sekolah tidak dapat masuk di komputer ini"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Aplikasi ini hanya dapat dibuka dari layar masuk"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Aplikasi ini memerlukan jaringan. Sambungkan ke Wi-Fi dari bilah atas, lalu coba lagi."

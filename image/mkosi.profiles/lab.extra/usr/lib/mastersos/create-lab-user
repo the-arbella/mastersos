@@ -1,0 +1,12 @@
+#!/bin/bash
+# lab：首次开机（含恢复出厂后）建试验用户 student（sudo），root 与它用同一口令；口令只带哈希，明文在 Mac 上。
+set -euo pipefail
+hash=$(cat /usr/lib/mastersos/lab-pw.hash)
+id student >/dev/null 2>&1 || useradd -m -s /bin/bash -G sudo -p "$hash" student
+usermod -p "$hash" root
+if [ -s /usr/lib/mastersos/authorized_keys ]; then
+	install -d -m700 -o student -g student /home/student/.ssh
+	install -m600 -o student -g student /usr/lib/mastersos/authorized_keys /home/student/.ssh/authorized_keys
+fi
+install -d -m700 /var/lib/mastersos-lab
+touch /var/lib/mastersos-lab/user-created

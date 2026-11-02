@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "በ%s የሚተዳደር"
+
+msgid "Shut down"
+msgstr "ዝጋ"
+
+msgid "Browse as Guest"
+msgstr "እንደ እንግዳ አስስ"
+
+msgid "Add person"
+msgstr "ሰው ጨምር"
+
+msgid "Apps"
+msgstr "መተግበሪያዎች"
+
+msgid "Cancel"
+msgstr "ተው"
+
+msgid "Retry"
+msgstr "እንደገና ሞክር"
+
+msgid "Opening the sign-in page…"
+msgstr "የመግቢያ ገጹን በመክፈት ላይ…"
+
+msgid "The sign-in page could not be opened."
+msgstr "የመግቢያ ገጹን መክፈት አልተቻለም።"
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "ትምህርት ቤቱን ማግኘት አልተቻለም። ከላይኛው አሞሌ ከWi-Fi ጋር ይገናኙ፣ ከዚያ እንደገና ይሞክሩ።"
+
+msgid "School email"
+msgstr "የትምህርት ቤት ኢሜይል"
+
+msgid "IT local account"
+msgstr "የአይቲ አካባቢያዊ መለያ"
+
+msgid "Username"
+msgstr "የተጠቃሚ ስም"
+
+msgid "This account cannot sign in on this computer."
+msgstr "ይህ መለያ በዚህ ኮምፒውተር ላይ መግባት አይችልም።"
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "ይህ መለያ በዚህ ኮምፒውተር ላይ መግባት አይችልም። የትምህርት ቤት ኢሜይልዎን (%s) ይጠቀሙ።"
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "በሌላ መለያ ገብተዋል። እዚህ በመረጡት መለያ እንደገና ይግቡ።"
+
+msgid "Language"
+msgstr "ቋንቋ"
+
+msgid "Keyboard"
+msgstr "ኪቦርድ"
+
+msgid "Continue"
+msgstr "ቀጥል"
+
+msgid "The setting could not be saved. Try again."
+msgstr "ቅንብሩን ማስቀመጥ አልተቻለም። እንደገና ይሞክሩ።"
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "መለያዎ ተሰናክሏል። አስተዳዳሪዎን ያነጋግሩ።"
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "ይህ መሣሪያ ተሰናክሏል። አስተዳዳሪዎን ያነጋግሩ።"
+
+msgid "Sign in with your school account."
+msgstr "በትምህርት ቤት መለያዎ ይግቡ።"
+
+msgid "Could not sign in. Please try again."
+msgstr "መግባት አልተቻለም። እባክዎ እንደገና ይሞክሩ።"
+
+msgid "Authentication request cancelled"
+msgstr "የማረጋገጫ ጥያቄ ተሰርዟል"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "ከፍተኛው የማረጋገጫ ሙከራ ብዛት ደርሷል"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "የመዳረሻ ማስመሰያ በማምጣት ላይ ስህተት ተፈጥሯል። እባክዎ እንደገና ይሞክሩ።"
+
+msgid "Invalid user name"
+msgstr "ልክ ያልሆነ የተጠቃሚ ስም"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "ይህ ኮምፒውተር በትምህርት ቤቱ ተቆልፏል፤ እባክዎ አይቲን ያነጋግሩ"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "በዚህ ኮምፒውተር ላይ እንደ እንግዳ መግባት አይፈቀድም"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "አካባቢያዊ መለያዎች በዚህ ኮምፒውተር ላይ መግባት አይችሉም"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "የትምህርት ቤት መለያዎች በዚህ ኮምፒውተር ላይ መግባት አይችሉም"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "ይህ መተግበሪያ ከመግቢያ ማያ ገጹ ብቻ ነው የሚከፈተው"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "ይህ መተግበሪያ አውታረ መረብ ይፈልጋል። ከላይኛው አሞሌ ከWi-Fi ጋር ይገናኙ፣ ከዚያ እንደገና ይሞክሩ።"

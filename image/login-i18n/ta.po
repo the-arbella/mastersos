@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "%s நிர்வகிக்கிறது"
+
+msgid "Shut down"
+msgstr "நிறுத்து"
+
+msgid "Browse as Guest"
+msgstr "விருந்தினராக உலாவு"
+
+msgid "Add person"
+msgstr "நபரைச் சேர்"
+
+msgid "Apps"
+msgstr "பயன்பாடுகள்"
+
+msgid "Cancel"
+msgstr "ரத்துசெய்"
+
+msgid "Retry"
+msgstr "மீண்டும் முயற்சி"
+
+msgid "Opening the sign-in page…"
+msgstr "உள்நுழைவுப் பக்கம் திறக்கப்படுகிறது…"
+
+msgid "The sign-in page could not be opened."
+msgstr "உள்நுழைவுப் பக்கத்தைத் திறக்க முடியவில்லை."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "பள்ளியுடன் இணைக்க முடியவில்லை. மேல் பட்டியிலிருந்து Wi-Fi உடன் இணைத்து, மீண்டும் முயலவும்."
+
+msgid "School email"
+msgstr "பள்ளி மின்னஞ்சல்"
+
+msgid "IT local account"
+msgstr "IT உள்ளூர் கணக்கு"
+
+msgid "Username"
+msgstr "பயனர்பெயர்"
+
+msgid "This account cannot sign in on this computer."
+msgstr "இந்தக் கணினியில் இந்தக் கணக்கால் உள்நுழைய முடியாது."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "இந்தக் கணினியில் இந்தக் கணக்கால் உள்நுழைய முடியாது. உங்கள் பள்ளி மின்னஞ்சலைப் (%s) பயன்படுத்தவும்."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "நீங்கள் வேறொரு கணக்கில் உள்நுழைந்துள்ளீர்கள். இங்கே தேர்ந்தெடுத்த கணக்கில் மீண்டும் உள்நுழையவும்."
+
+msgid "Language"
+msgstr "மொழி"
+
+msgid "Keyboard"
+msgstr "விசைப்பலகை"
+
+msgid "Continue"
+msgstr "தொடர்"
+
+msgid "The setting could not be saved. Try again."
+msgstr "அமைப்பைச் சேமிக்க முடியவில்லை. மீண்டும் முயலவும்."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "உங்கள் கணக்கு முடக்கப்பட்டுள்ளது. உங்கள் நிர்வாகியைத் தொடர்புகொள்ளவும்."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "இந்தச் சாதனம் முடக்கப்பட்டுள்ளது. உங்கள் நிர்வாகியைத் தொடர்புகொள்ளவும்."
+
+msgid "Sign in with your school account."
+msgstr "உங்கள் பள்ளிக் கணக்கில் உள்நுழையவும்."
+
+msgid "Could not sign in. Please try again."
+msgstr "உள்நுழைய முடியவில்லை. மீண்டும் முயலவும்."
+
+msgid "Authentication request cancelled"
+msgstr "அங்கீகாரக் கோரிக்கை ரத்துசெய்யப்பட்டது"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "அங்கீகார முயற்சிகளின் அதிகபட்ச எண்ணிக்கையை எட்டியது"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "அணுகல் டோக்கனைப் பெறுவதில் பிழை. மீண்டும் முயலவும்."
+
+msgid "Invalid user name"
+msgstr "தவறான பயனர்பெயர்"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "இந்தக் கணினியைப் பள்ளி பூட்டியுள்ளது; IT பிரிவைத் தொடர்புகொள்ளவும்"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "இந்தக் கணினியில் விருந்தினர் உள்நுழைவு அனுமதிக்கப்படவில்லை"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "உள்ளூர் கணக்குகளால் இந்தக் கணினியில் உள்நுழைய முடியாது"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "பள்ளிக் கணக்குகளால் இந்தக் கணினியில் உள்நுழைய முடியாது"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "இந்தப் பயன்பாட்டை உள்நுழைவுத் திரையிலிருந்து மட்டுமே திறக்க முடியும்"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "இந்தப் பயன்பாட்டுக்கு நெட்வொர்க் தேவை. மேல் பட்டியிலிருந்து Wi-Fi உடன் இணைத்து, மீண்டும் முயலவும்."

@@ -1,0 +1,18 @@
+# Clears EFI/MastersOS/boot-pending on the ESP: the initrd (mastersos-usr-repair) sets it on every boot, and this boot has reached
+# boot-complete.target (the health check passed), so the next initrd need not treat it as a boot that failed.
+# Requisite= and not Requires= for the same reason as mastersos-bootloader-update: a manual start must not re-run the health check.
+# No Nice or IO class: the work is one unlink, it should be quick. Enabled by the multi-user.target.wants link under /usr/lib
+# (not by preset: machines updated to an image with this unit never get presets re-applied).
+[Unit]
+Description=MastersOS clear the boot-pending marker
+Documentation=file:/usr/lib/mastersos/integrity
+Requisite=boot-complete.target
+After=boot-complete.target
+ConditionVirtualization=!container
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/mastersos/integrity --boot-ok
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,151 @@
+#!/bin/bash
+# mastersos-update.service runs this: download and install the new version. School cache (plan 5 Task 12):
+#   when the agent has update_mirror set, same-named transfers in /etc/sysupdate.d/ point [Source] at the
+#   cache, and the agent leaves a copy of the originals (channel only, root unchanged) in
+#   $var/sysupdate-fallback.d/. Without that directory (no cache set) this behaves exactly like running
+#   systemd-sysupdate update. With it:
+#   1. Update via the cache, bounded by $cache_timeout. If that fails (unreachable, 404, timeout, tampered
+#      content failing verification...) retry once from the official source with --definitions= pointing at
+#      the fallback directory, and write the outcome to $var/update-mirror-failed (the agent reports it as
+#      update:mirror). The next round tries the cache first again; a round in which the cache works deletes
+#      this record (not the stale / unknown ones of step 2).
+#   2. A cache cannot alter or downgrade content (everything is signature-checked), but it can serve a stale
+#      listing and so delay updates. After a successful cache round, ask the official source whether it has
+#      something newer (check-new). The answer has three states: newer (exit 0 and a version on stdout),
+#      none (exit 0 or 1 with empty stdout and empty stderr) and unknown (anything else: a message on stderr,
+#      timeout, other exit codes). The first time "newer" is seen, $stale is written with the time. If it is
+#      still true $grace seconds later, update from the official source and record "school cache stale". Only
+#      a definitive "none" (cache caught up) deletes $stale and the stale record; "unknown" touches neither,
+#      so a flaky or blocked official source cannot reset the clock. Unknown is tracked in $unknown; after
+#      $unknown_grace seconds of it, "freshness unknown" is recorded. Any definitive answer clears it.
+#      A timestamp file that is unparsable or lies in the future (clock set back) is rewritten with now.
+# Paths, grace window and timeout can be overridden through environment variables for tests/update-run-test.sh.
+set -euo pipefail
+
+sysupdate=${MASTERSOS_SYSUPDATE:-/usr/lib/systemd/systemd-sysupdate}
+var=${MASTERSOS_SYSTEM_VAR:-/var/lib/mastersos-system}
+# The one place the staleness grace window (12 h, in seconds) is defined.
+grace=${MASTERSOS_MIRROR_GRACE:-43200}
+cache_timeout=${MASTERSOS_MIRROR_TIMEOUT:-45m}
+fallback=$var/sysupdate-fallback.d
+status=$var/update-mirror-failed
+stale=$var/update-mirror-stale-since
+unknown=$var/update-mirror-unknown-since
+unknown_grace=${MASTERSOS_MIRROR_UNKNOWN_GRACE:-86400}
+
+# write_status <text>: atomically replace the record with "<UTC time> <text>".
+write_status() {
+	printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >"$status.tmp" && mv -f -- "$status.tmp" "$status"
+}
+
+# newer <definitions dir or empty>: ask check-new; sets NEWER_STATE (newer | none | unknown) and NEWER_OUT
+# (the version, for newer). Errors print to stderr while "no candidate" is silent, so stderr is the discriminator.
+# SYSTEMD_LOG_LEVEL=warning drops sysupdate's info-level progress lines, which would otherwise make every
+# answer "unknown"; errors are logged at warning or above and still come through.
+newer() {
+	local errf rc=0 err
+	errf=$(mktemp)
+	if [ -n "$1" ]; then
+		NEWER_OUT=$(SYSTEMD_LOG_LEVEL=warning timeout 300 "$sysupdate" --definitions="$1" check-new 2>"$errf") || rc=$?
+	else
+		NEWER_OUT=$(SYSTEMD_LOG_LEVEL=warning timeout 300 "$sysupdate" check-new 2>"$errf") || rc=$?
+	fi
+	err=$(cat -- "$errf")
+	rm -f -- "$errf"
+	if [ "$rc" -eq 0 ] && [ -n "$NEWER_OUT" ]; then
+		NEWER_STATE=newer
+	elif [ "$rc" -le 1 ] && [ -z "$NEWER_OUT" ] && [ -z "$err" ]; then
+		NEWER_STATE=none
+	else
+		NEWER_STATE=unknown
+		NEWER_OUT=
+	fi
+}
+
+# status_has <text>: does the current record contain it?
+status_has() { grep -qF -- "$1" "$status" 2>/dev/null; }
+
+# load_ts <file> <now>: sets TS to the epoch seconds stored in the file. Missing, unparsable or in the future
+# (the clock went backwards): rewrite with now and return 1.
+load_ts() {
+	TS=$(cat -- "$1" 2>/dev/null || true)
+	case $TS in '' | *[!0-9]*) ;; *) if [ "$TS" -le "$2" ]; then return 0; fi ;; esac
+	TS=$2
+	echo "$2" >"$1"
+	return 1
+}
+
+main() {
+	local rc=0 rc2=0 w v now since
+
+	# No fallback directory: no cache is set, so a failure is just a failure.
+	if ! compgen -G "$fallback/*.transfer" >/dev/null; then
+		"$sysupdate" update || rc=$?
+		return "$rc"
+	fi
+
+	newer ""
+	w=""
+	[ "$NEWER_STATE" = newer ] && w=$NEWER_OUT
+	timeout --kill-after=60 "$cache_timeout" "$sysupdate" update || rc=$?
+	if [ "$rc" -ne 0 ]; then
+		echo "update-run: update via the school cache failed (exit code ${rc}), retrying from the official source" >&2
+		"$sysupdate" --definitions="$fallback" update || rc2=$?
+		if [ "$rc2" -eq 0 ]; then
+			write_status "school cache not used: sysupdate exit code ${rc}; this round updated from the official source"
+		else
+			write_status "both the school cache and the official source failed: cache exit code ${rc}, official exit code ${rc2}"
+		fi
+		return "$rc2"
+	fi
+	# The cache worked: drop a "cache not used" record, but keep stale / unknown ones until a definitive answer.
+	if ! status_has "school cache stale" && ! status_has "freshness unknown"; then
+		rm -f -- "$status"
+	fi
+
+	# Is the cache behind the official source?
+	now=$(date +%s)
+	newer "$fallback"
+	case $NEWER_STATE in
+	none)
+		rm -f -- "$stale" "$unknown"
+		if status_has "school cache stale" || status_has "freshness unknown"; then
+			rm -f -- "$status"
+		fi
+		return 0
+		;;
+	unknown)
+		load_ts "$unknown" "$now" || true
+		if [ $((now - TS)) -gt "$unknown_grace" ] && ! status_has "school cache stale"; then
+			write_status "school cache: freshness unknown for over 24h (official source unreachable)"
+		fi
+		return 0
+		;;
+	esac
+	v=$NEWER_OUT
+	rm -f -- "$unknown"
+	if status_has "freshness unknown"; then
+		rm -f -- "$status"
+	fi
+	if ! load_ts "$stale" "$now"; then
+		echo "update-run: the official source has ${v} which the school cache does not offer yet" >&2
+		return 0
+	fi
+	since=$TS
+	if [ $((now - since)) -lt "$grace" ]; then
+		return 0
+	fi
+	echo "update-run: the school cache has been behind for over ${grace}s, updating from the official source" >&2
+	"$sysupdate" --definitions="$fallback" update || rc2=$?
+	w=${w:-nothing newer than installed}
+	if [ "$rc2" -eq 0 ]; then
+		write_status "school cache stale: official has ${v}, cache offers ${w}; this round updated from the official source"
+	else
+		write_status "school cache stale: official has ${v}, cache offers ${w}; update from the official source failed (exit code ${rc2})"
+	fi
+	return "$rc2"
+}
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+	main "$@"
+fi

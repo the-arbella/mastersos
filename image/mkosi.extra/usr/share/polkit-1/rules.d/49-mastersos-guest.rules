@@ -1,0 +1,18 @@
+// 访客（4b Task 11 复审 I2、I3）：每位访客都是同一个账号，账号层面能改的东西会留给下一位访客与登录界面。
+// - linger：打开之后访客的 user manager 永远不停，清理永远不来，访客从此登录不了（直到重启也不行：linger 文件留着）
+// - 自己的名字、头像（GDM 的用户列表给所有人看）与口令（设了口令，之后的访客都进不来）
+// systemd 与 accountsservice 对这几个动作的默认都是「活动会话直接放行」，这里对 guest 一律拒绝。
+// 清理服务每次还会把名字、shell、口令恢复原样、删掉 AccountsService 里按名字存的数据，这是第二道
+polkit.addRule(function (action, subject) {
+    if (subject.user !== "guest") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    switch (action.id) {
+    case "org.freedesktop.login1.set-self-linger":
+    case "org.freedesktop.login1.set-user-linger":
+    case "org.freedesktop.accounts.change-own-user-data":
+    case "org.freedesktop.accounts.change-own-password":
+        return polkit.Result.NO;
+    }
+    return polkit.Result.NOT_HANDLED;
+});

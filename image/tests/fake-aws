@@ -1,0 +1,92 @@
+#!/bin/bash
+# tests/sync-s3-test.sh 用的假 aws（放在 PATH 最前面）。不碰网络、不读凭据。
+#   FAKE_AWS_LOG     每次调用追加一行：<子命令…> <键或参数>（例：`s3 cp stable/SHA256SUMS`）；AWS_PROFILE 记到 $FAKE_AWS_LOG.profile
+#   FAKE_AWS_BUCKET  假桶的目录：对象是 <目录>/<键>，旁边的 <键>.meta 记 cache-control、content-type、sha256
+#   FAKE_AWS_FAIL    子命令名（head-object、cp、list-objects-v2、rm、create-invalidation、wait、get-caller-identity）：
+#                    那一个子命令一律失败（退出 1，什么都不改）
+# 认识 sync-s3.sh 用到的七个子命令，别的一律失败（退出 2）。
+set -euo pipefail
+: "${FAKE_AWS_LOG:?}" "${FAKE_AWS_BUCKET:?}"
+echo "${AWS_PROFILE:-}" >>"$FAKE_AWS_LOG.profile"
+
+group=${1:-} sub=${2:-}
+shift 2 2>/dev/null || true
+if [ -n "${FAKE_AWS_FAIL:-}" ] && [ "$sub" = "$FAKE_AWS_FAIL" ]; then
+	echo "$group $sub" >>"$FAKE_AWS_LOG"
+	echo "fake-aws: FAKE_AWS_FAIL=$sub" >&2
+	exit 1
+fi
+
+# 取 --选项 的值
+opt() { # opt <名字> <参数…>
+	local n=$1
+	shift
+	while [ $# -gt 0 ]; do
+		if [ "$1" = "$n" ]; then
+			echo "$2"
+			return 0
+		fi
+		shift
+	done
+	return 1
+}
+key_of() { local u=${1#s3://}; echo "${u#*/}"; } # s3://桶/键 → 键
+
+case "$group $sub" in
+"s3api head-object")
+	key=$(opt --key "$@")
+	echo "$group $sub $key" >>"$FAKE_AWS_LOG"
+	if [ ! -f "$FAKE_AWS_BUCKET/$key" ]; then
+		echo "An error occurred (404) when calling the HeadObject operation: Not Found" >&2
+		exit 254
+	fi
+	# sync-s3.sh 只要 --query Metadata.sha256 --output text：没有就是 None
+	sha=$(sed -n 's/^sha256=//p' "$FAKE_AWS_BUCKET/$key.meta" 2>/dev/null || true)
+	echo "${sha:-None}"
+	;;
+"s3 cp")
+	src=$1 dst=$2
+	shift 2
+	key=$(key_of "$dst")
+	echo "$group $sub $key" >>"$FAKE_AWS_LOG"
+	[ -f "$src" ] || { echo "fake-aws: 没有 $src" >&2; exit 1; }
+	meta=$(opt --metadata "$@" || true)
+	mkdir -p "$(dirname "$FAKE_AWS_BUCKET/$key")"
+	cp "$src" "$FAKE_AWS_BUCKET/$key.tmp"
+	mv -f "$FAKE_AWS_BUCKET/$key.tmp" "$FAKE_AWS_BUCKET/$key"
+	{
+		echo "cache-control=$(opt --cache-control "$@" || true)"
+		echo "content-type=$(opt --content-type "$@" || true)"
+		echo "sha256=${meta#sha256=}"
+	} >"$FAKE_AWS_BUCKET/$key.meta"
+	;;
+"s3api list-objects-v2")
+	prefix=$(opt --prefix "$@")
+	echo "$group $sub $prefix" >>"$FAKE_AWS_LOG"
+	out=$(cd "$FAKE_AWS_BUCKET" && find . -type f ! -name '*.meta' -printf '%P\n' | LC_ALL=C sort | awk -v p="$prefix" 'index($0, p) == 1') || true
+	echo "${out:-None}"
+	;;
+"s3 rm")
+	key=$(key_of "$1")
+	echo "$group $sub $key" >>"$FAKE_AWS_LOG"
+	rm -f "$FAKE_AWS_BUCKET/$key" "$FAKE_AWS_BUCKET/$key.meta"
+	;;
+"cloudfront create-invalidation")
+	echo "$group $sub $(opt --distribution-id "$@")" >>"$FAKE_AWS_LOG"
+	# --paths 之后到下一个 -- 选项之前的全部值
+	echo "$group paths $(printf '%s\n' "$@" | awk '/^--paths$/ {on=1; next} /^--/ {on=0} on' | tr '\n' ' ')" >>"$FAKE_AWS_LOG"
+	echo "IFAKE0001"
+	;;
+"cloudfront wait")
+	echo "$group $sub $*" >>"$FAKE_AWS_LOG"
+	;;
+"sts get-caller-identity")
+	echo "$group $sub" >>"$FAKE_AWS_LOG"
+	echo "arn:aws:iam::000000000000:user/fake"
+	;;
+*)
+	echo "$group $sub $*" >>"$FAKE_AWS_LOG"
+	echo "fake-aws: 不认识的调用：$group $sub $*" >&2
+	exit 2
+	;;
+esac

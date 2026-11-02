@@ -1,0 +1,16 @@
+# Kernel command line of the installer UKI (make-installer.sh uses it without comments and newlines; Ruling 13).
+# The root is a tmpfs in memory, /usr comes as usual from the signed verity partitions on the boot disk (the stick); repart is
+# masked in the initrd and in the system (otherwise it would create the B slot, the seed and the root partitions on the
+# stick); boots straight into mastersos-installer.target.
+# make-installer.sh then copies systemd.image_policy=, systemd.image_filter= and console= (the lab's serial console) from the
+# main UKI's command line, so both images always have the same image policy.
+root=tmpfs
+mount.usr=dissect
+rd.systemd.mask=systemd-repart.service
+systemd.mask=systemd-repart.service
+systemd.unit=mastersos-installer.target
+# As in the main UKI: no interactive systemd-firstboot on the empty /etc. No plymouth screen and no kernel messages on the
+# screen (the installer asks its questions on tty1; in a VM the kernel's audit messages scrambled the confirm screen)
+systemd.firstboot=off
+plymouth.enable=0
+quiet

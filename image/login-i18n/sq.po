@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "Administrohet nga %s"
+
+msgid "Shut down"
+msgstr "Fike"
+
+msgid "Browse as Guest"
+msgstr "Shfleto si vizitor"
+
+msgid "Add person"
+msgstr "Shto person"
+
+msgid "Apps"
+msgstr "Aplikacione"
+
+msgid "Cancel"
+msgstr "Anulo"
+
+msgid "Retry"
+msgstr "Provo përsëri"
+
+msgid "Opening the sign-in page…"
+msgstr "Po hapet faqja e hyrjes…"
+
+msgid "The sign-in page could not be opened."
+msgstr "Faqja e hyrjes nuk u hap dot."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Nuk lidhet dot me shkollën. Lidhu me Wi-Fi nga shiriti lart dhe provo përsëri."
+
+msgid "School email"
+msgstr "Email-i i shkollës"
+
+msgid "IT local account"
+msgstr "Llogari lokale e IT-së"
+
+msgid "Username"
+msgstr "Emri i përdoruesit"
+
+msgid "This account cannot sign in on this computer."
+msgstr "Kjo llogari nuk mund të hyjë në këtë kompjuter."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "Kjo llogari nuk mund të hyjë në këtë kompjuter. Përdor email-in e shkollës (%s)."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Ke hyrë me një llogari tjetër. Hyr përsëri me llogarinë që zgjodhe këtu."
+
+msgid "Language"
+msgstr "Gjuha"
+
+msgid "Keyboard"
+msgstr "Tastiera"
+
+msgid "Continue"
+msgstr "Vazhdo"
+
+msgid "The setting could not be saved. Try again."
+msgstr "Cilësimi nuk u ruajt dot. Provo përsëri."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "Llogaria jote është çaktivizuar. Kontakto administratorin."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "Kjo pajisje është çaktivizuar. Kontakto administratorin."
+
+msgid "Sign in with your school account."
+msgstr "Hyr me llogarinë e shkollës."
+
+msgid "Could not sign in. Please try again."
+msgstr "Hyrja nuk u krye. Provo përsëri."
+
+msgid "Authentication request cancelled"
+msgstr "Kërkesa për vërtetim u anulua"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "U arrit numri maksimal i përpjekjeve për vërtetim"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Gabim gjatë marrjes së tokenit të hyrjes. Provo përsëri."
+
+msgid "Invalid user name"
+msgstr "Emër përdoruesi i pavlefshëm"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "Ky kompjuter është kyçur nga shkolla; kontakto IT-në"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "Hyrja si vizitor nuk lejohet në këtë kompjuter"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "Llogaritë lokale nuk mund të hyjnë në këtë kompjuter"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "Llogaritë e shkollës nuk mund të hyjnë në këtë kompjuter"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Ky aplikacion hapet vetëm nga ekrani i hyrjes"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Ky aplikacion ka nevojë për një rrjet. Lidhu me Wi-Fi nga shiriti lart dhe provo përsëri."

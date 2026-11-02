@@ -1,0 +1,27 @@
+# Task 20 test bundle: teacher laptops (the full mode, school accounts and local users, LibreOffice, one printer, one apply
+# script and one login script).
+# This is one [[group]] and its [[config]]: accept-4b.sh's bundle() joins [school], default, teacher, cart and [[device]]
+# into one manifest before publishing. The [[config]] comes last so that B_TEACHER_EXTRA (for example a [config.chrome]
+# table) lands in it, and so that B_TEACHER_SED can rename only the config (`/^\[\[config\]\]/,$ s/^name = …/`). The printer is an ippeveprinter started on VM 161 for the print check (removed afterwards); its
+# non-ASCII name exercises the CUPS queue-name handling. The script contents are written into the draft as
+# scripts/t20-apply.sh and scripts/t20-login.sh by accept-4b.sh.
+[[group]]
+id = "teacher"
+name = "Teacher laptops"
+config = "teacher"
+
+[[config]]
+id = "teacher"
+name = "Teacher laptops"
+login_methods = ["sso", "local"]
+local_users_admin = false
+interface = "full"
+printers = [{ name = "教研室 T20", uri = "ipp://192.0.2.99:8631/ipp/print" }]
+scripts = [
+  { path = "scripts/t20-apply.sh", when = "apply" },
+  { path = "scripts/t20-login.sh", when = "login" },
+]
+
+[config.apps]
+web = [{ name = "Wikipedia", url = "https://www.wikipedia.org/" }]
+flatpak = ["org.libreoffice.LibreOffice"]

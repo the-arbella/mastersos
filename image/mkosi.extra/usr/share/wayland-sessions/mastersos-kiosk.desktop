@@ -1,0 +1,14 @@
+[Desktop Entry]
+# 锁定应用的会话（计划 9 设计 §4.4）。kiosk 账号的 AccountsService 记录写 Session=mastersos-kiosk（agent 的 kiosk 步骤），
+# GDM names XDG_SESSION_DESKTOP after this file when it starts the session; `mastersos-kiosk run` and `guard` check it,
+# pam-session reads the AccountsService record (GDM 50 has not set the variable yet at open_session).
+# No NoDisplay/Hidden: gdm3 50 then ignores the saved Session and starts ubuntu for kiosk accounts (VM 170, 2026-10-27).
+# Anyone may pick it from the gear; `mastersos-kiosk run` ends a non-kiosk account's session. DCONF_PROFILE 让这个会话读 /usr/share/dconf/profile/mastersos-kiosk（清空并锁住 Ctrl+Alt+F1…F12）；
+# gnome-session 把环境交给 systemd 用户实例，gnome-kiosk 与应用单元都看得到
+Name=MastersOS Kiosk
+Comment=MastersOS locked app session
+Exec=env DCONF_PROFILE=mastersos-kiosk gnome-session --session=mastersos-kiosk
+TryExec=gnome-session
+Type=Application
+DesktopNames=GNOME-Kiosk;GNOME;
+X-GDM-SessionRegisters=false

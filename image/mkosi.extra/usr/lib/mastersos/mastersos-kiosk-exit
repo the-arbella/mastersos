@@ -1,0 +1,5 @@
+#!/bin/bash
+# 考试扩展「退出」按钮的 native messaging 宿主（宿主清单 org.mastersos.kiosk_exit.json 的 path 指向这里：path 带不了参数）。
+# Chrome 在后面追加调用方的 origin 等参数，exit-host 不看；stdin / stdout 是消息通道，这里不能有别的输出。
+set -euo pipefail
+exec /usr/bin/mastersos-agent kiosk exit-host "$@"

@@ -1,0 +1,4 @@
+{"blockdevices":[
+ {"name":"sda","path":"/dev/sda","type":"disk","size":1000204886016,"rm":false,"tran":"sata","model":"WDC WD10","partlabel":null},
+ {"name":"nvme0n1","path":"/dev/nvme0n1","type":"disk","size":256060514304,"rm":false,"tran":"nvme","model":"KBG40","partlabel":null}
+]}

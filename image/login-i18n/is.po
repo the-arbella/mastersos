@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "Stýrt af %s"
+
+msgid "Shut down"
+msgstr "Slökkva"
+
+msgid "Browse as Guest"
+msgstr "Vafra sem gestur"
+
+msgid "Add person"
+msgstr "Bæta við notanda"
+
+msgid "Apps"
+msgstr "Forrit"
+
+msgid "Cancel"
+msgstr "Hætta við"
+
+msgid "Retry"
+msgstr "Reyna aftur"
+
+msgid "Opening the sign-in page…"
+msgstr "Opna innskráningarsíðuna…"
+
+msgid "The sign-in page could not be opened."
+msgstr "Ekki tókst að opna innskráningarsíðuna."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Næ ekki sambandi við skólann. Tengstu Wi-Fi úr efri stikunni og reyndu aftur."
+
+msgid "School email"
+msgstr "Skólanetfang"
+
+msgid "IT local account"
+msgstr "Staðbundinn tæknideildarreikningur"
+
+msgid "Username"
+msgstr "Notandanafn"
+
+msgid "This account cannot sign in on this computer."
+msgstr "Þessi reikningur getur ekki skráð sig inn á þessari tölvu."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "Þessi reikningur getur ekki skráð sig inn á þessari tölvu. Notaðu skólanetfangið þitt (%s)."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Þú skráðir þig inn með öðrum reikningi. Skráðu þig aftur inn með reikningnum sem þú valdir hér."
+
+msgid "Language"
+msgstr "Tungumál"
+
+msgid "Keyboard"
+msgstr "Lyklaborð"
+
+msgid "Continue"
+msgstr "Áfram"
+
+msgid "The setting could not be saved. Try again."
+msgstr "Ekki tókst að vista stillinguna. Reyndu aftur."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "Reikningurinn þinn er óvirkur. Hafðu samband við kerfisstjóra."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "Þetta tæki er óvirkt. Hafðu samband við kerfisstjóra."
+
+msgid "Sign in with your school account."
+msgstr "Skráðu þig inn með skólareikningnum þínum."
+
+msgid "Could not sign in. Please try again."
+msgstr "Innskráning mistókst. Reyndu aftur."
+
+msgid "Authentication request cancelled"
+msgstr "Auðkenningarbeiðni afturkölluð"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "Hámarksfjölda auðkenningartilrauna náð"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Villa við að sækja aðgangslykil. Reyndu aftur."
+
+msgid "Invalid user name"
+msgstr "Ógilt notandanafn"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "Skólinn hefur læst þessari tölvu; hafðu samband við tæknideild"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "Gestainnskráning er ekki leyfð á þessari tölvu"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "Staðbundnir reikningar geta ekki skráð sig inn á þessari tölvu"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "Skólareikningar geta ekki skráð sig inn á þessari tölvu"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Aðeins er hægt að opna þetta forrit af innskráningarskjánum"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Þetta forrit þarf net. Tengstu Wi-Fi úr efri stikunni og reyndu aftur."

@@ -1,0 +1,30 @@
+# ---- 构建产物 ----
+core/target/
+core/mastersos-server/web/dist/
+core/mastersos-server/web/dist-sign/
+node_modules/
+*.tsbuildinfo
+
+# ---- 密钥一律不入库 ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+# Image public keys (private keys never enter this repo;image/tests/check-tree.sh 第 1 条拒绝私钥入库）
+!image/keys/*.pem
+!image/keys/lab/*.pem
+
+# ---- 工作草稿 ----
+.remember/
+.superpowers/
+.playwright-mcp/
+.claude/worktrees/
+
+# ---- 编辑器 / 系统 ----
+.DS_Store
+.idea/
+.vscode/
+*.log
+.labtest-out/

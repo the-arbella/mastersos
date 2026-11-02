@@ -1,0 +1,28 @@
+# Installer started from a Ventoy stick (initrd only): find the MastersOS folder, check the system file's version and size against
+# the kernel command line, attach it as a read-only loop disk. Must finish before the /usr verity device is set up, because
+# the UKI's usr= partitions are /dev/disk/by-loop-ref/mastersos-ventoy-part3 and -part4, which this unit creates.
+# Runs only when the command line has mastersos.ventoy (the Ventoy installer UKI; ConditionKernelCommandLine= with a bare key
+# matches key and key=value); every other boot skips it.
+# Refusals (no folder, wrong version, incomplete file...) do not exit: the script prints the reason, asks "Press Enter to
+# restart." (systemd-ask-password), reboots on Enter and otherwise waits in `exec sleep infinity`, so the screen stays and the
+# initrd's emergency -> reboot path (emergency.service.d/50-mastersos-reboot.conf) never triggers.
+# TimeoutStartSec=infinity for the same reason: nobody may be at the screen to press Enter.
+# IgnoreOnIsolate=yes: the exFAT mount it leaves under /run must outlive the switch-root into the installer.
+[Unit]
+Description=MastersOS: find the system file on the Ventoy stick and attach it (initrd)
+DefaultDependencies=no
+ConditionKernelCommandLine=mastersos.ventoy
+After=systemd-udevd.service systemd-udev-trigger.service
+Before=systemd-veritysetup@usr.service sysusr-usr.mount initrd-usr-fs.target
+Conflicts=shutdown.target
+Before=shutdown.target
+IgnoreOnIsolate=yes
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=infinity
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/console
+ExecStart=/usr/lib/mastersos/ventoy-attach

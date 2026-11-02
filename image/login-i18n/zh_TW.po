@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "由 %s 管理"
+
+msgid "Shut down"
+msgstr "關機"
+
+msgid "Browse as Guest"
+msgstr "以訪客身分瀏覽"
+
+msgid "Add person"
+msgstr "新增使用者"
+
+msgid "Apps"
+msgstr "應用程式"
+
+msgid "Cancel"
+msgstr "取消"
+
+msgid "Retry"
+msgstr "重試"
+
+msgid "Opening the sign-in page…"
+msgstr "正在開啟登入頁面…"
+
+msgid "The sign-in page could not be opened."
+msgstr "無法開啟登入頁面。"
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "無法連線到學校。請從頂端列連接 Wi-Fi，然後重試。"
+
+msgid "School email"
+msgstr "學校電子郵件"
+
+msgid "IT local account"
+msgstr "IT 本機帳號"
+
+msgid "Username"
+msgstr "使用者名稱"
+
+msgid "This account cannot sign in on this computer."
+msgstr "此帳號無法在這部電腦上登入。"
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "此帳號無法在這部電腦上登入。請使用你的學校電子郵件（%s）。"
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "你登入的帳號與所選帳號不同。請使用你在這裡選擇的帳號重新登入。"
+
+msgid "Language"
+msgstr "語言"
+
+msgid "Keyboard"
+msgstr "鍵盤"
+
+msgid "Continue"
+msgstr "繼續"
+
+msgid "The setting could not be saved. Try again."
+msgstr "無法儲存設定。請重試。"
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "你的帳號已被停用。請聯絡管理員。"
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "此裝置已被停用。請聯絡管理員。"
+
+msgid "Sign in with your school account."
+msgstr "請使用學校帳號登入。"
+
+msgid "Could not sign in. Please try again."
+msgstr "無法登入。請重試。"
+
+msgid "Authentication request cancelled"
+msgstr "驗證要求已取消"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "已達到驗證嘗試次數上限"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "取得存取權杖時發生錯誤。請重試。"
+
+msgid "Invalid user name"
+msgstr "使用者名稱無效"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "這部電腦已被學校鎖定，請聯絡 IT 人員"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "這部電腦不允許訪客登入"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "本機帳號無法在這部電腦上登入"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "學校帳號無法在這部電腦上登入"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "此應用程式只能從登入畫面開啟"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "此應用程式需要網路。請從頂端列連接 Wi-Fi，然後重試。"

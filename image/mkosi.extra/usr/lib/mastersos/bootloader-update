@@ -1,0 +1,219 @@
+#!/bin/bash
+# 把镜像里签好的引导程序复制到 ESP（mastersos-bootloader-update.service，只在被标「好」的开机之后跑）。
+#
+# sysupdate 只换 /usr 与 UKI；ESP 上的 shim（BOOTX64.EFI）、我们签名的 systemd-boot（grubx64.efi）与
+# MokManager（mmx64.efi）装机后就不会再变。Dell BIOS 更新带来新的 dbx / SBAT 吊销时，留在旧版本的 shim
+# 会把全体机器挡在固件里（Ruling 19）。所以每个镜像在 /usr/lib/mastersos/esp/ 带一份（mkosi.finalize 从
+# 构建时装好的 ESP 复制），这里逐个比较 sha256，不同的换掉。
+#
+# 写法（docs/secure-boot.md「引导程序随镜像更新」）：
+#   - 顺序：grubx64.efi → mmx64.efi → BOOTX64.EFI。shim 放最后：新 shim 可能抬高 SbatLevel，
+#     不能让它在旧的 systemd-boot 还没换掉时先落盘。任何一个失败就停，后面的不动。
+#   - 每个文件：写成 <名字>.new → fsync → 读回核对 sha256 → rename 覆盖 → fsync 文件与目录。
+#     vfat 的 rename 覆盖已有文件时，是把原文件那一条目录项改指向新文件的簇（一条 32 字节的目录项、
+#     在一个扇区里），断电时要么还是旧文件、要么已是新文件；不会出现「没有这个文件」的时刻。
+#     「先把旧的改名成 .old、再把 .new 改名过去」反而有这样的时刻：断在两次改名之间，ESP 上就没有
+#     BOOTX64.EFI，机器起不来，也就没人能用 .old 去恢复。
+#   - 上一次断电留下的 <名字>.new 先删掉（固件不认这个名字，只是垃圾）。
+#   - 不降级：ESP 的 loader/mastersos-bootloader.version 记下最后一次写引导程序的镜像版本，本次开机的
+#     镜像比它旧（有人在启动菜单里手动选了旧版本）就什么都不做——新 shim 抬高过的 SbatLevel 可能已经
+#     吊销旧版本的 systemd-boot。
+#   - 失败只记日志、退出非零：这时开机已经完成，ESP 上留着的是旧文件（或已换好的那几个新文件），都能启动。
+#   - 换 shim 之前核对证书链（4b Task 22，docs/secure-boot.md「2023 证书」）：镜像里的 BOOTX64.EFI 与 ESP 上的不同时，
+#     在写任何文件之前跑 `mastersos-agent shim-check <镜像里的 BOOTX64.EFI>`（用本机的活动 db 验它的签名）。退出非 0
+#     （1 链不上、2 判断不了，或者 agent 都跑不起来）→ 三个文件都不换（新的 systemd-boot 可能要新 shim 的 SBAT），
+#     写 /var/lib/mastersos-system/shim-ca.json（ok:false，0600），脚本退出 0（这次好的开机不变成失败的单元）；agent 据此
+#     回报 system:shim-ca 失败。退出 0 → 照旧换，换完写 ok:true。shim 没变时不跑 shim-check（旧状态是 ok:false 就改回 ok:true）。
+#   - Then, still before any write, `mastersos-agent shim-prepare <the image's BOOTX64.EFI>` (plan 5 Task 8,
+#     docs/secure-boot.md 「引导程序更新与 TPM」): the agent adds the new shim's SbatLevel to the pcrlock policy.
+#     Exit 0 → swap; non-zero or no agent → swap anyway, log "prediction failed", the next boot needs the recovery key.
+#
+# 环境变量（只给 tests/bootloader-update-test.sh；单元里不设）：MASTERSOS_ESP（ESP 的挂载点）、
+# MASTERSOS_ESP_SRC（默认 /usr/lib/mastersos/esp）、MASTERSOS_IMAGE_VERSION（默认取 os-release 的 IMAGE_VERSION）、
+# MASTERSOS_SHIM_CA_STATE（默认 /var/lib/mastersos-system/shim-ca.json）。
+set -euo pipefail
+
+# 换的顺序（shim 最后）；ESP 上的文件名大小写不敏感（vfat），镜像里与 ESP 上用同一个名字
+NAMES=(grubx64.efi mmx64.efi BOOTX64.EFI)
+STAMP=loader/mastersos-bootloader.version
+
+log() { echo "bootloader-update: $*"; }
+
+find_esp() {
+	local esp d
+	esp=$(timeout 20 bootctl --print-esp-path 2>/dev/null) || esp=""
+	if [ -n "$esp" ] && [ -d "$esp/EFI/BOOT" ]; then
+		echo "$esp"
+		return 0
+	fi
+	for d in /efi /boot; do
+		if [ -d "$d/EFI/BOOT" ]; then
+			echo "$d"
+			return 0
+		fi
+	done
+	return 1
+}
+
+# $1 比 $2 旧（systemd 的版本比较与 sort -V 对 20261012.1 这种版本号一致）
+older_than() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n 1)" = "$1" ]; }
+
+sha_of() { sha256sum <"$1" | cut -d' ' -f1; }
+
+# 原子地把 $1 换成 $2 的内容（$3 = 期望的 sha256）。失败时删掉 .new、返回非零，原文件不动。
+replace_file() {
+	local dst=$1 src=$2 want=$3 tmp=$1.new got
+	if ! cp "$src" "$tmp"; then
+		log "复制 $src → $tmp 失败"
+		rm -f "$tmp"
+		return 1
+	fi
+	if ! sync "$tmp"; then
+		log "fsync $tmp 失败"
+		rm -f "$tmp"
+		return 1
+	fi
+	# 读回来的是页缓存，不是盘上的字节：它抓得住 cp 写短、写错，验不了介质（fsync 之后盘上的才是真的）
+	got=$(sha_of "$tmp") || got=""
+	if [ "$got" != "$want" ]; then
+		log "$tmp 读回来的 sha256（${got:-读不出}）不是 $want"
+		rm -f "$tmp"
+		return 1
+	fi
+	if ! mv -f "$tmp" "$dst"; then
+		log "改名 $tmp → $dst 失败"
+		rm -f "$tmp"
+		return 1
+	fi
+	# rename 改的是目录项：fsync 改过名的文件（vfat 的目录项随文件的 inode 写回）与目录本身
+	if ! sync "$dst" "$(dirname "$dst")"; then
+		log "fsync $dst 或它的目录失败（改名已经做了；下次开机再核对）"
+		return 1
+	fi
+}
+
+# write_shim_ca <true|false> <shim-check 的退出码> <镜像版本> <原因>：给 agent 的 system:shim-ca。0600，先 .new 再改名。
+# 写不成只记日志（不影响换不换引导程序）。原因去掉引号、反斜杠与控制字符，免得写坏 JSON
+write_shim_ca() {
+	local f=${MASTERSOS_SHIM_CA_STATE:-/var/lib/mastersos-system/shim-ca.json} reason
+	reason=$(printf '%s' "$4" | tr -d '\\"' | tr '[:cntrl:]' ' ')
+	if ! (
+		umask 077
+		mkdir -p "$(dirname "$f")" &&
+			printf '{"ok":%s,"exit":%d,"image_version":"%s","reason":"%s"}\n' "$1" "$2" "$3" "$reason" >"$f.new" &&
+			mv -f "$f.new" "$f"
+	); then
+		rm -f "$f.new"
+		log "写 $f 失败"
+	fi
+}
+
+main() {
+	local src=${MASTERSOS_ESP_SRC:-/usr/lib/mastersos/esp} esp version stamped n s d want have changed=()
+
+	version=${MASTERSOS_IMAGE_VERSION:-$(
+		# shellcheck disable=SC1091
+		. /usr/lib/os-release && echo "${IMAGE_VERSION:-}"
+	)}
+	if ! [[ $version =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+		log "看不懂本镜像的 IMAGE_VERSION（'${version}'），不动 ESP"
+		return 1
+	fi
+	if [ -n "${MASTERSOS_ESP:-}" ]; then
+		esp=$MASTERSOS_ESP
+	elif ! esp=$(find_esp); then
+		log "找不到 ESP（bootctl --print-esp-path、/efi、/boot 都没有 EFI/BOOT），不动"
+		return 1
+	fi
+	d=$esp/EFI/BOOT
+	[ -d "$d" ] || {
+		log "$d 不存在，不动"
+		return 1
+	}
+	for n in "${NAMES[@]}"; do
+		[ -f "$src/$n" ] || {
+			log "镜像里缺 $src/${n}，不动 ESP"
+			return 1
+		}
+	done
+
+	exec 9>/run/mastersos-bootloader-update.lock
+	flock -n 9 || {
+		log "已有另一个 bootloader-update 在跑"
+		return 1
+	}
+
+	if [ -f "$esp/$STAMP" ]; then
+		stamped=$(tr -d '[:space:]' <"$esp/$STAMP")
+		if [[ $stamped =~ ^[0-9]+(\.[0-9]+)*$ ]] && older_than "$version" "$stamped"; then
+			log "ESP 上的引导程序来自 MastersOS ${stamped}，本次开机的 $version 更旧：不降级"
+			return 0
+		fi
+	fi
+
+	# 换 shim 之前：新 shim 能不能链到本机的活动 db（在写任何文件之前）
+	local shim_checked=0 sc_out sc_rc state=${MASTERSOS_SHIM_CA_STATE:-/var/lib/mastersos-system/shim-ca.json}
+	if [ "$(sha_of "$src/BOOTX64.EFI")" != "$(sha_of "$d/BOOTX64.EFI" 2>/dev/null || true)" ]; then
+		sc_rc=0
+		sc_out=$(mastersos-agent shim-check "$src/BOOTX64.EFI" 2>&1) || sc_rc=$?
+		log "shim-check（退出 ${sc_rc}）：$(printf '%s' "$sc_out" | tr '\n' ' ')"
+		if [ "$sc_rc" != 0 ]; then
+			write_shim_ca false "$sc_rc" "$version" "$(printf '%s\n' "$sc_out" | tail -n 1)"
+			log "MastersOS $version 带的 shim 链不到本机的 Secure Boot db（或核对不了）：${NAMES[*]} 都不换，停在 ESP 上的旧版本（system:shim-ca 回报失败，详情按原因给改法：链不到 → 升 BIOS、Reset All Keys；被 dbx 吊销 → 用更新的镜像，不要 Reset All Keys）"
+			return 0
+		fi
+		shim_checked=1
+		# Plan 5 Task 8: before any write, the agent predicts the SbatLevel the new shim will write on its first boot and
+		# adds it to the pcrlock policy, so the next boot does not need the recovery key. Failure (or an agent that does
+		# not run) still swaps: staying on a possibly revoked shim is worse than one recovery key prompt (ruling 14).
+		local sp_out sp_rc=0
+		sp_out=$(mastersos-agent shim-prepare "$src/BOOTX64.EFI" 2>&1) || sp_rc=$?
+		log "shim-prepare (exit ${sp_rc}): $(printf '%s' "$sp_out" | tr '\n' ' ')"
+		if [ "$sp_rc" != 0 ]; then
+			log "prediction failed: $(printf '%s\n' "$sp_out" | tail -n 1); replacing the shim anyway, the next boot needs the recovery key"
+		fi
+	elif grep -q '"ok":false' "$state" 2>/dev/null; then
+		write_shim_ca true 0 "$version" "镜像带的 shim 与 ESP 上的相同"
+	fi
+
+	for n in "${NAMES[@]}"; do
+		rm -f "$d/$n.new"
+	done
+
+	for n in "${NAMES[@]}"; do
+		s=$src/$n
+		want=$(sha_of "$s")
+		have=$(sha_of "$d/$n" 2>/dev/null) || have=""
+		[ "$want" = "$have" ] && continue
+		log "$n：ESP 上 ${have:-没有}，镜像里 $want，替换"
+		if ! replace_file "$d/$n" "$s" "$want"; then
+			log "$n 没换成，停下（后面的 ${NAMES[*]} 里还没换的都不动），下次被标好的开机再试"
+			return 1
+		fi
+		changed+=("$n")
+	done
+
+	if [ "$shim_checked" = 1 ]; then
+		write_shim_ca true 0 "$version" "$(printf '%s\n' "$sc_out" | tail -n 1)"
+	fi
+	if [ ${#changed[@]} -eq 0 ]; then
+		log "ESP 上的 ${NAMES[*]} 与 MastersOS $version 的相同"
+	else
+		log "换好了：${changed[*]}（MastersOS ${version}）"
+	fi
+	# 版本标记：内容不同才写，同样先 .new 再改名
+	if [ "$(cat "$esp/$STAMP" 2>/dev/null || true)" != "$version" ]; then
+		mkdir -p "$esp/loader"
+		if ! { printf '%s\n' "$version" >"$esp/$STAMP.new" && sync "$esp/$STAMP.new" &&
+			mv -f "$esp/$STAMP.new" "$esp/$STAMP" && sync "$esp/$STAMP" "$esp/loader"; }; then
+			rm -f "$esp/$STAMP.new"
+			log "写 $STAMP 失败"
+			return 1
+		fi
+	fi
+}
+
+# 被 source 时只定义函数
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+	main "$@"
+fi

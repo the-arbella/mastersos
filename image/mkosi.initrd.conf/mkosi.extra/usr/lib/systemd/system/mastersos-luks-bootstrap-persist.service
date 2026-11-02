@@ -1,0 +1,21 @@
+# After systemd-repart and after the root partition is unlocked and mounted on /sysroot, before the switch to the real root: put
+# the temporary key repart used on the first boot / after a factory reset (/run/mastersos/luks-bootstrap-key) into the unlocked
+# root partition (/sysroot/var/lib/mastersos-system/luks-bootstrap-key, 0600), so the agent in user space can change LUKS
+# without the TPM. Only when repart really created a new partition (the root partition's LUKS UUID changed); a normal boot only
+# deletes the copy in /run.
+# Pulled in by initrd.target.wants/ (evaluated on every boot: skipped when ConditionPathExists does not hold). A failure only
+# fails this unit and does not block the boot.
+[Unit]
+Description=MastersOS: persist first-boot LUKS bootstrap key into the data partition (initrd)
+DefaultDependencies=no
+ConditionPathExists=/run/mastersos/luks-bootstrap-key
+Requires=sysroot.mount
+After=sysroot.mount systemd-repart.service
+Before=initrd-switch-root.target initrd-cleanup.service
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/mastersos/luks-bootstrap-persist

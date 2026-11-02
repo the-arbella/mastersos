@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "Spravuje %s"
+
+msgid "Shut down"
+msgstr "Vypnúť"
+
+msgid "Browse as Guest"
+msgstr "Prehliadať ako hosť"
+
+msgid "Add person"
+msgstr "Pridať osobu"
+
+msgid "Apps"
+msgstr "Aplikácie"
+
+msgid "Cancel"
+msgstr "Zrušiť"
+
+msgid "Retry"
+msgstr "Skúsiť znova"
+
+msgid "Opening the sign-in page…"
+msgstr "Otvára sa prihlasovacia stránka…"
+
+msgid "The sign-in page could not be opened."
+msgstr "Prihlasovaciu stránku sa nepodarilo otvoriť."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Nepodarilo sa spojiť so školou. Pripojte sa k sieti Wi-Fi na hornom paneli a skúste to znova."
+
+msgid "School email"
+msgstr "Školský e-mail"
+
+msgid "IT local account"
+msgstr "Lokálny účet IT"
+
+msgid "Username"
+msgstr "Používateľské meno"
+
+msgid "This account cannot sign in on this computer."
+msgstr "Tento účet sa na tomto počítači nemôže prihlásiť."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "Tento účet sa na tomto počítači nemôže prihlásiť. Použite svoj školský e-mail (%s)."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Prihlásili ste sa iným účtom. Prihláste sa znova účtom, ktorý ste tu vybrali."
+
+msgid "Language"
+msgstr "Jazyk"
+
+msgid "Keyboard"
+msgstr "Klávesnica"
+
+msgid "Continue"
+msgstr "Pokračovať"
+
+msgid "The setting could not be saved. Try again."
+msgstr "Nastavenie sa nepodarilo uložiť. Skúste to znova."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "Váš účet je zakázaný. Obráťte sa na správcu."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "Toto zariadenie je zakázané. Obráťte sa na správcu."
+
+msgid "Sign in with your school account."
+msgstr "Prihláste sa školským účtom."
+
+msgid "Could not sign in. Please try again."
+msgstr "Prihlásenie sa nepodarilo. Skúste to znova."
+
+msgid "Authentication request cancelled"
+msgstr "Žiadosť o overenie bola zrušená"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "Bol dosiahnutý maximálny počet pokusov o overenie"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Chyba pri získavaní prístupového tokenu. Skúste to znova."
+
+msgid "Invalid user name"
+msgstr "Neplatné používateľské meno"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "Tento počítač zamkla škola; obráťte sa na oddelenie IT"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "Prihlásenie hosťa nie je na tomto počítači povolené"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "Lokálne účty sa na tomto počítači nemôžu prihlásiť"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "Školské účty sa na tomto počítači nemôžu prihlásiť"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Túto aplikáciu je možné otvoriť iba z prihlasovacej obrazovky"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Táto aplikácia potrebuje sieť. Pripojte sa k sieti Wi-Fi na hornom paneli a skúste to znova."

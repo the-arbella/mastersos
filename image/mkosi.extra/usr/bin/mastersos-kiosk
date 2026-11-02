@@ -1,0 +1,5 @@
+#!/bin/bash
+# 锁定应用（计划 9）：mastersos-kiosk run / exit-host / enter <id> / guard 都在 agent 里（core 的 mastersos-agent/src/kiosk_session.rs），
+# 以会话的用户身份运行。run 由 gnome-kiosk 会话起，enter 由桌面与 Dock 上的启动器起（system/desktop.rs）。
+set -euo pipefail
+exec /usr/bin/mastersos-agent kiosk "$@"

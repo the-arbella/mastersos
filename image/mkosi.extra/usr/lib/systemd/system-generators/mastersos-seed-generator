@@ -1,0 +1,109 @@
+#!/bin/bash
+# 为启动盘上的种子分区（GPT 标签 mastersos-seed）生成 /var/lib/mastersos-seed 的挂载。
+#
+# 只认启动盘：先从 EFI 变量 LoaderDevicePartUUID（systemd-boot 写的，启动所在的 ESP）找到 ESP，
+# 取不到时退到 /dev/gpt-auto-root-luks（initrd 按启动盘找到的根分区）；再取它所在的磁盘，
+# 只在这块磁盘上找标签为 mastersos-seed 的分区。别的盘、U 盘上同名的分区一律忽略。
+# 找不到就什么都不生成：种子分区坏了或缺了，机器照常开机（挂载带 nofail），agent 自己决定跑不跑。
+#
+# 生成器跑在很早的时候，没有 journal 可用：记录写到 /run/mastersos/seed-generator.log。
+# 不经 udev 的符号链接按标签找分区：只读 sysfs 与 blkid 的底层探测（直接读 GPT）。
+set -euo pipefail
+
+out=${1:-/run/systemd/generator}
+log_dir=/run/mastersos
+log=$log_dir/seed-generator.log
+label=mastersos-seed
+efivar=/sys/firmware/efi/efivars/LoaderDevicePartUUID-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f
+
+mkdir -p "$log_dir"
+: >"$log"
+say() { echo "mastersos-seed-generator: $*" >>"$log"; }
+
+# /dev/sda1 → sda；/dev/nvme0n1p3 → nvme0n1（sysfs 里分区目录的上一级就是磁盘）
+disk_of() {
+	local dev name sys
+	dev=$(readlink -f "$1") || return 1
+	name=$(basename "$dev")
+	sys=$(readlink -f "/sys/class/block/$name") || return 1
+	[ -e "$sys/partition" ] || return 1
+	basename "$(dirname "$sys")"
+}
+
+boot_disk=""
+if [ -r "$efivar" ]; then
+	# 前 4 字节是属性，之后是 UTF-16LE 的 UUID
+	uuid=$(tail -c +5 "$efivar" | tr -d '\0' | tr 'A-F' 'a-f')
+	esp=""
+	if [ -n "$uuid" ] && [ -e "/dev/disk/by-partuuid/$uuid" ]; then
+		esp=/dev/disk/by-partuuid/$uuid
+	elif [ -n "$uuid" ]; then
+		# udev 的链接还没有时，逐个分区用 blkid 底层探测比对 PARTUUID
+		for p in /sys/class/block/*/partition; do
+			n=$(basename "$(dirname "$p")")
+			if [ "$(blkid -p -o value -s PART_ENTRY_UUID "/dev/$n" 2>/dev/null || true)" = "$uuid" ]; then
+				esp=/dev/$n
+				break
+			fi
+		done
+	fi
+	if [ -n "$esp" ]; then
+		boot_disk=$(disk_of "$esp" || true)
+		[ -n "$boot_disk" ] && say "启动盘 ${boot_disk}（来自 LoaderDevicePartUUID=${uuid}）"
+	else
+		say "LoaderDevicePartUUID=${uuid:-<空>} 找不到对应的分区"
+	fi
+fi
+if [ -z "$boot_disk" ] && [ -e /dev/gpt-auto-root-luks ]; then
+	boot_disk=$(disk_of /dev/gpt-auto-root-luks || true)
+	[ -n "$boot_disk" ] && say "启动盘 ${boot_disk}（来自 /dev/gpt-auto-root-luks）"
+fi
+if [ -z "$boot_disk" ]; then
+	say "找不到启动盘，不挂种子分区"
+	exit 0
+fi
+
+seed=""
+for pf in /sys/class/block/*/partition; do
+	part=$(basename "$(dirname "$pf")")
+	# 不看 uevent 的 PARTNAME：首次开机 repart 用 BLKPG 加的分区在内核里没有名字，要从 GPT 读
+	[ "$(blkid -p -o value -s PART_ENTRY_NAME "/dev/$part" 2>/dev/null || true)" = "$label" ] || continue
+	d=$(disk_of "/dev/$part" || true)
+	if [ "$d" != "$boot_disk" ]; then
+		say "忽略非启动盘上的 ${label}：/dev/${part}（在 ${d:-?} 上）"
+		continue
+	fi
+	if [ -n "$seed" ]; then
+		say "启动盘上有不止一个 ${label}（/dev/$seed 与 /dev/${part}），只用第一个"
+		continue
+	fi
+	seed=$part
+done
+if [ -z "$seed" ]; then
+	say "启动盘 $boot_disk 上没有 ${label}，不挂种子分区"
+	exit 0
+fi
+
+partuuid=$(blkid -p -o value -s PART_ENTRY_UUID "/dev/$seed" 2>/dev/null || true)
+if [ -z "$partuuid" ]; then
+	say "读不到 /dev/$seed 的 PARTUUID，不挂种子分区"
+	exit 0
+fi
+
+unit='var-lib-mastersos\x2dseed.mount'
+cat >"$out/$unit" <<UNIT
+# 由 mastersos-seed-generator 生成：启动盘 $boot_disk 上的 ${label}（/dev/${seed}）
+[Unit]
+Description=MastersOS seed partition
+Documentation=file:/usr/lib/systemd/system-generators/mastersos-seed-generator
+Before=local-fs.target
+
+[Mount]
+What=/dev/disk/by-partuuid/$partuuid
+Where=/var/lib/mastersos-seed
+Type=ext4
+Options=nosuid,nodev,noexec,nofail
+UNIT
+mkdir -p "$out/local-fs.target.wants"
+ln -sf "../$unit" "$out/local-fs.target.wants/$unit"
+say "挂载 /dev/${seed}（PARTUUID=${partuuid}）到 /var/lib/mastersos-seed"

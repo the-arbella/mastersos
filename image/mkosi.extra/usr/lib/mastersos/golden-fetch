@@ -1,0 +1,337 @@
+#!/bin/bash
+# golden-fetch <version>: the network fallback of the /usr self-repair (usr-self-repair Task 7): download <version> from the
+# update channel and write it into the golden copy, so the initrd can then rewrite the active slot from it.
+#
+# golden-fetch --booted: ExecStart of mastersos-golden-fetch.service, which integrity's "network" action starts (the active slot is
+# bad and the golden copy cannot repair it). The unit waits for network-online and has 3 h (integrity's own unit has 30 min and
+# must not wait on the network). Runs golden-fetch <IMAGE_VERSION of /usr/lib/os-release> and then:
+#   0  touch /run/mastersos-golden-fetched (integrity fetches at most once per boot), then systemctl start --no-block
+#      mastersos-integrity.service: the re-run sees the golden copy good and requests the repair of the bad active slot (and tells
+#      the user); exit 0
+#   3  systemctl start --no-block mastersos-update.service (the booted version is gone, an update is the way out); exit 0
+#   other: exit with that code (the unit fails; the next boot's integrity decides again)
+# The follow-ups live here and not in ExecStartPost= / ExecStopPost=: one place handles both outcomes, and the test runs it.
+#
+# Exit codes of golden-fetch <version>:
+#   0  the golden copy now holds <version>: its signature area names the running root hash, the written usr and verity read
+#      through with the downloaded signature (or, when the kernel keyring cannot judge it, ENOKEY, on the root hash alone: it is
+#      the running one), the golden ESP has the UKI of <version> signed for that root hash, and the written signature opens it
+#   3  <version> is not in the channel (the signed SHA256SUMS lists none of its files)
+#   2  usage
+#   1  anything else; the golden signature area is then either untouched (failure before the first write) or zeroed
+#
+# Source: [Source] Path= of 12-usr.transfer, /etc/sysupdate.d/ first (the agent's channel or school-cache override), else
+# /usr/lib/sysupdate.d/. When the agent set a school cache it also left the official transfers in $VAR/sysupdate-fallback.d/: the
+# cache is tried first, then the official source (as update-run does); the answer of the last source tried is the result.
+# Per source: SHA256SUMS and SHA256SUMS.gpg (gpgv against the image's import-pubring.pgp, as systemd-sysupdate does), then the four
+# files of <version> named in it, each exactly once (systemd-sysupdate's MatchPattern of the transfers, %a = x86-64):
+#   MastersOS_<v>_x86-64.usr-x86-64.<uuid>.raw.zst, ...usr-x86-64-verity.<uuid>.raw.zst, ...usr-x86-64-verity-sig.<uuid>.raw.zst,
+#   MastersOS_<v>_x86-64.efi
+# downloaded with curl into a fresh mktemp -d directory under /var/tmp (students can write /var/tmp: never a fixed name there),
+# sha256-checked against SHA256SUMS. Only when all four check out, the signature's rootHash is the running usrhash and the UKI is
+# signed for it with IMAGE_VERSION=<version>, is anything written. The download directory is removed on exit.
+#
+# Write order (integrity's copy_slot / finish_copy, shared by sourcing integrity): golden ESP mounted read-write first (pre-flight),
+# golden-sig zeroed, usr streamed through zstd -dc into the golden usr partition, verity, UKI and manifest, full read-through with
+# the downloaded signature, signature written last and read back, then a signed open of the golden copy from its own signature
+# partition. Every partition write is dd conv=fsync under an exclusive flock of the whole disk, then udevadm settle.
+#
+# Never downgrades: a golden copy whose signature area names another root hash and whose UKI names a version newer than <version>
+# (or whose version cannot be read) is left alone (exit 1).
+#
+# Environment overrides (tests/golden-fetch-test.sh and the lab smoke run; integrity passes its own through): MASTERSOS_GOLDEN_LIB,
+# MASTERSOS_INTEGRITY, MASTERSOS_SYSTEM_VAR, MASTERSOS_SYSUPDATE_ETC (default /etc/sysupdate.d), MASTERSOS_SYSUPDATE_USR (default
+# /usr/lib/sysupdate.d), MASTERSOS_GPG_KEYRING, MASTERSOS_FETCH_TMPDIR (default /var/tmp), MASTERSOS_FETCH_MIN_FREE_MB, MASTERSOS_FETCH_MAX_{LIST,FILE}_BYTES,
+# MASTERSOS_GOLDEN_{SIG,VERITY,USR,ESP}, MASTERSOS_GOLDEN_ESP_DIR, MASTERSOS_CMDLINE, MASTERSOS_DD, MASTERSOS_WHOLE_DISK,
+# MASTERSOS_MOK_DER, MASTERSOS_UKIFY; for --booted MASTERSOS_IMAGE_VERSION, MASTERSOS_SYSTEMCTL and MASTERSOS_FETCHED_MARKER.
+set -euo pipefail
+
+VER_RE='^[0-9A-Za-z][0-9A-Za-z._~+-]*$'
+if [ $# -eq 1 ] && [ "$1" = --booted ]; then
+	ver=${MASTERSOS_IMAGE_VERSION:-$(
+		# shellcheck disable=SC1091
+		. /usr/lib/os-release 2>/dev/null && echo "${IMAGE_VERSION:-}"
+	)}
+	if ! [[ $ver =~ $VER_RE ]]; then
+		echo "golden-fetch: cannot read a usable IMAGE_VERSION from os-release (${ver:-empty})"
+		exit 1
+	fi
+	rc=0
+	"$BASH" "$0" "$ver" || rc=$?
+	systemctl=${MASTERSOS_SYSTEMCTL:-systemctl}
+	case $rc in
+	0)
+		# once per boot: integrity's network action does not start this unit again while the marker is there (a re-run that
+		# still finds the golden copy bad would otherwise download 1.66 GB again, and again)
+		: >"${MASTERSOS_FETCHED_MARKER:-/run/mastersos-golden-fetched}" || echo "golden-fetch: cannot leave the fetched marker"
+		echo "golden-fetch: golden copy fetched, running integrity again"
+		"$systemctl" start --no-block mastersos-integrity.service || exit 1
+		;;
+	3)
+		echo "golden-fetch: $ver is no longer in the channel, starting mastersos-update"
+		"$systemctl" start --no-block mastersos-update.service || exit 1
+		;;
+	*) exit "$rc" ;;
+	esac
+	exit 0
+fi
+if [ $# -ne 1 ] || ! [[ $1 =~ $VER_RE ]]; then
+	echo "usage: golden-fetch <version> | --booted" >&2
+	exit 2
+fi
+WANT_VER=$1
+
+# shellcheck source-path=SCRIPTDIR source=golden-lib
+. "${MASTERSOS_GOLDEN_LIB:-/usr/lib/mastersos/golden-lib}"
+# integrity only defines functions when sourced: write_dd, put_file, put_text, copy helpers, vcheck, golden_esp_mount...
+# shellcheck source-path=SCRIPTDIR source=integrity
+. "${MASTERSOS_INTEGRITY:-/usr/lib/mastersos/integrity}"
+
+log() { echo "golden-fetch: $*"; }
+GOLDEN_ESP_MNT=/run/mastersos-golden-fetch-esp # not integrity's mount point: integrity is our caller
+ETC_TRANSFERS=${MASTERSOS_SYSUPDATE_ETC:-/etc/sysupdate.d}
+USR_TRANSFERS=${MASTERSOS_SYSUPDATE_USR:-/usr/lib/sysupdate.d}
+KEYRING=${MASTERSOS_GPG_KEYRING:-/usr/lib/systemd/import-pubring.pgp}
+TMPBASE=${MASTERSOS_FETCH_TMPDIR:-/var/tmp}
+# 20261027.4: usr 1.57 GB + UKI 83 MB + verity 14 MB compressed, the verity unpacked again; 4 GiB leaves room to grow
+MIN_FREE_MB=${MASTERSOS_FETCH_MIN_FREE_MB:-4096}
+MAX_LIST_BYTES=${MASTERSOS_FETCH_MAX_LIST_BYTES:-1048576}  # SHA256SUMS, SHA256SUMS.gpg: 1 MiB
+MAX_FILE_BYTES=${MASTERSOS_FETCH_MAX_FILE_BYTES:-4294967296} # each payload file: 4 GiB (20261027.4's usr .raw.zst is 1.57 GB)
+ARCH=x86-64
+TMPD=""
+DOWNLOADED=0 # bytes
+
+cleanup() {
+	golden_esp_umount
+	[ -z "$TMPD" ] || rm -rf "$TMPD"
+}
+trap cleanup EXIT
+
+# source_path <transfer file> -> its [Source] Path=
+source_path() {
+	sed -nE '/^\[Source\]/,/^\[/{s/^Path=[[:space:]]*([^[:space:]]+)[[:space:]]*$/\1/p}' "$1" | head -n 1
+}
+
+# sources -> the channel URLs to try, in order (one per line)
+sources() {
+	local f=$ETC_TRANSFERS/12-usr.transfer p
+	[ -f "$f" ] || f=$USR_TRANSFERS/12-usr.transfer
+	p=$(source_path "$f" 2>/dev/null) || p=""
+	[ -z "$p" ] || echo "$p"
+	f=$VAR/sysupdate-fallback.d/12-usr.transfer
+	if [ -f "$f" ]; then
+		p=$(source_path "$f" 2>/dev/null) || p=""
+		[ -z "$p" ] || echo "$p"
+	fi
+}
+
+# get <url> <file> <max bytes>: download one file of at most <max bytes> (a broken or hostile mirror cannot fill /var/tmp before
+# anything is verified); adds its size to DOWNLOADED
+get() {
+	local n
+	rm -f "$2"
+	curl --fail --silent --show-error --location --proto =https,http,file --proto-redir =https --max-filesize "$3" \
+		--connect-timeout 30 --speed-limit 1024 --speed-time 120 --retry 3 --output "$2" "$1" || return 1
+	n=$(stat -c %s "$2") || return 1
+	[ "$n" -le "$3" ] || return 1
+	DOWNLOADED=$((DOWNLOADED + n))
+}
+
+# pick <sums> <regex> -> "<sha256> <name>" of the one SHA256SUMS line whose name matches; 1 when none, 2 when several
+pick() {
+	local lines
+	lines=$(sed -nE 's/^([0-9a-f]{64}) [ *]?([^ ]+)$/\1 \2/p' "$1" | grep -E " $2\$") || return 1
+	[ "$(printf '%s\n' "$lines" | wc -l)" = 1 ] || return 2
+	echo "$lines"
+}
+
+# fetch_from <base url> <dir>: download and check the four files of WANT_VER into <dir> (usr.dl verity.dl sig.dl uki.dl)
+# 0 all good, 3 the signed SHA256SUMS does not list WANT_VER, 1 anything else. All four are picked from the signed listing before
+# any of them is downloaded (a half-published version costs no 1.6 GB download).
+fetch_from() {
+	local base=${1%/} d=$2 v kind re line want got rc missing=()
+	local -A lines=()
+	rm -rf "${d:?}" && mkdir -m 0700 "$d" || return 1
+	if ! get "$base/SHA256SUMS" "$d/SHA256SUMS" "$MAX_LIST_BYTES" || ! get "$base/SHA256SUMS.gpg" "$d/SHA256SUMS.gpg" "$MAX_LIST_BYTES"; then
+		log "cannot download SHA256SUMS from $base (or it is larger than $MAX_LIST_BYTES bytes)"
+		return 1
+	fi
+	if ! gpgv --homedir "$d" --keyring "$KEYRING" "$d/SHA256SUMS.gpg" "$d/SHA256SUMS" >"$d/gpgv.log" 2>&1; then
+		log "SHA256SUMS from $base does not verify against $KEYRING: $(tr '\n' ' ' <"$d/gpgv.log")"
+		return 1
+	fi
+	v=${WANT_VER//./\\.}
+	v=${v//+/\\+}
+	for kind in usr verity sig uki; do
+		case $kind in
+		usr) re="MastersOS_${v}_$ARCH\.usr-$ARCH\.[0-9a-f-]+\.raw\.zst" ;;
+		verity) re="MastersOS_${v}_$ARCH\.usr-$ARCH-verity\.[0-9a-f-]+\.raw\.zst" ;;
+		sig) re="MastersOS_${v}_$ARCH\.usr-$ARCH-verity-sig\.[0-9a-f-]+\.raw\.zst" ;;
+		uki) re="MastersOS_${v}_$ARCH\.efi" ;;
+		esac
+		rc=0
+		line=$(pick "$d/SHA256SUMS" "$re") || rc=$?
+		case $rc in
+		0) lines[$kind]=$line ;;
+		1) missing+=("$kind") ;;
+		*)
+			log "SHA256SUMS from $base lists more than one $kind file for $WANT_VER"
+			return 1
+			;;
+		esac
+	done
+	if [ ${#missing[@]} = 4 ]; then
+		log "$base does not offer $WANT_VER"
+		return 3
+	fi
+	if [ ${#missing[@]} -gt 0 ]; then
+		log "$base lists $WANT_VER without its ${missing[*]} file(s); nothing downloaded"
+		return 1
+	fi
+	for kind in usr verity sig uki; do
+		line=${lines[$kind]}
+		want=${line%% *}
+		if ! get "$base/${line#* }" "$d/$kind.dl" "$MAX_FILE_BYTES"; then
+			log "cannot download ${line#* } from $base (or it is larger than $MAX_FILE_BYTES bytes)"
+			return 1
+		fi
+		got=$(sha256sum <"$d/$kind.dl" | cut -d' ' -f1)
+		if [ "$got" != "$want" ]; then
+			log "${line#* } from $base has sha256 $got, SHA256SUMS says $want"
+			return 1
+		fi
+	done
+	log "$WANT_VER downloaded from $base and checked against the signed SHA256SUMS"
+}
+
+# guard_downgrade: 1 when the golden copy may hold a version newer than WANT_VER
+guard_downgrade() {
+	local rh ver
+	rh=$(sig_roothash "$GSIG" 2>/dev/null) || return 0 # signature area empty or invalid: nothing to protect
+	[ "$rh" != "$RUNHASH" ] || return 0
+	if ! golden_esp_mount ro; then
+		log "the golden copy names $rh but its ESP does not mount: its version is unknown, not overwriting it"
+		return 1
+	fi
+	ver=$(uki_field "$GOLDEN_ESP_DIR/MastersOS.efi" version 2>/dev/null) || ver=""
+	golden_esp_umount
+	if [ -z "$ver" ]; then
+		log "the golden copy names $rh but its version cannot be read: not overwriting it"
+		return 1
+	fi
+	if older_than "$WANT_VER" "$ver"; then
+		log "the golden copy holds $ver, newer than $WANT_VER: not downgrading it"
+		return 1
+	fi
+}
+
+# free_mb <dir> -> MiB available to root there
+free_mb() { df -Pk "$1" | awk 'NR == 2 { print int($4 / 1024) }'; }
+
+main() {
+	local srcs=() src rc=1 t0 avail uki_ver d="" n=0 sigtmp got
+	t0=${EPOCHREALTIME/./}
+	RUNHASH=$(sed -nE 's/^(.* )?usrhash=([0-9a-f]{64})( .*)?$/\2/p' "${MASTERSOS_CMDLINE:-/proc/cmdline}" | head -n 1) || RUNHASH=""
+	if [ -z "$RUNHASH" ]; then
+		log "no usrhash= on the kernel command line"
+		return 1
+	fi
+	GSIG=${MASTERSOS_GOLDEN_SIG:-$(golden_dev "$GOLDEN_SIG_TYPE" 2>/dev/null || true)}
+	GVERITY=${MASTERSOS_GOLDEN_VERITY:-$(golden_dev "$GOLDEN_VERITY_TYPE" 2>/dev/null || true)}
+	GUSR=${MASTERSOS_GOLDEN_USR:-$(golden_dev "$GOLDEN_USR_TYPE" 2>/dev/null || true)}
+	GOLDEN_ESP_DEV=${MASTERSOS_GOLDEN_ESP:-$(golden_dev "$GOLDEN_ESP_TYPE" 2>/dev/null || true)}
+	if [ -z "$GSIG" ] || [ -z "$GVERITY" ] || [ -z "$GUSR" ]; then
+		log "no golden partitions on the boot disk"
+		return 1
+	fi
+	guard_downgrade || return 1
+
+	avail=$(free_mb "$TMPBASE" 2>/dev/null) || avail=""
+	if ! [[ $avail =~ ^[0-9]+$ ]] || [ "$avail" -lt "$MIN_FREE_MB" ]; then
+		log "only ${avail:-?} MiB free in $TMPBASE, $MIN_FREE_MB MiB needed: not downloading"
+		return 1
+	fi
+	TMPD=$(mktemp -d "$TMPBASE/mastersos-golden-fetch.XXXXXX") || {
+		log "cannot create a download directory in $TMPBASE"
+		return 1
+	}
+
+	mapfile -t srcs < <(sources)
+	if [ ${#srcs[@]} = 0 ]; then
+		log "no [Source] Path= in 12-usr.transfer"
+		return 1
+	fi
+	for src in "${srcs[@]}"; do
+		n=$((n + 1))
+		d=$TMPD/src$n
+		log "trying $src"
+		rc=0
+		fetch_from "$src" "$d" || rc=$?
+		[ "$rc" != 0 ] || break
+	done
+	[ "$rc" = 0 ] || return "$rc"
+	log "downloaded $DOWNLOADED bytes in $(since "$t0") s"
+
+	# the download must be exactly the running /usr, and its UKI the one of WANT_VER for it
+	sigtmp=$d/sig.raw
+	if ! zstd -dcq -- "$d/sig.dl" >"$sigtmp" || ! zstd -dcq -- "$d/verity.dl" >"$d/verity.raw"; then
+		log "cannot unpack the signature or verity file"
+		return 1
+	fi
+	got=$(sig_roothash "$sigtmp" 2>/dev/null) || got=""
+	if [ "$got" != "$RUNHASH" ]; then
+		log "the downloaded signature names ${got:-nothing}, not the running root hash $RUNHASH: not writing"
+		return 1
+	fi
+	if ! verity_data_bytes "$d/verity.raw" >/dev/null; then
+		log "the downloaded verity file has no dm-verity superblock"
+		return 1
+	fi
+	uki_ver=$(uki_field "$d/uki.dl" version 2>/dev/null) || uki_ver=""
+	if [ "$uki_ver" != "$WANT_VER" ] || ! uki_file_ok "$d/uki.dl" "$RUNHASH"; then
+		log "the downloaded UKI (IMAGE_VERSION ${uki_ver:-?}) is not a signed UKI of $WANT_VER for $RUNHASH: not writing"
+		return 1
+	fi
+
+	# pre-flight: a golden ESP that does not mount read-write would fail after golden-sig was zeroed and usr rewritten
+	if ! golden_esp_mount rw; then
+		log "cannot mount the golden ESP read-write: nothing written"
+		return 1
+	fi
+	if ! write_golden "$d" "$sigtmp"; then
+		log "writing the golden copy failed: its signature area stays zeroed"
+		return 1
+	fi
+	golden_esp_umount
+	log "the golden copy is now $WANT_VER ($RUNHASH); $DOWNLOADED bytes downloaded, $(since "$t0") s in all"
+}
+
+# write_golden <download dir> <unpacked sig>: zero golden-sig, stream usr, then finish_copy (verity, UKI, read-through, sig last),
+# then a signed open of the golden copy from its own signature partition
+write_golden() {
+	local d=$1 sig=$2 t rc=0 bytes vbytes
+	t=${EPOCHREALTIME/./}
+	write_dd "$GSIG" if=/dev/zero bs=16K count=1 || return 1
+	# iflag=fullblock: without it the image's dd (uutils 0.10.0) took 29.7 s for this pipe instead of 1.9 s (VM 165, 20261027.4)
+	zstd -dcq -- "$d/usr.dl" | write_dd "$GUSR" bs=4M iflag=fullblock || rc=$?
+	if [ "$rc" != 0 ]; then
+		log "unpacking usr into $GUSR failed ($rc)"
+		return 1
+	fi
+	bytes=$(erofs_bytes "$GUSR") || bytes=""
+	vbytes=$(verity_data_bytes "$d/verity.raw") || vbytes=""
+	if [ -z "$bytes" ] || [ "$bytes" != "$vbytes" ]; then
+		log "usr written to $GUSR holds ${bytes:-no} erofs bytes, the verity superblock covers ${vbytes:-?}"
+		return 1
+	fi
+	log "usr unpacked into $GUSR in $(since "$t") s (erofs $bytes bytes)"
+	finish_copy "$sig" "$d/verity.raw" "$GSIG" "$GVERITY" "$GUSR" "$RUNHASH" 1 "$d/uki.dl" || return 1
+	# the signature now on the golden partition must open the copy (signed when the keyring can judge it)
+	if ! vcheck "$GUSR" "$GVERITY" "$GSIG" "$RUNHASH" 1 --no-read; then
+		log "the written golden signature does not open the copy: zeroing it again"
+		write_dd "$GSIG" if=/dev/zero bs=16K count=1 || log "cannot zero $GSIG"
+		return 1
+	fi
+}
+
+main

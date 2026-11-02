@@ -1,0 +1,109 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: dz\n"
+
+msgid "Managed by %s"
+msgstr "%s གིས་ འཛིན་སྐྱོང་འབད་ཡོད།"
+
+msgid "Shut down"
+msgstr "སྒོ་བསྡམ།"
+
+msgid "Browse as Guest"
+msgstr "མགྲོན་པོ་སྦེ་ བརྟག་ཞིབ་འབད།"
+
+msgid "Add person"
+msgstr "མི་ཅིག་ཁ་སྣོན་འབད།"
+
+msgid "Apps"
+msgstr "ཨེཔ་ཚུ།"
+
+msgid "Cancel"
+msgstr "ཆ་མེད་བཟོ།"
+
+msgid "Retry"
+msgstr "ལོག་ཚོད་ལྟ་འབད།"
+
+msgid "Opening the sign-in page…"
+msgstr "ནང་འཛུལ་ཤོག་ལེབ་ ཁ་ཕྱེ་དོ་ཡོད།…"
+
+msgid "The sign-in page could not be opened."
+msgstr "ནང་འཛུལ་ཤོག་ལེབ་ ཁ་ཕྱེ་མ་ཚུགས།"
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "སློབ་གྲྭ་དང་ འབྲེལ་མ་ཚུགས། སྟེང་གི་ཕྲ་རིང་ལས་ Wi-Fi ལུ་ མཐུད་ཞིནམ་ལས་ ལོག་ཚོད་ལྟ་འབད།"
+
+msgid "School email"
+msgstr "སློབ་གྲྭའི་ གློག་འཕྲིན།"
+
+msgid "IT local account"
+msgstr "IT ས་གནས་ཀྱི་ རྩིས་ཐོ།"
+
+msgid "Username"
+msgstr "ལག་ལེན་པའི་མིང་།"
+
+msgid "This account cannot sign in on this computer."
+msgstr "རྩིས་ཐོ་འདི་གིས་ གློག་ཀླད་འདི་ལུ་ ནང་འཛུལ་འབད་མི་ཚུགས།"
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "རྩིས་ཐོ་འདི་གིས་ གློག་ཀླད་འདི་ལུ་ ནང་འཛུལ་འབད་མི་ཚུགས། ཁྱོད་ཀྱི་ སློབ་གྲྭའི་གློག་འཕྲིན་ (%s) ལག་ལེན་འཐབ།"
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "ཁྱོད་ཀྱིས་ རྩིས་ཐོ་གཞན་ཅིག་གིས་ ནང་འཛུལ་འབད་ཡི། ཁྱོད་ཀྱིས་ ཁ་ཐོག་ལུ་ སེལ་འཐུ་འབད་མི་ རྩིས་ཐོ་གིས་ ལོག་ནང་འཛུལ་འབད།"
+
+msgid "Language"
+msgstr "སྐད་ཡིག"
+
+msgid "Keyboard"
+msgstr "ལྡེ་མིག་པང་ལེབ།"
+
+msgid "Continue"
+msgstr "མུ་མཐུད།"
+
+msgid "The setting could not be saved. Try again."
+msgstr "སྒྲིག་བཀོད་འདི་ གསོག་འཇོག་འབད་མ་ཚུགས། ལོག་ཚོད་ལྟ་འབད།"
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "ཁྱོད་ཀྱི་ རྩིས་ཐོ་ ལག་ལེན་མེད་བཟོ་ཡོད། ཁྱོད་ཀྱི་ འཛིན་སྐྱོང་པ་ལུ་ འབྲེལ་བ་འཐབ།"
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "ཐབས་འཕྲུལ་འདི་ ལག་ལེན་མེད་བཟོ་ཡོད། ཁྱོད་ཀྱི་ འཛིན་སྐྱོང་པ་ལུ་ འབྲེལ་བ་འཐབ།"
+
+msgid "Sign in with your school account."
+msgstr "ཁྱོད་ཀྱི་ སློབ་གྲྭའི་རྩིས་ཐོ་གིས་ ནང་འཛུལ་འབད།"
+
+msgid "Could not sign in. Please try again."
+msgstr "ནང་འཛུལ་འབད་མ་ཚུགས། གནངམ་འབད་ ལོག་ཚོད་ལྟ་འབད།"
+
+msgid "Authentication request cancelled"
+msgstr "བདེན་དཔྱད་ཀྱི་ ཞུ་བ་ ཆ་མེད་བཟོ་ཡོད།"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "བདེན་དཔྱད་ཚོད་ལྟའི་ གྲངས་མང་ཤོས་ལུ་ ལྷོད་ཡོད།"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "འཛུལ་སྒོའི་ ཊོ་ཀེན་ ལེན་པའི་སྐབས་ འཛོལ་བ་ཅིག་བྱུང་ཡི། གནངམ་འབད་ ལོག་ཚོད་ལྟ་འབད།"
+
+msgid "Invalid user name"
+msgstr "ལག་ལེན་པའི་མིང་ ནུས་མེད།"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "གློག་ཀླད་འདི་ སློབ་གྲྭ་གིས་ ལྡེ་མིག་བརྒྱབ་ཡོད། གནངམ་འབད་ IT ལུ་ འབྲེལ་བ་འཐབ།"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "གློག་ཀླད་འདི་ལུ་ མགྲོན་པོའི་ནང་འཛུལ་ འབད་ཆོག་ཐོབ་མེད།"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "ས་གནས་ཀྱི་རྩིས་ཐོ་ཚུ་གིས་ གློག་ཀླད་འདི་ལུ་ ནང་འཛུལ་འབད་མི་ཚུགས།"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "སློབ་གྲྭའི་རྩིས་ཐོ་ཚུ་གིས་ གློག་ཀླད་འདི་ལུ་ ནང་འཛུལ་འབད་མི་ཚུགས།"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "ཨེཔ་འདི་ ནང་འཛུལ་གྱི་བརྙན་ཡོལ་ལས་ རྐྱངམ་ཅིག་ ཁ་ཕྱེ་ཚུགས།"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "ཨེཔ་འདི་ལུ་ ཡོངས་འབྲེལ་དགོས། སྟེང་གི་ཕྲ་རིང་ལས་ Wi-Fi ལུ་ མཐུད་ཞིནམ་ལས་ ལོག་ཚོད་ལྟ་འབད།"

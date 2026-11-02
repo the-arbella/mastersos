@@ -1,0 +1,56 @@
+{
+ "source": "MastersOS_20261015.4_x86-64.efi（lab 构建 20261015.4，提交 b6499347；取自安装 U 盘 a4-20261015.4-plain.img 的 EFI/mastersos/）",
+ "uki_sha256": "cf086e84ccbfaacb343f1c8824c42043b45bfaed8d43ac59459a6568d63c613c",
+ "profiles": [
+  {
+   "measured_sha256": {
+    ".sbat": "64fb2be5405275a22622bbf68c538a9e2d41e987755c03ee2a56576ad41c6bf4",
+    ".osrel": "8f29f866b8c3b37f98ec276ecefbab1570d70d9b0c45861dd26df298208a5bc9",
+    ".cmdline": "08ca62e919354a109f3e03a208519307877d6591881aa1e10abfbb2fc76f04c6",
+    ".uname": "ff912fa2bda82731c6c581bfd3e54cacef51218011443f1216dcc5690c84c63e",
+    ".pcrpkey": "c944bffa927e01e4f13faf870bab21bf6e36404ed8defd4c0f774eb536ee1824",
+    ".linux": "e52957a8f676eaf2281769cbb129bc0dd6fe7374167ddde9c289d256e019d55b",
+    ".initrd": "f2f7b577f43e9a917e07674f6d98265377f2bf5ef3d9be0c2ea38e74965f7392",
+    ".ucode": "04acbd86da4a0e3cee83fc117f06b647866033311a251c6371fead4f9cfbbe65",
+    ".profile": "c60cc5862a28b2f7eb95aa6f3bf2403a989092ec0cfe0119231a4e1385ffc8dc"
+   },
+   "pcrsig": {
+    "sha256": [
+     {
+      "pcrs": [
+       11
+      ],
+      "pkfp": "8ac02ed4b16c67b5e910396ef7b28c682fc1e882d54dd1d551190bde48222152",
+      "pol": "e245632a30037bc36661351c6b846ccf76b58e6f95c4815a4231c9884530178e",
+      "sig": "kbzH+MwN+by3XP9RwADy25B83ao+W7AAPzrtz38ZAr5EJ4hyWUFW/qFnrxeAjme30JqjU2PA0Z3iex1sBjQLQsz3kVc2nhiYhJAhmdIg+1RLs1HeV3aswVfzvdG6NQlPCMFTQYbbJX2woCa/DTlMedlYaA9zisBbz0fRYtCLqLqR5+Umm+4UqehxuYor/4Z2YpVWG7UiJPoh5wF7GzE757p5ISBfdA/GaN8SFm3l5NAlsAHHFFpqPvkq69HeUMMcTstG6R8lTZgNIy1lef/JutzzY9cjCT50IiXJnVdOrvrVAqDvR0HpWerY/YIVpotSha3/2MNi4Eqn0auFqeamsg=="
+     }
+    ]
+   }
+  },
+  {
+   "measured_sha256": {
+    ".sbat": "64fb2be5405275a22622bbf68c538a9e2d41e987755c03ee2a56576ad41c6bf4",
+    ".osrel": "8f29f866b8c3b37f98ec276ecefbab1570d70d9b0c45861dd26df298208a5bc9",
+    ".cmdline": "74a853fdff8c9c0158bb39593ee5e75ab1edff4ee4b55cc329715e4338357cdb",
+    ".uname": "ff912fa2bda82731c6c581bfd3e54cacef51218011443f1216dcc5690c84c63e",
+    ".pcrpkey": "c944bffa927e01e4f13faf870bab21bf6e36404ed8defd4c0f774eb536ee1824",
+    ".linux": "e52957a8f676eaf2281769cbb129bc0dd6fe7374167ddde9c289d256e019d55b",
+    ".initrd": "f2f7b577f43e9a917e07674f6d98265377f2bf5ef3d9be0c2ea38e74965f7392",
+    ".ucode": "04acbd86da4a0e3cee83fc117f06b647866033311a251c6371fead4f9cfbbe65",
+    ".profile": "6a6c6920940da370ec9a63f66c4f5463320b301a96dd49f31b1cd06e2bbdb440"
+   },
+   "pcrsig": {
+    "sha256": [
+     {
+      "pcrs": [
+       11
+      ],
+      "pkfp": "8ac02ed4b16c67b5e910396ef7b28c682fc1e882d54dd1d551190bde48222152",
+      "pol": "7f81ea4a4e848545c270fe5ced568c1a48d9755fa15e6d66d3e4e466bc53a9ac",
+      "sig": "EIgsztyjKQrfhPWA2EtKXrgeVPoBS/MY+7+DcvmzwnnK/cd+9XW9dET7WfFCQgOqA2V77aW50iKMJetqvD2yaKV9trErz3vplYSrTbfv3LFn/ZUIOo2ivTLiy1NsnGAHqYUpsCqzDQFfEkaarJ//p1quFcG95gHpSJGKJkn02hsKxl+JmxgMKG1JYc/ufDDgRuPrm6PmQd1G7+PzjQ+eeqjOMX18yhmPUDuttAOBiF0hBbvH3+14bTzJyXbz6Saz+3MmiUO6PxGzWR4P0YXj5A3m3OdzAZZUZ3+V8RnVDDLWXXaJzaA/y7nSdAYNKZERnkeBD5b3YVou9P8kXVcyrg=="
+     }
+    ]
+   }
+  }
+ ]
+}

@@ -1,0 +1,10 @@
+// The login screen sets the computer's language and keyboard (localectl), and nothing else. Desktop users do not.
+polkit.addRule(function (action, subject) {
+    if (!/^gdm-greeter(-[0-9]+)?$/.test(subject.user)) {
+        return polkit.Result.NOT_HANDLED;
+    }
+    if (action.id === "org.freedesktop.locale1.set-locale" || action.id === "org.freedesktop.locale1.set-keyboard") {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});

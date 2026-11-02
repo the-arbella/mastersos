@@ -1,0 +1,53 @@
+# authd 的 OIDC broker（Ruling 1：从源码编进 /usr，不装 snapd）。由 D-Bus 激活（authd 第一次要用它时，
+# /usr/share/dbus-1/system-services/com.ubuntu.authd.Oidc.service），不进任何 target、没有 [Install]。
+# 照上游 snap 的定义改写（authd-oidc: daemon: dbus, bus-name com.ubuntu.authd.Oidc, restart-condition: never）。
+# snap 的 $SNAP_DATA（broker.conf 与 token 缓存）在这里拆成两处：配置 /etc/authd/oidc/（--config），
+# 数据 /var/lib/authd-oidc（broker 不在 snap 里时的默认数据目录：/var/lib/<可执行文件名>，即 StateDirectory）。
+[Unit]
+Description=authd OIDC broker
+Documentation=https://documentation.ubuntu.com/authd/
+# 学校没配 SSO（agent 没写 broker.conf.d/ 里的文件）时不起：它以 root 解析网络上来的东西，没用时不让它跑。
+# 此时 authd 选这个 broker 会得到激活失败，本机用户的登录不经过它（broker 是用户在「Not listed?」里选的）
+ConditionDirectoryNotEmpty=/etc/authd/oidc/broker.conf.d
+
+[Service]
+Type=dbus
+BusName=com.ubuntu.authd.Oidc
+ExecStart=/usr/libexec/authd-oidc --config /etc/authd/oidc/broker.conf
+Environment=SYSLOG_IDENTIFIER=authd-oidc
+SyslogIdentifier=authd-oidc
+# 同 snap 的 restart-condition: never：退出后由下一次 D-Bus 调用重新激活
+Restart=no
+
+StateDirectory=authd-oidc
+StateDirectoryMode=0700
+ConfigurationDirectory=authd/oidc
+ConfigurationDirectoryMode=0755
+UMask=0077
+
+# 加固（Ruling 1）：它以 root 跑、解析身份系统的 TLS/HTTP/JWT。能写的只有自己的状态目录；
+# 配置（含 agent 写的 0600 drop-in）只读；不需要任何 capability（读的配置与状态都归 root 所有）。
+ProtectSystem=strict
+ReadWritePaths=/var/lib/authd-oidc
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=

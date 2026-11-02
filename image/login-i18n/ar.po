@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "تُدار بواسطة %s"
+
+msgid "Shut down"
+msgstr "إيقاف التشغيل"
+
+msgid "Browse as Guest"
+msgstr "التصفح كضيف"
+
+msgid "Add person"
+msgstr "إضافة شخص"
+
+msgid "Apps"
+msgstr "التطبيقات"
+
+msgid "Cancel"
+msgstr "إلغاء"
+
+msgid "Retry"
+msgstr "إعادة المحاولة"
+
+msgid "Opening the sign-in page…"
+msgstr "جارٍ فتح صفحة تسجيل الدخول…"
+
+msgid "The sign-in page could not be opened."
+msgstr "تعذّر فتح صفحة تسجيل الدخول."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "تعذّر الوصول إلى المدرسة. اتصل بشبكة Wi-Fi من الشريط العلوي ثم أعد المحاولة."
+
+msgid "School email"
+msgstr "البريد الإلكتروني المدرسي"
+
+msgid "IT local account"
+msgstr "حساب محلي لقسم تقنية المعلومات"
+
+msgid "Username"
+msgstr "اسم المستخدم"
+
+msgid "This account cannot sign in on this computer."
+msgstr "لا يمكن لهذا الحساب تسجيل الدخول على هذا الحاسوب."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "لا يمكن لهذا الحساب تسجيل الدخول على هذا الحاسوب. استخدم بريدك الإلكتروني المدرسي (%s)."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "سجّلت الدخول بحساب مختلف. سجّل الدخول مجددًا بالحساب الذي اخترته هنا."
+
+msgid "Language"
+msgstr "اللغة"
+
+msgid "Keyboard"
+msgstr "لوحة المفاتيح"
+
+msgid "Continue"
+msgstr "متابعة"
+
+msgid "The setting could not be saved. Try again."
+msgstr "تعذّر حفظ الإعداد. حاول مرة أخرى."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "حسابك معطّل. تواصل مع المسؤول."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "هذا الجهاز معطّل. تواصل مع المسؤول."
+
+msgid "Sign in with your school account."
+msgstr "سجّل الدخول بحسابك المدرسي."
+
+msgid "Could not sign in. Please try again."
+msgstr "تعذّر تسجيل الدخول. يرجى المحاولة مرة أخرى."
+
+msgid "Authentication request cancelled"
+msgstr "تم إلغاء طلب المصادقة"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "تم بلوغ الحد الأقصى لمحاولات المصادقة"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "حدث خطأ أثناء الحصول على رمز الوصول. يرجى المحاولة مرة أخرى."
+
+msgid "Invalid user name"
+msgstr "اسم المستخدم غير صالح"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "تم قفل هذا الحاسوب من قبل المدرسة؛ يرجى التواصل مع قسم تقنية المعلومات"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "تسجيل الدخول كضيف غير مسموح به على هذا الحاسوب"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "لا يمكن للحسابات المحلية تسجيل الدخول على هذا الحاسوب"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "لا يمكن للحسابات المدرسية تسجيل الدخول على هذا الحاسوب"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "لا يمكن فتح هذا التطبيق إلا من شاشة تسجيل الدخول"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "يحتاج هذا التطبيق إلى شبكة. اتصل بشبكة Wi-Fi من الشريط العلوي ثم أعد المحاولة."

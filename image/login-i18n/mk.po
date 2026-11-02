@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "Управувано од %s"
+
+msgid "Shut down"
+msgstr "Исклучи"
+
+msgid "Browse as Guest"
+msgstr "Прелистувај како гостин"
+
+msgid "Add person"
+msgstr "Додај лице"
+
+msgid "Apps"
+msgstr "Апликации"
+
+msgid "Cancel"
+msgstr "Откажи"
+
+msgid "Retry"
+msgstr "Обиди се повторно"
+
+msgid "Opening the sign-in page…"
+msgstr "Се отвора страницата за најава…"
+
+msgid "The sign-in page could not be opened."
+msgstr "Страницата за најава не можеше да се отвори."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Училиштето не може да се достигне. Поврзете се на Wi-Fi од горната лента, па обидете се повторно."
+
+msgid "School email"
+msgstr "Училишна е-пошта"
+
+msgid "IT local account"
+msgstr "Локална IT сметка"
+
+msgid "Username"
+msgstr "Корисничко име"
+
+msgid "This account cannot sign in on this computer."
+msgstr "Оваа сметка не може да се најави на овој компјутер."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "Оваа сметка не може да се најави на овој компјутер. Користете ја вашата училишна е-пошта (%s)."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Се најавивте со друга сметка. Најавете се повторно со сметката што ја избравте овде."
+
+msgid "Language"
+msgstr "Јазик"
+
+msgid "Keyboard"
+msgstr "Тастатура"
+
+msgid "Continue"
+msgstr "Продолжи"
+
+msgid "The setting could not be saved. Try again."
+msgstr "Поставката не можеше да се зачува. Обидете се повторно."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "Вашата сметка е оневозможена. Контактирајте го администраторот."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "Овој уред е оневозможен. Контактирајте го администраторот."
+
+msgid "Sign in with your school account."
+msgstr "Најавете се со вашата училишна сметка."
+
+msgid "Could not sign in. Please try again."
+msgstr "Најавата не успеа. Обидете се повторно."
+
+msgid "Authentication request cancelled"
+msgstr "Барањето за автентикација е откажано"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "Достигнат е максималниот број обиди за автентикација"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Грешка при преземање на токенот за пристап. Обидете се повторно."
+
+msgid "Invalid user name"
+msgstr "Неважечко корисничко име"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "Училиштето го заклучи овој компјутер; контактирајте со IT"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "Најавата како гостин не е дозволена на овој компјутер"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "Локалните сметки не можат да се најават на овој компјутер"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "Училишните сметки не можат да се најават на овој компјутер"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Оваа апликација може да се отвори само од екранот за најава"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Оваа апликација има потреба од мрежа. Поврзете се на Wi-Fi од горната лента, па обидете се повторно."

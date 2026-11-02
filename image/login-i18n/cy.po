@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "Wedi'i reoli gan %s"
+
+msgid "Shut down"
+msgstr "Diffodd"
+
+msgid "Browse as Guest"
+msgstr "Pori fel gwestai"
+
+msgid "Add person"
+msgstr "Ychwanegu person"
+
+msgid "Apps"
+msgstr "Apiau"
+
+msgid "Cancel"
+msgstr "Diddymu"
+
+msgid "Retry"
+msgstr "Ailgynnig"
+
+msgid "Opening the sign-in page…"
+msgstr "Yn agor y dudalen mewngofnodi…"
+
+msgid "The sign-in page could not be opened."
+msgstr "Doedd dim modd agor y dudalen mewngofnodi."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Methu cyrraedd yr ysgol. Cysylltwch â Wi-Fi o'r bar uchaf, yna ceisiwch eto."
+
+msgid "School email"
+msgstr "E-bost yr ysgol"
+
+msgid "IT local account"
+msgstr "Cyfrif lleol TG"
+
+msgid "Username"
+msgstr "Enw defnyddiwr"
+
+msgid "This account cannot sign in on this computer."
+msgstr "Does dim modd i'r cyfrif hwn fewngofnodi ar y cyfrifiadur hwn."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "Does dim modd i'r cyfrif hwn fewngofnodi ar y cyfrifiadur hwn. Defnyddiwch e-bost eich ysgol (%s)."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Rydych wedi mewngofnodi gyda chyfrif gwahanol. Mewngofnodwch eto gyda'r cyfrif a ddewisoch yma."
+
+msgid "Language"
+msgstr "Iaith"
+
+msgid "Keyboard"
+msgstr "Bysellfwrdd"
+
+msgid "Continue"
+msgstr "Parhau"
+
+msgid "The setting could not be saved. Try again."
+msgstr "Doedd dim modd cadw'r gosodiad. Ceisiwch eto."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "Mae eich cyfrif wedi'i analluogi. Cysylltwch â'ch gweinyddwr."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "Mae'r ddyfais hon wedi'i hanalluogi. Cysylltwch â'ch gweinyddwr."
+
+msgid "Sign in with your school account."
+msgstr "Mewngofnodwch gyda chyfrif eich ysgol."
+
+msgid "Could not sign in. Please try again."
+msgstr "Methu mewngofnodi. Ceisiwch eto."
+
+msgid "Authentication request cancelled"
+msgstr "Diddymwyd y cais dilysu"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "Cyrhaeddwyd uchafswm y ceisiadau dilysu"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Gwall wrth nôl y tocyn mynediad. Ceisiwch eto."
+
+msgid "Invalid user name"
+msgstr "Enw defnyddiwr annilys"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "Mae'r ysgol wedi cloi'r cyfrifiadur hwn; cysylltwch â TG"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "Ni chaniateir mewngofnodi fel gwestai ar y cyfrifiadur hwn"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "Does dim modd i gyfrifon lleol fewngofnodi ar y cyfrifiadur hwn"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "Does dim modd i gyfrifon ysgol fewngofnodi ar y cyfrifiadur hwn"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Dim ond o'r sgrin mewngofnodi y mae modd agor yr ap hwn"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Mae'r ap hwn angen rhwydwaith. Cysylltwch â Wi-Fi o'r bar uchaf, yna ceisiwch eto."

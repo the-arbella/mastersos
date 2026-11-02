@@ -1,0 +1,18 @@
+# 开机在登录界面之前的快速应用（Ruling 15）：只跑 SystemApplier 里标为 fast 的步骤，不放文件、
+# 不跑脚本、不回报；本机还没有任何验过的包时先等网络并试拉一次（agent 自己把这段限在 45 秒内）。
+# 由 gdm.service.d/50-mastersos-agent-local.conf 的 Wants= 拉起：失败或超时（TimeoutStartSec=60）都只是
+# 这个单元失败，GDM 照常起来——健康检查等显示管理器最多 120 秒，这里最多占 60 秒。
+# 两条 Condition 任一成立就跑（|）：没有种子的机器是未受管的个人电脑，agent 不跑。
+[Unit]
+Description=MastersOS agent: apply settings before the login screen
+Documentation=file:/usr/bin/mastersos-agent
+After=local-fs.target systemd-tmpfiles-setup.service NetworkManager.service
+Before=display-manager.service gdm.service
+ConditionPathExists=|/var/lib/mastersos/seed.toml
+ConditionPathExists=|/var/lib/mastersos-seed/seed.toml
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/mastersos-agent apply-local
+TimeoutStartSec=60
+PrivateTmp=yes

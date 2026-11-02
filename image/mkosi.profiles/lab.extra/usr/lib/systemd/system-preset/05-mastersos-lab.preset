@@ -1,0 +1,5 @@
+# lab profile 的单元（正式镜像没有这些）
+enable qemu-guest-agent.service
+enable ssh.service
+enable mastersos-lab-user.service
+enable mastersos-lab-sshkeys.service

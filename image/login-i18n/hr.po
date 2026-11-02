@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "Upravlja: %s"
+
+msgid "Shut down"
+msgstr "Isključi"
+
+msgid "Browse as Guest"
+msgstr "Pregledaj kao gost"
+
+msgid "Add person"
+msgstr "Dodaj osobu"
+
+msgid "Apps"
+msgstr "Aplikacije"
+
+msgid "Cancel"
+msgstr "Odustani"
+
+msgid "Retry"
+msgstr "Pokušaj ponovno"
+
+msgid "Opening the sign-in page…"
+msgstr "Otvaranje stranice za prijavu…"
+
+msgid "The sign-in page could not be opened."
+msgstr "Stranicu za prijavu nije moguće otvoriti."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Škola nije dostupna. Spojite se na Wi-Fi putem gornje trake, a zatim pokušajte ponovno."
+
+msgid "School email"
+msgstr "Školska e-pošta"
+
+msgid "IT local account"
+msgstr "Lokalni IT račun"
+
+msgid "Username"
+msgstr "Korisničko ime"
+
+msgid "This account cannot sign in on this computer."
+msgstr "Ovaj se račun ne može prijaviti na ovom računalu."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "Ovaj se račun ne može prijaviti na ovom računalu. Koristite svoju školsku e-poštu (%s)."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Prijavili ste se drugim računom. Prijavite se ponovno računom koji ste ovdje odabrali."
+
+msgid "Language"
+msgstr "Jezik"
+
+msgid "Keyboard"
+msgstr "Tipkovnica"
+
+msgid "Continue"
+msgstr "Nastavi"
+
+msgid "The setting could not be saved. Try again."
+msgstr "Postavku nije moguće spremiti. Pokušajte ponovno."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "Vaš je račun onemogućen. Obratite se administratoru."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "Ovaj je uređaj onemogućen. Obratite se administratoru."
+
+msgid "Sign in with your school account."
+msgstr "Prijavite se svojim školskim računom."
+
+msgid "Could not sign in. Please try again."
+msgstr "Prijava nije uspjela. Pokušajte ponovno."
+
+msgid "Authentication request cancelled"
+msgstr "Zahtjev za autentifikaciju je otkazan"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "Dosegnut je najveći broj pokušaja autentifikacije"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Pogreška pri dohvaćanju pristupnog tokena. Pokušajte ponovno."
+
+msgid "Invalid user name"
+msgstr "Neispravno korisničko ime"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "Škola je zaključala ovo računalo; obratite se IT službi"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "Prijava kao gost nije dopuštena na ovom računalu"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "Lokalni se računi ne mogu prijaviti na ovom računalu"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "Školski se računi ne mogu prijaviti na ovom računalu"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Ova se aplikacija može otvoriti samo s zaslona za prijavu"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Ova aplikacija treba mrežu. Spojite se na Wi-Fi putem gornje trake, a zatim pokušajte ponovno."

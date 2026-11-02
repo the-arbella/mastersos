@@ -1,0 +1,12 @@
+[Unit]
+Description=Generate SSH host keys for the MastersOS lab image
+Before=ssh.service
+ConditionPathExists=!/etc/ssh/ssh_host_ed25519_key
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ssh-keygen -A
+
+[Install]
+# 不排在 ssh.socket 之前：普通服务排在 basic.target 之后，那样会成环（lab 实测）
+WantedBy=ssh.service

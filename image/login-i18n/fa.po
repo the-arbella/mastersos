@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "مدیریت‌شده توسط %s"
+
+msgid "Shut down"
+msgstr "خاموش کردن"
+
+msgid "Browse as Guest"
+msgstr "مرور به‌عنوان مهمان"
+
+msgid "Add person"
+msgstr "افزودن فرد"
+
+msgid "Apps"
+msgstr "برنامه‌ها"
+
+msgid "Cancel"
+msgstr "لغو"
+
+msgid "Retry"
+msgstr "تلاش دوباره"
+
+msgid "Opening the sign-in page…"
+msgstr "در حال باز کردن صفحهٔ ورود…"
+
+msgid "The sign-in page could not be opened."
+msgstr "صفحهٔ ورود باز نشد."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "دسترسی به مدرسه ممکن نیست. از نوار بالا به Wi-Fi وصل شوید و دوباره تلاش کنید."
+
+msgid "School email"
+msgstr "ایمیل مدرسه"
+
+msgid "IT local account"
+msgstr "حساب محلی فناوری اطلاعات"
+
+msgid "Username"
+msgstr "نام کاربری"
+
+msgid "This account cannot sign in on this computer."
+msgstr "این حساب نمی‌تواند در این رایانه وارد شود."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "این حساب نمی‌تواند در این رایانه وارد شود. از ایمیل مدرسهٔ خود (%s) استفاده کنید."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "با حساب دیگری وارد شده‌اید. دوباره با حسابی که اینجا انتخاب کردید وارد شوید."
+
+msgid "Language"
+msgstr "زبان"
+
+msgid "Keyboard"
+msgstr "صفحه‌کلید"
+
+msgid "Continue"
+msgstr "ادامه"
+
+msgid "The setting could not be saved. Try again."
+msgstr "تنظیم ذخیره نشد. دوباره تلاش کنید."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "حساب شما غیرفعال شده است. با مدیر خود تماس بگیرید."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "این دستگاه غیرفعال شده است. با مدیر خود تماس بگیرید."
+
+msgid "Sign in with your school account."
+msgstr "با حساب مدرسهٔ خود وارد شوید."
+
+msgid "Could not sign in. Please try again."
+msgstr "ورود انجام نشد. لطفاً دوباره تلاش کنید."
+
+msgid "Authentication request cancelled"
+msgstr "درخواست احراز هویت لغو شد"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "به حداکثر تعداد تلاش برای احراز هویت رسیده‌اید"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "خطا در دریافت توکن دسترسی. لطفاً دوباره تلاش کنید."
+
+msgid "Invalid user name"
+msgstr "نام کاربری نامعتبر است"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "این رایانه توسط مدرسه قفل شده است؛ لطفاً با بخش فناوری اطلاعات تماس بگیرید"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "ورود مهمان در این رایانه مجاز نیست"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "حساب‌های محلی نمی‌توانند در این رایانه وارد شوند"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "حساب‌های مدرسه نمی‌توانند در این رایانه وارد شوند"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "این برنامه را فقط از صفحهٔ ورود می‌توان باز کرد"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "این برنامه به شبکه نیاز دارد. از نوار بالا به Wi-Fi وصل شوید و دوباره تلاش کنید."

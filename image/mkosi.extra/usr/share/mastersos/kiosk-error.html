@@ -1,0 +1,30 @@
+<!doctype html>
+<!-- 锁定应用（计划 9 设计 §4.4）：Chrome 60 秒内退出 5 次，mastersos-kiosk run 以 --kiosk 打开这一页（mastersos-bundle 的
+     ERROR_PAGE；URLAllowlist 只放行这一个文件）。关掉这一页（Alt+F4）就结束会话、回到登录界面。只用本页的样式，不引外部资源、不跑脚本 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>这个应用无法启动 / This app could not start</title>
+<style>
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex; align-items: center; justify-content: center;
+    background: #1f2328; color: #f0f3f6;
+    font-family: "Noto Sans CJK SC", "Noto Sans", sans-serif;
+  }
+  main { max-width: 40em; padding: 2em; text-align: center; }
+  h1 { font-size: 2.2em; font-weight: 600; margin: 0 0 0.3em; }
+  p.en { font-size: 1.6em; margin: 0 0 2em; }
+  p.hint { font-size: 1.1em; color: #b8c0c8; margin: 0.2em 0; }
+</style>
+</head>
+<body>
+<main>
+<h1>这个应用无法启动，请举手找老师</h1>
+<p class="en" lang="en">This app could not start. Please ask your teacher.</p>
+<p class="hint">按 Alt+F4 关闭这一页，回到登录界面。</p>
+<p class="hint" lang="en">Press Alt+F4 to close this page and return to the sign-in screen.</p>
+</main>
+</body>
+</html>

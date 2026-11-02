@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "Do %s quản lý"
+
+msgid "Shut down"
+msgstr "Tắt máy"
+
+msgid "Browse as Guest"
+msgstr "Duyệt với tư cách khách"
+
+msgid "Add person"
+msgstr "Thêm người dùng"
+
+msgid "Apps"
+msgstr "Ứng dụng"
+
+msgid "Cancel"
+msgstr "Hủy"
+
+msgid "Retry"
+msgstr "Thử lại"
+
+msgid "Opening the sign-in page…"
+msgstr "Đang mở trang đăng nhập…"
+
+msgid "The sign-in page could not be opened."
+msgstr "Không thể mở trang đăng nhập."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Không thể kết nối với nhà trường. Hãy kết nối Wi-Fi từ thanh trên cùng rồi thử lại."
+
+msgid "School email"
+msgstr "Email trường học"
+
+msgid "IT local account"
+msgstr "Tài khoản cục bộ của bộ phận IT"
+
+msgid "Username"
+msgstr "Tên người dùng"
+
+msgid "This account cannot sign in on this computer."
+msgstr "Tài khoản này không thể đăng nhập trên máy tính này."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "Tài khoản này không thể đăng nhập trên máy tính này. Hãy dùng email trường học của bạn (%s)."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Bạn đã đăng nhập bằng một tài khoản khác. Hãy đăng nhập lại bằng tài khoản bạn đã chọn ở đây."
+
+msgid "Language"
+msgstr "Ngôn ngữ"
+
+msgid "Keyboard"
+msgstr "Bàn phím"
+
+msgid "Continue"
+msgstr "Tiếp tục"
+
+msgid "The setting could not be saved. Try again."
+msgstr "Không thể lưu cài đặt. Hãy thử lại."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "Tài khoản của bạn đã bị vô hiệu hóa. Hãy liên hệ quản trị viên."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "Thiết bị này đã bị vô hiệu hóa. Hãy liên hệ quản trị viên."
+
+msgid "Sign in with your school account."
+msgstr "Hãy đăng nhập bằng tài khoản trường học của bạn."
+
+msgid "Could not sign in. Please try again."
+msgstr "Không thể đăng nhập. Vui lòng thử lại."
+
+msgid "Authentication request cancelled"
+msgstr "Yêu cầu xác thực đã bị hủy"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "Đã đạt số lần xác thực tối đa"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Lỗi khi lấy mã thông báo truy cập. Vui lòng thử lại."
+
+msgid "Invalid user name"
+msgstr "Tên người dùng không hợp lệ"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "Máy tính này đã bị nhà trường khóa; vui lòng liên hệ bộ phận IT"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "Máy tính này không cho phép đăng nhập với tư cách khách"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "Tài khoản cục bộ không thể đăng nhập trên máy tính này"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "Tài khoản trường học không thể đăng nhập trên máy tính này"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Ứng dụng này chỉ có thể được mở từ màn hình đăng nhập"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Ứng dụng này cần có mạng. Hãy kết nối Wi-Fi từ thanh trên cùng rồi thử lại."

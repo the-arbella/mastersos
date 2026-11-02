@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "គ្រប់គ្រងដោយ %s"
+
+msgid "Shut down"
+msgstr "បិទ"
+
+msgid "Browse as Guest"
+msgstr "រុករកជាភ្ញៀវ"
+
+msgid "Add person"
+msgstr "បន្ថែមអ្នកប្រើ"
+
+msgid "Apps"
+msgstr "កម្មវិធី"
+
+msgid "Cancel"
+msgstr "បោះបង់"
+
+msgid "Retry"
+msgstr "ព្យាយាមម្ដងទៀត"
+
+msgid "Opening the sign-in page…"
+msgstr "កំពុងបើកទំព័រចូលប្រើ…"
+
+msgid "The sign-in page could not be opened."
+msgstr "មិនអាចបើកទំព័រចូលប្រើបានទេ។"
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "មិនអាចភ្ជាប់ទៅសាលាបានទេ។ សូមភ្ជាប់ Wi-Fi ពីរបារខាងលើ រួចព្យាយាមម្ដងទៀត។"
+
+msgid "School email"
+msgstr "អ៊ីមែលសាលា"
+
+msgid "IT local account"
+msgstr "គណនីមូលដ្ឋានរបស់ IT"
+
+msgid "Username"
+msgstr "ឈ្មោះអ្នកប្រើ"
+
+msgid "This account cannot sign in on this computer."
+msgstr "គណនីនេះមិនអាចចូលប្រើក្នុងកុំព្យូទ័រនេះបានទេ។"
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "គណនីនេះមិនអាចចូលប្រើក្នុងកុំព្យូទ័រនេះបានទេ។ សូមប្រើអ៊ីមែលសាលារបស់អ្នក (%s)។"
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "អ្នកបានចូលដោយប្រើគណនីផ្សេង។ សូមចូលម្ដងទៀតដោយប្រើគណនីដែលអ្នកបានជ្រើសរើសនៅទីនេះ។"
+
+msgid "Language"
+msgstr "ភាសា"
+
+msgid "Keyboard"
+msgstr "ក្ដារចុច"
+
+msgid "Continue"
+msgstr "បន្ត"
+
+msgid "The setting could not be saved. Try again."
+msgstr "មិនអាចរក្សាទុកការកំណត់បានទេ។ សូមព្យាយាមម្ដងទៀត។"
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "គណនីរបស់អ្នកត្រូវបានបិទ។ សូមទាក់ទងអ្នកគ្រប់គ្រង។"
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "ឧបករណ៍នេះត្រូវបានបិទ។ សូមទាក់ទងអ្នកគ្រប់គ្រង។"
+
+msgid "Sign in with your school account."
+msgstr "ចូលដោយប្រើគណនីសាលារបស់អ្នក។"
+
+msgid "Could not sign in. Please try again."
+msgstr "មិនអាចចូលបានទេ។ សូមព្យាយាមម្ដងទៀត។"
+
+msgid "Authentication request cancelled"
+msgstr "សំណើផ្ទៀងផ្ទាត់ត្រូវបានលុបចោល"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "ចំនួនព្យាយាមផ្ទៀងផ្ទាត់អតិបរមាត្រូវបានដល់កំណត់"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "មានបញ្ហាក្នុងការទាញយកថូខឹនចូលប្រើ។ សូមព្យាយាមម្ដងទៀត។"
+
+msgid "Invalid user name"
+msgstr "ឈ្មោះអ្នកប្រើមិនត្រឹមត្រូវ"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "កុំព្យូទ័រនេះត្រូវបានសាលាចាក់សោ សូមទាក់ទងផ្នែក IT"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "មិនអនុញ្ញាតឱ្យចូលជាភ្ញៀវក្នុងកុំព្យូទ័រនេះទេ"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "គណនីមូលដ្ឋានមិនអាចចូលក្នុងកុំព្យូទ័រនេះបានទេ"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "គណនីសាលាមិនអាចចូលក្នុងកុំព្យូទ័រនេះបានទេ"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "កម្មវិធីនេះអាចបើកបានតែពីអេក្រង់ចូលប្រើប៉ុណ្ណោះ"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "កម្មវិធីនេះត្រូវការបណ្តាញ។ សូមភ្ជាប់ Wi-Fi ពីរបារខាងលើ រួចព្យាយាមម្ដងទៀត។"

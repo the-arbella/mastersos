@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "Управляется: %s"
+
+msgid "Shut down"
+msgstr "Выключить"
+
+msgid "Browse as Guest"
+msgstr "Войти как гость"
+
+msgid "Add person"
+msgstr "Добавить пользователя"
+
+msgid "Apps"
+msgstr "Приложения"
+
+msgid "Cancel"
+msgstr "Отмена"
+
+msgid "Retry"
+msgstr "Повторить"
+
+msgid "Opening the sign-in page…"
+msgstr "Открытие страницы входа…"
+
+msgid "The sign-in page could not be opened."
+msgstr "Не удалось открыть страницу входа."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Не удаётся связаться со школой. Подключитесь к Wi-Fi в верхней панели и повторите попытку."
+
+msgid "School email"
+msgstr "Школьная электронная почта"
+
+msgid "IT local account"
+msgstr "Локальная учётная запись ИТ"
+
+msgid "Username"
+msgstr "Имя пользователя"
+
+msgid "This account cannot sign in on this computer."
+msgstr "Эта учётная запись не может войти на этом компьютере."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "Эта учётная запись не может войти на этом компьютере. Используйте школьную электронную почту (%s)."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Вы вошли с другой учётной записью. Войдите снова с той учётной записью, которую выбрали здесь."
+
+msgid "Language"
+msgstr "Язык"
+
+msgid "Keyboard"
+msgstr "Клавиатура"
+
+msgid "Continue"
+msgstr "Продолжить"
+
+msgid "The setting could not be saved. Try again."
+msgstr "Не удалось сохранить настройку. Повторите попытку."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "Ваша учётная запись отключена. Обратитесь к администратору."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "Это устройство отключено. Обратитесь к администратору."
+
+msgid "Sign in with your school account."
+msgstr "Войдите с помощью школьной учётной записи."
+
+msgid "Could not sign in. Please try again."
+msgstr "Не удалось войти. Повторите попытку."
+
+msgid "Authentication request cancelled"
+msgstr "Запрос аутентификации отменён"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "Достигнуто максимальное число попыток аутентификации"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Ошибка при получении маркера доступа. Повторите попытку."
+
+msgid "Invalid user name"
+msgstr "Недопустимое имя пользователя"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "Этот компьютер заблокирован школой; обратитесь в ИТ-отдел"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "Гостевой вход на этом компьютере запрещён"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "Локальные учётные записи не могут входить на этом компьютере"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "Школьные учётные записи не могут входить на этом компьютере"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Это приложение можно открыть только с экрана входа"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Этому приложению нужна сеть. Подключитесь к Wi-Fi в верхней панели и повторите попытку."

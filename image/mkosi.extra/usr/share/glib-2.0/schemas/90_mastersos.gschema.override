@@ -1,0 +1,5 @@
+# MastersOS 的 GNOME 默认值（mkosi.postinst.chroot 里 glib-compile-schemas）。
+# Dock：Chrome 由 agent 装成 sysext（Task 9），装好之前这一项不显示；没有 gnome-shell-common 默认里的
+# firefox-esr、Evolution、Software 等（镜像里没有这些应用）。4b 的设置包可经 dconf 覆盖。
+[org.gnome.shell]
+favorite-apps=['google-chrome.desktop', 'org.gnome.Nautilus.desktop']

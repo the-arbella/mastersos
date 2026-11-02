@@ -1,0 +1,98 @@
+#!/bin/bash
+# Started with every regular desktop session (mastersos-browser-wait.service, offline status design §3) while the web browser
+# is not installed yet. Chrome there, or no status.json (only a managed mastersos-agent writes it: an unmanaged machine or one
+# not enrolled yet has nothing to say): exits at once, silently. A session that is not locked (session-mode is not `learning`, or there is
+# no session-mode yet because the machine has no settings bundle): one notification, exit. A locked session: a progress window
+# with no buttons whose text follows status.json (written by mastersos-agent every 30 s) until Chrome appears; if the user
+# closes the window it is not shown again, a notification is sent instead. Locked-app (kiosk-*) accounts get nothing.
+# When Chrome appears the window's last screen says to sign out and in again before it closes: a sysext merged mid-session
+# does not reach the running GNOME Shell, so the Dock shows Chrome only in the next session (PVE, 2026-10-30).
+# Overridable for tests: MASTERSOS_PUBLIC, MASTERSOS_CHROME_BIN, MASTERSOS_POLL (seconds, default 3),
+# MASTERSOS_READY_HOLD (seconds the last screen stays, default 15).
+set -euo pipefail
+public=${MASTERSOS_PUBLIC:-/var/lib/mastersos-public}
+chrome=${MASTERSOS_CHROME_BIN:-/usr/bin/google-chrome-stable}
+poll=${MASTERSOS_POLL:-3}
+hold=${MASTERSOS_READY_HOLD:-15}
+
+[ -x "$chrome" ] && exit 0
+[ -e "$public/status.json" ] || exit 0
+case ${USER:-$(id -un 2>/dev/null || :)} in
+kiosk-*) exit 0 ;;
+esac
+
+case ${LANG:-} in
+zh*)
+	title='浏览器还没有安装好。'
+	ready='浏览器已经装好。请注销后重新登录才能看到它。'
+	;;
+th*)
+	title='ยังไม่ได้ติดตั้งเว็บเบราว์เซอร์'
+	ready='เว็บเบราว์เซอร์พร้อมแล้ว ออกจากระบบแล้วเข้าสู่ระบบใหม่เพื่อดูเบราว์เซอร์'
+	;;
+*)
+	title='The web browser is not installed yet.'
+	ready='The web browser is ready. Sign out and sign in again to see it.'
+	;;
+esac
+
+# field <name>: the JSON string value of <name> in status.json, unescaped; empty for null, a missing key or no file.
+# No python3 in the image: sed takes "name": "..." where the value is a run of escapes or non-quote characters. The agent
+# writes it with serde_json::to_vec_pretty (one key per line, `"name": value`, non-ASCII as UTF-8); the match works on either
+# layout. \" \\ \/ and control-character escapes are all serde_json writes.
+field() {
+	sed -nE "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"((\\\\.|[^\"\\\\])*)\".*/\\1/p" "$public/status.json" 2>/dev/null |
+		head -n1 | sed -e 's/\\\\/\x01/g' -e 's/\\"/"/g' -e 's/\\\//\//g' -e 's/\\[bfnrt]/ /g' -e 's/\x01/\\/g' || :
+}
+# value <name>: a bare enum value ("ok", "waiting", ...)
+value() {
+	sed -nE "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"([a-z_]*)\".*/\\1/p" "$public/status.json" 2>/dev/null | head -n1 || :
+}
+# The headline sentence and the detail of the first part that is not ok (network > settings > chrome), one per line.
+status_text() {
+	local part msg detail=''
+	msg=$(field message)
+	for part in network settings chrome; do
+		if [ -n "$(value "$part")" ] && [ "$(value "$part")" != ok ]; then
+			detail=$(field "${part}_detail")
+			break
+		fi
+	done
+	printf '%s' "$msg"
+	[ -n "$detail" ] && printf '\n%s' "$detail"
+	return 0
+}
+notify() {
+	local body
+	body=$(field message)
+	notify-send --app-name=MastersOS --icon=dialog-information --expire-time=10000 "$title" ${body:+"$body"} >/dev/null 2>&1 || :
+}
+
+if [ "$(cat "$public/session-mode" 2>/dev/null || :)" != learning ]; then
+	notify
+	exit 0
+fi
+
+# zenity reads its stdin: "# text" sets the text (zenity unescapes \n there, so a literal backslash is doubled), "100" ends it
+coproc ZEN { zenity --progress --pulsate --no-cancel --auto-close --title=MastersOS >/dev/null 2>&1; }
+exec 4>&"${ZEN[1]}"
+zen=$ZEN_PID
+trap '' PIPE
+while :; do
+	if [ -x "$chrome" ]; then
+		# the Dock of this session will not show it: say so, then close
+		printf '# %s\n' "$ready" >&4 2>/dev/null && sleep "$hold"
+		printf '100\n' >&4 2>/dev/null || :
+		exit 0
+	fi
+	text=$(status_text)
+	text=${text//\\/\\\\}
+	text=${text//$'\n'/\\n}
+	# no status text yet: the first line alone, no empty second line
+	if ! kill -0 "$zen" 2>/dev/null || ! printf '# %s%s\n' "$title" "${text:+\\n$text}" >&4 2>/dev/null; then
+		# closed by the user: do not open it again
+		notify
+		exit 0
+	fi
+	sleep "$poll"
+done

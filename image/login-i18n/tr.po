@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "%s tarafından yönetiliyor"
+
+msgid "Shut down"
+msgstr "Kapat"
+
+msgid "Browse as Guest"
+msgstr "Misafir olarak gez"
+
+msgid "Add person"
+msgstr "Kişi ekle"
+
+msgid "Apps"
+msgstr "Uygulamalar"
+
+msgid "Cancel"
+msgstr "İptal"
+
+msgid "Retry"
+msgstr "Yeniden dene"
+
+msgid "Opening the sign-in page…"
+msgstr "Oturum açma sayfası açılıyor…"
+
+msgid "The sign-in page could not be opened."
+msgstr "Oturum açma sayfası açılamadı."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Okula ulaşılamıyor. Üst çubuktan Wi-Fi'ye bağlanın ve yeniden deneyin."
+
+msgid "School email"
+msgstr "Okul e-postası"
+
+msgid "IT local account"
+msgstr "BT yerel hesabı"
+
+msgid "Username"
+msgstr "Kullanıcı adı"
+
+msgid "This account cannot sign in on this computer."
+msgstr "Bu hesap bu bilgisayarda oturum açamaz."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "Bu hesap bu bilgisayarda oturum açamaz. Okul e-postanızı (%s) kullanın."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Farklı bir hesapla oturum açtınız. Burada seçtiğiniz hesapla yeniden oturum açın."
+
+msgid "Language"
+msgstr "Dil"
+
+msgid "Keyboard"
+msgstr "Klavye"
+
+msgid "Continue"
+msgstr "Devam"
+
+msgid "The setting could not be saved. Try again."
+msgstr "Ayar kaydedilemedi. Yeniden deneyin."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "Hesabınız devre dışı. Yöneticinizle iletişime geçin."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "Bu cihaz devre dışı. Yöneticinizle iletişime geçin."
+
+msgid "Sign in with your school account."
+msgstr "Okul hesabınızla oturum açın."
+
+msgid "Could not sign in. Please try again."
+msgstr "Oturum açılamadı. Lütfen yeniden deneyin."
+
+msgid "Authentication request cancelled"
+msgstr "Kimlik doğrulama isteği iptal edildi"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "En fazla kimlik doğrulama denemesi sayısına ulaşıldı"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Erişim belirteci alınırken hata oluştu. Lütfen yeniden deneyin."
+
+msgid "Invalid user name"
+msgstr "Geçersiz kullanıcı adı"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "Bu bilgisayar okul tarafından kilitlendi; lütfen BT birimiyle iletişime geçin"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "Bu bilgisayarda misafir girişine izin verilmiyor"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "Yerel hesaplar bu bilgisayarda oturum açamaz"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "Okul hesapları bu bilgisayarda oturum açamaz"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Bu uygulama yalnızca oturum açma ekranından açılabilir"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Bu uygulama bir ağa ihtiyaç duyuyor. Üst çubuktan Wi-Fi'ye bağlanın ve yeniden deneyin."

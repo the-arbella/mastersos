@@ -1,0 +1,20 @@
+#!/bin/bash
+# NetworkManager dispatcher（$1 = 接口，$2 = 事件）：连上网或连通性变化时叫醒 mastersos-agent，
+# 立即拉取一次（上一轮应用有失败项时也立即重应用），不等退避（Review Focus 2）。
+# agent 没在跑（未受管的机器、还没起来）时 systemctl kill 失败，忽略。
+# Chrome 还没装上（首次开机没网、恢复出厂之后）时顺带启动一次 mastersos-chrome.service，不等 6 小时的定时器；
+# 装上之后只靠定时器（每次连网都查一次没必要）。一小时内下载过 .deb（mastersos-agent chrome 在下载前更新
+# /var/lib/mastersos/chrome/download-started 的 mtime）就不再由这里触发：下载之后才失败的（哈希不对、合并失败）不会因为
+# Wi‑Fi 时断时续而一遍遍重下约 140 MB。只取了索引（几 KB）就失败的（例如刚连上时 DNS 还没好）不受这个限制。
+# 时间戳在将来（写下时钟快、之后被 NTP 拨回）不算「一小时内」：! -newermt now。
+set -euo pipefail
+
+case "${2:-}" in
+up | connectivity-change)
+	systemctl kill -s USR1 --kill-whom=main mastersos-agent.service >/dev/null 2>&1 || true
+	stamp=/var/lib/mastersos/chrome/download-started
+	if [ ! -d /var/lib/extensions/google-chrome ] && [ -z "$(find "$stamp" -mmin -60 ! -newermt now 2>/dev/null)" ]; then
+		systemctl start --no-block mastersos-chrome.service >/dev/null 2>&1 || true
+	fi
+	;;
+esac

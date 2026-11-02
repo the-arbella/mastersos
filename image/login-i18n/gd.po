@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "Fo stiùireadh %s"
+
+msgid "Shut down"
+msgstr "Dùin sìos"
+
+msgid "Browse as Guest"
+msgstr "Brabhsaich mar aoigh"
+
+msgid "Add person"
+msgstr "Cuir neach ris"
+
+msgid "Apps"
+msgstr "Aplacaidean"
+
+msgid "Cancel"
+msgstr "Sguir dheth"
+
+msgid "Retry"
+msgstr "Feuch a-rithist"
+
+msgid "Opening the sign-in page…"
+msgstr "A’ fosgladh duilleag an inntrigidh…"
+
+msgid "The sign-in page could not be opened."
+msgstr "Cha b’ urrainn dhuinn duilleag an inntrigidh fhosgladh."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Chan urrainn dhuinn ceangal ris an sgoil. Ceangail ri Wi-Fi on bhàr gu h-àrd agus feuch a-rithist."
+
+msgid "School email"
+msgstr "Post-d na sgoile"
+
+msgid "IT local account"
+msgstr "Cunntas ionadail IT"
+
+msgid "Username"
+msgstr "Ainm-cleachdaiche"
+
+msgid "This account cannot sign in on this computer."
+msgstr "Chan urrainn dhan chunntas seo inntrigeadh air a’ choimpiutair seo."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "Chan urrainn dhan chunntas seo inntrigeadh air a’ choimpiutair seo. Cleachd post-d na sgoile agad (%s)."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Rinn thu inntrigeadh le cunntas eile. Inntrig a-rithist leis a’ chunntas a thagh thu an seo."
+
+msgid "Language"
+msgstr "Cànan"
+
+msgid "Keyboard"
+msgstr "Meur-chlàr"
+
+msgid "Continue"
+msgstr "Lean air adhart"
+
+msgid "The setting could not be saved. Try again."
+msgstr "Cha b’ urrainn dhuinn an roghainn a shàbhaladh. Feuch a-rithist."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "Tha an cunntas agad à comas. Cuir fios chun an rianaire agad."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "Tha an uidheam seo à comas. Cuir fios chun an rianaire agad."
+
+msgid "Sign in with your school account."
+msgstr "Inntrig le cunntas na sgoile agad."
+
+msgid "Could not sign in. Please try again."
+msgstr "Cha deach an t-inntrigeadh leis. Feuch a-rithist."
+
+msgid "Authentication request cancelled"
+msgstr "Chaidh an iarrtas dearbhaidh a chur dheth"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "Chaidh uiread nan oidhirpean dearbhaidh a ruigsinn"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Mearachd le faighinn an tòcain inntrigidh. Feuch a-rithist."
+
+msgid "Invalid user name"
+msgstr "Ainm-cleachdaiche mì-dhligheach"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "Chaidh a’ choimpiutair seo a ghlasadh leis an sgoil; cuir fios gu IT"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "Chan eil inntrigeadh mar aoigh ceadaichte air a’ choimpiutair seo"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "Chan urrainn do chunntasan ionadail inntrigeadh air a’ choimpiutair seo"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "Chan urrainn do chunntasan sgoile inntrigeadh air a’ choimpiutair seo"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Chan fhosgail an aplacaid seo ach o sgrìn an inntrigidh"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Tha feum aig an aplacaid seo air lìonra. Ceangail ri Wi-Fi on bhàr gu h-àrd agus feuch a-rithist."

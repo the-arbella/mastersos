@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "Управлявано от %s"
+
+msgid "Shut down"
+msgstr "Изключване"
+
+msgid "Browse as Guest"
+msgstr "Разглеждане като гост"
+
+msgid "Add person"
+msgstr "Добавяне на човек"
+
+msgid "Apps"
+msgstr "Приложения"
+
+msgid "Cancel"
+msgstr "Отказ"
+
+msgid "Retry"
+msgstr "Нов опит"
+
+msgid "Opening the sign-in page…"
+msgstr "Отваряне на страницата за вход…"
+
+msgid "The sign-in page could not be opened."
+msgstr "Страницата за вход не можа да се отвори."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Няма връзка с училището. Свържете се с Wi-Fi от горната лента и опитайте отново."
+
+msgid "School email"
+msgstr "Училищна електронна поща"
+
+msgid "IT local account"
+msgstr "Локален ИТ акаунт"
+
+msgid "Username"
+msgstr "Потребителско име"
+
+msgid "This account cannot sign in on this computer."
+msgstr "Този акаунт не може да влиза на този компютър."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "Този акаунт не може да влиза на този компютър. Използвайте училищната си електронна поща (%s)."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Влязохте с друг акаунт. Влезте отново с акаунта, който избрахте тук."
+
+msgid "Language"
+msgstr "Език"
+
+msgid "Keyboard"
+msgstr "Клавиатура"
+
+msgid "Continue"
+msgstr "Продължаване"
+
+msgid "The setting could not be saved. Try again."
+msgstr "Настройката не можа да се запази. Опитайте отново."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "Акаунтът ви е деактивиран. Свържете се с администратора."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "Това устройство е деактивирано. Свържете се с администратора."
+
+msgid "Sign in with your school account."
+msgstr "Влезте с училищния си акаунт."
+
+msgid "Could not sign in. Please try again."
+msgstr "Влизането не беше успешно. Опитайте отново."
+
+msgid "Authentication request cancelled"
+msgstr "Заявката за удостоверяване е отменена"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "Достигнат е максималният брой опити за удостоверяване"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Грешка при получаване на токена за достъп. Опитайте отново."
+
+msgid "Invalid user name"
+msgstr "Невалидно потребителско име"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "Този компютър е заключен от училището; свържете се с ИТ отдела"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "Влизането като гост не е разрешено на този компютър"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "Локалните акаунти не могат да влизат на този компютър"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "Училищните акаунти не могат да влизат на този компютър"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Това приложение може да се отвори само от екрана за вход"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Това приложение се нуждае от мрежа. Свържете се с Wi-Fi от горната лента и опитайте отново."

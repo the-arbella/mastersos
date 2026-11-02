@@ -1,0 +1,48 @@
+# Dependency policy, enforced by the `deps` job in .github/workflows/mastersos.yml.
+# Run locally: cd core && cargo deny --workspace check
+[graph]
+all-features = true
+
+[advisories]
+# Every entry needs a reason and a condition for removing it.
+ignore = [
+    # rumqttc 0.25.1 (latest as of 2026-11-01) pins rustls-webpki 0.102 but only names its error
+    # type (src/tls.rs). Certificates are verified by rustls 0.23 with rustls-webpki 0.103, which is
+    # patched. Remove these five when rumqttc moves off 0.102.
+    { id = "RUSTSEC-2026-0049", reason = "rustls-webpki 0.102 is not used to verify certificates (rumqttc error type only)" },
+    { id = "RUSTSEC-2026-0098", reason = "rustls-webpki 0.102 is not used to verify certificates (rumqttc error type only)" },
+    { id = "RUSTSEC-2026-0099", reason = "rustls-webpki 0.102 is not used to verify certificates (rumqttc error type only)" },
+    { id = "RUSTSEC-2026-0104", reason = "rustls-webpki 0.102 is not used to verify certificates (rumqttc error type only)" },
+    { id = "RUSTSEC-2026-0382", reason = "only the rumqttc copy of rustls-webpki 0.102 remains affected; 0.103 is patched" },
+    # Unmaintained, no known vulnerability; each goes when its parent crate replaces it.
+    { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile, pulled in by rumqttc" },
+    { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2, build-time only, pulled in by i18n-embed-fl" },
+    { id = "RUSTSEC-2026-0374", reason = "basic-toml, pulled in by i18n-config" },
+]
+
+[licenses]
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+# Workspace crates use path dependencies, which cargo-deny counts as wildcards; crates.io wildcards
+# are refused by `cargo publish` and none are used here.
+[bans]
+multiple-versions = "allow"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

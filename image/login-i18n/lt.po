@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "Tvarko: %s"
+
+msgid "Shut down"
+msgstr "Išjungti"
+
+msgid "Browse as Guest"
+msgstr "Naršyti kaip svečiui"
+
+msgid "Add person"
+msgstr "Pridėti asmenį"
+
+msgid "Apps"
+msgstr "Programos"
+
+msgid "Cancel"
+msgstr "Atšaukti"
+
+msgid "Retry"
+msgstr "Bandyti dar kartą"
+
+msgid "Opening the sign-in page…"
+msgstr "Atidaromas prisijungimo puslapis…"
+
+msgid "The sign-in page could not be opened."
+msgstr "Nepavyko atidaryti prisijungimo puslapio."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Nepavyksta pasiekti mokyklos. Prisijunkite prie Wi-Fi viršutinėje juostoje ir bandykite dar kartą."
+
+msgid "School email"
+msgstr "Mokyklos el. paštas"
+
+msgid "IT local account"
+msgstr "Vietinė IT paskyra"
+
+msgid "Username"
+msgstr "Naudotojo vardas"
+
+msgid "This account cannot sign in on this computer."
+msgstr "Su šia paskyra šiame kompiuteryje prisijungti negalima."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "Su šia paskyra šiame kompiuteryje prisijungti negalima. Naudokite savo mokyklos el. paštą (%s)."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Prisijungėte su kita paskyra. Prisijunkite dar kartą su čia pasirinkta paskyra."
+
+msgid "Language"
+msgstr "Kalba"
+
+msgid "Keyboard"
+msgstr "Klaviatūra"
+
+msgid "Continue"
+msgstr "Tęsti"
+
+msgid "The setting could not be saved. Try again."
+msgstr "Nepavyko išsaugoti nustatymo. Bandykite dar kartą."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "Jūsų paskyra išjungta. Kreipkitės į administratorių."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "Šis įrenginys išjungtas. Kreipkitės į administratorių."
+
+msgid "Sign in with your school account."
+msgstr "Prisijunkite su savo mokyklos paskyra."
+
+msgid "Could not sign in. Please try again."
+msgstr "Prisijungti nepavyko. Bandykite dar kartą."
+
+msgid "Authentication request cancelled"
+msgstr "Tapatybės patvirtinimo užklausa atšaukta"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "Pasiektas didžiausias tapatybės patvirtinimo bandymų skaičius"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Gaunant prieigos raktą įvyko klaida. Bandykite dar kartą."
+
+msgid "Invalid user name"
+msgstr "Netinkamas naudotojo vardas"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "Mokykla užrakino šį kompiuterį; kreipkitės į IT specialistus"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "Šiame kompiuteryje prisijungti kaip svečiui negalima"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "Vietinės paskyros šiame kompiuteryje prisijungti negali"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "Mokyklos paskyros šiame kompiuteryje prisijungti negali"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Šią programą galima atidaryti tik iš prisijungimo ekrano"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Šiai programai reikia tinklo. Prisijunkite prie Wi-Fi viršutinėje juostoje ir bandykite dar kartą."

@@ -1,0 +1,28 @@
+# Installer: the plain-text flow on tty1 (mastersos-installer, Task 10). Pulled in only by mastersos-installer.target.
+# First /usr/lib/mastersos/installer-mount mounts, read-only, the ESP of **the stick the machine booted from** on
+# /run/mastersos-usb-esp and the MASTERSOS-SEED partition (GPT label mastersos-usb-seed) of the same stick on
+# /run/mastersos-usb-seed; when that fails the unit fails instead of treating it as "no seed" (Ruling 11). The installer
+# checks again that the seed folder really is the mount of that partition.
+# On any failure (installer-mount or the installer) the screen shows the reason, whether the disk was touched and
+# "Press Enter to restart."; Enter reboots. Nothing else starts on tty1 (no getty), so the screen stays until then.
+[Unit]
+Description=MastersOS installer
+Documentation=file:/usr/bin/mastersos-installer
+After=basic.target systemd-udev-trigger.service systemd-udevd.service systemd-vconsole-setup.service
+Conflicts=getty@tty1.service
+After=getty@tty1.service
+
+[Service]
+Type=oneshot
+# Clear the screen: the questions are hard to read right after the boot messages
+ExecStartPre=-/usr/bin/printf '\\033[H\\033[2J'
+ExecStartPre=/usr/bin/udevadm settle
+ExecStartPre=/usr/lib/mastersos/installer-mount
+ExecStart=/usr/bin/mastersos-installer
+StandardInput=tty
+StandardOutput=inherit
+StandardError=inherit
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TimeoutStartSec=infinity

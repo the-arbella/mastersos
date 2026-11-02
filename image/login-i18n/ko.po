@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "%s에서 관리 중"
+
+msgid "Shut down"
+msgstr "종료"
+
+msgid "Browse as Guest"
+msgstr "게스트로 사용"
+
+msgid "Add person"
+msgstr "사용자 추가"
+
+msgid "Apps"
+msgstr "앱"
+
+msgid "Cancel"
+msgstr "취소"
+
+msgid "Retry"
+msgstr "다시 시도"
+
+msgid "Opening the sign-in page…"
+msgstr "로그인 페이지를 여는 중…"
+
+msgid "The sign-in page could not be opened."
+msgstr "로그인 페이지를 열 수 없습니다."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "학교에 연결할 수 없습니다. 상단 막대에서 Wi-Fi에 연결한 후 다시 시도하세요."
+
+msgid "School email"
+msgstr "학교 이메일"
+
+msgid "IT local account"
+msgstr "IT 로컬 계정"
+
+msgid "Username"
+msgstr "사용자 이름"
+
+msgid "This account cannot sign in on this computer."
+msgstr "이 계정은 이 컴퓨터에 로그인할 수 없습니다."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "이 계정은 이 컴퓨터에 로그인할 수 없습니다. 학교 이메일(%s)을 사용하세요."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "다른 계정으로 로그인했습니다. 여기서 선택한 계정으로 다시 로그인하세요."
+
+msgid "Language"
+msgstr "언어"
+
+msgid "Keyboard"
+msgstr "키보드"
+
+msgid "Continue"
+msgstr "계속"
+
+msgid "The setting could not be saved. Try again."
+msgstr "설정을 저장할 수 없습니다. 다시 시도하세요."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "계정이 비활성화되었습니다. 관리자에게 문의하세요."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "이 기기는 비활성화되었습니다. 관리자에게 문의하세요."
+
+msgid "Sign in with your school account."
+msgstr "학교 계정으로 로그인하세요."
+
+msgid "Could not sign in. Please try again."
+msgstr "로그인할 수 없습니다. 다시 시도해 주세요."
+
+msgid "Authentication request cancelled"
+msgstr "인증 요청이 취소되었습니다"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "인증 시도 가능 횟수를 초과했습니다"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "액세스 토큰을 가져오는 중 오류가 발생했습니다. 다시 시도해 주세요."
+
+msgid "Invalid user name"
+msgstr "사용자 이름이 올바르지 않습니다"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "이 컴퓨터는 학교에서 잠갔습니다. IT 담당자에게 문의하세요"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "이 컴퓨터에서는 게스트 로그인을 할 수 없습니다"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "로컬 계정은 이 컴퓨터에 로그인할 수 없습니다"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "학교 계정은 이 컴퓨터에 로그인할 수 없습니다"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "이 앱은 로그인 화면에서만 열 수 있습니다"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "이 앱에는 네트워크가 필요합니다. 상단 막대에서 Wi-Fi에 연결한 후 다시 시도하세요."

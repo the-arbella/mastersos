@@ -1,0 +1,858 @@
+#!/bin/bash
+# Userspace side of the /usr self-repair (usr-self-repair Task 4; design: docs/superpowers/specs, plan: usr-self-repair).
+#
+#   integrity --boot-ok   ExecStart of mastersos-boot-ok.service: remove EFI/MastersOS/boot-pending from the ESP (the initrd sets it
+#                         on every boot; reaching boot-complete.target means this boot got far enough). Never touches repair-count.
+#                         Exits 0 even when there is no ESP.
+#   integrity             ExecStart of mastersos-integrity.service: check the active /usr slot, the golden copy, (when the booted
+#                         version is older than the golden one) the newest UKI on the ESP and the inactive slot, decide the actions
+#                         with golden-lib's decide_userspace, write integrity.json, carry the actions out (Task 5, below), write
+#                         integrity.json again and, when a repair was requested, tell the user.
+#
+# Actions (decide_userspace's names; each success adds a "repaired" entry):
+#   refresh-golden    golden_refresh: copy the active slot and the booted UKI into the golden copy (golden-sig zeroed first,
+#                     written last, after a full verity_check of the copy with the active slot's signature).
+#   restore-inactive  restore_inactive: copy the golden copy over the inactive slot of the golden version (sig zeroed first,
+#                     written last). Only while holding /run/mastersos-slots.lock (non-blocking; mastersos-update.service runs
+#                     under it, sysupdate writes that slot too): busy = skipped with a note, retried next boot.
+#   restore-uki       restore_uki: put the golden UKI back on the ESP as EFI/Linux/MastersOS_<v>_x86-64.efi (no boot counter).
+#                     Runs after restore-inactive, under the same lock (sysupdate writes EFI/Linux too), and only when a slot of
+#                     that version is on the boot disk (inactive_slot_devs): otherwise skipped with a note.
+#   request-repair    request_repair: EFI/MastersOS/repair-usr "<data PARTUUID> <roothash>" for the initrd (usr-repair).
+#   network           start mastersos-golden-fetch.service (--no-block; Task 7) and note it. The download (1.66 GB) waits for
+#                     network-online in its own unit with a 3 h timeout, so this check never waits on the network. That unit runs
+#                     integrity again when the golden copy was fetched (the re-run requests the repair of a bad active slot) and
+#                     starts mastersos-update when the booted version is gone from the channel. Once per boot: after a fetch
+#                     (/run/mastersos-golden-fetched) the action is skipped with a note.
+# Every partition write is dd ... conv=fsync under an exclusive flock of the whole disk (udev takes a shared one before probing),
+# followed by udevadm settle. ESP files are written as <name>.new, synced, renamed (as bootloader-update does).
+#
+# State: $MASTERSOS_SYSTEM_VAR/integrity.json (0644), shape
+#   {"checked_at","has_golden","booted_version","golden_version"|null,"active_ok","golden_ok","actions":[...],
+#    "repaired":[{"at","what","from"}] (latest 10, inherited from the old file),"gave_up":"<roothash>"|null,
+#    "golden_full_checked_at"|null,"notes":["<text>",...],"error":"<text>"|null}
+# "actions" are the decided ones; golden_ok / golden_version / golden_full_checked_at show the state after the actions ran.
+# "repaired" what/from: golden/active, uki/golden, inactive/golden, repair-request/golden (golden/network in files written
+# before the fetch moved into its own unit).
+# "error" is non-null only for a failure that stopped the check (cannot locate the active slot, cannot find the running root hash,
+# cannot read IMAGE_VERSION; the actions are then ["report-only"], or the table's output when only IMAGE_VERSION is missing) or an
+# action (an interrupted refresh, mastersos-golden-fetch.service that cannot be started...).
+# "notes" (array of strings, [] by default) are informational and never mean the check failed: the ENOKEY degradation (the kernel
+# keyring could not verify the signature: veritysetup rc 1 / verity_check exit 3, measured on a Secure Boot-off machine with a
+# MOK-enrolled certificate, see the golden-lib header; a partition is then accepted on its root hash alone, but only when that root
+# hash is the RUNNING one, the kernel already verified the running /usr with the same signature at boot; a golden copy with another
+# root hash is not trusted), "golden signature area empty/invalid", an active slot or golden copy that does not verify, a golden ESP
+# that cannot be mounted. Consumers (the agent's system:integrity item) read active_ok / golden_ok / actions for health, not notes.
+#
+# ESP files (EFI/MastersOS/): boot-pending (set by the initrd, cleared by --boot-ok), repair-count "<roothash> <n>" (written by the
+# initrd repair; removed here only once the active slot of that root hash reads clean; "<running roothash> n" with n >= 2 while the slot is
+# still bad means the initrd gave up, reported as gave_up); repair-inprogress "<roothash>" and repair-interrupted "<roothash> <k>"
+# (left by an initrd repair that was cut off) and a repair-usr request "<data PARTUUID> <roothash>" are removed here, like
+# repair-count, once the active slot of that root hash reads clean.
+#
+# Reads are throttled to 150 MiB/s (golden-lib read_through; IOSchedulingClass=idle does little under none/mq-deadline). The golden
+# copy is normally only opened (--no-read) and read through when its last full check is older than 7 days.
+#
+# Environment overrides (tests/integrity-test.sh and the lab smoke run; the unit sets none): MASTERSOS_GOLDEN_LIB, MASTERSOS_ESP,
+# MASTERSOS_SYSTEM_VAR, MASTERSOS_GOLDEN_{SIG,VERITY,USR,ESP} (devices), MASTERSOS_GOLDEN_ESP_DIR (an already mounted golden ESP),
+# MASTERSOS_ACTIVE_OK (0|1: skip the active-slot read), MASTERSOS_CMDLINE, MASTERSOS_IMAGE_VERSION, MASTERSOS_NOW (epoch seconds),
+# MASTERSOS_LOGINCTL, MASTERSOS_RUNUSER, MASTERSOS_NOTIFY, MASTERSOS_LOCALE_CONF, MASTERSOS_ESP_LINUX (default $ESP/EFI/Linux),
+# MASTERSOS_ACTIVE_{SIG,VERITY,USR} (the active slot's partitions, only read together with MASTERSOS_ACTIVE_OK), MASTERSOS_DD,
+# MASTERSOS_WHOLE_DISK (the file to lock instead of the partition's disk), MASTERSOS_SYSTEMCTL,
+# MASTERSOS_SLOTS_LOCK (default /run/mastersos-slots.lock), MASTERSOS_FETCHED_MARKER (default /run/mastersos-golden-fetched),
+# MASTERSOS_SYSFS (golden-lib's; also where inactive_slot_devs reads partition numbers).
+set -euo pipefail
+
+GOLDEN_LIB=${MASTERSOS_GOLDEN_LIB:-/usr/lib/mastersos/golden-lib}
+VAR=${MASTERSOS_SYSTEM_VAR:-/var/lib/mastersos-system}
+STATE_DIR=EFI/MastersOS
+GOLDEN_ESP_MNT=/run/mastersos-golden-esp
+RATE=150          # MiB/s for every full read in userspace
+FULL_CHECK_DAYS=7 # a full read of the golden copy at least this often
+GOLDEN_ESP_MOUNTED=0
+NOTES=()
+ERRORS=()
+REPAIRED=() # JSON objects {"at","what","from"} added by this run
+ARCH=x86-64 # the UKI name's architecture (sysupdate's %a)
+DD=${MASTERSOS_DD:-dd}
+SLOTS_LOCK=${MASTERSOS_SLOTS_LOCK:-/run/mastersos-slots.lock}
+# left by golden-fetch --booted after a successful fetch (same default there); /run is root-only and empty after a reboot
+FETCHED_MARKER=${MASTERSOS_FETCHED_MARKER:-/run/mastersos-golden-fetched}
+MAX_TRIES=2 # the initrd's repair-count cap (usr-repair MAX_TRIES): at or above it for the running root hash the initrd gave up
+A_SIG="" A_VERITY="" A_USR="" # the active slot's partitions, once active_slot_ok located them
+GSIG="" GVERITY="" GUSR="" GOLD_RH="" # the golden partitions and the root hash its signature area names
+NOTIFY_TIMEOUT=${MASTERSOS_NOTIFY_TIMEOUT:-10} # seconds; the session bus belongs to the user, a hung bus must not stall us
+
+log() { echo "integrity: $*"; }
+note() {
+	NOTES+=("$*")
+	log "$*"
+}
+# fail "<text>": a failure that stopped the check (goes to "error")
+fail() {
+	ERRORS+=("$*")
+	log "$*"
+}
+
+# find_esp: same as bootloader-update
+find_esp() {
+	local esp d
+	esp=$(timeout 20 bootctl --print-esp-path 2>/dev/null) || esp=""
+	if [ -n "$esp" ] && [ -d "$esp/EFI" ]; then
+		echo "$esp"
+		return 0
+	fi
+	for d in /efi /boot; do
+		if [ -d "$d/EFI" ]; then
+			echo "$d"
+			return 0
+		fi
+	done
+	return 1
+}
+
+now_epoch() { echo "${MASTERSOS_NOW:-$(printf '%(%s)T' -1)}"; }
+rfc3339() { TZ=UTC printf '%(%Y-%m-%dT%H:%M:%SZ)T' "$1"; }
+
+# running_roothash -> the root hash of the running /usr: veritysetup's view first, the UKI command line second
+running_roothash() {
+	local h=""
+	h=$(veritysetup status usr 2>/dev/null | sed -nE 's/^ *root hash: *([0-9a-f]{64}) *$/\1/p' | head -n 1) || h=""
+	if [ -z "$h" ]; then
+		h=$(sed -nE 's/^(.* )?usrhash=([0-9a-f]{64})( .*)?$/\2/p' "${MASTERSOS_CMDLINE:-/proc/cmdline}" 2>/dev/null | head -n 1) || h=""
+	fi
+	[ -n "$h" ] || return 1
+	echo "$h"
+}
+
+# boot_ok <esp> -> removes boot-pending (the only thing --boot-ok does)
+boot_ok() {
+	local esp=$1
+	if [ -z "$esp" ]; then
+		log "no ESP found, nothing to clear"
+		return 0
+	fi
+	if [ -e "$esp/$STATE_DIR/boot-pending" ]; then
+		if rm -f "$esp/$STATE_DIR/boot-pending"; then
+			sync -f "$esp" 2>/dev/null || sync || true
+			log "boot-pending cleared"
+		else
+			log "cannot remove $esp/$STATE_DIR/boot-pending"
+		fi
+	else
+		log "no boot-pending on the ESP"
+	fi
+	return 0
+}
+
+# vcheck <data> <hash> <sig> <roothash> <degrade 0|1> [verity_check flags] -> 0 good, 1 bad.
+# Exit 3 from verity_check (the kernel keyring lacks the certificate) is retried with --no-sig when <degrade> is 1,
+# i.e. when the root hash is the running one; otherwise it counts as bad.
+vcheck() {
+	local data=$1 hash=$2 sig=$3 rh=$4 degrade=$5 rc=0
+	shift 5
+	verity_check "$data" "$hash" "$sig" "$rh" "$@" || rc=$?
+	if [ "$rc" = 3 ]; then
+		if [ "$degrade" = 1 ]; then
+			note "the kernel keyring cannot verify the signature (ENOKEY); ${data##*/} accepted on its root hash alone (it is the running one)"
+			rc=0
+			verity_check "$data" "$hash" "$sig" "$rh" --no-sig "$@" || rc=$?
+		else
+			note "the kernel keyring cannot verify the signature (ENOKEY); ${data##*/} with a root hash other than the running one is not trusted"
+		fi
+	fi
+	[ "$rc" = 0 ]
+}
+
+# active_slot_ok <roothash> -> 0 when all three active partitions are good, 1 when not, 2 when the slot cannot be located
+active_slot_ok() {
+	local rh=$1 st data sibs sig hash
+	if [ -n "${MASTERSOS_ACTIVE_OK:-}" ]; then
+		A_SIG=${MASTERSOS_ACTIVE_SIG:-} A_VERITY=${MASTERSOS_ACTIVE_VERITY:-} A_USR=${MASTERSOS_ACTIVE_USR:-}
+		[ "$MASTERSOS_ACTIVE_OK" = 1 ]
+		return
+	fi
+	st=$(veritysetup status usr 2>/dev/null) || {
+		fail "veritysetup status usr failed: cannot locate the active /usr slot"
+		return 2
+	}
+	data=$(printf '%s\n' "$st" | sed -nE 's/^ *data device: *([^ ]+) *$/\1/p' | head -n 1)
+	hash=$(printf '%s\n' "$st" | sed -nE 's/^ *hash device: *([^ ]+) *$/\1/p' | head -n 1)
+	if [ -z "$data" ] || [ -z "$hash" ] || ! sibs=$(slot_siblings "$data"); then
+		fail "cannot find the active slot's signature partition (data ${data:-?}, hash ${hash:-?})"
+		return 2
+	fi
+	sig=${sibs%% *}
+	A_SIG=$sig A_VERITY=$hash A_USR=$data
+	vcheck "$data" "$hash" "$sig" "$rh" 1 --rate "$RATE"
+}
+
+# golden_esp_mount [ro|rw]
+golden_esp_mount() {
+	if [ -n "${MASTERSOS_GOLDEN_ESP_DIR:-}" ]; then
+		[ -d "$MASTERSOS_GOLDEN_ESP_DIR" ] || return 1 # tests: a missing directory stands for a golden ESP that does not mount
+		GOLDEN_ESP_DIR=$MASTERSOS_GOLDEN_ESP_DIR
+		return 0
+	fi
+	[ -n "${GOLDEN_ESP_DEV:-}" ] || return 1
+	mkdir -p "$GOLDEN_ESP_MNT" || return 1
+	mount -t vfat -o "${1:-ro}",nosuid,nodev,noexec,umask=0077 "$GOLDEN_ESP_DEV" "$GOLDEN_ESP_MNT" || return 1
+	GOLDEN_ESP_MOUNTED=1
+	GOLDEN_ESP_DIR=$GOLDEN_ESP_MNT
+}
+
+golden_esp_umount() {
+	[ "$GOLDEN_ESP_MOUNTED" = 1 ] || return 0
+	if umount "$GOLDEN_ESP_MNT" 2>/dev/null; then
+		GOLDEN_ESP_MOUNTED=0
+	else
+		log "cannot unmount $GOLDEN_ESP_MNT"
+	fi
+}
+
+# uki_file_ok <uki> <roothash>: signed by the MastersOS MOK certificate and carrying that usrhash (golden-lib checks a directory's
+# MastersOS.efi, so the file is linked under that name in a private directory)
+uki_file_ok() {
+	local d rc=0
+	d=$(_private_dir) || return 1
+	ln -s "$(realpath "$1")" "$d/MastersOS.efi" && golden_uki_ok "$d" "$2" || rc=1
+	rm -rf "$d"
+	return "$rc"
+}
+
+# newest_uki_ok <esp> <version> <roothash>: some UKI on the ESP for that version verifies
+newest_uki_ok() {
+	local dir=${MASTERSOS_ESP_LINUX:-$1/EFI/Linux} f
+	for f in "$dir"/MastersOS_"$2"_*.efi "$dir"/MastersOS_"$2".efi; do
+		[ -f "$f" ] || continue
+		uki_file_ok "$f" "$3" && return 0
+	done
+	return 1
+}
+
+# inactive_slot_devs <version> -> "<sig> <hash> <data>": the three partitions of the boot disk labelled MastersOS_<version>_verity_sig,
+# MastersOS_<version>_verity and MastersOS_<version>, each label once. Like the initrd's slot_siblings for the active slot, sig and
+# hash must carry systemd's usr-verity-sig / usr-verity types and the three must be consecutive partitions in sig/verity/usr order
+# (install.repart.d 10-12, 20-22), so restore_inactive never writes a partition that only carries a matching label.
+# PARTTYPE comes before PARTLABEL in the listing: it is never empty on a GPT partition, a label may be (lsblk -r prints nothing).
+inactive_slot_devs() {
+	local ver=$1 disk name ptype label data="" hash="" sig="" sysfs=${MASTERSOS_SYSFS:-/sys} ns nh nd
+	disk=$(boot_disk) || return 1
+	while read -r name ptype label; do
+		case $label in
+		"MastersOS_$ver")
+			[ -z "$data" ] || return 1
+			data=$name
+			;;
+		"MastersOS_${ver}_verity")
+			[ -z "$hash" ] && [ "${ptype,,}" = "$SLOT_VERITY_TYPE" ] || return 1
+			hash=$name
+			;;
+		"MastersOS_${ver}_verity_sig")
+			[ -z "$sig" ] && [ "${ptype,,}" = "$SLOT_SIG_TYPE" ] || return 1
+			sig=$name
+			;;
+		esac
+	done < <(lsblk -nrpo NAME,PARTTYPE,PARTLABEL "$disk")
+	[ -n "$data" ] && [ -n "$hash" ] && [ -n "$sig" ] || return 1
+	{
+		read -r ns <"$sysfs/class/block/${sig##*/}/partition" &&
+			read -r nh <"$sysfs/class/block/${hash##*/}/partition" &&
+			read -r nd <"$sysfs/class/block/${data##*/}/partition"
+	} 2>/dev/null || return 1
+	[[ $ns =~ ^[0-9]+$ && $nh =~ ^[0-9]+$ && $nd =~ ^[0-9]+$ ]] || return 1
+	[ "$nh" = $((ns + 1)) ] && [ "$nd" = $((ns + 2)) ] || return 1
+	echo "$sig $hash $data"
+}
+
+# inactive_slot_ok <version> <roothash>: the inactive slot of that version verifies
+inactive_slot_ok() {
+	local devs
+	devs=$(inactive_slot_devs "$1") || return 1
+	# shellcheck disable=SC2086 # three device names
+	set -- "$2" $devs
+	vcheck "$4" "$3" "$2" "$1" 0 --rate "$RATE"
+}
+
+# --- writing -------------------------------------------------------------------------------------------------------------------
+# since <start-us> -> seconds elapsed, e.g. 11.7
+since() {
+	local us=$((${EPOCHREALTIME/./} - $1))
+	printf '%d.%d' $((us / 1000000)) $((us % 1000000 / 100000))
+}
+
+# write_dd <target> <dd operands...>: dd <operands> of=<target> conv=fsync,notrunc status=none while holding an exclusive flock on
+# the target's whole disk, then udevadm settle. notrunc only matters for the plain files of the tests.
+write_dd() {
+	local dst=$1 disk fd rc=0
+	shift
+	disk=${MASTERSOS_WHOLE_DISK:-}
+	if [ -z "$disk" ]; then
+		disk=$(whole_disk "$dst") || {
+			log "cannot find the disk of $dst"
+			return 1
+		}
+	fi
+	exec {fd}<"$disk" || return 1
+	if ! flock -x -w 60 "$fd"; then
+		exec {fd}<&-
+		log "cannot lock $disk"
+		return 1
+	fi
+	"$DD" "$@" of="$dst" conv=fsync,notrunc status=none || rc=$?
+	exec {fd}<&-
+	udevadm settle --timeout=30 >/dev/null 2>&1 || true
+	[ "$rc" = 0 ] || log "dd $* of=$dst failed ($rc)"
+	return "$rc"
+}
+
+# put_file <src> <dst>: <dst>.new, fsync, compare sha256, rename, fsync the file and its directory (bootloader-update's pattern)
+put_file() {
+	local src=$1 dst=$2 want got
+	want=$(sha256sum <"$src" | cut -d' ' -f1) || return 1
+	rm -f "$dst.new"
+	if ! cp "$src" "$dst.new" || ! sync "$dst.new"; then
+		rm -f "$dst.new"
+		log "cannot write $dst.new"
+		return 1
+	fi
+	got=$(sha256sum <"$dst.new" | cut -d' ' -f1) || got=""
+	if [ "$got" != "$want" ]; then
+		rm -f "$dst.new"
+		log "$dst.new reads back as ${got:-nothing}, not $want"
+		return 1
+	fi
+	if ! mv -f "$dst.new" "$dst"; then
+		rm -f "$dst.new"
+		log "cannot rename $dst.new"
+		return 1
+	fi
+	sync "$dst" "$(dirname "$dst")" || log "fsync of $dst failed (renamed already)"
+}
+
+# put_text <dst> <text>: put_file of a one-line text
+put_text() {
+	local d rc=0
+	d=$(_private_dir) || return 1
+	printf '%s\n' "$2" >"$d/f" && put_file "$d/f" "$1" || rc=1
+	rm -rf "$d"
+	return "$rc"
+}
+
+# repaired <what> <from>
+repaired() {
+	REPAIRED+=("$(jq -nc --arg at "$(rfc3339 "$NOW")" --arg what "$1" --arg from "$2" '{at: $at, what: $what, from: $from}')")
+}
+
+# copy_slot <src-sig> <src-verity> <src-usr> <dst-sig> <dst-verity> <dst-usr> <roothash> <degrade 0|1> [<uki>]: the shared
+# write order of golden_refresh and restore_inactive. Zero the target signature, copy usr up to the erofs size, then finish_copy.
+# A failure at any point leaves the target signature zeroed (re-zeroed when the signature write itself fails), so the copy is never
+# trusted.
+copy_slot() {
+	local ssig=$1 sverity=$2 susr=$3 dsig=$4 dverity=$5 dusr=$6 rh=$7 degrade=$8 uki=${9:-} bytes t
+	bytes=$(erofs_bytes "$susr") || {
+		log "$susr holds no erofs image"
+		return 1
+	}
+	t=${EPOCHREALTIME/./}
+	write_dd "$dsig" if=/dev/zero bs=16K count=1 || return 1
+	write_dd "$dusr" if="$susr" bs=4M iflag=count_bytes count="$bytes" || return 1
+	log "usr copied: $bytes bytes in $(since "$t") s"
+	finish_copy "$ssig" "$sverity" "$dsig" "$dverity" "$dusr" "$rh" "$degrade" "$uki"
+}
+
+# finish_copy <src-sig> <src-verity> <dst-sig> <dst-verity> <dst-usr> <roothash> <degrade 0|1> [<uki>]: the rest of a copy whose
+# target signature is zeroed and whose usr is written already (copy_slot; golden-fetch streams usr from the download). Copy the
+# whole verity partition, (with <uki>: put it and its manifest into GOLDEN_ESP_DIR, which the caller mounted read-write BEFORE
+# zeroing the signature, and check that it is signed for <roothash>), read the copy through with the SOURCE signature, then write
+# the signature and read it back. The target signature stays zeroed on any failure.
+finish_copy() {
+	local ssig=$1 sverity=$2 dsig=$3 dverity=$4 dusr=$5 rh=$6 degrade=$7 uki=${8:-} t ver
+	t=${EPOCHREALTIME/./}
+	write_dd "$dverity" if="$sverity" bs=4M || return 1
+	log "verity copied in $(since "$t") s"
+	if [ -n "$uki" ]; then
+		t=${EPOCHREALTIME/./}
+		ver=$(uki_field "$uki" version) || return 1
+		if ! put_file "$uki" "$GOLDEN_ESP_DIR/MastersOS.efi" ||
+			! put_text "$GOLDEN_ESP_DIR/manifest" "version=$ver sha256=$(sha256sum <"$uki" | cut -d' ' -f1)"; then
+			return 1
+		fi
+		if ! golden_uki_ok "$GOLDEN_ESP_DIR" "$rh"; then
+			log "the UKI written to the golden ESP is not a signed UKI for $rh"
+			return 1
+		fi
+		log "UKI copied in $(since "$t") s"
+	fi
+	t=${EPOCHREALTIME/./}
+	vcheck "$dusr" "$dverity" "$ssig" "$rh" "$degrade" --rate "$RATE" || {
+		log "the copy does not verify; its signature stays zeroed"
+		return 1
+	}
+	log "copy read through in $(since "$t") s"
+	if ! write_dd "$dsig" if="$ssig" bs=16K count=1 || [ "$(sig_roothash "$dsig" 2>/dev/null)" != "$rh" ]; then
+		log "writing the signature to $dsig failed or it does not read back: zeroing it again"
+		write_dd "$dsig" if=/dev/zero bs=16K count=1 || log "cannot zero $dsig"
+		return 1
+	fi
+}
+
+# golden_refresh <active-sig> <active-verity> <active-usr> <uki>: make the golden copy the running version
+golden_refresh() {
+	local asig=$1 averity=$2 ausr=$3 uki=$4 rh ver
+	rh=$(sig_roothash "$asig" 2>/dev/null) || rh=""
+	if [ "$rh" != "$RUNHASH" ]; then
+		fail "refresh-golden: the active signature partition names ${rh:-nothing}, not the running root hash; not copying"
+		return 1
+	fi
+	if [ -z "$GSIG" ] || [ -z "$GVERITY" ] || [ -z "$GUSR" ]; then
+		fail "refresh-golden: golden partitions missing"
+		return 1
+	fi
+	if ! uki_file_ok "$uki" "$rh" || ! ver=$(uki_field "$uki" version); then
+		fail "refresh-golden: $uki is not a signed UKI for the running root hash"
+		return 1
+	fi
+	# pre-flight: a golden ESP that does not mount read-write would fail the copy at step 4, after the sig was zeroed and 2 GB
+	# rewritten, on every boot
+	if ! golden_esp_mount rw; then
+		fail "refresh-golden: cannot mount the golden ESP read-write; nothing written"
+		return 1
+	fi
+	log "refresh-golden: copying $ver ($rh) from the active slot"
+	if ! copy_slot "$asig" "$averity" "$ausr" "$GSIG" "$GVERITY" "$GUSR" "$rh" 1 "$uki"; then
+		golden_esp_umount
+		fail "refresh-golden: copy interrupted, the golden copy stays invalid until the next try"
+		return 1
+	fi
+	golden_esp_umount
+	GOLDEN_OK=1 GOLDEN_VER=$ver GOLDEN_FULL_AT=$(rfc3339 "$NOW")
+	repaired golden active
+	log "refresh-golden: the golden copy is now $ver"
+}
+
+# restore_uki <esp> <golden-uki>: some UKI of the golden version on the ESP verifies, or the golden UKI is put back as
+# EFI/Linux/MastersOS_<v>_x86-64.efi (no boot counter: that version was blessed). Copies of that version that do not verify go.
+restore_uki() {
+	local esp=$1 guki=$2 dir ver rh f bad=()
+	dir=${MASTERSOS_ESP_LINUX:-$esp/EFI/Linux}
+	if ! ver=$(uki_field "$guki" version) || ! rh=$(uki_field "$guki" usrhash) || ! uki_file_ok "$guki" "$rh"; then
+		fail "restore-uki: the golden UKI does not verify"
+		return 1
+	fi
+	for f in "$dir/MastersOS_${ver}_$ARCH"*.efi; do
+		[ -f "$f" ] || continue
+		if uki_file_ok "$f" "$rh"; then
+			log "restore-uki: ${f##*/} verifies, nothing to do"
+			return 0
+		fi
+		bad+=("$f")
+	done
+	mkdir -p "$dir"
+	if ! put_file "$guki" "$dir/MastersOS_${ver}_$ARCH.efi"; then
+		fail "restore-uki: cannot write $dir/MastersOS_${ver}_$ARCH.efi"
+		return 1
+	fi
+	for f in "${bad[@]}"; do
+		[ "$f" = "$dir/MastersOS_${ver}_$ARCH.efi" ] && continue
+		rm -f "$f" && log "restore-uki: removed ${f##*/} (does not verify)"
+	done
+	sync "$dir" 2>/dev/null || true
+	repaired uki golden
+	log "restore-uki: MastersOS_${ver}_$ARCH.efi restored from the golden copy"
+}
+
+# restore_inactive <sig> <verity> <usr>: copy the golden copy over that (inactive) slot
+restore_inactive() {
+	local sig=$1 verity=$2 usr=$3 rh h
+	if [ "$usr" = "$A_USR" ] || [ "$verity" = "$A_VERITY" ] || [ "$sig" = "$A_SIG" ]; then
+		fail "restore-inactive: $usr is the active slot; not writing"
+		return 1
+	fi
+	h=("${MASTERSOS_SYSFS:-/sys}/class/block/${usr##*/}/holders/"*)
+	if [ -e "${h[0]}" ]; then
+		fail "restore-inactive: $usr is in use; not writing"
+		return 1
+	fi
+	if ! rh=$(sig_roothash "$GSIG"); then
+		fail "restore-inactive: the golden signature area is invalid"
+		return 1
+	fi
+	log "restore-inactive: copying the golden copy ($rh) to $usr"
+	if ! copy_slot "$GSIG" "$GVERITY" "$GUSR" "$sig" "$verity" "$usr" "$rh" 0; then
+		fail "restore-inactive: copy failed, the slot's signature stays zeroed"
+		return 1
+	fi
+	repaired inactive golden
+}
+
+# request_repair <esp> <data-partuuid> <roothash>: ask the initrd to rewrite the active slot from the golden copy
+request_repair() {
+	local esp=$1 f=$1/$STATE_DIR/repair-usr line="$2 $3"
+	if [ -z "$esp" ]; then
+		fail "request-repair: no ESP"
+		return 1
+	fi
+	if [ -f "$f" ] && [ "$(cat "$f" 2>/dev/null)" = "$line" ]; then
+		log "request-repair: already requested"
+		return 0
+	fi
+	if ! mkdir -p "$esp/$STATE_DIR" || ! put_text "$f" "$line"; then
+		fail "request-repair: cannot write $f"
+		return 1
+	fi
+	repaired repair-request golden
+	log "request-repair: $line"
+}
+
+# partuuid_of <roothash>: the data partition's PARTUUID (systemd-repart takes the first 128 bits of the root hash)
+partuuid_of() { echo "${1:0:8}-${1:8:4}-${1:12:4}-${1:16:4}-${1:20:12}"; }
+
+# booted_uki <esp>: the ESP's UKI of the booted version that carries the running root hash
+booted_uki() {
+	local dir=${MASTERSOS_ESP_LINUX:-$1/EFI/Linux} f
+	for f in "$dir/MastersOS_${BOOTED_VER}_"*.efi "$dir/MastersOS_$BOOTED_VER.efi"; do
+		[ -f "$f" ] || continue
+		if uki_file_ok "$f" "$RUNHASH"; then
+			echo "$f"
+			return 0
+		fi
+	done
+	return 1
+}
+
+# --- actions ---------------------------------------------------------------------------------------------------------------------
+act_request_repair() {
+	request_repair "$1" "$(partuuid_of "$RUNHASH")" "$RUNHASH" && REQUESTED=1
+}
+
+# act_network: hand the download to mastersos-golden-fetch.service (golden-fetch --booted); no "repaired" entry, nothing fetched yet.
+# Once per boot: golden-fetch --booted leaves FETCHED_MARKER in /run before it starts this check again. If that re-run still finds
+# the golden copy bad (only flaky hardware gets here: golden-fetch verified the copy fully), the next boot's check decides again
+# instead of a fetch -> integrity -> fetch cycle of 1.66 GB downloads.
+act_network() {
+	if [ -e "$FETCHED_MARKER" ]; then
+		note "network: the golden copy was already fetched in this boot and still does not verify; not fetching again until the next boot"
+		return 0
+	fi
+	if ! "${MASTERSOS_SYSTEMCTL:-systemctl}" start --no-block mastersos-golden-fetch.service; then
+		fail "network: cannot start mastersos-golden-fetch.service"
+		return 1
+	fi
+	note "network: mastersos-golden-fetch.service started to download $BOOTED_VER into the golden copy"
+}
+
+# run_actions <esp>: carry out ACTIONS; failures are recorded by fail() and the next action still runs
+run_actions() {
+	local esp=$1 a uki devs lockfd
+	for a in "${ACTIONS[@]}"; do
+		case $a in
+		refresh-golden)
+			if [ -z "$A_SIG" ] || [ -z "$A_VERITY" ] || [ -z "$A_USR" ]; then
+				fail "refresh-golden: the active slot's partitions are unknown"
+			elif [ -z "$esp" ] || ! uki=$(booted_uki "$esp"); then
+				fail "refresh-golden: no signed UKI of $BOOTED_VER for the running root hash on the ESP"
+			else
+				golden_refresh "$A_SIG" "$A_VERITY" "$A_USR" "$uki" || true
+			fi
+			;;
+		restore-uki)
+			# under the slots lock too (sysupdate's UKI transfer writes EFI/Linux), and only when a slot of the golden version is
+			# on the disk: a blessed UKI (no boot counter) whose /usr partitions are gone (overwritten by a later update, or labelled
+			# _empty by an interrupted one) would be picked by systemd-boot on every boot and never find /usr, a reboot loop the
+			# initrd cannot repair. A slot that is present but damaged is fine: the initrd rewrites it from the golden copy, which
+			# names exactly that usrhash. decide_userspace lists restore-inactive first, so a slot it restored counts here.
+			if [ -z "$esp" ]; then
+				fail "restore-uki: no ESP"
+			elif ! exec {lockfd}>>"$SLOTS_LOCK"; then
+				fail "restore-uki: cannot open $SLOTS_LOCK"
+			elif ! flock -n "$lockfd"; then
+				note "inactive slot busy (update running), UKI restore skipped"
+				exec {lockfd}>&-
+			else
+				if ! inactive_slot_devs "$GOLDEN_VER" >/dev/null; then
+					note "restore-uki: no slot of $GOLDEN_VER on the boot disk, its UKI is not put back (it could not find /usr)"
+				elif ! golden_esp_mount ro; then
+					fail "restore-uki: cannot mount the golden ESP"
+				else
+					restore_uki "$esp" "$GOLDEN_ESP_DIR/MastersOS.efi" || true
+					golden_esp_umount
+				fi
+				exec {lockfd}>&-
+			fi
+			;;
+		restore-inactive)
+			# lock first (non-blocking: mastersos-update can hold it for hours; busy = skip this boot, nothing is wrong), then
+			# find and re-check the slot inside the lock: while sysupdate writes it, it is labelled _empty and looks damaged
+			if ! exec {lockfd}>>"$SLOTS_LOCK"; then
+				fail "restore-inactive: cannot open $SLOTS_LOCK"
+			elif ! flock -n "$lockfd"; then
+				note "inactive slot busy (update running), restore skipped"
+				exec {lockfd}>&-
+			else
+				if ! devs=$(inactive_slot_devs "$GOLDEN_VER"); then
+					fail "restore-inactive: no slot labelled MastersOS_$GOLDEN_VER"
+				elif inactive_slot_ok "$GOLDEN_VER" "$GOLD_RH"; then
+					log "restore-inactive: the slot of $GOLDEN_VER verifies now, nothing to do"
+				else
+					# shellcheck disable=SC2086 # three device names
+					restore_inactive $devs || true
+				fi
+				exec {lockfd}>&-
+			fi
+			;;
+		request-repair) act_request_repair "$esp" || true ;;
+		network) act_network || true ;;
+		esac
+	done
+}
+
+# --- notification ----------------------------------------------------------------------------------------------------------------
+# notify_text <key> <lang> -> the text for the key in zh / th, English otherwise
+notify_text() {
+	case $1:$2 in
+	repair-pending:zh*) echo "系统文件需要修复。下次重新启动电脑时会自动修复。" ;;
+	repair-pending:th*) echo "ไฟล์ระบบต้องได้รับการซ่อมแซม ระบบจะซ่อมแซมให้อัตโนมัติเมื่อรีสตาร์ทคอมพิวเตอร์ครั้งถัดไป" ;;
+	repair-pending:*) echo "System files need repair. This happens automatically the next time the computer restarts." ;;
+	*) return 1 ;;
+	esac
+}
+
+# notify_user <key>: show a desktop notification to the user of the active graphical session; no such session = skip
+notify_user() {
+	local key=$1 lang text loginctl=${MASTERSOS_LOGINCTL:-loginctl} runuser=${MASTERSOS_RUNUSER:-runuser} notify=${MASTERSOS_NOTIFY:-notify-send}
+	local id line active type name uid class
+	lang=${LANG:-}
+	if [ -z "$lang" ]; then
+		lang=$(sed -nE 's/^LANG=//p' "${MASTERSOS_LOCALE_CONF:-/etc/locale.conf}" 2>/dev/null | tr -d '"' | head -n 1) || lang=""
+	fi
+	text=$(notify_text "$key" "$lang") || return 0
+	while read -r id _; do
+		[ -n "$id" ] || continue
+		active="" type="" name="" uid="" class=""
+		while read -r line; do
+			case $line in
+			Active=*) active=${line#Active=} ;;
+			Type=*) type=${line#Type=} ;;
+			Class=*) class=${line#Class=} ;;
+			Name=*) name=${line#Name=} ;;
+			User=*) uid=${line#User=} ;;
+			esac
+		done < <("$loginctl" show-session "$id" -p Active -p Type -p Class -p Name -p User 2>/dev/null || true)
+		[ "$active" = yes ] && [ "$class" = user ] || continue # not the GDM greeter (Class=greeter)
+		[ "$type" = wayland ] || [ "$type" = x11 ] || continue
+		[ -n "$name" ] && [[ $uid =~ ^[0-9]+$ ]] || continue
+		timeout -k 2 "$NOTIFY_TIMEOUT" "$runuser" -u "$name" -- env "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" \
+			"$notify" --app-name=MastersOS --urgency=normal "MastersOS" "$text" || log "notify-send for $name failed"
+		return 0
+	done < <("$loginctl" list-sessions --no-legend 2>/dev/null || true)
+	log "no active graphical session, not notifying"
+	return 0
+}
+
+# --- JSON ------------------------------------------------------------------------------------------------------------------------
+# write_json: reads the globals below; keeps the latest 10 "repaired" entries of the old file
+write_json() {
+	local f=$VAR/integrity.json old=[] err="" notes=[] new=[] acts
+	if [ -f "$f" ]; then
+		old=$(jq -c '(.repaired // []) | if type == "array" then .[-10:] else [] end' "$f" 2>/dev/null) || old=[]
+	fi
+	if [ ${#ERRORS[@]} -gt 0 ]; then
+		err=$(printf '%s; ' "${ERRORS[@]}")
+		err=${err%; }
+	fi
+	if [ ${#NOTES[@]} -gt 0 ]; then notes=$(printf '%s\n' "${NOTES[@]}" | jq -R . | jq -sc .); fi
+	if [ ${#REPAIRED[@]} -gt 0 ]; then new=$(printf '%s\n' "${REPAIRED[@]}" | jq -sc .); fi
+	acts=[]
+	if [ ${#ACTIONS[@]} -gt 0 ]; then acts=$(printf '%s\n' "${ACTIONS[@]}" | jq -R . | jq -sc .); fi
+	mkdir -p "$VAR"
+	jq -n \
+		--arg at "$(rfc3339 "$NOW")" --argjson has_golden "$([ "$HAS_GOLDEN" = 1 ] && echo true || echo false)" \
+		--arg booted "$BOOTED_VER" --arg golden "$GOLDEN_VER" \
+		--argjson active_ok "$([ "$ACTIVE_OK" = 1 ] && echo true || echo false)" \
+		--argjson golden_ok "$([ "$GOLDEN_OK" = 1 ] && echo true || echo false)" \
+		--argjson actions "$acts" --argjson repaired "$old" --argjson new "$new" --arg gave_up "$([ "$GAVE_UP" = 1 ] && echo "$RUNHASH" || true)" \
+		--arg full "$GOLDEN_FULL_AT" --arg err "$err" --argjson notes "$notes" \
+		'{checked_at: $at, has_golden: $has_golden, booted_version: $booted,
+		  golden_version: (if $golden == "" then null else $golden end), active_ok: $active_ok, golden_ok: $golden_ok,
+		  actions: $actions, repaired: ($repaired + $new | .[-10:]), gave_up: (if $gave_up == "" then null else $gave_up end),
+		  golden_full_checked_at: (if $full == "" then null else $full end), notes: $notes, error: (if $err == "" then null else $err end)}' \
+		>"$f.new"
+	chmod 0644 "$f.new"
+	mv -f "$f.new" "$f"
+}
+
+check_main() {
+	local esp=$1 rc count full_due=0 old_full="" age degrade=0 flags newest_ok=1 inactive_ok=1 line f
+	NOW=$(now_epoch)
+	BOOTED_VER=${MASTERSOS_IMAGE_VERSION:-$(
+		# shellcheck disable=SC1091
+		. /usr/lib/os-release 2>/dev/null && echo "${IMAGE_VERSION:-}"
+	)}
+	HAS_GOLDEN=0 ACTIVE_OK=0 GOLDEN_OK=0 GAVE_UP=0 GOLDEN_VER="" GOLDEN_FULL_AT="" RUNHASH="" ACTIONS=() REQUESTED=0
+	[ -n "$BOOTED_VER" ] || fail "cannot read IMAGE_VERSION from os-release"
+
+	if [ -f "$VAR/integrity.json" ]; then
+		old_full=$(jq -r '.golden_full_checked_at // empty' "$VAR/integrity.json" 2>/dev/null) || old_full=""
+		GOLDEN_FULL_AT=$old_full
+	fi
+
+	GSIG=${MASTERSOS_GOLDEN_SIG:-$(golden_dev "$GOLDEN_SIG_TYPE" 2>/dev/null || true)}
+	GVERITY=${MASTERSOS_GOLDEN_VERITY:-$(golden_dev "$GOLDEN_VERITY_TYPE" 2>/dev/null || true)}
+	GUSR=${MASTERSOS_GOLDEN_USR:-$(golden_dev "$GOLDEN_USR_TYPE" 2>/dev/null || true)}
+	GOLDEN_ESP_DEV=${MASTERSOS_GOLDEN_ESP:-$(golden_dev "$GOLDEN_ESP_TYPE" 2>/dev/null || true)}
+	GOLDEN_ESP_DIR=""
+	if [ -z "$GSIG" ]; then
+		log "no golden copy on this machine: report only"
+		ACTIONS=(report-only)
+		write_json
+		return 0
+	fi
+	HAS_GOLDEN=1
+
+	RUNHASH=$(running_roothash) || {
+		fail "cannot determine the running root hash"
+		ACTIONS=(report-only)
+		write_json
+		return 0
+	}
+
+	# repair-count of the initrd (only meaningful with an ESP)
+	count=""
+	if [ -n "$esp" ] && [ -f "$esp/$STATE_DIR/repair-count" ]; then
+		count=$(tr -d '\n' <"$esp/$STATE_DIR/repair-count" || true)
+	fi
+
+	# 1. active slot
+	rc=0
+	active_slot_ok "$RUNHASH" || rc=$?
+	if [ "$rc" = 2 ]; then
+		ACTIONS=(report-only)
+		write_json
+		return 0
+	elif [ "$rc" = 0 ]; then
+		ACTIVE_OK=1
+		# only the count of THIS root hash: a count for another slot's hash (e.g. one that was given up on) stays
+		if [ -n "$count" ] && [ "${count%% *}" = "$RUNHASH" ]; then
+			rm -f "$esp/$STATE_DIR/repair-count"
+			log "active slot is good: repair-count ($count) removed"
+		fi
+		# an initrd repair of this root hash that was cut off after its writes (unit timeout, power cut) left these behind;
+		# the slot reads clean now, so the initrd must not rewrite it again on the next boot
+		for f in repair-inprogress repair-interrupted; do
+			[ -n "$esp" ] && [ -f "$esp/$STATE_DIR/$f" ] || continue
+			line=$(tr -d '\n' <"$esp/$STATE_DIR/$f" || true)
+			if [ "${line%% *}" = "$RUNHASH" ]; then
+				rm -f "$esp/$STATE_DIR/$f"
+				log "active slot is good: $f ($line) removed"
+			fi
+		done
+		# a repair request for this root hash is satisfied too. The initrd keeps it after a write that did not verify (so the
+		# next boot tries again); left here, a slot the initrd cannot verify but this check reads clean would be rewritten on
+		# every boot, each time as attempt 1 (repair-count was just removed above)
+		if [ -n "$esp" ] && [ -f "$esp/$STATE_DIR/repair-usr" ]; then
+			line=$(tr -d '\n' <"$esp/$STATE_DIR/repair-usr" || true)
+			if [ "${line##* }" = "$RUNHASH" ]; then
+				rm -f "$esp/$STATE_DIR/repair-usr"
+				log "active slot is good: repair-usr ($line) removed"
+			fi
+		fi
+	else
+		note "the active /usr slot ($RUNHASH) does not read clean"
+		# the same rule as the initrd's initrd_plan: tries >= MAX_TRIES for this root hash
+		if [[ $count =~ ^([0-9a-f]{64})\ ([0-9]+)$ ]] && [ "${BASH_REMATCH[1]}" = "$RUNHASH" ] &&
+			[ "$((10#${BASH_REMATCH[2]}))" -ge "$MAX_TRIES" ]; then
+			GAVE_UP=1
+		fi
+	fi
+
+	# 2. golden copy. The version comes from the golden UKI; GOLDEN_VER stays empty unless the signature area parses
+	if GOLD_RH=$(sig_roothash "$GSIG"); then
+		if golden_esp_mount ro; then
+			GOLDEN_VER=$(uki_field "$GOLDEN_ESP_DIR/MastersOS.efi" version 2>/dev/null || true)
+		else
+			note "cannot mount the golden ESP"
+		fi
+		full_due=1
+		if [ -n "$old_full" ]; then
+			age=$(jq -nr --arg t "$old_full" --argjson now "$NOW" '$now - ($t | fromdateiso8601)' 2>/dev/null) || age=""
+			if [[ $age =~ ^[0-9]+$ ]] && [ "$age" -lt $((FULL_CHECK_DAYS * 86400)) ]; then full_due=0; fi
+		fi
+		if [ "$GOLD_RH" = "$RUNHASH" ]; then degrade=1; fi
+		if [ "$full_due" = 1 ]; then flags=(--rate "$RATE"); else flags=(--no-read); fi
+		if [ -n "$GVERITY" ] && [ -n "$GUSR" ] && [ -n "$GOLDEN_ESP_DIR" ] &&
+			vcheck "$GUSR" "$GVERITY" "$GSIG" "$GOLD_RH" "$degrade" "${flags[@]}" &&
+			golden_uki_ok "$GOLDEN_ESP_DIR" "$GOLD_RH"; then
+			GOLDEN_OK=1
+			if [ "$full_due" = 1 ]; then GOLDEN_FULL_AT=$(rfc3339 "$NOW"); fi
+		else
+			note "the golden copy does not verify (root hash $GOLD_RH)"
+		fi
+	else
+		note "golden signature area is empty or invalid"
+	fi
+
+	# 3. only when booted older than the golden copy: what the golden copy could rebuild
+	if [ "$GOLDEN_OK" = 1 ] && [ -n "$GOLDEN_VER" ] && [ -n "$BOOTED_VER" ] && older_than "$BOOTED_VER" "$GOLDEN_VER"; then
+		if [ -n "$esp" ]; then newest_uki_ok "$esp" "$GOLDEN_VER" "$GOLD_RH" || newest_ok=0; fi
+		inactive_slot_ok "$GOLDEN_VER" "$GOLD_RH" || inactive_ok=0
+	fi
+	golden_esp_umount
+
+	while read -r line; do
+		if [ -n "$line" ]; then ACTIONS+=("$line"); fi
+	done < <(HAS_GOLDEN=1 ACTIVE_OK=$ACTIVE_OK BOOTED_VER=$BOOTED_VER GOLDEN_VER=$GOLDEN_VER GOLDEN_OK=$GOLDEN_OK \
+		NEWEST_UKI_OK=$newest_ok INACTIVE_OK=$inactive_ok GAVE_UP=$GAVE_UP decide_userspace)
+	# The table reads an empty GOLDEN_VER as "signature area invalid". When the signature area names a root hash but the version
+	# cannot be read (golden ESP not mountable, MastersOS.efi missing or unreadable), the copy may be NEWER than the booted version:
+	# refreshing or fetching over it could downgrade it. Only a copy of the running root hash may be rewritten then.
+	if [ -n "$GOLD_RH" ] && [ -z "$GOLDEN_VER" ] && [ "$GOLD_RH" != "$RUNHASH" ]; then
+		local kept=() a
+		for a in "${ACTIONS[@]}"; do
+			case $a in refresh-golden | network) ;; *) kept+=("$a") ;; esac
+		done
+		if [ ${#kept[@]} -ne ${#ACTIONS[@]} ]; then
+			note "golden copy version unreadable (root hash $GOLD_RH); not refreshing or fetching over it"
+			[ ${#kept[@]} -gt 0 ] || kept=(report-only)
+			ACTIONS=("${kept[@]}")
+		fi
+	fi
+	log "booted ${BOOTED_VER:-?} golden ${GOLDEN_VER:-none} active_ok=$ACTIVE_OK golden_ok=$GOLDEN_OK actions: ${ACTIONS[*]:-none}"
+	# the decision is on disk before anything is written (an action can take minutes); the second write adds the outcome
+	write_json
+	if [ ${#ACTIONS[@]} -gt 0 ] && [ "${ACTIONS[*]}" != report-only ]; then
+		run_actions "$esp"
+		write_json
+	fi
+	if [ "$REQUESTED" = 1 ]; then notify_user repair-pending; fi
+	return 0
+}
+
+main() {
+	local mode=${1:-} esp=""
+	case $mode in
+	"" | --boot-ok) ;;
+	*)
+		echo "usage: integrity [--boot-ok]" >&2
+		return 2
+		;;
+	esac
+	if [ -n "${MASTERSOS_ESP:-}" ]; then
+		if [ -d "$MASTERSOS_ESP" ]; then esp=$MASTERSOS_ESP; fi
+	else
+		esp=$(find_esp) || esp=""
+	fi
+	if [ "$mode" = --boot-ok ]; then
+		boot_ok "$esp"
+		return 0
+	fi
+	# shellcheck source-path=SCRIPTDIR source=golden-lib
+	. "$GOLDEN_LIB"
+	trap 'golden_esp_umount' EXIT
+	check_main "$esp"
+}
+
+# Sourced (tests): only define the functions
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+	main "$@"
+fi

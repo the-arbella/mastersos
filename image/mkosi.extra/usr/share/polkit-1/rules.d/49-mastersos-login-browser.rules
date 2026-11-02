@@ -1,0 +1,15 @@
+// The login screen starts and stops the browser of its sign-in card, and nothing else. The greeter's user is dynamic
+// (gdm-greeter, gdm-greeter-2, ...) and the unit's instance is that user: a greeter reaches only its own browser.
+polkit.addRule(function (action, subject) {
+    if (action.id !== "org.freedesktop.systemd1.manage-units" || !/^gdm-greeter(-[0-9]+)?$/.test(subject.user)) {
+        return polkit.Result.NOT_HANDLED;
+    }
+    if (action.lookup("unit") !== "mastersos-login-browser@" + subject.user + ".service") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    var verb = action.lookup("verb");
+    if (verb === "start" || verb === "stop" || verb === "restart") {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});

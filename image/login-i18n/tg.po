@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "Идора мекунад: %s"
+
+msgid "Shut down"
+msgstr "Хомӯш кардан"
+
+msgid "Browse as Guest"
+msgstr "Ҳамчун меҳмон ворид шудан"
+
+msgid "Add person"
+msgstr "Илова кардани корбар"
+
+msgid "Apps"
+msgstr "Барномаҳо"
+
+msgid "Cancel"
+msgstr "Бекор кардан"
+
+msgid "Retry"
+msgstr "Бори дигар кӯшиш кардан"
+
+msgid "Opening the sign-in page…"
+msgstr "Саҳифаи воридшавӣ кушода мешавад…"
+
+msgid "The sign-in page could not be opened."
+msgstr "Саҳифаи воридшавӣ кушода нашуд."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Бо мактаб алоқа барқарор нашуд. Аз навори боло ба Wi-Fi пайваст шавед ва бори дигар кӯшиш кунед."
+
+msgid "School email"
+msgstr "Почтаи электронии мактаб"
+
+msgid "IT local account"
+msgstr "Ҳисоби маҳаллии IT"
+
+msgid "Username"
+msgstr "Номи корбар"
+
+msgid "This account cannot sign in on this computer."
+msgstr "Ин ҳисоб дар ин компютер ворид шуда наметавонад."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "Ин ҳисоб дар ин компютер ворид шуда наметавонад. Почтаи электронии мактаби худро (%s) истифода баред."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Шумо бо ҳисоби дигар ворид шудед. Бо ҳисобе, ки дар ин ҷо интихоб кардед, бори дигар ворид шавед."
+
+msgid "Language"
+msgstr "Забон"
+
+msgid "Keyboard"
+msgstr "Клавиатура"
+
+msgid "Continue"
+msgstr "Идома додан"
+
+msgid "The setting could not be saved. Try again."
+msgstr "Танзим захира нашуд. Бори дигар кӯшиш кунед."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "Ҳисоби шумо ғайрифаъол карда шудааст. Бо маъмур тамос гиред."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "Ин дастгоҳ ғайрифаъол карда шудааст. Бо маъмур тамос гиред."
+
+msgid "Sign in with your school account."
+msgstr "Бо ҳисоби мактаби худ ворид шавед."
+
+msgid "Could not sign in. Please try again."
+msgstr "Ворид шудан муяссар нашуд. Бори дигар кӯшиш кунед."
+
+msgid "Authentication request cancelled"
+msgstr "Дархости аутентификатсия бекор карда шуд"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "Шумораи ҳадди аксари кӯшишҳои аутентификатсия расид"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Ҳангоми гирифтани токени дастрасӣ хато рух дод. Бори дигар кӯшиш кунед."
+
+msgid "Invalid user name"
+msgstr "Номи корбар нодуруст аст"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "Ин компютер аз ҷониби мактаб қулф карда шудааст; бо шӯъбаи IT тамос гиред"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "Воридшавии меҳмон дар ин компютер иҷозат нест"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "Ҳисобҳои маҳаллӣ дар ин компютер ворид шуда наметавонанд"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "Ҳисобҳои мактаб дар ин компютер ворид шуда наметавонанд"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Ин барномаро танҳо аз экрани воридшавӣ кушодан мумкин аст"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Ин барнома ба шабака ниёз дорад. Аз навори боло ба Wi-Fi пайваст шавед ва бори дигар кӯшиш кунед."

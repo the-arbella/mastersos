@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "Керується: %s"
+
+msgid "Shut down"
+msgstr "Вимкнути"
+
+msgid "Browse as Guest"
+msgstr "Переглядати як гість"
+
+msgid "Add person"
+msgstr "Додати користувача"
+
+msgid "Apps"
+msgstr "Застосунки"
+
+msgid "Cancel"
+msgstr "Скасувати"
+
+msgid "Retry"
+msgstr "Повторити"
+
+msgid "Opening the sign-in page…"
+msgstr "Відкриття сторінки входу…"
+
+msgid "The sign-in page could not be opened."
+msgstr "Не вдалося відкрити сторінку входу."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Не вдається зв’язатися зі школою. Підключіться до Wi-Fi на верхній панелі та повторіть спробу."
+
+msgid "School email"
+msgstr "Шкільна електронна пошта"
+
+msgid "IT local account"
+msgstr "Локальний обліковий запис ІТ"
+
+msgid "Username"
+msgstr "Ім’я користувача"
+
+msgid "This account cannot sign in on this computer."
+msgstr "Цей обліковий запис не може входити на цьому комп’ютері."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "Цей обліковий запис не може входити на цьому комп’ютері. Використайте шкільну електронну пошту (%s)."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Ви увійшли з іншим обліковим записом. Увійдіть ще раз з обліковим записом, який ви вибрали тут."
+
+msgid "Language"
+msgstr "Мова"
+
+msgid "Keyboard"
+msgstr "Клавіатура"
+
+msgid "Continue"
+msgstr "Продовжити"
+
+msgid "The setting could not be saved. Try again."
+msgstr "Не вдалося зберегти налаштування. Повторіть спробу."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "Ваш обліковий запис вимкнено. Зверніться до адміністратора."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "Цей пристрій вимкнено. Зверніться до адміністратора."
+
+msgid "Sign in with your school account."
+msgstr "Увійдіть за допомогою шкільного облікового запису."
+
+msgid "Could not sign in. Please try again."
+msgstr "Не вдалося увійти. Повторіть спробу."
+
+msgid "Authentication request cancelled"
+msgstr "Запит автентифікації скасовано"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "Досягнуто максимальної кількості спроб автентифікації"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Помилка отримання маркера доступу. Повторіть спробу."
+
+msgid "Invalid user name"
+msgstr "Недійсне ім’я користувача"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "Цей комп’ютер заблоковано школою; зверніться до ІТ-відділу"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "Гостьовий вхід на цьому комп’ютері заборонено"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "Локальні облікові записи не можуть входити на цьому комп’ютері"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "Шкільні облікові записи не можуть входити на цьому комп’ютері"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Цей застосунок можна відкрити лише з екрана входу"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Цей застосунок потребує мережі. Підключіться до Wi-Fi на верхній панелі та повторіть спробу."

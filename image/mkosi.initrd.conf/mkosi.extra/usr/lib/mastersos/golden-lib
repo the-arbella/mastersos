@@ -1,0 +1,397 @@
+# shellcheck shell=bash
+# golden-lib: helpers shared by the /usr self-repair pieces (design: docs/superpowers/specs, plan: usr-self-repair Task 2).
+# Source it, never execute it. It only defines functions and constants.
+#
+# Two users:
+#   * the initrd repair service (identical copy under mkosi.initrd.conf/mkosi.extra/, check-tree rule 37 keeps them
+#     byte-identical). It may only use INITRD_TOOLS. Functions marked "(i)" below are the ones it calls.
+#   * the userspace integrity checker, which also uses ukify, jq, sbverify, openssl and sort.
+#
+# Facts measured on VM 170 (image 20261026.1, active slot sda5/sda6/sda7, veritysetup 2.8.4, ukify 259) in the Task 2 spike:
+#   * Signature partition (16 KiB) is one line of JSON padded with NULs:
+#       {"rootHash":"<64 hex>","certificateFingerprint":"<64 hex>","signature":"<base64 PKCS#7, 1227 bytes decoded>"}
+#     There is a certificateFingerprint key between rootHash and signature; the sed patterns below do not depend on key order.
+#   * erofs superblock at 1024: magic bytes e2 e1 f5 e0, blkszbits=12 at 1036, blocks=442592 (u32 LE) at 1060
+#     -> 442592 << 12 = 1812856832, equal to the "size" in `veritysetup status usr`.
+#   * ukify: `ukify inspect FILE --json=short` works; `ukify inspect --json=short FILE` is REJECTED ("unrecognized
+#     arguments") with ukify 259, so the file name must come first. JSON is {".osrel": {"text": "...IMAGE_VERSION=\"20261026.1\"\n"},
+#     ".cmdline": {"text": "usrhash=<64 hex> root=dissect ..."}, ...}.
+#   * Partition types on the lab image match: sig e7bb33fb-06cf-4e81-8273-e543b413e2e2, verity 77ff5f63-e7b6-4633-acf4-1565b864c0e6,
+#     usr 8484680c-9521-48c6-9c11-b0720656f69e (`systemd-id128 show usr-verity-x86-64` is unknown to the image's systemd-id128, so
+#     the values were read from lsblk -o PARTTYPE instead).
+#   * veritysetup open with a signature works on a second mapping of the same blocks:
+#       veritysetup open <data> <name> <hash> <roothash> --root-hash-signature=<file>   -> "verified (with signature)"
+#     BUT (1) opening the ACTIVE slot's data partition directly fails with "Cannot use device ... which is in use" because
+#     dm-verity "usr" holds it; read-only loop devices on the two partitions work (verity_check does that when
+#     /sys/class/block/<name>/holders is non-empty and losetup exists, i.e. userspace only; in the initrd the slot is not mapped yet).
+#     (2) On the running system there are no dm udev rules (no dmsetup package): without DM_DISABLE_UDEV=1 veritysetup open/close
+#     block forever on a udev cookie semaphore (observed, had to be killed). verity_check exports DM_DISABLE_UDEV=1; libdevmapper then
+#     creates the /dev/mapper node itself. veritysetup has no --disable-udev option in 2.8.4.
+#     (3) Failure messages: valid signature but another roothash -> rc 5 "Key was rejected by service"; signature by a certificate
+#     that is not in a kernel keyring -> rc 1 "Required key not available" (ENOKEY); garbage signature -> rc 5 "Bad message".
+#     Unsigned open of the same data works (rc 0), so --no-sig is a pure roothash check.
+#   * Secure Boot off (Task 3, image 20261027.2, signed `verity_check --no-read` of the slot from the installer stick, SB toggled
+#     with lab/fw-vars.sh): with SB off shim does not hand MokListRT to the kernel (no "UEFI:MokListRT" line in the kernel log), so a
+#     certificate enrolled as a MOK (VM 165, the normal shim + MOK route) is NOT in any keyring: the signed open fails with
+#     "Required key not available" and verity_check returns 3; --no-sig still returns 0. A certificate in UEFI db (VM 170, the
+#     "append to db" route) is still loaded into the platform keyring with SB off and the signed open returns 0. With SB on both
+#     routes return 0. Userspace must therefore treat exit 3 as "keyring cannot verify" and fall back to trusting only a golden
+#     copy whose roothash equals the running one. (Booting the installed system with SB off also changes PCR 7, so the TPM does not
+#     unseal the data partition and the initrd asks for the recovery key.)
+#   * dd is uutils coreutils (0.10.0) on the image: `dd skip=` on an efivarfs file fails with "Illegal seek", so efivars are read
+#     through `cat | dd` (Task 3, found in the initrd of the installer stick).
+#
+# Environment overrides (tests): MASTERSOS_BOOT_DISK, MASTERSOS_LOADER_PARTUUID_FILE, MASTERSOS_GOLDEN_LSBLK, MASTERSOS_SYSFS,
+# MASTERSOS_UKIFY, MASTERSOS_MOK_DER.
+
+# shellcheck disable=SC2034 # constants are read by the sourcing scripts
+GOLDEN_SIG_TYPE=d75b658d-fd52-45d1-b604-7503d3390430
+GOLDEN_VERITY_TYPE=dbd93f87-e4ab-4c62-8efe-21507a9f3575
+GOLDEN_USR_TYPE=24fb2b7c-2400-4428-b63f-a3b9824db2b7
+GOLDEN_ESP_TYPE=b86387b4-5385-488f-ab7b-7d8cc7a663de
+# systemd's x86-64 usr-verity-sig / usr-verity partition types (what the slots' signature and hash partitions carry)
+SLOT_SIG_TYPE=e7bb33fb-06cf-4e81-8273-e543b413e2e2
+SLOT_VERITY_TYPE=77ff5f63-e7b6-4633-acf4-1565b864c0e6
+# The only commands the initrd has for the (i) functions (initrd has no jq, ukify, sbverify, sort, ls, cut, readlink, mktemp...).
+# build.sh checks that each of these is in the initrd.
+INITRD_TOOLS="sed grep dd od tr head base64 lsblk mount umount udevadm veritysetup blockdev flock sync cat rm mv mkdir"
+
+# (i) loader_partuuid -> the PARTUUID (lower case) of the ESP the machine booted from.
+# LoaderDevicePartUUID is set by systemd-boot/stub to the PARTUUID of the ESP: 4 attribute bytes + UTF-16LE text.
+loader_partuuid() {
+	local f=${MASTERSOS_LOADER_PARTUUID_FILE:-/sys/firmware/efi/efivars/LoaderDevicePartUUID-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f}
+	local uuid
+	[ -r "$f" ] || return 1
+	# through cat: efivarfs files cannot seek, and the image's dd (uutils) fails "Illegal seek" on skip= there
+	uuid=$(cat "$f" | dd bs=1 skip=4 status=none | tr -d '\0' | tr '[:upper:]' '[:lower:]')
+	[[ $uuid =~ ^[0-9a-f-]{36}$ ]] || return 1
+	echo "$uuid"
+}
+
+# (i) boot_disk -> the whole disk the machine booted from (the parent of the ESP named by LoaderDevicePartUUID).
+boot_disk() {
+	if [ -n "${MASTERSOS_BOOT_DISK:-}" ]; then
+		echo "$MASTERSOS_BOOT_DISK"
+		return 0
+	fi
+	local uuid pk
+	uuid=$(loader_partuuid) || return 1
+	pk=$(lsblk -no PKNAME "/dev/disk/by-partuuid/$uuid" 2>/dev/null | head -n 1)
+	[ -n "$pk" ] || pk=$(lsblk -no PKNAME "$uuid" 2>/dev/null | head -n 1) # tests, or a stub that keys on the uuid
+	[ -n "$pk" ] || return 1
+	echo "/dev/$pk"
+}
+
+# (i) golden_dev <type-uuid> -> /dev/... of the partition with that GPT type on the boot disk; 1 when there is none.
+golden_dev() {
+	local want=${1,,} name ptype disk
+	if [ -n "${MASTERSOS_GOLDEN_LSBLK:-}" ]; then
+		while read -r name ptype; do
+			if [ "${ptype,,}" = "$want" ]; then
+				echo "$name"
+				return 0
+			fi
+		done < <("$MASTERSOS_GOLDEN_LSBLK")
+		return 1
+	fi
+	disk=$(boot_disk) || return 1
+	while read -r name ptype; do
+		if [ "${ptype,,}" = "$want" ]; then
+			echo "$name"
+			return 0
+		fi
+	done < <(lsblk -nrpo NAME,PARTTYPE "$disk")
+	return 1
+}
+
+# (i) sig_roothash <dev-or-file> -> the 64-hex root hash from the signature partition; 1 when absent or malformed.
+sig_roothash() {
+	local json rh
+	json=$(dd if="$1" bs=16K count=1 status=none | tr -d '\0') || return 1
+	rh=$(printf '%s' "$json" | sed -nE 's/.*"rootHash":"([^"]*)".*/\1/p' | head -n 1)
+	[[ $rh =~ ^[0-9a-f]{64}$ ]] || return 1
+	echo "$rh"
+}
+
+# (i) sig_signature <dev-or-file> <out-file> -> writes the decoded PKCS#7 signature; 1 (and no output file) on failure.
+sig_signature() {
+	local json b64
+	json=$(dd if="$1" bs=16K count=1 status=none | tr -d '\0') || return 1
+	b64=$(printf '%s' "$json" | sed -nE 's/.*"signature":"([^"]*)".*/\1/p' | head -n 1)
+	[ -n "$b64" ] || return 1
+	if ! printf '%s' "$b64" | base64 -d >"$2" 2>/dev/null; then
+		rm -f "$2"
+		return 1
+	fi
+	if [ ! -s "$2" ]; then
+		rm -f "$2"
+		return 1
+	fi
+}
+
+# (i) erofs_bytes <dev-or-file> -> size in bytes of the erofs image (blocks << blkszbits); 1 when the magic is wrong.
+erofs_bytes() {
+	local magic bits blocks
+	magic=$(od -An -tx1 -j1024 -N4 "$1" 2>/dev/null | tr -d ' \n')
+	[ "$magic" = e2e1f5e0 ] || return 1
+	bits=$(od -An -tu1 -j1036 -N1 "$1" | tr -d ' \n')
+	blocks=$(od -An -tu4 -j1060 -N4 "$1" | tr -d ' \n')
+	[[ $bits =~ ^[0-9]+$ && $blocks =~ ^[0-9]+$ ]] || return 1
+	echo $((blocks << bits))
+}
+
+# (i) verity_data_bytes <hash-dev-or-file> -> data_block_size * data_blocks from the dm-verity superblock at offset 0 of the
+# hash partition ("verity\0\0" at 0, data_block_size u32 LE at 64, data_blocks u64 LE at 72); 1 without that superblock.
+# Measured on the 20261027.2 build: 4096 * 442596 = 1812873216 = erofs_bytes of its usr partition.
+verity_data_bytes() {
+	local magic bs blocks
+	magic=$(od -An -tx1 -N8 "$1" 2>/dev/null | tr -d ' \n')
+	[ "$magic" = 7665726974790000 ] || return 1
+	bs=$(od -An -tu4 -j64 -N4 "$1" | tr -d ' \n')
+	blocks=$(od -An -tu8 -j72 -N8 "$1" | tr -d ' \n')
+	[[ $bs =~ ^[0-9]+$ && $blocks =~ ^[0-9]+$ ]] && [ "$bs" -gt 0 ] || return 1
+	echo $((bs * blocks))
+}
+
+# _pace <start-us> <mib-so-far> <MiB/s>: sleep until <mib-so-far> could have been read at the given rate (bash builtins only)
+_pace() {
+	local wait_us wait_s
+	wait_us=$(($1 + $2 * 1000000 / $3 - ${EPOCHREALTIME/./}))
+	[ "$wait_us" -gt 0 ] || return 0
+	printf -v wait_s '%d.%06d' $((wait_us / 1000000)) $((wait_us % 1000000))
+	read -r -t "$wait_s" <> <(:) || true
+}
+
+# (i) read_through <dev> [MiB/s] -> reads the whole device; the exit status is the result.
+# With a rate it reads 16 MiB at a time and sleeps after each chunk so the average stays under the limit
+# (IOSchedulingClass=idle does little under the none/mq-deadline schedulers, so the reader limits itself).
+read_through() {
+	local dev=$1 rate=${2:-}
+	if [ -z "$rate" ]; then
+		dd if="$dev" of=/dev/null bs=1M status=none
+		return
+	fi
+	[[ $rate =~ ^[0-9]+$ ]] && [ "$rate" -gt 0 ] || return 2
+	local chunk=16 i=0 out full part got start total_mib=0
+	start=${EPOCHREALTIME/./}
+	while :; do
+		out=$(LC_ALL=C dd if="$dev" of=/dev/null bs=1M count=$chunk skip=$((i * chunk)) 2>&1 >/dev/null) || return 1
+		got=$(printf '%s\n' "$out" | sed -nE 's/^([0-9]+)\+([0-9]+) records in$/\1 \2/p' | head -n 1)
+		[ -n "$got" ] || return 1
+		full=${got% *}
+		part=${got#* }
+		[ $((full + part)) -gt 0 ] || break
+		total_mib=$((total_mib + full + part)) # a partial block counts as a whole MiB: slightly conservative
+		i=$((i + 1))
+		_pace "$start" "$total_mib" "$rate"
+		[ "$full" -eq $chunk ] || break
+	done
+	return 0
+}
+
+# (i) whole_disk <part-dev> -> the parent disk device (for flock).
+whole_disk() {
+	local prefix=${1%"${1##*/}"} pk
+	pk=$(lsblk -no PKNAME "$1" 2>/dev/null | head -n 1)
+	[ -n "$pk" ] || return 1
+	echo "${prefix}${pk}"
+}
+
+# (i) slot_siblings <data-dev> -> "<sig-dev> <hash-dev>": partition number -2 and -1 on the same disk (the slot layout is always
+# sig/verity/usr, install.repart.d 10-12 and 20-22). Returns 1 unless both carry the systemd usr-verity-sig / usr-verity types.
+slot_siblings() {
+	local name=${1##*/} prefix=${1%"${1##*/}"} sysfs=${MASTERSOS_SYSFS:-/sys} num pk base sig hash
+	[ -r "$sysfs/class/block/$name/partition" ] || return 1
+	read -r num <"$sysfs/class/block/$name/partition" || return 1
+	[[ $num =~ ^[0-9]+$ ]] && [ "$num" -ge 3 ] || return 1
+	pk=$(lsblk -no PKNAME "$1" 2>/dev/null | head -n 1)
+	[ -n "$pk" ] || return 1
+	base=$pk
+	[[ $pk =~ [0-9]$ ]] && base=${pk}p
+	sig=${base}$((num - 2))
+	hash=${base}$((num - 1))
+	[ "$(lsblk -no PARTTYPE "${prefix}${sig}" 2>/dev/null | head -n 1)" = "$SLOT_SIG_TYPE" ] || return 1
+	[ "$(lsblk -no PARTTYPE "${prefix}${hash}" 2>/dev/null | head -n 1)" = "$SLOT_VERITY_TYPE" ] || return 1
+	echo "${prefix}${sig} ${prefix}${hash}"
+}
+
+# _private_dir -> prints a new directory only root can enter. Temp files never go straight into a world-writable directory:
+# a user could pre-create a symlink at a predictable name and make root overwrite or read an arbitrary file.
+# mktemp -d (userspace) makes a random 0700 directory; without mktemp (initrd) mkdir -m 0700 under /run, which fails if the
+# path already exists, so a pre-created path can never be reused.
+_private_dir() {
+	local d
+	if command -v mktemp >/dev/null 2>&1; then
+		d=$(mktemp -d 2>/dev/null) || return 1
+	else
+		d=${MASTERSOS_RUN_DIR:-/run}/mastersos-golden.$$
+		mkdir -m 0700 "$d" 2>/dev/null || return 1
+	fi
+	echo "$d"
+}
+
+# _verity_close <name>: close a check mapping. A close that fails while the mapping still exists (busy for a moment: udev or blkid
+# probing it) is tried again, five times in about a second, then left to deferred removal (cryptsetup's close --deferred: removed
+# when the last user lets go). A check mapping left behind in the initrd keeps the active data partition held, and
+# systemd-veritysetup@usr could not open it on that boot. MASTERSOS_DEV_MAPPER (tests) replaces /dev/mapper.
+_verity_close() {
+	local i
+	for i in 1 2 3 4 5; do
+		veritysetup close "$1" >/dev/null 2>&1 && return 0
+		[ -e "${MASTERSOS_DEV_MAPPER:-/dev/mapper}/$1" ] || return 0 # nothing to close (the usual case: never opened)
+		[ "$i" = 5 ] || read -r -t 0.2 <> <(:) || true
+	done
+	veritysetup close --deferred "$1" >/dev/null 2>&1
+}
+
+# (i) verity_check <data-dev> <hash-dev> <sig-dev-or-file> <roothash> [--no-read] [--no-sig] [--rate MiB/s]
+# 0 when the signature area names <roothash>, the verity tree opens with it (and, unless --no-sig, with the kernel verifying the
+# PKCS#7 signature) and (unless --no-read) every data block reads through. The initrd always passes --no-sig: its trust root is
+# the usrhash on the UKI command line, and with Secure Boot off the MOK certificate may not be in the kernel keyring.
+# --rate N throttles the full read to N MiB/s (read_through's rate; without it the read is unthrottled).
+# Exit codes: 0 good; 1 any failure (signature area disagrees, bad signature, bad data or tree, tooling error);
+# 2 bad option; 3 the signed open failed with veritysetup rc 1 ("Required key not available", ENOKEY: the kernel keyring lacks the
+# signing certificate; measured on VM 170). A bad signature or bad data is rc 5 from veritysetup and comes back as 1, so callers can
+# tell "keyring cannot verify" (3) from "damaged" (1). 3 is only returned when a signature was used (never with --no-sig).
+# When the data partition is already mapped (the active slot) the check goes through read-only loop devices with direct I/O, so
+# pages cached by an earlier check cannot hide corruption on disk (the kernel accepts --direct-io=on on a block device: VM 170, dio=1).
+verity_check() {
+	local data=$1 hash=$2 sigsrc=$3 roothash=$4 no_read=0 no_sig=0 rate=""
+	shift 4
+	while [ $# -gt 0 ]; do
+		case $1 in
+		--no-read) no_read=1 ;;
+		--no-sig) no_sig=1 ;;
+		--rate)
+			[[ ${2:-} =~ ^[0-9]+$ ]] && [ "$2" -gt 0 ] || return 2
+			rate=$2
+			shift
+			;;
+		*) return 2 ;;
+		esac
+		shift
+	done
+	(
+		# subshell: its trap must not replace the caller's
+		name=mastersos-check-$$
+		tmpd=""
+		loops=()
+		# shellcheck disable=SC2329 # invoked by the trap
+		cleanup() {
+			_verity_close "$name" || true
+			[ ${#loops[@]} -eq 0 ] || losetup -d "${loops[@]}" >/dev/null 2>&1 || true
+			[ -z "$tmpd" ] || rm -rf "$tmpd"
+		}
+		trap cleanup EXIT
+		export DM_DISABLE_UDEV=1 # see header: no dm udev rules on the running system, veritysetup would hang
+		[ "$(sig_roothash "$sigsrc")" = "$roothash" ] || exit 1
+		veritysetup close "$name" >/dev/null 2>&1 || true
+		args=()
+		if [ "$no_sig" = 0 ]; then
+			tmpd=$(_private_dir) || exit 1
+			sig_signature "$sigsrc" "$tmpd/sig" || exit 1
+			args=("--root-hash-signature=$tmpd/sig")
+		fi
+		# a data partition that is mapped already (the active slot) cannot be opened a second time: use read-only loop devices
+		d=$data h=$hash
+		dn=${data##*/}
+		holders=("${MASTERSOS_SYSFS:-/sys}/class/block/$dn/holders/"*)
+		if [ -e "${holders[0]}" ] && command -v losetup >/dev/null 2>&1; then
+			ld=$(losetup -r --direct-io=on -f --show "$data") || exit 1
+			loops=("$ld")
+			lh=$(losetup -r --direct-io=on -f --show "$hash") || exit 1
+			loops+=("$lh")
+			d=$ld h=$lh
+		fi
+		vrc=0
+		veritysetup open "$d" "$name" "$h" "$roothash" "${args[@]}" || vrc=$?
+		if [ "$vrc" != 0 ]; then
+			[ "$vrc" = 1 ] && [ "$no_sig" = 0 ] && exit 3
+			exit 1
+		fi
+		if [ "$no_read" = 0 ]; then
+			# shellcheck disable=SC2086 # $rate is empty or one number: unquoted on purpose
+			read_through "/dev/mapper/$name" $rate || exit 1
+		fi
+		exit 0
+	)
+}
+
+# uki_field <uki> version|usrhash -> IMAGE_VERSION of .osrel / the usrhash= word of .cmdline (userspace only: ukify and jq)
+uki_field() {
+	local json text val
+	json=$("${MASTERSOS_UKIFY:-ukify}" inspect "$1" --json=short) || return 1
+	case $2 in
+	version)
+		text=$(printf '%s' "$json" | jq -r '.[".osrel"].text // empty') || return 1
+		val=$(printf '%s\n' "$text" | sed -nE 's/^IMAGE_VERSION="?([^"]*)"?$/\1/p' | head -n 1)
+		;;
+	usrhash)
+		text=$(printf '%s' "$json" | jq -r '.[".cmdline"].text // empty') || return 1
+		val=$(printf '%s\n' "$text" | tr ' ' '\n' | sed -nE 's/^usrhash=([0-9a-f]{64})$/\1/p' | head -n 1)
+		;;
+	*) return 2 ;;
+	esac
+	[ -n "$val" ] || return 1 # field missing or empty
+	echo "$val"
+}
+
+# older_than <a> <b>: a is strictly older than b (same as bootloader-update)
+older_than() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n 1)" = "$1" ]; }
+
+# golden_uki_ok <golden-esp-dir> <golden-roothash>: the golden UKI is signed by the MastersOS MOK certificate and its usrhash is
+# the golden signature's root hash.
+golden_uki_ok() {
+	local uki=$1/MastersOS.efi der=${MASTERSOS_MOK_DER:-/usr/share/mastersos/mastersos-mok.der} pemdir pem rc=0 got
+	[ -f "$uki" ] && [ -f "$der" ] || return 1
+	pemdir=$(_private_dir) || return 1
+	pem=$pemdir/mok.pem
+	if openssl x509 -inform der -in "$der" -out "$pem" 2>/dev/null; then
+		sbverify --cert "$pem" "$uki" >/dev/null 2>&1 || rc=1
+	else
+		rc=1
+	fi
+	rm -rf "$pemdir"
+	[ "$rc" = 0 ] || return 1
+	got=$(uki_field "$uki" usrhash) || return 1
+	[ -n "$got" ] && [ "$got" = "$2" ]
+}
+
+# decide_userspace: pure decision table for the userspace integrity checker. Reads HAS_GOLDEN ACTIVE_OK BOOTED_VER GOLDEN_VER
+# GOLDEN_OK NEWEST_UKI_OK INACTIVE_OK GAVE_UP from the environment (GOLDEN_VER empty = the golden signature area is invalid),
+# prints one action per line: report-only refresh-golden request-repair restore-uki restore-inactive network.
+# ACTIVE_OK means all three active-slot partitions are good (data and tree read through, signature partition names the running root
+# hash and opens with the signature). The golden copy only goes up: when the booted version is older than the golden one, never
+# print network or refresh-golden. Callers set GOLDEN_VER only from a golden signature that sig_roothash parses validly, and leave it
+# empty otherwise.
+decide_userspace() {
+	local acts=() booted=${BOOTED_VER:-} golden=${GOLDEN_VER:-}
+	if [ "${HAS_GOLDEN:-0}" != 1 ]; then
+		echo report-only
+		return 0
+	fi
+	if [ -n "$golden" ] && [ -n "$booted" ] && older_than "$booted" "$golden"; then
+		# booted on an older version than the golden copy (rolled back by boot counting): the golden copy is the newest known
+		# good image, so it can rebuild what is missing from it; nothing is downloaded and nothing is written into it
+		# restore-inactive first: integrity only puts the UKI back once a slot of that version exists on the disk (a blessed UKI
+		# without its /usr would be picked on every boot and never find /usr)
+		if [ "${GOLDEN_OK:-0}" = 1 ]; then
+			[ "${INACTIVE_OK:-1}" = 1 ] || acts+=(restore-inactive)
+			[ "${NEWEST_UKI_OK:-1}" = 1 ] || acts+=(restore-uki)
+		fi
+		if [ ${#acts[@]} -eq 0 ] && [ "${ACTIVE_OK:-1}" != 1 ]; then
+			acts+=(report-only)
+		fi
+	elif [ "${ACTIVE_OK:-0}" = 1 ]; then
+		if [ -z "$golden" ] || [ "${GOLDEN_OK:-0}" != 1 ] || older_than "$golden" "$booted"; then
+			acts+=(refresh-golden)
+		fi
+	elif [ "${GAVE_UP:-0}" = 1 ]; then
+		acts+=(report-only)
+	elif [ "${GOLDEN_OK:-0}" = 1 ] && [ "$golden" = "$booted" ]; then
+		acts+=(request-repair)
+	else
+		acts+=(network)
+	fi
+	[ ${#acts[@]} -eq 0 ] || printf '%s\n' "${acts[@]}"
+}

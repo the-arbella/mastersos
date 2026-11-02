@@ -1,0 +1,136 @@
+#!/bin/bash
+# ExecStartPre of mastersos-installer.service: mount the two partitions of the installer stick the machine booted from, read-only
+#   the ESP (the partition we booted from, EFI variable LoaderDevicePartUUID)    -> /run/mastersos-usb-esp
+#   MASTERSOS-SEED, GPT label mastersos-usb-seed, on the same disk              -> /run/mastersos-usb-seed
+# Only the boot disk counts: partitions with the same names on other sticks or internal disks are never looked at (same approach
+# as mastersos-seed-generator, no udev by-label links). No MASTERSOS-SEED on the boot disk is a failure: the installer refuses
+# instead of treating it as "no seed" (Ruling 11).
+#
+# Ventoy mode (kernel command line has mastersos.ventoy=<version>): the initrd (ventoy-attach) already mounted the Ventoy
+# stick on /run/mastersos-ventoy (the installer reads the seeds from its MastersOS folder) and attached the system file as a
+# read-only loop disk. Only the ESP is needed here: partition 1 of that loop disk -> /run/mastersos-usb-esp. No seed partition.
+#
+# A failure prints the reason, "The disk has not been touched." (nothing here writes to any disk) and "Press Enter to restart.",
+# reads a line from the tty (the unit has StandardInput=tty) and reboots; when the line cannot be read it exits 1 and the
+# screen stays. Everything printed is English only: the console font has no CJK glyphs.
+# Input typed earlier (an Enter during the boot) is dropped before the question, so it cannot answer it unread. When
+# `systemctl reboot` fails, the kernel's sysrq trigger restarts (sync, remount read-only, reboot): it needs no /usr binary.
+# Any other failure (set -e) ends on the same screen through the ERR trap.
+set -Eeuo pipefail
+
+# The overrides exist for tests/installer-mount-test.sh only
+sysrq=${INSTALLER_MOUNT_SYSRQ:-/proc/sysrq-trigger}
+esp_dir=${INSTALLER_MOUNT_ESP_DIR:-/run/mastersos-usb-esp}
+seed_dir=/run/mastersos-usb-seed
+cmdline=${INSTALLER_MOUNT_CMDLINE:-/proc/cmdline}
+ventoy_dir=${INSTALLER_MOUNT_VENTOY_DIR:-/run/mastersos-ventoy}
+loop_esp=${INSTALLER_MOUNT_LOOP_ESP:-/dev/disk/by-loop-ref/mastersos-ventoy-part1}
+label=mastersos-usb-seed
+efivar=${INSTALLER_MOUNT_EFIVAR:-/sys/firmware/efi/efivars/LoaderDevicePartUUID-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f}
+
+# restart: systemctl reboot; when that fails (/usr gone with a pulled stick, ...), sysrq s, u, b (builtins and /proc only); >> is the same on /proc and keeps every letter in a test file
+restart() {
+	systemctl reboot && return 0
+	local k
+	for k in s u b; do
+		echo "$k" >>"$sysrq" 2>/dev/null || break
+		[ "$k" = b ] || sleep 1 2>/dev/null || true
+	done
+	echo "Could not restart: hold the power button to turn the computer off." >&2
+}
+
+die() {
+	trap - ERR
+	{
+		echo
+		echo "mastersos-installer-mount: $*"
+		echo "Cannot mount the installer stick."
+		echo "The disk has not been touched."
+		echo
+		printf 'Press Enter to restart. '
+	} >&2
+	# drop lines typed before the question (only on a terminal: tests feed a pipe)
+	if [ -t 0 ]; then
+		while read -r -t 0.1 _; do :; done
+	fi
+	if read -r _; then
+		restart
+	fi
+	exit 1
+}
+
+# ERR trap: a failure outside the explicit checks (mkdir, ...) still ends on the restart screen. In a subshell ($(...)) only
+# that subshell ends; the parent then sees the failure and gets here itself.
+on_error() {
+	[ "$BASHPID" = "$$" ] || return 0
+	die "internal error at line $1"
+}
+trap 'on_error $LINENO' ERR
+
+# /dev/sda1 -> sda (in sysfs the parent of a partition's directory is its disk)
+disk_of() {
+	local name sys
+	name=$(basename "$(readlink -f "$1")")
+	sys=$(readlink -f "/sys/class/block/$name") || return 1
+	[ -e "$sys/partition" ] || return 1
+	basename "$(dirname "$sys")"
+}
+
+# find_part <field> <value> [<disk>]: the first partition whose blkid low-level probe (reads the GPT directly) has field = value,
+# only on <disk> when given
+find_part() {
+	local pf part
+	for pf in /sys/class/block/*/partition; do
+		part=$(basename "$(dirname "$pf")")
+		[ "$(blkid -p -o value -s "$1" "/dev/$part" 2>/dev/null | tr 'A-F' 'a-f' || true)" = "$2" ] || continue
+		if [ -n "${3:-}" ] && [ "$(disk_of "/dev/$part" || true)" != "$3" ]; then
+			continue
+		fi
+		echo "/dev/$part"
+		return 0
+	done
+	return 1
+}
+
+opts=ro,nosuid,nodev,noexec,uid=0,gid=0,fmask=0177,dmask=0077
+
+# Mount $1 read-only on $2 and check it really is read-only
+mount_ro() {
+	local dev=$1 dir=$2 cur
+	mkdir -p "$dir"
+	if mountpoint -q "$dir"; then
+		umount "$dir"
+	fi
+	# the ESP we booted from is already mounted on /boot by gpt-auto (automount): the same vfat cannot be mounted again with
+	# other options, so bind that mount and remount the bind read-only
+	cur=$(findmnt -n -o TARGET --source "$dev" | head -n 1 || true)
+	if [ -n "$cur" ]; then
+		mount --bind "$cur" "$dir" || die "cannot bind $cur to $dir"
+		mount -o remount,bind,ro,nosuid,nodev,noexec "$dir" || die "cannot make $dir read-only"
+	else
+		mount -t vfat -o "$opts" "$dev" "$dir" || die "cannot mount $dev on $dir"
+	fi
+	findmnt -n -o OPTIONS --target "$dir" | grep -qE '(^|,)ro(,|$)' || die "$dir is not read-only"
+}
+
+if grep -qE '(^|[[:space:]])mastersos\.ventoy=' "$cmdline" 2>/dev/null; then
+	mountpoint -q "$ventoy_dir" || die "the Ventoy stick is not mounted on $ventoy_dir (the initrd did not mount it)"
+	[ -e "$loop_esp" ] || die "partition 1 of the system file ($loop_esp) is missing"
+	echo "mastersos-installer-mount: Ventoy mode: ESP $loop_esp"
+	mount_ro "$loop_esp" "$esp_dir"
+	exit 0
+fi
+
+[ -r "$efivar" ] || die "no LoaderDevicePartUUID (the machine was not started through systemd-boot)"
+# 4 bytes of attributes, then the UUID in UTF-16LE
+uuid=$(tail -c +5 "$efivar" | tr -d '\0' | tr 'A-F' 'a-f')
+[ -n "$uuid" ] || die "LoaderDevicePartUUID is empty"
+esp=$(find_part PART_ENTRY_UUID "$uuid") || die "the ESP we booted from (PARTUUID $uuid) was not found"
+disk=$(disk_of "$esp") || die "$esp is not a partition"
+seed=$(find_part PART_ENTRY_NAME "$label" "$disk") ||
+	die "the boot stick /dev/$disk has no MASTERSOS-SEED partition (GPT label $label): it was not made by make-installer.sh"
+echo "mastersos-installer-mount: boot stick /dev/${disk}: ESP ${esp}, MASTERSOS-SEED $seed"
+
+for pair in "$esp:$esp_dir" "$seed:$seed_dir"; do
+	mount_ro "${pair%%:*}" "${pair#*:}"
+done

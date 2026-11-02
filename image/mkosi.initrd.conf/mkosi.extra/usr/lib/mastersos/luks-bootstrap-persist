@@ -1,0 +1,70 @@
+#!/bin/bash
+# ExecStart of mastersos-luks-bootstrap-persist.service (initrd only, after systemd-repart and sysroot.mount, before the switch
+# to the real root). On the first boot / after a factory reset repart gave the new root partition a key slot, owned by no
+# token, for /run/mastersos/luks-bootstrap-key; put that temporary key into the unlocked root partition
+# ($SYSROOT/var/lib/mastersos-system/luks-bootstrap-key, 0600) for the agent in user space, which uses it (without the TPM) to
+# enrol the recovery key and replace the TPM slot, then removes this key slot and this file.
+# Only when repart really created a new partition (the root partition's LUKS UUID differs from the one luks-bootstrap-key
+# recorded before repart); on a normal boot repart touches nothing, the UUID is unchanged, and only the copy in /run is
+# deleted, nothing is written to ${SYSROOT}.
+# A failure (the temporary key does not unlock, the write fails) only fails this unit and does not block the boot: the agent
+# reports luks:tpm, and IT can reinstall or factory reset.
+# When sourced (tests/luks-bootstrap-test.sh) it only defines functions; the paths are variables (ROOT_LUKS, SYSROOT, RUN_DIR),
+# cryptsetup comes from PATH and the test replaces it with a stub.
+set -euo pipefail
+
+RUN_DIR=${RUN_DIR:-/run/mastersos}
+SYSROOT=${SYSROOT:-/sysroot}
+ROOT_LUKS=${ROOT_LUKS:-/dev/disk/by-designator/root-luks}
+
+# Store the temporary key (or decide it is not needed). The copy in /run is deleted whatever happens (review I3: not through a
+# RETURN trap, which bash skips when set -e exits half way). persist_inner is called inside `||`, where errexit does not apply,
+# so every step checks explicitly and returns 1 on error; the outer function deletes the /run copy however persist_inner ends,
+# and when run as a script an EXIT trap covers the rest.
+persist_bootstrap_key() {
+	local rc=0
+	persist_inner || rc=$?
+	rm -f "$RUN_DIR/luks-bootstrap-key"
+	return "$rc"
+}
+
+persist_inner() {
+	local key=$RUN_DIR/luks-bootstrap-key dir=$SYSROOT/var/lib/mastersos-system before after
+	if [ ! -s "$key" ]; then
+		echo "mastersos-luks-bootstrap-persist: no temporary key (${key}), nothing to do"
+		return 0
+	fi
+	before=$(cat "$RUN_DIR/root-uuid-before" 2>/dev/null) || before=none
+	after=$(cryptsetup luksUUID "$ROOT_LUKS" 2>/dev/null) || after=none
+	[ -n "$before" ] || before=none
+	[ -n "$after" ] || after=none
+	if [ "$after" != none ] && [ "$after" = "$before" ]; then
+		echo "mastersos-luks-bootstrap-persist: root partition UUID unchanged (${after}), repart created nothing this time; only deleting the temporary key"
+		return 0
+	fi
+	# A new partition (first boot / factory reset): first check that the temporary key really unlocks it (passphrase only, no
+	# token), then store it.
+	if ! cryptsetup open --test-passphrase --disable-external-tokens --key-file="$key" "$ROOT_LUKS"; then
+		echo "mastersos-luks-bootstrap-persist: the temporary key does not unlock the new root partition (${ROOT_LUKS}), not storing it" >&2
+		return 1
+	fi
+	install -d -m 0700 "$dir" || {
+		echo "mastersos-luks-bootstrap-persist: cannot create ${dir}, not storing the key" >&2
+		return 1
+	}
+	# The file is never wider than 0600, from the moment it is created (umask 077, then install -m 0600; no chmod after the
+	# write). The umask is tightened only in the subshell, so the parents created by install -d above keep their modes
+	# (/var/lib and the like must stay 0755). A failed write deletes the partial copy.
+	if ! (umask 077 && install -m 0600 "$key" "$dir/luks-bootstrap-key") || ! sync; then
+		rm -f "$dir/luks-bootstrap-key"
+		echo "mastersos-luks-bootstrap-persist: cannot write the temporary key into ${dir}, not storing it" >&2
+		return 1
+	fi
+	echo "mastersos-luks-bootstrap-persist: temporary key stored in $dir/luks-bootstrap-key (root partition UUID $before -> ${after})"
+	return 0
+}
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+	trap 'rm -f "$RUN_DIR/luks-bootstrap-key"' EXIT
+	persist_bootstrap_key "$@"
+fi

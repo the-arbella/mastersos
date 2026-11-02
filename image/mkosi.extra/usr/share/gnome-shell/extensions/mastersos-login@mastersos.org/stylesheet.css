@@ -1,0 +1,180 @@
+/* MastersOS login screen: shelf, notice, sign-in card, language screen, links under the email field. */
+.mastersos-login-managed {
+    color: rgba(255, 255, 255, 0.72);
+    font-size: 10pt;
+    padding: 0 4px 10px 4px;
+}
+
+.mastersos-shelf-row {
+    spacing: 8px;
+}
+
+.mastersos-pill {
+    background-color: rgba(255, 255, 255, 0.10);
+    color: #f2f3f5;
+    border-radius: 20px;
+    padding: 9px 18px 9px 14px;
+    font-size: 11pt;
+    transition-duration: 100ms;
+}
+
+.mastersos-pill:hover {
+    background-color: rgba(255, 255, 255, 0.18);
+}
+
+.mastersos-pill:active {
+    background-color: rgba(255, 255, 255, 0.26);
+}
+
+.mastersos-pill:focus {
+    box-shadow: inset 0 0 0 2px #8ab4f8;
+}
+
+.mastersos-pill-content {
+    spacing: 8px;
+}
+
+.mastersos-pill-icon {
+    icon-size: 16px;
+}
+
+.mastersos-app-icon {
+    icon-size: 24px;
+    margin-right: 10px;
+}
+
+.mastersos-login-background,
+.mastersos-card-scrim {
+    background-gradient-direction: vertical;
+    background-gradient-start: #20252e;
+    background-gradient-end: #14171d;
+}
+
+.mastersos-card {
+    background-color: #ffffff;
+    border-radius: 16px;
+    color: #1f1f1f;
+    box-shadow: 0 8px 32px 4px rgba(0, 0, 0, 0.5);
+}
+
+.mastersos-card-status {
+    spacing: 14px;
+    padding: 24px 40px;
+}
+
+.mastersos-card-status-body {
+    color: #444746;
+    font-size: 11pt;
+    text-align: center;
+}
+
+.mastersos-card-cancel {
+    background-color: rgba(255, 255, 255, 0.14);
+    color: #ffffff;
+    border-radius: 20px;
+    padding: 9px 32px;
+    font-size: 11pt;
+}
+
+.mastersos-card-cancel:hover {
+    background-color: rgba(255, 255, 255, 0.24);
+}
+
+.mastersos-card-cancel:focus {
+    box-shadow: inset 0 0 0 2px #8ab4f8;
+}
+
+.mastersos-login-link {
+    color: #a8c7fa;
+    font-size: 10.5pt;
+    padding: 6px 8px;
+    border-radius: 8px;
+}
+
+.mastersos-login-link:hover {
+    color: #d3e3fd;
+    background-color: rgba(255, 255, 255, 0.08);
+}
+
+.mastersos-login-link:focus {
+    box-shadow: inset 0 0 0 2px #8ab4f8;
+}
+
+.mastersos-login-refusal {
+    color: #f2b8b5;
+    font-size: 10.5pt;
+    padding: 6px 12px;
+}
+
+.mastersos-notice {
+    spacing: 8px;
+}
+
+.mastersos-notice-retry,
+.mastersos-setup-continue {
+    background-color: #0b57d0;
+    color: #ffffff;
+    border-radius: 18px;
+    padding: 8px 24px;
+    font-size: 11pt;
+}
+
+.mastersos-notice-retry:hover,
+.mastersos-setup-continue:hover {
+    background-color: #0842a0;
+}
+
+.mastersos-notice-retry:focus,
+.mastersos-setup-continue:focus {
+    box-shadow: inset 0 0 0 2px #8ab4f8;
+}
+
+.mastersos-setup {
+    background-color: rgba(255, 255, 255, 0.06);
+    border-radius: 16px;
+    padding: 24px 32px;
+    spacing: 16px;
+    color: #f2f3f5;
+}
+
+.mastersos-setup-columns {
+    spacing: 24px;
+}
+
+.mastersos-setup-column {
+    spacing: 8px;
+}
+
+.mastersos-setup-heading {
+    color: rgba(255, 255, 255, 0.72);
+    font-size: 11pt;
+    font-weight: 600;
+}
+
+.mastersos-setup-item {
+    color: #f2f3f5;
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 12pt;
+}
+
+.mastersos-setup-item > StLabel {
+    text-align: left;
+}
+
+.mastersos-setup-item:hover {
+    background-color: rgba(255, 255, 255, 0.10);
+}
+
+.mastersos-setup-item:focus {
+    box-shadow: inset 0 0 0 2px #8ab4f8;
+}
+
+.mastersos-setup-item:checked {
+    background-color: #0b57d0;
+    color: #ffffff;
+}
+
+.mastersos-setup-footer {
+    spacing: 12px;
+}

@@ -1,0 +1,17 @@
+# Chrome 更新：开机 2 分钟后一次，之后约每 6 小时一次（加最多 20 分钟的随机延迟，免得全校同一时刻下载）。
+# 另有每小时一轮（4b Task 23）：IT 设的更新时段可能短于 6 小时，只靠 6 小时一轮会整段错过。不在时段内、或在暂停中的轮次
+# 只读本机状态就退出（不联网）；没设时段的机器上一次查源不到 6 小时同样不联网（mastersos-agent chrome --scheduled），
+# 所以它们仍约每 6 小时查一次源。时段至少 2 小时（lint）：每小时一轮落在整点后 20 分钟内，太短的时段可能碰不上。
+# OnUnitActiveSec=6h 因为每小时都有一轮而实际上不再触发，留着无害。
+# 由 /usr/lib 的 timers.target.wants 链接启用（不靠 preset：已装好的机器更新到这个镜像后也要起来）。
+[Unit]
+Description=MastersOS Chrome update timer
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=6h
+OnCalendar=hourly
+RandomizedDelaySec=20min
+
+[Install]
+WantedBy=timers.target

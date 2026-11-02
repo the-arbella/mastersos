@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""微软 DBXUpdate.bin 导入发布闸门的 dbx 目录（keys/microsoft/dbx/，keyset.sh 的 keyset_shim_chains 读它）。
+
+用法：python3 -I dbx-import <DBXUpdate.bin> <输出目录>
+
+输入是微软 secureboot_objects 仓库 PostSignedObjects/DBX/amd64/DBXUpdate.bin，即 EFI_VARIABLE_AUTHENTICATION_2：
+16 字节 EFI_TIME + WIN_CERTIFICATE_UEFI_GUID（按它自己的 dwLength 跳过）+ 若干 EFI_SIGNATURE_LIST。
+输出：EFI_CERT_X509_GUID 的每一项写 <sha256>.der；EFI_CERT_SHA256_GUID 的每一项按小写十六进制、排序、去重写进 sha256.txt。
+别的类型（X509_SHA256/384/512、SHA1 等）闸门不读，只计数、打印「跳过 N 项（类型 …）」，不写文件。
+结构不对（长度越界、列表尾部有残余）→ 退出 1，不写任何文件：先写到输出目录旁的临时目录，成功才换上。
+输出目录里原有的 *.der 与 sha256.txt 被换掉，别的文件（SOURCE.txt）不动。
+"""
+import hashlib
+import os
+import shutil
+import struct
+import sys
+import tempfile
+import uuid
+
+X509 = uuid.UUID("a5c059a1-94e4-4aa7-87b5-ab155c2bf072")
+SHA256 = uuid.UUID("c1c41626-504c-4092-aca9-41f936934328")
+NAMES = {
+    uuid.UUID("3bd2a492-96c0-4079-b420-fcf98ef103ed"): "X509_SHA256",
+    uuid.UUID("7076876e-80c2-4ee6-aad2-28b349a6865b"): "X509_SHA384",
+    uuid.UUID("446dbf63-2502-4cda-bcfa-2465d2b0fe9d"): "X509_SHA512",
+    uuid.UUID("826ca512-cf10-4ac9-b187-be01496631bd"): "SHA1",
+}
+
+
+class Bad(Exception):
+    pass
+
+
+def parse(data):
+    """返回 (x509 DER 列表, sha256 十六进制集合, {类型名: 项数})。"""
+    if len(data) < 16 + 24:
+        raise Bad("文件太短，不是 EFI_VARIABLE_AUTHENTICATION_2")
+    # EFI_TIME 16 字节，然后 WIN_CERTIFICATE_UEFI_GUID：dwLength(4) wRevision(2) wCertificateType(2) CertType(16) 数据
+    (cert_len,) = struct.unpack_from("<I", data, 16)
+    if cert_len < 24 or 16 + cert_len > len(data):
+        raise Bad("WIN_CERTIFICATE 的 dwLength 越界")
+    pos = 16 + cert_len
+    ders, hashes, skipped = [], set(), {}
+    while pos < len(data):
+        if len(data) - pos < 28:
+            raise Bad("签名列表头被截断（偏移 %d）" % pos)
+        typ = uuid.UUID(bytes_le=data[pos : pos + 16])
+        lsize, hsize, ssize = struct.unpack_from("<III", data, pos + 16)
+        if lsize < 28 or pos + lsize > len(data):
+            raise Bad("SignatureListSize 越界（偏移 %d）" % pos)
+        body = lsize - 28
+        if hsize > body:
+            raise Bad("SignatureHeaderSize 越界（偏移 %d）" % pos)
+        entries = body - hsize
+        if entries and (ssize < 16 or entries % ssize != 0):
+            raise Bad("SignatureSize 与列表长度对不上（偏移 %d）" % pos)
+        start = pos + 28 + hsize
+        for off in range(start, start + entries, ssize) if entries else ():
+            payload = data[off + 16 : off + ssize]  # 前 16 字节是 SignatureOwner
+            if typ == X509:
+                if not payload:
+                    raise Bad("X509 项是空的（偏移 %d）" % off)
+                ders.append(payload)
+            elif typ == SHA256:
+                if len(payload) != 32:
+                    raise Bad("SHA256 项不是 32 字节（偏移 %d）" % off)
+                hashes.add(payload.hex())
+            else:
+                name = NAMES.get(typ, str(typ))
+                skipped[name] = skipped.get(name, 0) + 1
+        pos += lsize
+    return ders, hashes, skipped
+
+
+def main(argv):
+    if len(argv) != 3:
+        print("用法：dbx-import <DBXUpdate.bin> <输出目录>", file=sys.stderr)
+        return 2
+    src, out = argv[1], os.path.abspath(argv[2])
+    try:
+        with open(src, "rb") as f:
+            data = f.read()
+        ders, hashes, skipped = parse(data)
+    except (Bad, OSError, struct.error) as e:
+        print("dbx-import: %s；一个文件都没写" % e, file=sys.stderr)
+        return 1
+    parent = os.path.dirname(out)
+    os.makedirs(parent, exist_ok=True)
+    tmp = tempfile.mkdtemp(prefix=".dbx-import.", dir=parent)
+    try:
+        names = {}
+        for der in ders:
+            names[hashlib.sha256(der).hexdigest()] = der
+        for h, der in names.items():
+            with open(os.path.join(tmp, h + ".der"), "wb") as f:
+                f.write(der)
+        with open(os.path.join(tmp, "sha256.txt"), "w") as f:
+            f.write("".join(h + "\n" for h in sorted(hashes)))
+        os.makedirs(out, exist_ok=True)
+        for old in os.listdir(out):
+            if old.endswith(".der") or old == "sha256.txt":
+                os.remove(os.path.join(out, old))
+        for new in os.listdir(tmp):
+            os.replace(os.path.join(tmp, new), os.path.join(out, new))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    print("导入 %d 个证书（*.der）、%d 个映像哈希（sha256.txt）" % (len(names), len(hashes)))
+    for name in sorted(skipped):
+        print("跳过 %d 项（类型 %s）：闸门不读，机器上的 shim-check 按本机 dbx 查" % (skipped[name], name))
+    return 0
+
+
+sys.exit(main(sys.argv))

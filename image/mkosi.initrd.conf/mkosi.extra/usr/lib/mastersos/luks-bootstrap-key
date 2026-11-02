@@ -1,0 +1,28 @@
+#!/bin/bash
+# ExecStart of mastersos-luks-bootstrap-key.service (initrd only, before systemd-repart).
+# On the first boot and after a factory reset repart creates the root partition with Encrypt=key-file+tpm2 from
+# repart.d/40-root.conf: bound to the signed PCR 11 (using the UKI's .pcrpkey automatically) and with one key slot, owned by
+# no token, for the temporary key generated here.
+# That temporary key lets the agent in user space change LUKS without the TPM (enrol the recovery key, replace the TPM slot):
+# the data disk's TPM signature only covers enter-initrd, so after leaving the initrd the TPM no longer releases the key
+# (spec §6.12 (a), 4b Ruling 28).
+# Runs on every boot, cheaply (32 random bytes, no PBKDF): on a normal boot repart creates nothing, nobody uses the key and the
+# persist unit deletes it.
+# Also records the root partition's LUKS UUID at this point (none when the device does not exist yet); the persist unit uses
+# it to tell whether repart created a new partition this time.
+set -euo pipefail
+
+RUN_DIR=${RUN_DIR:-/run/mastersos}
+ROOT_LUKS=${ROOT_LUKS:-/dev/disk/by-designator/root-luks}
+
+umask 077
+mkdir -p "$RUN_DIR"
+dd if=/dev/urandom of="$RUN_DIR/luks-bootstrap-key" bs=32 count=1 status=none
+# The disk is known (the unit runs after initrd-usr-fs.target); wait for the udev events of its partitions so the
+# by-designator links are complete. A failure does not block.
+udevadm settle --timeout=30 || echo "mastersos-luks-bootstrap-key: udevadm settle did not finish, going on" >&2
+if uuid=$(cryptsetup luksUUID "$ROOT_LUKS" 2>/dev/null) && [ -n "$uuid" ]; then
+	printf '%s\n' "$uuid" >"$RUN_DIR/root-uuid-before"
+else
+	printf 'none\n' >"$RUN_DIR/root-uuid-before"
+fi

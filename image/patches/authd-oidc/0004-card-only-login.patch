@@ -1,0 +1,529 @@
+diff --git a/authd-oidc-brokers/internal/broker/broker.go b/authd-oidc-brokers/internal/broker/broker.go
+--- a/authd-oidc-brokers/internal/broker/broker.go
++++ b/authd-oidc-brokers/internal/broker/broker.go
+@@ -845,7 +845,7 @@ func (b *Broker) NewSession(username, lang, mode, providerID string) (sessionID,
+ 
+ 	// Construct an OIDC provider via OIDC discovery.
+ 	s.oidcServer, err = b.connectToOIDCServer(context.Background())
+-	if err != nil && b.cfg.forceAccessCheckWithProvider {
++	if err != nil && (b.cfg.forceAccessCheckWithProvider || authCodeEnabled()) {
+ 		log.Errorf(context.Background(), "Could not connect to the provider and force_access_check_with_provider is set, denying authentication: %v", err)
+ 		//nolint:staticcheck,revive // ST1005 This error is displayed as is to the user, so it should be capitalized
+ 		return "", "", errors.New("Error connecting to provider. Check your network connection.")
+@@ -970,6 +970,11 @@ func (b *Broker) availableAuthModes(session session) (availableModes []string, e
+ func (b *Broker) authModeIsAvailable(session session, authMode string) bool {
+ 	switch authMode {
+ 	case authmodes.Password:
++		// MastersOS: every login goes through the school's page, see mastersos_cardonly.go.
++		if authCodeEnabled() {
++			return false
++		}
++
+ 		if !tokenExists(session) {
+ 			log.Debugf(context.Background(), "Token does not exist for user %q, so local password authentication is not available", session.username)
+ 			return false
+@@ -1026,7 +1031,8 @@ func (b *Broker) authModeIsAvailable(session session, authMode string) bool {
+ 			log.Debugf(context.Background(), "OIDC server is not initialized, so the device code flow is not available")
+ 			return false
+ 		}
+-		if session.oidcServer.Endpoint().DeviceAuthURL == "" {
++		// MastersOS: these modes run the authorization code flow on the card, which needs no device endpoint.
++		if !authCodeEnabled() && session.oidcServer.Endpoint().DeviceAuthURL == "" {
+ 			log.Debugf(context.Background(), "OIDC server does not support the device code flow, so it is not available")
+ 			return false
+ 		}
+@@ -1168,7 +1174,7 @@ func (b *Broker) generateUILayout(session *session, authModeID string) (map[stri
+ 
+ 		// MastersOS: the login screen opens this URL in its browser card.
+ 		if authCodeEnabled() {
+-			flow, authURL, err := startAuthCodeFlow(session.oauth2Config, session.username, authCodeListen, authCodeRedirect)
++			flow, authURL, err := startAuthCodeFlow(session.oauth2Config, session.username, authCodeListen, authCodeRedirect, cardAuthOptions(session.lang)...)
+ 			if err != nil {
+ 				return nil, fmt.Errorf("could not start the sign-in: %v", err)
+ 			}
+@@ -1462,7 +1468,8 @@ func (b *Broker) deviceAuth(ctx context.Context, session *session) (string, isAu
+ func (b *Broker) finishDeviceAuth(ctx context.Context, session *session, t *oauth2.Token) (string, isAuthenticatedDataResponse) {
+ 	var err error
+ 
+-	if t.RefreshToken == "" {
++	// MastersOS: a card login never refreshes, see mastersos_cardonly.go.
++	if t.RefreshToken == "" && session.authCode == nil {
+ 		log.Warningf(context.Background(), "No refresh token returned for user during device code flow. You might have to add the 'offline_access' scope to the 'extra_scopes' setting.")
+ 	}
+ 
+@@ -1500,6 +1507,11 @@ func (b *Broker) finishDeviceAuth(ctx context.Context, session *session, t *oaut
+ 		return AuthDenied, errorMessageForDisplay(err, "Failed to retrieve groups from Microsoft Graph API")
+ 	}
+ 
++	// MastersOS: the school's page was the login, there is no local password to define.
++	if session.authCode != nil {
++		return b.finishCardLogin(session, authInfo)
++	}
++
+ 	// MastersOS: a re-login forced by a refused refresh, right after this same identity typed its correct local
+ 	// password, keeps that password (as the passwordless Entra flow does for returning users) instead of
+ 	// asking for a new one. First logins, device auth chosen directly and any other identity still define
+diff --git a/authd-oidc-brokers/internal/broker/mastersos_authcode.go b/authd-oidc-brokers/internal/broker/mastersos_authcode.go
+--- a/authd-oidc-brokers/internal/broker/mastersos_authcode.go
++++ b/authd-oidc-brokers/internal/broker/mastersos_authcode.go
+@@ -54,7 +54,7 @@ var (
+ 
+ // startAuthCodeFlow listens on addr and returns the flow and the URL to open. The port is fixed, so a flow still waiting
+ // (the person pressed Cancel, or asked for a new page) is closed first.
+-func startAuthCodeFlow(cfg oauth2.Config, username, addr, redirect string) (*authCodeFlow, string, error) {
++func startAuthCodeFlow(cfg oauth2.Config, username, addr, redirect string, opts ...oauth2.AuthCodeOption) (*authCodeFlow, string, error) {
+ 	authCodeMu.Lock()
+ 	defer authCodeMu.Unlock()
+ 	if authCodeCurrent != nil {
+@@ -85,9 +85,9 @@ func startAuthCodeFlow(cfg oauth2.Config, username, addr, redirect string) (*aut
+ 	go func() { _ = f.server.Serve(l) }()
+ 	authCodeCurrent = f
+ 
+-	url := cfg.AuthCodeURL(f.state,
++	url := cfg.AuthCodeURL(f.state, append(opts,
+ 		oauth2.S256ChallengeOption(f.verifier),
+-		oauth2.SetAuthURLParam("login_hint", username))
++		oauth2.SetAuthURLParam("login_hint", username))...)
+ 	return f, url, nil
+ }
+ 
+diff --git a/authd-oidc-brokers/internal/broker/mastersos_cardonly.go b/authd-oidc-brokers/internal/broker/mastersos_cardonly.go
+new file mode 100644
+--- /dev/null
++++ b/authd-oidc-brokers/internal/broker/mastersos_cardonly.go
+@@ -0,0 +1,95 @@
++package broker
++
++// MastersOS carried patch (image/patches/authd-oidc/0004-card-only-login.patch): with MASTERSOS_AUTH_CODE=1 the school's
++// page is the only way in. The broker offers no local password, asks for none after the page, and refuses to start a
++// session when the identity provider cannot be reached (the login screen says so), so there is no offline login. A hash
++// left by an older version is deleted at the next login: nothing reads it any more.
++//
++// Nothing here needs a refresh token: the password path was the only reader of a cached token at login, so a provider
++// that issues none (no offline_access requested) logs in the same way every time, through its page. The device
++// authorization endpoint is not needed either. The page gets the login screen's language through ui_locales.
++
++import (
++	"context"
++	"errors"
++	"io/fs"
++	"os"
++	"strings"
++
++	"github.com/canonical/authd/authd-oidc-brokers/internal/token"
++	"github.com/canonical/authd/log"
++	"golang.org/x/oauth2"
++)
++
++// systemLocaleFiles are read in order for LANG: localectl writes the first. The broker's own LANG comes last because it
++// is frozen at boot, and the login screen changes the language without a reboot.
++var systemLocaleFiles = []string{"/etc/locale.conf", "/etc/default/locale"}
++
++// cardAuthOptions carries the language to the school's page; without a usable one the page picks its own. The system
++// language wins: the login screen changes it without restarting GDM, whose session worker keeps the old LANG.
++func cardAuthOptions(sessionLang string) []oauth2.AuthCodeOption {
++	tag := bcp47Tag(systemLang())
++	if tag == "" {
++		tag = bcp47Tag(sessionLang)
++	}
++	if tag == "" {
++		return nil
++	}
++	return []oauth2.AuthCodeOption{oauth2.SetAuthURLParam("ui_locales", tag)}
++}
++
++// systemLang is the system's LANG, or "" when it is not set.
++func systemLang() string {
++	for _, path := range systemLocaleFiles {
++		data, err := os.ReadFile(path)
++		if err != nil {
++			continue
++		}
++		for _, line := range strings.Split(string(data), "\n") {
++			if value, ok := strings.CutPrefix(strings.TrimSpace(line), "LANG="); ok {
++				return strings.Trim(value, `"'`)
++			}
++		}
++	}
++	return os.Getenv("LANG")
++}
++
++// bcp47Tag turns a POSIX locale (th_TH.UTF-8, sr_RS@latin, zh_CN) into a language tag (th-TH, sr-RS, zh-CN). "" for
++// anything else, which includes C and POSIX: they name no language.
++func bcp47Tag(locale string) string {
++	if i := strings.IndexAny(locale, ".@"); i >= 0 {
++		locale = locale[:i]
++	}
++	language, region, hasRegion := strings.Cut(locale, "_")
++	if len(language) < 2 || len(language) > 3 || !asciiIn(language, 'a', 'z') {
++		return ""
++	}
++	if !hasRegion {
++		return language
++	}
++	if len(region) != 2 || !asciiIn(region, 'A', 'Z') {
++		return ""
++	}
++	return language + "-" + region
++}
++
++func asciiIn(s string, low, high byte) bool {
++	for i := 0; i < len(s); i++ {
++		if s[i] < low || s[i] > high {
++			return false
++		}
++	}
++	return true
++}
++
++// finishCardLogin ends a login that went through the school's page.
++func (b *Broker) finishCardLogin(session *session, authInfo *token.AuthCachedInfo) (string, isAuthenticatedDataResponse) {
++	access, data := b.finishAuth(session, authInfo)
++	if access != AuthGranted {
++		return access, data
++	}
++	if err := os.Remove(session.passwordPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
++		log.Warningf(context.Background(), "Could not remove the old local password of user %q: %v", session.username, err)
++	}
++	return access, data
++}
+diff --git a/authd-oidc-brokers/internal/broker/mastersos_cardonly_export_test.go b/authd-oidc-brokers/internal/broker/mastersos_cardonly_export_test.go
+new file mode 100644
+--- /dev/null
++++ b/authd-oidc-brokers/internal/broker/mastersos_cardonly_export_test.go
+@@ -0,0 +1,19 @@
++package broker
++
++// MastersOS carried patch (image/patches/authd-oidc/0004-card-only-login.patch): the helpers its tests reach.
++
++import "testing"
++
++// BCP47Tag and SystemLang expose the language lookup for tests.
++var (
++	BCP47Tag   = bcp47Tag
++	SystemLang = systemLang
++)
++
++// SetSystemLocaleFiles points the system language lookup at paths for the length of the test.
++func SetSystemLocaleFiles(t *testing.T, paths ...string) {
++	t.Helper()
++	saved := systemLocaleFiles
++	systemLocaleFiles = paths
++	t.Cleanup(func() { systemLocaleFiles = saved })
++}
+diff --git a/authd-oidc-brokers/internal/broker/mastersos_cardonly_test.go b/authd-oidc-brokers/internal/broker/mastersos_cardonly_test.go
+new file mode 100644
+--- /dev/null
++++ b/authd-oidc-brokers/internal/broker/mastersos_cardonly_test.go
+@@ -0,0 +1,311 @@
++package broker_test
++
++// MastersOS carried patch (image/patches/authd-oidc/0004-card-only-login.patch). These tests set the process environment,
++// so none of them is parallel; parallel tests only resume after every serial test has finished.
++
++import (
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"net/url"
++	"os"
++	"path/filepath"
++	"testing"
++	"time"
++
++	"github.com/canonical/authd/authd-oidc-brokers/internal/broker"
++	"github.com/canonical/authd/authd-oidc-brokers/internal/broker/authmodes"
++	"github.com/canonical/authd/authd-oidc-brokers/internal/password"
++	"github.com/canonical/authd/authd-oidc-brokers/internal/testutils"
++	"github.com/canonical/authd/authd-oidc-brokers/internal/token"
++	"github.com/stretchr/testify/require"
++)
++
++const cardOnlyAddress = "127.0.0.1:31397"
++
++func cardOnlyBroker(t *testing.T) *broker.Broker {
++	t.Helper()
++	return newBrokerForTests(t, &brokerForTestConfig{
++		Config:                 broker.Config{DataDir: t.TempDir()},
++		ownerAllowed:           true,
++		firstUserBecomesOwner:  true,
++		supportsFetchingGroups: true,
++		listenAddress:          cardOnlyAddress,
++		customHandlers: map[string]testutils.EndpointHandler{
++			"/token": testutils.TokenHandler("http://"+cardOnlyAddress, &testutils.TokenHandlerOptions{
++				IDTokenClaims: []map[string]interface{}{{"sub": "saved-user-id"}},
++			}),
++		},
++	})
++}
++
++// signInOnCard selects the web mode and plays the browser: the redirect the school's page would send.
++func signInOnCard(t *testing.T, b *broker.Broker, sessionID string) {
++	t.Helper()
++	require.NoError(t, b.SetAvailableMode(sessionID, authmodes.DeviceQr))
++	layout, err := b.SelectAuthenticationMode(sessionID, authmodes.DeviceQr)
++	require.NoError(t, err, "selecting the web mode should start the sign-in")
++	u, err := url.Parse(layout["content"])
++	require.NoError(t, err)
++	res, err := http.Get("http://127.0.0.1:48123/callback?code=c&state=" + u.Query().Get("state"))
++	require.NoError(t, err)
++	require.NoError(t, res.Body.Close())
++	require.Equal(t, http.StatusOK, res.StatusCode)
++}
++
++func TestMastersOSCardOnlyFirstLoginHasNoLocalPassword(t *testing.T) {
++	t.Setenv("MASTERSOS_AUTH_CODE", "1")
++	b := cardOnlyBroker(t)
++	sessionID, _ := newSessionForTests(t, b, "", "")
++
++	requireAuthModes(t, b, sessionID, authmodes.DeviceQr)
++	signInOnCard(t, b, sessionID)
++
++	access, data, err := b.IsAuthenticated(sessionID, "{}")
++	require.NoError(t, err)
++	require.Equal(t, broker.AuthGranted, access, "data: %s", data)
++	require.True(t, json.Valid([]byte(data)))
++	require.Contains(t, data, `"userinfo"`)
++	require.Empty(t, b.GetNextAuthModes(sessionID), "nothing follows the school's page")
++	_, err = os.Stat(b.PasswordFilepathForSession(sessionID))
++	require.ErrorIs(t, err, os.ErrNotExist, "no local password may exist after a card login")
++}
++
++func TestMastersOSCardOnlyIgnoresAndRemovesAnOldLocalPassword(t *testing.T) {
++	t.Setenv("MASTERSOS_AUTH_CODE", "1")
++	b := cardOnlyBroker(t)
++	sessionID, _ := newSessionForTests(t, b, "", "")
++	generateAndStoreCachedInfo(t, tokenOptions{}, b.TokenPathForSession(sessionID))
++	require.NoError(t, password.HashAndStorePassword("password", b.PasswordFilepathForSession(sessionID)))
++
++	requireAuthModes(t, b, sessionID, authmodes.DeviceQr)
++	signInOnCard(t, b, sessionID)
++
++	access, data, err := b.IsAuthenticated(sessionID, "{}")
++	require.NoError(t, err)
++	require.Equal(t, broker.AuthGranted, access, "data: %s", data)
++	_, err = os.Stat(b.PasswordFilepathForSession(sessionID))
++	require.ErrorIs(t, err, os.ErrNotExist, "the old hash should be gone")
++}
++
++func TestMastersOSCardOnlyRefusesPasswordMode(t *testing.T) {
++	t.Setenv("MASTERSOS_AUTH_CODE", "1")
++	b := cardOnlyBroker(t)
++	sessionID, _ := newSessionForTests(t, b, "", "")
++	generateAndStoreCachedInfo(t, tokenOptions{}, b.TokenPathForSession(sessionID))
++	require.NoError(t, password.HashAndStorePassword("password", b.PasswordFilepathForSession(sessionID)))
++
++	requireAuthModes(t, b, sessionID, authmodes.DeviceQr)
++	_, err := b.SelectAuthenticationMode(sessionID, authmodes.Password)
++	require.Error(t, err, "a client must not be able to pick the local password by name")
++}
++
++func TestMastersOSCardOnlyWithoutProviderNoSession(t *testing.T) {
++	t.Setenv("MASTERSOS_AUTH_CODE", "1")
++	b := newBrokerForTests(t, &brokerForTestConfig{
++		Config:       broker.Config{DataDir: t.TempDir()},
++		ownerAllowed: true,
++		issuerURL:    "http://127.0.0.1:1",
++	})
++	_, _, err := b.NewSession("test-user@email.com", "some lang", "login", "")
++	require.ErrorContains(t, err, "Error connecting to provider", "the login screen matches this text for its offline card")
++}
++
++// withoutRefreshToken answers like the provider's token endpoint with no offline_access granted.
++func withoutRefreshToken(next testutils.EndpointHandler) testutils.EndpointHandler {
++	return func(w http.ResponseWriter, r *http.Request) {
++		rec := httptest.NewRecorder()
++		next(rec, r)
++		var body map[string]interface{}
++		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
++			http.Error(w, err.Error(), http.StatusInternalServerError)
++			return
++		}
++		delete(body, "refresh_token")
++		w.Header().Set("Content-Type", "application/json")
++		_ = json.NewEncoder(w).Encode(body)
++	}
++}
++
++func cardOnlyBrokerWith(t *testing.T, handlers map[string]testutils.EndpointHandler) *broker.Broker {
++	t.Helper()
++	return newBrokerForTests(t, &brokerForTestConfig{
++		Config:                 broker.Config{DataDir: t.TempDir()},
++		ownerAllowed:           true,
++		firstUserBecomesOwner:  true,
++		supportsFetchingGroups: true,
++		listenAddress:          cardOnlyAddress,
++		customHandlers:         handlers,
++	})
++}
++
++func cardOnlyTokenHandler() testutils.EndpointHandler {
++	return testutils.TokenHandler("http://"+cardOnlyAddress, &testutils.TokenHandlerOptions{
++		IDTokenClaims: []map[string]interface{}{{"sub": "saved-user-id"}, {"sub": "saved-user-id"}, {"sub": "saved-user-id"}},
++	})
++}
++
++func requireCardGranted(t *testing.T, b *broker.Broker, sessionID string) {
++	t.Helper()
++	signInOnCard(t, b, sessionID)
++	access, data, err := b.IsAuthenticated(sessionID, "{}")
++	require.NoError(t, err)
++	require.Equal(t, broker.AuthGranted, access, "data: %s", data)
++}
++
++func TestMastersOSCardOnlyLoginsNeedNoRefreshToken(t *testing.T) {
++	t.Setenv("MASTERSOS_AUTH_CODE", "1")
++	b := cardOnlyBrokerWith(t, map[string]testutils.EndpointHandler{"/token": withoutRefreshToken(cardOnlyTokenHandler())})
++
++	sessionID, _ := newSessionForTests(t, b, "", "")
++	requireAuthModes(t, b, sessionID, authmodes.DeviceQr)
++	requireCardGranted(t, b, sessionID)
++	// The login moves the cache to a directory named after the provider ID, so the path is only known now.
++	tokenPath := b.TokenPathForSession(sessionID)
++	info, err := token.LoadAuthInfo(tokenPath)
++	require.NoError(t, err)
++	require.Empty(t, info.Token.RefreshToken, "the provider issued none")
++
++	// The next login finds a cached token that cannot be refreshed, and goes to the card as the first one did.
++	sessionID, _ = newSessionForTests(t, b, "", "")
++	require.Equal(t, tokenPath, b.TokenPathForSession(sessionID), "the second login must see the first one's cache")
++	requireAuthModes(t, b, sessionID, authmodes.DeviceQr)
++	requireCardGranted(t, b, sessionID)
++	require.Empty(t, b.GetNextAuthModes(sessionID), "nothing may follow the school's page")
++}
++
++func TestMastersOSCardOnlyExpiredCacheDoesNotDeadEnd(t *testing.T) {
++	t.Setenv("MASTERSOS_AUTH_CODE", "1")
++	for name, opts := range map[string]tokenOptions{
++		"no refresh token":      {noRefreshToken: true, expired: true},
++		"expired refresh token": {refreshTokenExpired: true, expired: true},
++	} {
++		t.Run(name, func(t *testing.T) {
++			b := cardOnlyBrokerWith(t, map[string]testutils.EndpointHandler{"/token": withoutRefreshToken(cardOnlyTokenHandler())})
++			sessionID, _ := newSessionForTests(t, b, "", "")
++			generateAndStoreCachedInfo(t, opts, b.TokenPathForSession(sessionID))
++			require.NoError(t, password.HashAndStorePassword("password", b.PasswordFilepathForSession(sessionID)))
++
++			requireAuthModes(t, b, sessionID, authmodes.DeviceQr)
++			requireCardGranted(t, b, sessionID)
++
++			info, err := token.LoadAuthInfo(b.TokenPathForSession(sessionID))
++			require.NoError(t, err)
++			require.Empty(t, info.Token.RefreshToken, "a stored refresh token must not outlive the first card login")
++			require.True(t, info.Token.Expiry.After(time.Now()), "the fresh token replaces the cached one")
++		})
++	}
++}
++
++func TestMastersOSCardOnlyNeedsNoDeviceEndpoint(t *testing.T) {
++	serverURL := "http://" + cardOnlyAddress
++	handlers := map[string]testutils.EndpointHandler{
++		"/.well-known/openid-configuration": testutils.OpenIDHandlerWithNoDeviceEndpoint(serverURL),
++		"/token":                            cardOnlyTokenHandler(),
++	}
++
++	t.Run("offered on the card", func(t *testing.T) {
++		t.Setenv("MASTERSOS_AUTH_CODE", "1")
++		b := cardOnlyBrokerWith(t, handlers)
++		sessionID, _ := newSessionForTests(t, b, "", "")
++		requireAuthModes(t, b, sessionID, authmodes.DeviceQr)
++		requireCardGranted(t, b, sessionID)
++	})
++
++	t.Run("still required without the card", func(t *testing.T) {
++		t.Setenv("MASTERSOS_AUTH_CODE", "")
++		b := cardOnlyBrokerWith(t, handlers)
++		sessionID, _ := newSessionForTests(t, b, "", "")
++		_, err := b.GetAuthenticationModes(sessionID, supportedLayouts)
++		require.ErrorContains(t, err, "no authentication modes available")
++	})
++}
++
++func TestMastersOSCardOnlySendsLanguageToThePage(t *testing.T) {
++	t.Setenv("MASTERSOS_AUTH_CODE", "1")
++	t.Setenv("LANG", "de_DE.UTF-8")
++
++	dir := t.TempDir()
++	localeConf := filepath.Join(dir, "locale.conf")
++	require.NoError(t, os.WriteFile(localeConf, []byte("# managed\nLC_TIME=en_GB.UTF-8\nLANG=\"th_TH.UTF-8\"\n"), 0o600))
++	broker.SetSystemLocaleFiles(t, filepath.Join(dir, "absent"), localeConf)
++
++	for name, tc := range map[string]struct {
++		lang, want string
++		noSystem   bool
++	}{
++		"system beats a stale session":     {lang: "zh_CN", want: "th-TH"},
++		"session names no language":        {lang: "C", want: "th-TH"},
++		"session did not give a lang":      {lang: "", want: "th-TH"},
++		"session when the system has none": {lang: "zh_CN", want: "zh-CN", noSystem: true},
++	} {
++		t.Run(name, func(t *testing.T) {
++			if tc.noSystem {
++				broker.SetSystemLocaleFiles(t, filepath.Join(dir, "absent"))
++				t.Setenv("LANG", "")
++			}
++			b := cardOnlyBroker(t)
++			sessionID, _, err := b.NewSession("test-user@email.com", tc.lang, "login", "")
++			require.NoError(t, err)
++			requireAuthModes(t, b, sessionID, authmodes.DeviceQr)
++			require.NoError(t, b.SetAvailableMode(sessionID, authmodes.DeviceQr))
++			layout, err := b.SelectAuthenticationMode(sessionID, authmodes.DeviceQr)
++			require.NoError(t, err)
++			u, err := url.Parse(layout["content"])
++			require.NoError(t, err)
++			require.Equal(t, tc.want, u.Query().Get("ui_locales"))
++			require.Equal(t, "test-user@email.com", u.Query().Get("login_hint"))
++			b.CancelIsAuthenticated(sessionID)
++		})
++	}
++}
++
++func TestMastersOSBCP47Tags(t *testing.T) {
++	for in, want := range map[string]string{
++		"th_TH.UTF-8":  "th-TH",
++		"th_TH":        "th-TH",
++		"zh_CN":        "zh-CN",
++		"sr_RS@latin":  "sr-RS",
++		"fil_PH.UTF-8": "fil-PH",
++		"en":           "en",
++		"C":            "",
++		"C.UTF-8":      "",
++		"POSIX":        "",
++		"":             "",
++		"th_th":        "",
++		"th_TH_x":      "",
++		"t\nh":         "",
++		"th&x=y":       "",
++	} {
++		require.Equal(t, want, broker.BCP47Tag(in), "locale %q", in)
++	}
++}
++
++func TestMastersOSSystemLangFallsBackToEnvironment(t *testing.T) {
++	broker.SetSystemLocaleFiles(t, filepath.Join(t.TempDir(), "absent"))
++	t.Setenv("LANG", "ar_SA.UTF-8")
++	require.Equal(t, "ar_SA.UTF-8", broker.SystemLang())
++}
++
++// The school's page accepted a different account from the person picked on the greeter. The greeter matches this text to
++// show its refusal, so a changed message would turn a refusal into a generic failure.
++func TestMastersOSCardOnlyDeniesAnotherAccount(t *testing.T) {
++	t.Setenv("MASTERSOS_AUTH_CODE", "1")
++	b := cardOnlyBrokerWith(t, map[string]testutils.EndpointHandler{
++		"/token": testutils.TokenHandler("http://"+cardOnlyAddress, &testutils.TokenHandlerOptions{
++			IDTokenClaims: []map[string]interface{}{{"sub": "other-user-id", "email": "someone-else@email.com"}},
++		}),
++	})
++
++	sessionID, _ := newSessionForTests(t, b, "test-user@email.com", "")
++	requireAuthModes(t, b, sessionID, authmodes.DeviceQr)
++	signInOnCard(t, b, sessionID)
++	access, data, err := b.IsAuthenticated(sessionID, "{}")
++	require.NoError(t, err)
++	require.Equal(t, broker.AuthDenied, access, "data: %s", data)
++	require.Contains(t, data, "does not match the authenticated user", "the login screen matches this text for its refusal")
++	require.Contains(t, data, "test-user@email.com", "the refusal names the account that was asked for")
++	require.Contains(t, data, "someone-else@email.com", "and the one that signed in")
++	_, statErr := os.Stat(b.TokenPathForSession(sessionID))
++	require.ErrorIs(t, statErr, os.ErrNotExist, "a refused login must not leave a token for the requested account")
++}

@@ -1,0 +1,23 @@
+# 记下「/etc、/var 已按这一版 /usr 更新过」——在 Chrome 的 sysext 合并到 /usr **之前**（4b Task 12 复审 F3）。
+# 上游的 systemd-update-done 排在 ldconfig 之后，而 ldconfig 在 tmpfiles 之后、tmpfiles 在 sysext 合并之后：它记下的
+# 是合并出来的 overlay 的 mtime（那次开机的时刻），之后任何一版镜像自己的 /usr（erofs，mtime 是构建时刻）都不比它新，
+# 更新上来的机器从此不再跑排在合并之前判条件的 ConditionNeedsUpdate 单元（systemd-sysusers、systemd-hwdb-update），
+# 新版本加的组、hwdb 只有新装的机器才有（VM 165 从 .5 升到 20261016.9 实测）。
+# 这里在合并之前用同一个程序记下 erofs 的 mtime；上游那个由 systemd-update-done.service.d/50-mastersos.conf 停掉。
+# 排在合并之后判条件的 ldconfig、journal-catalog 看到的是 overlay（总比记录新），照旧每次开机都跑——sysext 的内容
+# 本来就可能每次开机不同。由 /usr 里的 sysinit.target.wants 链接启用（镜像更新后新加的单元靠 preset 起不来）。
+# 不用 ConditionNeedsUpdate=：条件不成立的单元不算 active，开机途中别的事务再把 sysinit.target 拉一次时它会被重新判，
+# 那时 /usr 可能已经是 overlay（VM 165 实测：合并之后又跑了一次、记下了合并的时刻）。所以这里无条件地跑一次
+# （RemainAfterExit，之后不再跑），自己比较，/usr 顶层已经是 overlay 就什么都不记（判断在 /usr/lib/mastersos/update-done，tests/update-done-test.sh 测）。
+[Unit]
+Description=Record that /etc and /var are up to date with the image's own /usr (before sysext merge)
+Documentation=man:systemd-update-done.service(8)
+DefaultDependencies=no
+After=local-fs.target systemd-sysusers.service systemd-hwdb-update.service systemd-journald.socket mastersos-update-stamp.service
+Before=systemd-sysext.service sysinit.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/mastersos/update-done record

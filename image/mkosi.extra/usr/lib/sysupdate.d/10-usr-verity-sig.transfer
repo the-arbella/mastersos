@@ -1,0 +1,19 @@
+# 源地址的 @BASE@ 由 image 的 mkosi.finalize 换成 MASTERSOS_UPDATE_BASE（正式镜像只收 https）。
+# /usr/lib/mastersos/sysupdate.d.in/ 里是通道模板（通道占位符由 agent 换成 beta，写到 /etc/sysupdate.d/ 覆盖同名文件）；
+# /usr/lib/sysupdate.d/ 里是同一份、通道已换成 stable。两边必须一致（tests/check-tree.sh 第 4 条）。
+[Transfer]
+ProtectVersion=%A
+Verify=yes
+
+[Source]
+Type=url-file
+Path=@BASE@/stable/
+MatchPattern=MastersOS_@v_%a.usr-%a-verity-sig.@u.raw.zst
+
+[Target]
+Type=partition
+Path=auto
+MatchPattern=MastersOS_@v_verity_sig
+MatchPartitionType=usr-verity-sig
+PartitionFlags=0
+ReadOnly=1

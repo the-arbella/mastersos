@@ -1,0 +1,8 @@
+{"blockdevices":[
+ {"name":"nvme0n1","path":"/dev/nvme0n1","type":"disk","size":512110190592,"rm":false,"tran":"nvme","model":"SAMSUNG MZVLB512HBJQ-000L7","partlabel":null,
+  "children":[{"name":"nvme0n1p1","path":"/dev/nvme0n1p1","type":"part","size":536870912,"rm":false,"tran":null,"model":null,"partlabel":"EFI system partition"}]},
+ {"name":"sda","path":"/dev/sda","type":"disk","size":31914983424,"rm":true,"tran":"usb","model":"USB DISK 3.0","partlabel":null,
+  "children":[
+   {"name":"sda1","path":"/dev/sda1","type":"part","size":1073741824,"rm":true,"tran":null,"model":null,"partlabel":"ESP"},
+   {"name":"sda2","path":"/dev/sda2","type":"part","size":67108864,"rm":true,"tran":null,"model":null,"partlabel":"mastersos-usb-seed"}]}
+]}

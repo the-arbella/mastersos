@@ -1,0 +1,26 @@
+# 访客的清理（4b Ruling 5）：等访客的进程都没了（user-1999.slice 不再 active，30 秒后 SIGKILL 再等 5 秒）之后，
+# 卸载 /home/guest、清 /tmp、/var/tmp、/dev/shm 里属于 1999 的东西、挂一份新的 tmpfs、写 /run/mastersos/guest-ready
+# （PAM 的 pam-session 只认这个标记）。由 user@1999.service 的 OnSuccess=/OnFailure= 拉起；开机时也跑一次，
+# 清掉上次断电留下的东西并备好第一份 tmpfs。agent 的 guest 步骤建、删账号之后也拉起它，访客点登录被拒时
+# pam-session 也拉起它。
+# 不排在 GDM 之前（复审 M5）：最坏要等 35 秒 slice + 删大量文件，会吃掉健康检查等显示管理器的 120 秒；
+# 没备好时访客点登录只是被拒（并拉起清理），登录界面不用等它。
+# 失败了 30 秒后再来（复审 I4）：清理可以重复做、每次都往前推进；不重来的话访客要等到下次开机才进得来
+# 不设 PrivateTmp=：要清的就是系统的 /tmp、/var/tmp（私有的 /tmp 会让它清个空）
+# 排在 mastersos-agent-local 之后：开机快速应用可能刚建出 guest 账号，清理要看到它才挂 tmpfs（两者并行时，agent
+# 在清理跑着时发的 start 会并进正在跑的那一次、不再重跑）。agent 那边一律 --no-block，不会等着这里而互相卡住
+[Unit]
+Description=MastersOS: clean up after the guest session
+Documentation=file:/usr/bin/mastersos-agent
+After=local-fs.target systemd-tmpfiles-setup.service mastersos-agent-local.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/mastersos-agent guest-cleanup
+Slice=system.slice
+TimeoutStartSec=60
+Restart=on-failure
+RestartSec=30s
+
+[Install]
+WantedBy=multi-user.target

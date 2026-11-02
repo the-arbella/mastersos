@@ -1,0 +1,439 @@
+#!/bin/bash
+# 在宿主上跑（$BUILDROOT 是镜像根，$SRCDIR 是本目录）。镜像只发 /usr，所以：
+#   1. 把 /etc 与 dpkg 数据库收进 /usr/share/factory；
+#   2. 按 etc-policy.conf（Ruling 3）生成 tmpfiles：默认 L 链接回 factory，copy 拷一次，dir 建真实目录；
+#   3. 系统用户与组转成 sysusers.d；包在 /etc 里做的「启用」转成 preset。
+#   4. 更新源（@BASE@）、sysupdate 公钥、回滚试验的坏版本（MASTERSOS_BROKEN，只 lab）。
+# 正式 profile 下 MASTERSOS_UPDATE_BASE 必须是 https:// 加域名。
+set -euo pipefail
+
+R=$BUILDROOT
+FE=$R/usr/share/factory/etc
+profiles=" ${PROFILES:-} "
+
+# --- systemd 版本：initrd 的 drop-in 照抄了这个版本生成的 ExecStart（systemd-version.verified）------------
+want_systemd=$(grep -vE '^[[:space:]]*(#|$)' "$SRCDIR/systemd-version.verified")
+have_systemd=$(dpkg-query --admindir="$R/var/lib/dpkg" -W -f='${Version}' systemd)
+if [ "$have_systemd" != "$want_systemd" ]; then
+	echo "finalize: 镜像里的 systemd 是 ${have_systemd}，initrd 的 drop-in 只对 ${want_systemd} 核对过：" >&2
+	echo "finalize: 照 systemd-version.verified 的说明重新比对 gpt-auto 生成的 systemd-cryptsetup@root，再改版本号" >&2
+	exit 1
+fi
+echo "finalize: systemd ${have_systemd}（与 initrd drop-in 核对过的版本相同）"
+
+# --- 更新源、构建变体 ------------------------------------------------------------
+# MASTERSOS_UPDATE_BASE 换掉 transfer 里的 @BASE@。正式镜像只收 https:// 加域名（不收 IP、localhost——
+# 试验网那个 IP 上的明文地址永远进不了正式镜像）；lab profile 才收明文的 http。MASTERSOS_BROKEN 只许 lab。
+is_lab=0
+case "$profiles" in *" lab "*) is_lab=1 ;; esac
+# 公钥按 profile 取（keyset.sh，Ruling 19）：lab 镜像只信 lab 的 gpg、PCR 与 MOK，正式镜像只信正式的
+# shellcheck source-path=SCRIPTDIR source=keyset.sh
+. "$SRCDIR/keyset.sh"
+if [ "$is_lab" = 1 ]; then pub=$(keyset_pub lab); else pub=$(keyset_pub release); fi
+echo "finalize: 公钥取自 ${pub#"$SRCDIR"/}"
+base=${MASTERSOS_UPDATE_BASE:-}
+base=${base%/}
+broken=${MASTERSOS_BROKEN:-}
+if ! [[ $base =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~-]+)*$ ]]; then
+	echo "finalize: MASTERSOS_UPDATE_BASE 应形如 https://updates.example.org/mastersos，实际：'${base}'" >&2
+	exit 1
+fi
+if [ "$is_lab" = 0 ]; then
+	host=${base#*://}
+	host=${host%%[:/]*}
+	if [[ $base != https://* ]] || [[ $host =~ ^[0-9.]+$ ]] || [ "$host" = localhost ]; then
+		echo "finalize: 正式镜像的 MASTERSOS_UPDATE_BASE 必须以 https:// 开头、主机是域名（不是 IP 或 localhost），实际：'${base}'" >&2
+		exit 1
+	fi
+	if [ -n "$broken" ]; then
+		echo "finalize: MASTERSOS_BROKEN=$broken 只许 lab profile（回滚试验用的坏版本）" >&2
+		exit 1
+	fi
+fi
+case "$broken" in "" | userspace | initrd | bad-shim) ;; *)
+	echo "finalize: MASTERSOS_BROKEN 只能是 userspace、initrd 或 bad-shim，实际：'$broken'" >&2
+	exit 1
+	;;
+esac
+
+n=0
+for t in "$R"/usr/lib/sysupdate.d/*.transfer "$R"/usr/lib/mastersos/sysupdate.d.in/*.transfer; do
+	sed -i "s|@BASE@|$base|g" "$t"
+	n=$((n + 1))
+	if grep -q '@BASE@' "$t"; then
+		echo "finalize: $t 里还有 @BASE@" >&2
+		exit 1
+	fi
+	src=$(grep -E '^[[:space:]]*Path=' "$t" | grep -vE '^[[:space:]]*Path=(auto|/)')
+	case "$src" in "Path=$base/stable/" | "Path=$base/@CHANNEL@/") ;; *)
+		echo "finalize: $t 的源应是 $base/<通道>/，实际：$src" >&2
+		exit 1
+		;;
+	esac
+done
+[ "$n" = 8 ] || {
+	echo "finalize: 应有 4 个 transfer 和 4 个通道模板，实际共 $n 个" >&2
+	exit 1
+}
+echo "finalize: sysupdate 源 = $base/<通道>/（$n 个 transfer）"
+
+# sysupdate 验 SHA256SUMS.gpg 用的公钥；文件名必须是 import-pubring.pgp（S2：写成 .gpg 会 DOWNLOAD INVALID）
+install -D -m 0644 "$pub/import-pubring.pgp" "$R/usr/lib/systemd/import-pubring.pgp"
+# 签名 PCR 11 策略的公钥：与每个 UKI 的 .pcrpkey 相同（publish.sh 的闸门核对）。用户态的
+# systemd-cryptenroll --tpm2-public-key= 用它（agent 换成「签名 PCR 11 + pcrlock」的 TPM 槽，Task 8）
+install -D -m 0644 "$pub/tpm2-pcr-public-key.pem" "$R/usr/lib/systemd/tpm2-pcr-public-key.pem"
+# Google 的 apt 签名公钥：agent 的 chrome 任务用 gpgv 验 InRelease（Task 9）。钥匙固定在镜像里、不从网上取；
+# 恰好一把主钥、指纹是 Google 公布的那个、子钥都只签名（check-google-keyring.sh，docs/keys.md），否则拒绝构建。
+gkr=$SRCDIR/keys/google-chrome-keyring.gpg
+"$SRCDIR/check-google-keyring.sh" "$gkr"
+install -D -m 0644 "$gkr" "$R/usr/share/mastersos/google-chrome-keyring.gpg"
+
+# --- Secure Boot：MOK 证书与随镜像更新的引导程序（Task 4，docs/secure-boot.md）----------------------
+# keys/mastersos-mok.der 是签 systemd-boot 与 UKI 的那把钥匙（~/mastersos-keys/db.crt）的 DER；lab 镜像用 keys/lab/ 的
+# （~/mastersos-keys/lab/db.crt，正式机器没登记它，shim 不启动 lab 签的 systemd-boot）。shim 用 MokList
+# 里的它验 grubx64.efi（我们签的 systemd-boot），systemd-boot 再经 shim 验 UKI。两处放一份：
+#   - ESP 根目录：第一次从 U 盘（或这块盘）启动时 MokManager「Enroll key from disk」选它；
+#   - /usr/share/mastersos/：安装器在 Secure Boot 关着的机器上 mokutil --import 用（Task 10/11）。
+# 构建时核对 ESP 上的 systemd-boot 确实由这张证书签的：对不上的镜像发出去，每台机器都会停在 shim 的
+# Security Violation，登记了 MOK 也没用。
+mok=$pub/mastersos-mok.der
+install -D -m 0644 "$mok" "$R/usr/share/mastersos/mastersos-mok.der"
+install -D -m 0644 "$mok" "$R/efi/mastersos-mok.der"
+mokpem=$(mktemp)
+openssl x509 -inform DER -in "$mok" -out "$mokpem"
+# mkosi 装好的 ESP（install_systemd_boot / install_shim 在 finalize 之前跑）：
+# EFI/BOOT/BOOTX64.EFI = Ubuntu 的 shim（微软签），grubx64.EFI = 我们签的 systemd-boot，mmx64.efi = MokManager
+esp_src=$R/usr/lib/mastersos/esp
+rm -rf "$esp_src"
+mkdir -p "$esp_src"
+for pair in BOOTX64.EFI:BOOTX64.EFI grubx64.EFI:grubx64.efi mmx64.efi:mmx64.efi; do
+	from=$R/efi/EFI/BOOT/${pair%%:*}
+	[ -f "$from" ] || {
+		echo "finalize: ESP 上没有 ${from#"$R"}（ShimBootloader=signed 应该装好了它）" >&2
+		exit 1
+	}
+	install -m 0644 "$from" "$esp_src/${pair#*:}"
+done
+if ! sbverify --cert "$mokpem" "$esp_src/grubx64.efi" >/dev/null 2>&1; then
+	echo "finalize: ESP 上的 grubx64.efi 不是由 ${mok#"$SRCDIR"/} 签的（构建用的 Secure Boot 钥匙与仓库里这个 profile 的 MOK 证书不配）" >&2
+	exit 1
+fi
+rm -f "$mokpem"
+# MASTERSOS_BROKEN=bad-shim（只 lab，4b Task 22 Step 7）：/usr 里那份 shim 换成同一个 shim 去掉微软签名、用一次性的测试 CA 重签，
+# ESP 上的不动。装着旧版本的机器升到它之后，bootloader-update 的 shim-check 链不上本机 db → 三个文件都不换、回报 system:shim-ca。
+# 测试 CA 的私钥只在这个临时目录里，用完即删
+if [ "$broken" = bad-shim ]; then
+	bad=$(mktemp -d)
+	# 中途失败（set -e）也要删掉测试 CA 的私钥（复审 Minor 7）；后面没有别的 EXIT trap
+	trap 'rm -rf "$bad"' EXIT
+	openssl req -x509 -newkey rsa:2048 -nodes -keyout "$bad/k" -out "$bad/c" -days 30 -subj "/CN=MastersOS bad-shim test CA" 2>/dev/null
+	cp "$esp_src/BOOTX64.EFI" "$bad/shim.efi"
+	for _ in 1 2 3 4; do
+		sbverify --list "$bad/shim.efi" 2>&1 | grep -q '^signature 1' || break
+		sbattach --remove "$bad/shim.efi"
+	done
+	if sbverify --list "$bad/shim.efi" 2>&1 | grep -q '^signature 1'; then
+		rm -rf "$bad"
+		echo "finalize: bad-shim：去不掉 shim 的签名" >&2
+		exit 1
+	fi
+	sbsign --key "$bad/k" --cert "$bad/c" --output "$esp_src/BOOTX64.EFI" "$bad/shim.efi"
+	rm -rf "$bad"
+	echo "finalize: MASTERSOS_BROKEN=bad-shim：/usr/lib/mastersos/esp/BOOTX64.EFI 换成测试 CA 重签的 shim（ESP 上的不动）"
+fi
+echo "finalize: 引导程序 → /usr/lib/mastersos/esp/：$(cd "$esp_src" && sha256sum BOOTX64.EFI grubx64.efi mmx64.efi | awk '{printf "%s=%.12s ", $2, $1}')；grubx64.efi 由 ${mok#"$SRCDIR"/} 签"
+
+# --- 安装器（Task 11）：安装器 UKI 用的就是这份 /usr ------------------------------------------
+# mastersos-installer 在内置盘上按 /usr/lib/mastersos/install.repart.d 分区（与 /usr/lib/repart.d 相同、去掉根分区，
+# check-tree 第 5 条），再把这个 profile 的 loader.conf（就是镜像 ESP 上那份：正式镜像 timeout 0、
+# secure-boot-enroll off）写到新 ESP；U 盘自己的 ESP 上是 make-installer.sh 换上的 usb-loader.conf，不能拿来用。
+# /usr/lib/mastersos/profile 让安装器知道 lab 镜像要多拷 loader/keys/auto（Task 10 的 Facts::detect）。
+install -d -m 0755 "$R/usr/lib/mastersos/install.repart.d" "$R/usr/lib/mastersos/installer"
+rm -f "$R"/usr/lib/mastersos/install.repart.d/*.conf
+install -m 0644 "$SRCDIR"/installer/install.repart.d/*.conf "$R/usr/lib/mastersos/install.repart.d/"
+loader_src=""
+for f in "$R/boot/loader/loader.conf" "$R/efi/loader/loader.conf"; do
+	[ -f "$f" ] && loader_src=$f && break
+done
+[ -n "$loader_src" ] || {
+	echo "finalize: 找不到镜像 ESP 的 loader.conf（/boot/loader 或 /efi/loader）" >&2
+	exit 1
+}
+install -m 0644 "$loader_src" "$R/usr/lib/mastersos/installer/loader.conf"
+if [ "$is_lab" = 1 ]; then echo lab; else echo release; fi >"$R/usr/lib/mastersos/profile"
+# 装好的机器的 ESP 拿的是这一份（在签名的 /usr 里），make-installer.sh 查的是 U 盘自己的 loader.conf：
+# 正式镜像在这里直接把关（Task 11 复审 M-1）
+if [ "$is_lab" = 0 ]; then
+	# systemd-boot 取最后一行，所以只看最后一条 secure-boot-enroll
+	if [ "$(grep -E '^[[:space:]]*secure-boot-enroll[[:space:]]' "$R/usr/lib/mastersos/installer/loader.conf" | tail -n1 | awk '{print $2}')" != off ] ||
+		[ "$(cat "$R/usr/lib/mastersos/profile")" != release ]; then
+		echo "finalize: 正式镜像的 /usr/lib/mastersos/installer/loader.conf 应写 secure-boot-enroll off、profile 应为 release" >&2
+		exit 1
+	fi
+fi
+echo "finalize: 安装器：$(find "$R/usr/lib/mastersos/install.repart.d" -name '*.conf' | wc -l) 个分区定义，loader.conf 取自 ${loader_src#"$R"}，profile $(cat "$R/usr/lib/mastersos/profile")"
+
+# NetworkManager 管网络：systemd-networkd 没有要管的接口（89-ethernet.network 已删），它的 wait-online 每次开机
+# 都要等满 2 分钟超时，network-online.target 跟着晚 2 分钟（Task 9 发现）。在 /usr 里屏蔽（链接到 /dev/null
+# 盖掉包里的单元文件），已装好、/etc 里有启用链接的机器更新到这个版本也随之屏蔽；network-online 由
+# NetworkManager-wait-online.service 负责。
+for u in systemd-networkd-wait-online.service systemd-networkd-wait-online@.service; do
+	ln -sfn /dev/null "$R/usr/lib/systemd/system/$u"
+done
+[ -f "$R/usr/lib/systemd/system/NetworkManager-wait-online.service" ] || {
+	echo "finalize: 镜像里没有 NetworkManager-wait-online.service（network-online.target 要靠它）" >&2
+	exit 1
+}
+
+# 上游的自动更新定时器不用：systemd-sysupdate-reboot.timer 会在装好后自动重启，systemd-sysupdate.timer
+# 与 mastersos-update.timer 重复（单元文件由 mkosi.conf 的 RemoveFiles= 删掉，这里删掉包留下的启用链接）
+rm -f "$R"/etc/systemd/system/*.wants/systemd-sysupdate*.timer
+
+# 回滚试验用的坏版本（只 lab，见上）
+case "$broken" in
+userspace)
+	echo "MASTERSOS_BROKEN=userspace，${IMAGE_VERSION:-?}" >"$R/usr/lib/mastersos/health-broken"
+	echo "finalize: MASTERSOS_BROKEN=userspace：健康检查一直失败"
+	;;
+initrd)
+	# 往 initrd 追加一段 cpio：一个 RequiredBy=initrd.target、必然失败的单元
+	d=$(mktemp -d)
+	u=usr/lib/systemd/system
+	mkdir -p "$d/$u/initrd.target.requires"
+	cat >"$d/$u/mastersos-broken-initrd.service" <<'UNIT'
+[Unit]
+Description=MastersOS deliberately broken initrd (MASTERSOS_BROKEN=initrd)
+DefaultDependencies=no
+Before=initrd.target
+ConditionPathExists=/etc/initrd-release
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=sh -c 'echo "mastersos: deliberately broken initrd (MASTERSOS_BROKEN=initrd)"; exit 1'
+UNIT
+	ln -s ../mastersos-broken-initrd.service "$d/$u/initrd.target.requires/mastersos-broken-initrd.service"
+	chmod -R u=rwX,go=rX "$d"
+	mkdir -p "$ARTIFACTDIR/io.mkosi.initrd"
+	(cd "$d" && find usr | LC_ALL=C sort | cpio -o -H newc -R 0:0 --quiet) >"$ARTIFACTDIR/io.mkosi.initrd/zz-mastersos-broken.cpio"
+	rm -rf "$d"
+	echo "finalize: MASTERSOS_BROKEN=initrd：initrd 里加了必然失败的 mastersos-broken-initrd.service"
+	;;
+esac
+
+# --- factory ---------------------------------------------------------------
+mkdir -p "$R/usr/share/factory"
+rm -rf "$FE"
+cp -a "$R/etc" "$FE"
+rm -f "$FE/machine-id" "$FE/hostname" "$FE/resolv.conf" "$FE/mtab"
+# 账号文件的备份与锁：useradd 等要能写它们，留着就成了指回只读 /usr 的链接（lab 实测 useradd 因此失败）
+rm -f "$FE/passwd-" "$FE/group-" "$FE/shadow-" "$FE/gshadow-" "$FE/subuid-" "$FE/subgid-" "$FE/.pwd.lock"
+if [ -d "$R/var/lib/dpkg" ]; then
+	mkdir -p "$R/usr/share/factory/var/lib"
+	rm -rf "$R/usr/share/factory/var/lib/dpkg"
+	cp -a "$R/var/lib/dpkg" "$R/usr/share/factory/var/lib/dpkg"
+fi
+
+# --- /etc 策略表 -------------------------------------------------------------
+declare -A kind=()
+policy_files=("$SRCDIR/etc-policy.conf")
+for p in $profiles; do
+	[ -f "$SRCDIR/etc-policy.$p.conf" ] && policy_files+=("$SRCDIR/etc-policy.$p.conf")
+done
+for f in "${policy_files[@]}"; do
+	while read -r k p _; do
+		case "$k" in '' | '#'*) continue ;; esac
+		case "$k" in copy | dir) ;; *)
+			echo "finalize: ${f}：未知的 kind '$k'" >&2
+			exit 1
+			;;
+		esac
+		kind[$p]=$k
+	done <"$f"
+done
+
+out=$R/usr/lib/tmpfiles.d/00-mastersos-factory-etc.conf
+
+# 别的包的 tmpfiles 要建成真实目录的 /etc 路径（例如 systemd 的 /etc/credstore，0700）：
+# 策略表没列的，不再生成 L 去抢（我们的文件排在 00-，会让它们的行被当成重复忽略掉）
+declare -A pkgdir=()
+for t in "$R"/usr/lib/tmpfiles.d/*.conf; do
+	[ "$t" = "$out" ] && continue
+	while read -r ty pth _; do
+		case "$ty" in d | d! | D | D!) ;; *) continue ;; esac
+		case "$pth" in /etc/*) pkgdir[$pth]=${t##*/} ;; esac
+	done <"$t"
+done
+# 别的包的 tmpfiles 首次开机拷到 /etc 的项（Ubuntu systemd 的 debian.conf：C! /etc/pam.d、/etc/nsswitch.conf、
+# /etc/issue）：同一路径上它的 C 先于我们的 L 生效（Task 12 在 VM 168 上用 systemd-tmpfiles 单独复现），装好的机器
+# 上它们成了真实的拷贝、不再跟着镜像更新——PAM 的修正永远到不了已装的机器。策略表没列成 copy 的，注释掉那一行，
+# 由我们的 L 决定（Ruling 3）。
+ncopy=0
+for t in "$R"/usr/lib/tmpfiles.d/*.conf; do
+	[ "$t" = "$out" ] && continue
+	while read -r ty pth _; do
+		# 类型是 C 加任意修饰（! + - = ~ ^……），不只列举几种：将来包里写成 C!- 也要被抓到
+		[[ $ty =~ ^C[^[:space:]]*$ ]] || continue
+		case "$pth" in /etc/*) ;; *) continue ;; esac
+		[ "${kind[$pth]:-}" = copy ] && continue
+		# 注释掉之后要有我们的 L 接手：factory 里得有这一项，否则这个路径在装好的机器上就什么都没有了
+		[ -e "$FE${pth#/etc}" ] || [ -L "$FE${pth#/etc}" ] || {
+			echo "finalize: ${t##*/} 的「$ty ${pth}」在 factory 里没有，注释掉就没人建它了；请在策略表里给它定 copy/dir" >&2
+			exit 1
+		}
+		# 按字段精确比对路径（不把路径塞进正则：nsswitch.conf 的点会匹配任意字符）
+		awk -v p="$pth" '!/^[[:space:]]*#/ && $1 ~ /^C/ && $2 == p {print "# mastersos: 由 00-mastersos-factory-etc.conf 按 etc-policy 决定（Ruling 3）：" $0; next} {print}' "$t" >"$t.mastersos-new"
+		cat "$t.mastersos-new" >"$t"
+		rm -f "$t.mastersos-new"
+		echo "finalize: ${t##*/} 的「$ty ${pth}」注释掉（策略表里不是 copy，由我们的 L/d 决定）"
+		ncopy=$((ncopy + 1))
+	done < <(grep -E '^[[:space:]]*C' "$t")
+done
+if grep -hE '^[[:space:]]*C[^[:space:]]*[[:space:]]+/etc/' "$R"/usr/lib/tmpfiles.d/*.conf | while read -r _ pth _; do
+	[ "${kind[$pth]:-}" = copy ] || echo "$pth"
+done | grep -q .; then
+	echo "finalize: 包的 tmpfiles 里仍有拷贝到 /etc 的行（策略表不是 copy）" >&2
+	exit 1
+fi
+
+dirs_list=$R/usr/lib/mastersos/etc-dirs
+# copy 路径：mastersos-etc-migrate 删掉旧策略的 L 留下的、指回 factory 的链接，tmpfiles 的 C 才拷得出真文件（4b Task 20：
+# 从 base-4b 升上来的机器 /etc/locale.conf 一直是指回 factory 的只读链接）
+copies_list=$R/usr/lib/mastersos/etc-copies
+mkdir -p "$(dirname "$dirs_list")"
+nL=0 nC=0 nd=0 nskip=0
+declare -A done_=()
+
+emit() { echo "$*" >>"$out"; }
+
+# 生成一项：$1 = /etc 下的绝对路径。dir 的子项递归同一规则。
+gen() {
+	local p=$1 src=$FE${1#/etc} mode uid gid child
+	case "$p" in *[[:space:]]*)
+		echo "finalize: /etc 下的路径含空白，tmpfiles 写不了：'$p'" >&2
+		exit 1
+		;;
+	esac
+	done_[$p]=1
+	case "${kind[$p]:-}" in
+	copy)
+		emit "C $p - - - -"
+		echo "$p" >>"$copies_list"
+		nC=$((nC + 1))
+		;;
+	dir)
+		if [ -d "$src" ] && [ ! -L "$src" ]; then
+			read -r mode uid gid < <(stat -c '%a %u %g' "$src")
+		else
+			mode=0755 uid=0 gid=0
+		fi
+		emit "d $p $mode $uid $gid -"
+		echo "$p" >>"$dirs_list"
+		nd=$((nd + 1))
+		if [ -d "$src" ] && [ ! -L "$src" ]; then
+			while IFS= read -r child; do
+				gen "$p/$child"
+			done < <(find "$src" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)
+		fi
+		;;
+	*)
+		if [ -n "${pkgdir[$p]:-}" ]; then
+			echo "finalize: $p 交给 ${pkgdir[$p]} 建真实目录，不生成 L"
+			nskip=$((nskip + 1))
+			return
+		fi
+		if [ -L "$src" ]; then
+			# 镜像里本来就是链接（os-release、localtime 之类）：照原样的目标，相对路径相对 /etc 仍然成立
+			emit "L $p - - - - $(readlink "$src")"
+		else
+			emit "L $p - - - - /usr/share/factory$p"
+		fi
+		nL=$((nL + 1))
+		;;
+	esac
+}
+
+{
+	echo "# generated by mkosi.finalize from etc-policy.conf (${policy_files[*]##*/})"
+	echo "# L = 链接回 /usr/share/factory/etc（跟着镜像走）；C = 首次开机拷一次；d = 真实目录"
+} >"$out"
+: >"$dirs_list"
+: >"$copies_list"
+while IFS= read -r e; do
+	gen "/etc/$e"
+done < <(find "$FE" -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)
+# 策略表列出、但 factory 里没有的 dir（例如 /etc/sysupdate.d）也要建
+for p in $(printf '%s\n' "${!kind[@]}" | LC_ALL=C sort); do
+	[ -n "${done_[$p]:-}" ] && continue
+	if [ "${kind[$p]}" = dir ]; then
+		gen "$p"
+	else
+		echo "finalize: copy $p 在 factory 里不存在，跳过"
+	fi
+done
+emit "C /var/lib/dpkg - - - -"
+nC=$((nC + 1))
+LC_ALL=C sort -o "$dirs_list" "$dirs_list"
+LC_ALL=C sort -o "$copies_list" "$copies_list"
+
+# --- 系统用户/组 → sysusers.d（uid/gid < 1000，且不是 root/nobody，systemd 自己会建）---
+{
+	echo "# generated by mkosi.finalize from the image's /etc/group + /etc/passwd"
+	awk -F: '$3>0 && $3<1000 {print "g " $1 " " $3}' "$R/etc/group"
+	awk -F: '$3>0 && $3<1000 {printf "u %s %s:%s \"%s\" %s %s\n", $1, $3, $4, ($5==""?"-":$5), $6, $7}' "$R/etc/passwd"
+	awk -F: '$3>0 && $3<1000 && $4!="" {n=split($4,m,","); for(i=1;i<=n;i++) print "m " m[i] " " $1}' "$R/etc/group"
+	# 本机管理员组（4b Task 12）：agent 的 admins 步骤按 local_users_admin 设定成员，sudoers 与 polkit 认它
+	echo "g mastersos-localadmin -"
+} >"$R/usr/lib/sysusers.d/00-mastersos-image-users.conf"
+# 管理员组（sudo、admin、mastersos-localadmin）的成员由 agent 的 admins 步骤管（4b Task 12 复审 F6）：sysusers 的 m 行把人加进
+# 管理员组的话，每次镜像更新后 sysusers 都会把他加回来，到下一次应用之前他是管理员。有这样的行就不出镜像
+if grep -HnE '^m[[:space:]]+[^[:space:]]+[[:space:]]+(sudo|admin|mastersos-localadmin)([[:space:]]|$)' "$R"/usr/lib/sysusers.d/*.conf >&2; then
+	echo "finalize: sysusers 的 m 行把人加进管理员组（上面列出的行），拒绝构建" >&2
+	exit 1
+fi
+
+# /etc/.updated 在 sysext 合并之前记（mastersos-update-done，4b Task 12 复审 F3、N2）。只有排在 mastersos-update-done 之前判条件的
+# ConditionNeedsUpdate 单元（sysusers、hwdb-update）在镜像更新后才跑得到，排在合并之后判的（ldconfig、journal-catalog）看到
+# overlay、每次开机都跑。镜像里出现别的 ConditionNeedsUpdate 单元就要先想清楚它排在哪边、再加进下面的名单
+needs_update_ok='^(systemd-sysusers|systemd-hwdb-update|ldconfig|systemd-journal-catalog-update|systemd-update-done)\.service$'
+needs_update=$(grep -lE '^ConditionNeedsUpdate=' "$R"/usr/lib/systemd/system/*.service 2>/dev/null | xargs -r -n1 basename | grep -vE "$needs_update_ok" || true)
+if [ -n "$needs_update" ]; then
+	echo "finalize: 镜像里有新的 ConditionNeedsUpdate 单元（$needs_update），先确认它在 mastersos-update-done 之前还是 sysext 合并之后判条件" >&2
+	exit 1
+fi
+
+# 用户单元的启用（4b Task 24，Task 13 先发现 PipeWire 没声音）：Debian 的 postinst 与 mkosi 的 systemctl --global preset-all 把它们
+# 链进 /etc/systemd/user，那个目录到不了机器（/etc 由策略表生成），gpg/ssh-agent 的 socket、xdg-user-dirs、用户级 tmpfiles 等都没跑。
+# user-units.sh 按允许清单把它们搬到 /usr/lib/systemd/user（mkosi.extra 里 PipeWire 已有的不重复，dbus.service 别名换掉
+# dbus-daemon 的单元文件），清单外的链接拒绝构建
+"$SRCDIR/user-units.sh" "$R"
+
+# --- 包装时启用的单元 → preset ---------------------------------------------------
+{
+	echo "# generated by mkosi.finalize from /etc/systemd/system/*.wants"
+	find "$R/etc/systemd/system" -mindepth 2 -maxdepth 2 -path '*.wants/*' -printf '%f\n' | LC_ALL=C sort -u | sed 's/^/enable /'
+	echo "enable gdm.service"
+	# pcrlock（只锁 PCR 7，见 systemd-pcrlock-make-policy.service.d/50-mastersos.conf）：make-policy 要
+	# secureboot-policy 与 secureboot-authority 先生成 PCR 7 的 .pcrlock 才算得出策略。今天包的启用已经带上
+	# 它们，这里写明，不靠包
+	echo "enable systemd-pcrlock-make-policy.service"
+	echo "enable systemd-pcrlock-secureboot-policy.service"
+	echo "enable systemd-pcrlock-secureboot-authority.service"
+	echo "enable NetworkManager.service"
+	# agent（Task 6）：常驻的 run；开机快速应用由 gdm.service.d 的 Wants= 拉起，不经 preset
+	echo "enable mastersos-agent.service"
+	echo "enable systemd-resolved.service"
+} >"$R/usr/lib/systemd/system-preset/10-mastersos.preset"
+
+# AppArmor（Task 9）：preset 只在首次开机套用一次，已装好的机器更新到带 apparmor 包的版本时它不会被启用——而包带来的
+# kernel.apparmor_restrict_unprivileged_userns=1 照样生效，一条配置都不载时 Chrome 等所有程序都建不了 user namespace
+# （VM 165 从 .14 更新到 .16 实测）。用 /usr/lib 里的 wants 链接启用，与 mastersos 单元同一个办法（check-tree 第 12 条）
+[ -f "$R/usr/lib/systemd/system/apparmor.service" ] || {
+	echo "finalize: 镜像里没有 apparmor.service" >&2
+	exit 1
+}
+mkdir -p "$R/usr/lib/systemd/system/sysinit.target.wants"
+ln -sfn ../apparmor.service "$R/usr/lib/systemd/system/sysinit.target.wants/apparmor.service"
+
+echo "finalize: /etc tmpfiles: L=$nL C=$nC d=${nd}（$(wc -l <"$dirs_list") 个 dir、$(wc -l <"$copies_list") 个 copy 由 mastersos-etc-migrate 先去掉旧链接；另有 $nskip 项交给包自己的 tmpfiles）"
+echo "finalize: $(grep -c '^[gum] ' "$R/usr/lib/sysusers.d/00-mastersos-image-users.conf") sysusers lines, $(grep -c '^enable ' "$R/usr/lib/systemd/system-preset/10-mastersos.preset") presets"

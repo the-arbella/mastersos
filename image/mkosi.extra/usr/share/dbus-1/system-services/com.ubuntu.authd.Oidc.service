@@ -1,0 +1,6 @@
+# authd 的 OIDC broker 的 D-Bus 激活（总线名照上游 snap 的 slot：com.ubuntu.authd.Oidc）：交给 systemd 起
+[D-BUS Service]
+Name=com.ubuntu.authd.Oidc
+Exec=/bin/false
+User=root
+SystemdService=authd-oidc.service

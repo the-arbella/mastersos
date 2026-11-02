@@ -1,0 +1,44 @@
+[
+  {
+    "digest_hex": "21a0efaab70be9d881325dcfddfe34992ed552db8c96a493c8881c27f9385027",
+    "files": {},
+    "manifest_text": "version = 1\n",
+    "name": "manifest-only"
+  },
+  {
+    "digest_hex": "83f2f55feddf42aba8ded65b972ea59e792d462691b192b602598ab33bfd596c",
+    "files": {
+      "files/说明.txt": "5L2g5aW9Ago="
+    },
+    "manifest_text": "version = 2\n# 教室\t设置\u0001\r\n[[group]]\nid = \"default\"\nname = \"未分组\"\n",
+    "name": "cjk-and-control-chars"
+  },
+  {
+    "digest_hex": "94a5bdc95197aa2b95fb55a8c8308e26743701f95112ab8b6cd7e8137d4c9287",
+    "files": {
+      "files/B.txt": "AP8B/g==",
+      "files/a.txt": "YQ==",
+      "files/b/c.txt": "Yw==",
+      "scripts/z.sh": "IyEvYmluL3NoCmVjaG8gego="
+    },
+    "manifest_text": "version = 3\n",
+    "name": "multi-file-unordered"
+  },
+  {
+    "digest_hex": "f10932b73e6874a9c294f06c4aebf71054e02e7f5da120b900c8a6c0435cf558",
+    "files": {
+      "files/empty": ""
+    },
+    "manifest_text": "version = 4\n",
+    "name": "empty-file"
+  },
+  {
+    "digest_hex": "9bfb578b3a1098a99a7eec1b8eb9c711b2788aedf47aa61a41c59fd4da5da514",
+    "files": {
+      "files/ｚ.txt": "emVk",
+      "files/😀.txt": "c21pbGU="
+    },
+    "manifest_text": "version = 5\n",
+    "name": "non-ascii-paths-utf8-order"
+  }
+]

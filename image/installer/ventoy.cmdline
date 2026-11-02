@@ -1,0 +1,19 @@
+# What the Ventoy installer UKI adds to installer.cmdline (make-installer.sh drops the comments and newlines, removes
+# mount.usr=dissect from installer.cmdline, fills in the @...@ values and then appends systemd.image_policy=,
+# systemd.image_filter= and console= copied from the main UKI, as for the full-disk installer).
+# The initrd's mastersos-ventoy-attach.service checks the system file's version and size against these values before it
+# attaches the file as a read-only loop disk (loop-ref mastersos-ventoy). The file's bytes are not hashed: the copy on the
+# stick is trusted. A damaged copy is not detected at install time (the installer copies the /usr partitions block for block
+# without checking them); it shows up later as I/O errors on the installed machine, fixed by reinstalling from a fresh copy.
+# /usr is not found by gpt-auto (mount.usr=dissect needs no LoaderDevicePartUUID and the loop-ref "rootdisk"): the verity
+# data and hash devices point explicitly at that loop disk's partitions, never at by-partuuid (an internal disk installed
+# from the same version carries the same PARTUUIDs), and the root hash is the main UKI's signed usrhash=.
+# veritysetup-generator (systemd v259) names the device systemd-veritysetup@usr -> /dev/mapper/usr.
+mount.usr=/dev/mapper/usr
+usrhash=@USRHASH@
+systemd.verity_usr_data=/dev/disk/by-loop-ref/mastersos-ventoy-part4
+systemd.verity_usr_hash=/dev/disk/by-loop-ref/mastersos-ventoy-part3
+mastersos.ventoy=@VERSION@
+mastersos.ventoy_size=@SIZE@
+# usr-repair looks for a golden copy of the boot disk's /usr; the boot disk here is the Ventoy stick, never repair it
+rd.systemd.mask=mastersos-usr-repair.service

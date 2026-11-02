@@ -1,0 +1,25 @@
+# On the first boot / after a factory reset, before systemd-repart creates the encrypted root partition: generate a 32-byte
+# temporary key in /run/mastersos and record the root partition's LUKS UUID at this point. The repart drop-in
+# (systemd-repart.service.d/50-mastersos-bootstrap-key.conf) pulls this unit in with Requires= and points --key-file at the key:
+# when the key was not generated repart does not run, so repart never creates a partition with an empty key. Initrd only
+# (ConditionPathExists=/etc/initrd-release), runs on every boot (cheap).
+# Ordered after initrd-usr-fs.target (review I4): the /usr partition is on the same disk as the root partition, and /usr being
+# mounted means the kernel knows the disk and has read its partition table; the script then runs udevadm settle (at most 30
+# seconds) for the udev events of that disk's partitions, so by-designator/root-luks exists if it ever will. That way a normal
+# boot reads the "before" UUID and persist takes the "unchanged" path (no PBKDF, no failure). On a fresh install the root
+# partition does not exist yet and the script goes on (writes none). No ordering on the root-luks device itself: on a fresh
+# install it only appears once repart creates it, so that would wait for the device timeout.
+# systemd-repart.service is After=initrd-usr-fs.target anyway, so there is no cycle.
+[Unit]
+Description=MastersOS: generate first-boot LUKS bootstrap key (initrd)
+DefaultDependencies=no
+ConditionPathExists=/etc/initrd-release
+After=initrd-usr-fs.target
+Before=systemd-repart.service
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/mastersos/luks-bootstrap-key

@@ -1,0 +1,47 @@
+[
+  {
+    "name": "plain",
+    "rp_id": "school.ac.th",
+    "public_key": "BJ3hvsiS075gHjp9cPsxHIct4XTfC6gwdINQy/4trcdXZaTqTw6D9tRhvQTyQVRgsys98Pi1qrXEIbsfr+AUB7U=",
+    "msg": "a2h1bm9zLWJ1bmRsZS12MQoHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBw==",
+    "authenticator_data": "b0FtWqM1D6ipt619Ob4wa0ZWow0B5XmQtVYS5kWYnGAFAAAAAA==",
+    "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiYTJoMWJtOXpMV0oxYm1Sc1pTMTJNUW9IQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Iiwib3JpZ2luIjoiaHR0cHM6Ly9zY2hvb2wuYWMudGgiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+    "sig": "MEUCIEM9a1KFDzQJ2cXAesphajI39SrtAElPJVaeMDzECJhbAiEA0VIeQaQf+WXyQEcqJ9JPSksKIfL/NKB6yp8IS/FqBT4="
+  },
+  {
+    "name": "port",
+    "rp_id": "localhost",
+    "public_key": "BK8e/Z890tq2ZTT3SE9KGSebUdVx5xjNMxK3lTAlptXA3Z7J5nh86WZKCl5j2860gtm4c9QIwobYH5voiL3jIkM=",
+    "msg": "a2h1bm9zLWJ1bmRsZS12MQoHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBw==",
+    "authenticator_data": "SZYN5YgOjGh0NBcPZHZgW4/krrmihjLHmVzzuoMdl2MFAAAAAA==",
+    "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiYTJoMWJtOXpMV0oxYm1Sc1pTMTJNUW9IQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Iiwib3JpZ2luIjoiaHR0cHM6Ly9sb2NhbGhvc3Q6ODQ0MyIsImNyb3NzT3JpZ2luIjpmYWxzZX0=",
+    "sig": "MEUCIQDhREJMpv1YD46fnQUk9gqiJyHiLzGaFrbEyp1F0TtZKAIgTiIMiuTOZL5LL2BYV8CLflTWolKRgfCSauGiyPIxmZY="
+  },
+  {
+    "name": "synced-passkey-be-bs",
+    "rp_id": "school.ac.th",
+    "public_key": "BMGaXhTC9Riz+5DRqnmK7Ryy5c57EELACIhLcCN/N4gx6lIinRFcs6RGZ2XC7tOhIqQNbLxv8wXqzECWzF8B3HY=",
+    "msg": "a2h1bm9zLWJ1bmRsZS12MQoHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBw==",
+    "authenticator_data": "b0FtWqM1D6ipt619Ob4wa0ZWow0B5XmQtVYS5kWYnGAdAAAAAA==",
+    "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiYTJoMWJtOXpMV0oxYm1Sc1pTMTJNUW9IQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Iiwib3JpZ2luIjoiaHR0cHM6Ly9zY2hvb2wuYWMudGgiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+    "sig": "MEUCIBtydnQ9KhtzCMVzMSrScGoqr1bs8ZKMCzTFTLSarIkkAiEAuyZ5fCTOzc4pfR8spwsqxYHIBROAkCtE3mx5Efb4TlY="
+  },
+  {
+    "name": "localhost-http",
+    "rp_id": "localhost",
+    "public_key": "BDvw4r9yB4k7f2ZSZM17ivHi4ZtaPJPgnqXwEPqpuIQAir0hfriA8LAc1Q1hN6yCQQj831a+cR561bvnfB9h8DU=",
+    "msg": "a2h1bm9zLWJ1bmRsZS12MQoHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBw==",
+    "authenticator_data": "SZYN5YgOjGh0NBcPZHZgW4/krrmihjLHmVzzuoMdl2MFAAAAAA==",
+    "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiYTJoMWJtOXpMV0oxYm1Sc1pTMTJNUW9IQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Iiwib3JpZ2luIjoiaHR0cDovL2xvY2FsaG9zdDo1MTczIiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ==",
+    "sig": "MEQCIFCtuNq4jr4whtCv9XEjfZtsYPMzUJwqQK0vlztyEaHLAiAjrdKF+UObpgRMk5IrsgfeY3P4iQ9d2gpFI3cpVDbeHQ=="
+  },
+  {
+    "name": "extra-client-data-fields",
+    "rp_id": "school.ac.th",
+    "public_key": "BMvadbe/B3xoElR6vvhzwlfiOB9sjaBE6DOdRZH4F31IN8wM4/lws2nS8JHeDrZBlhCKPphooTGr5DZvJBoDyhs=",
+    "msg": "a2h1bm9zLWJ1bmRsZS12MQoHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBw==",
+    "authenticator_data": "b0FtWqM1D6ipt619Ob4wa0ZWow0B5XmQtVYS5kWYnGAFAAAAAA==",
+    "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiYTJoMWJtOXpMV0oxYm1Sc1pTMTJNUW9IQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Iiwib3JpZ2luIjoiaHR0cHM6Ly9zY2hvb2wuYWMudGgiLCJjcm9zc09yaWdpbiI6ZmFsc2UsIm90aGVyX2tleXNfY2FuX2JlX2FkZGVkX2hlcmUiOiJkbyBub3QgY29tcGFyZSBjbGllbnREYXRhSlNPTiBhZ2FpbnN0IGEgdGVtcGxhdGUuIFNlZSBodHRwczovL2dvby5nbC95YWJQZXgifQ==",
+    "sig": "MEUCIQCv8lnCYMggT+t1XU6on0ns8386wdRL5v4OGuft6TltPwIgNs4vBtS/8yJEQlhiBZH2r89t06YjhveLCtOKM7bihug="
+  }
+]

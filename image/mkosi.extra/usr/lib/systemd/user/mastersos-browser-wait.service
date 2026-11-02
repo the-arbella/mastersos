@@ -1,0 +1,15 @@
+# The wait for the web browser in a regular desktop session (offline status design §3): /usr/lib/mastersos/browser-wait exits
+# at once when Chrome is installed; otherwise a notification, or in a locked session a window with no buttons until Chrome appears.
+# Pulled in by gnome-session@ubuntu.target and gnome-session@gnome.target (their .target.d/mastersos-browser-wait.conf), not by
+# gnome-session.target: the locked-app session gnome-session@mastersos-kiosk.target reaches gnome-session.target too
+# (org.mastersos.KioskApp.service binds to it). The script also skips kiosk-* accounts. No [Install].
+[Unit]
+Description=MastersOS: wait for the web browser
+PartOf=gnome-session.target
+After=gnome-session.target
+ConditionUser=!@system
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/mastersos/browser-wait
+Restart=no

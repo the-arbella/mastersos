@@ -1,0 +1,7 @@
+{
+  "name": "org.mastersos.kiosk_exit",
+  "description": "MastersOS 考试扩展的退出宿主 / MastersOS exam extension exit host",
+  "path": "/usr/lib/mastersos/mastersos-kiosk-exit",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://__EXAM_EXTENSION_ID__/"]
+}

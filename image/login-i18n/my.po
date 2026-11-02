@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "%s မှ စီမံခန့်ခွဲသည်"
+
+msgid "Shut down"
+msgstr "ပိတ်မည်"
+
+msgid "Browse as Guest"
+msgstr "ဧည့်သည်အဖြစ် အသုံးပြုမည်"
+
+msgid "Add person"
+msgstr "လူ ထည့်မည်"
+
+msgid "Apps"
+msgstr "အက်ပ်များ"
+
+msgid "Cancel"
+msgstr "မလုပ်တော့ပါ"
+
+msgid "Retry"
+msgstr "ထပ်ကြိုးစားမည်"
+
+msgid "Opening the sign-in page…"
+msgstr "လော့ဂ်အင်စာမျက်နှာကို ဖွင့်နေသည်…"
+
+msgid "The sign-in page could not be opened."
+msgstr "လော့ဂ်အင်စာမျက်နှာကို ဖွင့်၍ မရပါ။"
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "ကျောင်းနှင့် ဆက်သွယ်၍ မရပါ။ အပေါ်ဘားမှ Wi-Fi ကို ချိတ်ဆက်ပြီး ထပ်ကြိုးစားပါ။"
+
+msgid "School email"
+msgstr "ကျောင်းအီးမေးလ်"
+
+msgid "IT local account"
+msgstr "IT ဒေသတွင်း အကောင့်"
+
+msgid "Username"
+msgstr "အသုံးပြုသူအမည်"
+
+msgid "This account cannot sign in on this computer."
+msgstr "ဤအကောင့်ဖြင့် ဤကွန်ပျူတာတွင် လော့ဂ်အင်ဝင်၍ မရပါ။"
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "ဤအကောင့်ဖြင့် ဤကွန်ပျူတာတွင် လော့ဂ်အင်ဝင်၍ မရပါ။ သင့်ကျောင်းအီးမေးလ် (%s) ကို အသုံးပြုပါ။"
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "အခြားအကောင့်ဖြင့် လော့ဂ်အင်ဝင်ထားသည်။ ဤနေရာတွင် ရွေးထားသော အကောင့်ဖြင့် ပြန်လည် လော့ဂ်အင်ဝင်ပါ။"
+
+msgid "Language"
+msgstr "ဘာသာစကား"
+
+msgid "Keyboard"
+msgstr "ကီးဘုတ်"
+
+msgid "Continue"
+msgstr "ဆက်လုပ်မည်"
+
+msgid "The setting could not be saved. Try again."
+msgstr "ဆက်တင်ကို သိမ်းဆည်း၍ မရပါ။ ထပ်ကြိုးစားပါ။"
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "သင့်အကောင့်ကို ပိတ်ထားသည်။ စီမံခန့်ခွဲသူကို ဆက်သွယ်ပါ။"
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "ဤစက်ကို ပိတ်ထားသည်။ စီမံခန့်ခွဲသူကို ဆက်သွယ်ပါ။"
+
+msgid "Sign in with your school account."
+msgstr "သင့်ကျောင်းအကောင့်ဖြင့် လော့ဂ်အင်ဝင်ပါ။"
+
+msgid "Could not sign in. Please try again."
+msgstr "လော့ဂ်အင်ဝင်၍ မရပါ။ ထပ်ကြိုးစားပါ။"
+
+msgid "Authentication request cancelled"
+msgstr "အထောက်အထားစိစစ်ရန် တောင်းဆိုမှုကို ပယ်ဖျက်လိုက်သည်"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "အထောက်အထားစိစစ်ရန် ကြိုးစားနိုင်သော အကြိမ်ရေ ကျော်လွန်သွားသည်"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "ဝင်ရောက်ခွင့်တိုကင်ကို ရယူရာတွင် အမှားတက်သည်။ ထပ်ကြိုးစားပါ။"
+
+msgid "Invalid user name"
+msgstr "အသုံးပြုသူအမည် မမှန်ကန်ပါ"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "ဤကွန်ပျူတာကို ကျောင်းက သော့ခတ်ထားသည်၊ IT ကို ဆက်သွယ်ပါ"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "ဤကွန်ပျူတာတွင် ဧည့်သည်အဖြစ် လော့ဂ်အင်ဝင်ခွင့် မရှိပါ"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "ဒေသတွင်းအကောင့်များဖြင့် ဤကွန်ပျူတာတွင် လော့ဂ်အင်ဝင်၍ မရပါ"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "ကျောင်းအကောင့်များဖြင့် ဤကွန်ပျူတာတွင် လော့ဂ်အင်ဝင်၍ မရပါ"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "ဤအက်ပ်ကို လော့ဂ်အင်မျက်နှာပြင်မှသာ ဖွင့်နိုင်သည်"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "ဤအက်ပ်သည် ကွန်ရက် လိုအပ်သည်။ အပေါ်ဘားမှ Wi-Fi ကို ချိတ်ဆက်ပြီး ထပ်ကြိုးစားပါ။"

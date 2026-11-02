@@ -1,0 +1,289 @@
+From e260a49f66b517f2bb1cf7cda7298e5a321e5b1d Mon Sep 17 00:00:00 2001
+From: MastersOS <mastersos@khundavid.com>
+Date: Tue, 20 Oct 2026 10:00:07 +0700
+Subject: [PATCH] broker: offer a device-code re-login when the provider
+ refuses a refresh
+
+authd-oidc 0.5.2 only treats Keycloak's expired-token descriptions (and Entra's
+AADSTS revocations) as "re-authenticate"; every other answer from the token
+endpoint denies the login with "Failed to refresh token" and no device code.
+Dex answers 400 invalid_request when a newer login on the same client replaced
+the refresh token, and 500 invalid_request when the upstream refresh fails
+(session expired, password changed, account disabled); Zitadel answers
+invalid_grant. A user who hits one of these is locked out of that machine until
+an administrator deletes the cached token.
+
+Treat any remaining oauth2.RetrieveError from the refresh as "re-authentication
+required" and offer the device-code modes. Network errors are not
+RetrieveErrors and still fall back to offline login. The cached token and the
+local password are kept.
+
+Carried by MastersOS (mastersos/image/patches/authd-oidc/) on top of oidc-0.5.2.
+---
+ authd-oidc-brokers/internal/broker/broker.go  |  16 ++
+ .../internal/broker/mastersos_reauth_test.go     | 218 ++++++++++++++++++
+ .../first_call                                |   4 +-
+ 3 files changed, 236 insertions(+), 2 deletions(-)
+ create mode 100644 authd-oidc-brokers/internal/broker/mastersos_reauth_test.go
+
+diff --git a/authd-oidc-brokers/internal/broker/broker.go b/authd-oidc-brokers/internal/broker/broker.go
+index 7d721fb6..f553268d 100644
+--- a/authd-oidc-brokers/internal/broker/broker.go
++++ b/authd-oidc-brokers/internal/broker/broker.go
+@@ -1543,6 +1543,22 @@ func (b *Broker) passwordAuth(ctx context.Context, session *session, secret stri
+ 
+ 				return AuthDenied, errorMessage{Message: fmt.Sprintf("Your user account is disabled in %s, please contact your administrator.", b.provider.DisplayName())}
+ 			}
++			// MastersOS: any other answer from the token endpoint means the provider refused this
++			// refresh token (expired, revoked, replaced by a newer login, account disabled or
++			// password changed; Dex answers 400/500 invalid_request, Zitadel invalid_grant).
++			// A device-code login is a full authentication against the provider, which refuses
++			// disabled accounts on its own, so offering it instead of a denial never admits
++			// anyone who would otherwise be kept out. The cached token and local password are
++			// kept, so an abandoned re-login leaves offline login as it was. Network errors are
++			// not RetrieveErrors and still fall back to offline below.
++			status := 0
++			if retrieveErr.Response != nil {
++				status = retrieveErr.Response.StatusCode
++			}
++			log.Noticef(context.Background(), "Refresh refused for user %q (HTTP %d, %q %q), re-authentication required",
++				session.username, status, retrieveErr.ErrorCode, retrieveErr.ErrorDescription)
++			session.nextAuthModes = reauthModes
++			return AuthNext, errorMessage{Message: "Your sign-in has expired, please authenticate again."}
+ 		}
+ 		if err != nil {
+ 			log.Errorf(context.Background(), "Failed to refresh token: %s", err)
+diff --git a/authd-oidc-brokers/internal/broker/mastersos_reauth_test.go b/authd-oidc-brokers/internal/broker/mastersos_reauth_test.go
+new file mode 100644
+index 00000000..b1a36010
+--- /dev/null
++++ b/authd-oidc-brokers/internal/broker/mastersos_reauth_test.go
+@@ -0,0 +1,218 @@
++package broker_test
++
++// MastersOS carried patch (mastersos/image/patches/authd-oidc/0001-reauth-on-refresh-error.patch): a refresh that the
++// provider refuses offers a device-code re-login instead of a denial; a refresh that cannot reach the provider still
++// falls back to offline login.
++
++import (
++	"bytes"
++	"encoding/json"
++	"fmt"
++	"net"
++	"net/http"
++	"os"
++	"strings"
++	"testing"
++
++	"github.com/canonical/authd/authd-oidc-brokers/internal/broker"
++	"github.com/canonical/authd/authd-oidc-brokers/internal/broker/authmodes"
++	"github.com/canonical/authd/authd-oidc-brokers/internal/broker/sessionmode"
++	"github.com/canonical/authd/authd-oidc-brokers/internal/password"
++	"github.com/canonical/authd/authd-oidc-brokers/internal/testutils"
++	"github.com/stretchr/testify/require"
++)
++
++// closedPortURL returns a URL on 127.0.0.1 where nothing listens (connection refused).
++func closedPortURL(t *testing.T) string {
++	t.Helper()
++	l, err := net.Listen("tcp", "127.0.0.1:0")
++	require.NoError(t, err, "Setup: Listen should not have returned an error")
++	addr := l.Addr().String()
++	require.NoError(t, l.Close(), "Setup: Close should not have returned an error")
++	return "http://" + addr
++}
++
++// discoveryWithTokenEndpoint serves the default discovery document of issuer, but with tokenEndpoint.
++func discoveryWithTokenEndpoint(issuer, tokenEndpoint string) testutils.EndpointHandler {
++	return func(w http.ResponseWriter, _ *http.Request) {
++		w.Header().Add("Content-Type", "application/json")
++		_, _ = fmt.Fprintf(w, `{
++			"issuer": "%[1]s",
++			"authorization_endpoint": "%[1]s/auth",
++			"device_authorization_endpoint": "%[1]s/device_auth",
++			"token_endpoint": "%[2]s",
++			"jwks_uri": "%[1]s/keys",
++			"userinfo_endpoint": "%[1]s/userinfo",
++			"id_token_signing_alg_values_supported": ["RS256"]
++		}`, issuer, tokenEndpoint)
++	}
++}
++
++func TestMastersOSRefreshRefusalOffersDeviceCode(t *testing.T) {
++	t.Parallel()
++
++	const correctPassword = "password"
++	reauth := []string{authmodes.EntraAuth, authmodes.Device, authmodes.DeviceQr}
++
++	tests := map[string]struct {
++		tokenHandler testutils.EndpointHandler
++		// refusedTokenEndpoint: discovery points the token endpoint at a closed port (fixed listen address needed)
++		refusedTokenEndpoint bool
++		address              string
++		forceProviderCheck   bool
++
++		wantAccess  string
++		wantMessage string
++		wantOffline bool
++	}{
++		// Dex v2.44/v2.45: the refresh token was replaced by a newer login on the same client
++		"Dex_400_invalid_request_claimed_by_another_client": {
++			tokenHandler: testutils.ErrorResponseHandler(http.StatusBadRequest,
++				`{"error":"invalid_request","error_description":"Refresh token is invalid or has already been claimed by another client."}`),
++			wantAccess:  broker.AuthNext,
++			wantMessage: "Your sign-in has expired, please authenticate again.",
++		},
++		// Dex: the upstream refresh failed (Kanidm session expired or revoked, password changed, account disabled)
++		"Dex_500_invalid_request_upstream_refused": {
++			tokenHandler: testutils.ErrorResponseHandler(http.StatusInternalServerError, `{"error":"invalid_request"}`),
++			wantAccess:   broker.AuthNext,
++			wantMessage:  "Your sign-in has expired, please authenticate again.",
++		},
++		// Dex v2.46 (#5040) answers invalid_grant with the same description
++		"Dex_400_invalid_grant_claimed_by_another_client": {
++			tokenHandler: testutils.ErrorResponseHandler(http.StatusBadRequest,
++				`{"error":"invalid_grant","error_description":"Refresh token is invalid or has already been claimed by another client."}`),
++			wantAccess:  broker.AuthNext,
++			wantMessage: "Your sign-in has expired, please authenticate again.",
++		},
++		"Zitadel_400_invalid_grant_refresh_token_invalid": {
++			tokenHandler: testutils.ErrorResponseHandler(http.StatusBadRequest,
++				`{"error":"invalid_grant","error_description":"Errors.OIDCSession.RefreshTokenInvalid"}`),
++			wantAccess:  broker.AuthNext,
++			wantMessage: "Your sign-in has expired, please authenticate again.",
++		},
++		"Zitadel_400_invalid_request_user_not_active": {
++			tokenHandler: testutils.ErrorResponseHandler(http.StatusBadRequest,
++				`{"error":"invalid_request","error_description":"Errors.User.NotActive"}`),
++			wantAccess:  broker.AuthNext,
++			wantMessage: "Your sign-in has expired, please authenticate again.",
++		},
++		"401_unauthorized_client": {
++			tokenHandler: testutils.ErrorResponseHandler(http.StatusUnauthorized,
++				`{"error":"unauthorized_client","error_description":"client not allowed to use refresh tokens"}`),
++			wantAccess:  broker.AuthNext,
++			wantMessage: "Your sign-in has expired, please authenticate again.",
++		},
++		"400_without_body": {
++			tokenHandler: testutils.BadRequestHandler(),
++			wantAccess:   broker.AuthNext,
++			wantMessage:  "Your sign-in has expired, please authenticate again.",
++		},
++		"503_without_body": {
++			tokenHandler: testutils.UnavailableHandler(),
++			wantAccess:   broker.AuthNext,
++			wantMessage:  "Your sign-in has expired, please authenticate again.",
++		},
++		"Refusal_with_forced_provider_check": {
++			tokenHandler:       testutils.ErrorResponseHandler(http.StatusInternalServerError, `{"error":"invalid_request"}`),
++			forceProviderCheck: true,
++			wantAccess:         broker.AuthNext,
++			wantMessage:        "Your sign-in has expired, please authenticate again.",
++		},
++		// unchanged upstream path: Keycloak's expired-token descriptions
++		"Keycloak_400_invalid_grant_token_not_active": {
++			tokenHandler: testutils.ErrorResponseHandler(http.StatusBadRequest,
++				`{"error":"invalid_grant","error_description":"Token is not active"}`),
++			wantAccess:  broker.AuthNext,
++			wantMessage: "Refresh token expired, please authenticate again.",
++		},
++
++		// unchanged: the provider cannot be reached → offline login with the local password
++		"Connection_refused_falls_back_to_offline": {
++			refusedTokenEndpoint: true,
++			address:              "127.0.0.1:31391",
++			wantAccess:           broker.AuthGranted,
++			wantOffline:          true,
++		},
++		"Timeout_falls_back_to_offline": {
++			tokenHandler: testutils.HangingHandler(broker.MaxRequestDuration + 1),
++			wantAccess:   broker.AuthGranted,
++			wantOffline:  true,
++		},
++	}
++	for name, tc := range tests {
++		t.Run(name, func(t *testing.T) {
++			t.Parallel()
++
++			handlers := map[string]testutils.EndpointHandler{}
++			if tc.tokenHandler != nil {
++				handlers["/token"] = tc.tokenHandler
++			}
++			if tc.refusedTokenEndpoint {
++				issuer := "http://" + tc.address
++				handlers["/.well-known/openid-configuration"] = discoveryWithTokenEndpoint(issuer, closedPortURL(t)+"/token")
++			}
++
++			b := newBrokerForTests(t, &brokerForTestConfig{
++				Config:                       broker.Config{DataDir: t.TempDir()},
++				ownerAllowed:                 true,
++				firstUserBecomesOwner:        true,
++				supportsFetchingGroups:       true,
++				forceAccessCheckWithProvider: tc.forceProviderCheck,
++				customHandlers:               handlers,
++				listenAddress:                tc.address,
++			})
++
++			sessionID, key := newSessionForTests(t, b, "", sessionmode.Login)
++			generateAndStoreCachedInfo(t, tokenOptions{}, b.TokenPathForSession(sessionID))
++			require.NoError(t, password.HashAndStorePassword(correctPassword, b.PasswordFilepathForSession(sessionID)),
++				"Setup: HashAndStorePassword should not have returned an error")
++			tokenBefore, err := os.ReadFile(b.TokenPathForSession(sessionID))
++			require.NoError(t, err, "Setup: ReadFile should not have returned an error")
++			passwordBefore, err := os.ReadFile(b.PasswordFilepathForSession(sessionID))
++			require.NoError(t, err, "Setup: ReadFile should not have returned an error")
++
++			updateAuthModes(t, b, sessionID, authmodes.Password)
++			authData := fmt.Sprintf(`{"%s":"%s"}`, broker.AuthDataSecret, encryptSecret(t, correctPassword, key))
++			access, data, err := b.IsAuthenticated(sessionID, authData)
++			require.NoError(t, err, "IsAuthenticated should not have returned an error")
++			require.True(t, json.Valid([]byte(data)), "IsAuthenticated returned data must be valid JSON")
++			require.Equal(t, tc.wantAccess, access, "unexpected access, data: %s", data)
++
++			offline, err := b.IsOffline(sessionID)
++			require.NoError(t, err, "IsOffline should not have returned an error")
++			require.Equal(t, tc.wantOffline, offline, "unexpected offline state")
++
++			if tc.wantAccess != broker.AuthNext {
++				return
++			}
++
++			var msg struct {
++				Message string `json:"message"`
++			}
++			require.NoError(t, json.Unmarshal([]byte(data), &msg), "data should be a message")
++			require.Equal(t, tc.wantMessage, msg.Message)
++			require.Equal(t, reauth, b.GetNextAuthModes(sessionID), "a refused refresh should ask for re-authentication")
++
++			// The greeter's next step: the device code (QR) is offered on this session
++			modes, err := b.GetAuthenticationModes(sessionID, []map[string]string{
++				supportedUILayouts["form"],
++				supportedUILayouts["qrcode"],
++			})
++			require.NoError(t, err, "GetAuthenticationModes should not have returned an error")
++			var ids []string
++			for _, m := range modes {
++				ids = append(ids, m["id"])
++			}
++			require.Contains(t, ids, authmodes.DeviceQr, "the device code should be offered, got %s", strings.Join(ids, ","))
++
++			// Nothing cached is thrown away: an abandoned re-login leaves offline login as it was
++			tokenAfter, err := os.ReadFile(b.TokenPathForSession(sessionID))
++			require.NoError(t, err, "the cached token should still exist")
++			require.True(t, bytes.Equal(tokenBefore, tokenAfter), "the cached token should be unchanged")
++			passwordAfter, err := os.ReadFile(b.PasswordFilepathForSession(sessionID))
++			require.NoError(t, err, "the local password should still exist")
++			require.True(t, bytes.Equal(passwordBefore, passwordAfter), "the local password should be unchanged")
++		})
++	}
++}
+diff --git a/authd-oidc-brokers/internal/broker/testdata/golden/TestIsAuthenticated/Error_when_mode_is_password_but_server_returns_error/first_call b/authd-oidc-brokers/internal/broker/testdata/golden/TestIsAuthenticated/Error_when_mode_is_password_but_server_returns_error/first_call
+index 9ddc2b81..a6f6ae38 100644
+--- a/authd-oidc-brokers/internal/broker/testdata/golden/TestIsAuthenticated/Error_when_mode_is_password_but_server_returns_error/first_call
++++ b/authd-oidc-brokers/internal/broker/testdata/golden/TestIsAuthenticated/Error_when_mode_is_password_but_server_returns_error/first_call
+@@ -1,3 +1,3 @@
+-access: denied
+-data: '{"message":"Failed to refresh token"}'
++access: next
++data: '{"message":"Your sign-in has expired, please authenticate again."}'
+ err: <nil>

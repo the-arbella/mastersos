@@ -1,0 +1,157 @@
+#!/bin/bash
+# MastersOS 镜像的开机健康检查（mastersos-health.service，RequiredBy=boot-complete.target）。
+#
+# 只检查镜像本身：显示管理器起来了、/usr 的 dm-verity 处于 verified、agent 的二进制能跑（还没有 agent
+# 的镜像跳过这一条）。不看设置包、agent 的应用结果与网络——那些不是镜像的问题，坏的设置包绝不能让
+# 全体机器回滚镜像。
+#
+# 检查失败时：
+#   - 本次启动的 UKI 带启动计数、ESP 上还有另一个可启动（计数没用完）的 MastersOS UKI：由本脚本
+#     `systemctl --no-block reboot` 并 exit 1，systemd-boot 的计数用完后退回旧版本；
+#   - 没有计数，或 ESP 上没有别的可启动版本：只记一行「health failed, no counter / no fallback」、exit 0——
+#     boot-complete.target 照常到达，绝不让唯一可用的版本进重启循环；
+#   - 读不懂计数、找不到 ESP（unknown）：exit 1 但不重启——不标好（坏版本不会永久留下），也不冒险让
+#     可能只有一个版本的机器进循环；下一次有人重启时计数照常往下走。
+# 单元不设 FailureAction=：超时或本脚本意外退出也一样「不标好、不重启」，重启只在确认有回退版本时发生。
+#
+# 被 source 时（tests/health-check-test.sh）只定义函数，不执行检查。
+set -euo pipefail
+
+LOADER_GUID=4a67b082-0a4c-41cf-b6c7-440b29bb8c4f
+
+# 去掉 UKI 文件名里的启动计数：MastersOS_<v>_x86-64+2-1.efi → MastersOS_<v>_x86-64
+uki_base() {
+	local b=${1%.efi}
+	printf '%s\n' "$b" | sed -E 's/\+[0-9]+(-[0-9]+)?$//'
+}
+
+# 计数已用完：+0 或 +0-N
+uki_exhausted() {
+	[[ $1 =~ \+0(-[0-9]+)?\.efi$ ]]
+}
+
+# fallback_state <ESP 的 EFI/Linux 目录> <LoaderBootCountPath>
+# 输出一行：「no counter」「no fallback」「fallback <另一个 UKI 的文件名>」或「unknown: <原因>」。
+fallback_state() {
+	local dir=$1 count=$2 cur f b
+	if [ -z "$count" ]; then
+		echo "no counter"
+		return 0
+	fi
+	if ! [[ $count =~ \+[0-9]+(-[0-9]+)?\.efi$ ]]; then
+		echo "unknown: LoaderBootCountPath 看不懂（${count}）"
+		return 0
+	fi
+	if [ -z "$dir" ]; then
+		echo "unknown: 找不到 ESP"
+		return 0
+	fi
+	if [ ! -d "$dir" ]; then
+		echo "unknown: ESP 上没有 EFI/Linux（${dir}）"
+		return 0
+	fi
+	# 本次启动的名字带 +0（例如第三次尝试的 +0-3）不等于「没有回退」：systemd-boot 先减计数再启动，
+	# 最后一次尝试的名字就是 +0-N，这时失败必须重启，systemd-boot 下一次才会跳过它、退回旧版本
+	#（VM 166 实测：把 +0-N 当成「没有回退」，第三次失败后坏版本被 systemd-bless-boot 标成了好）。
+	# 唯一要防的循环是「ESP 上没有别的可启动版本」，由下面的查找负责。
+	cur=${count//\\//}
+	cur=${cur##*/}
+	for f in "$dir"/MastersOS_*.efi; do
+		[ -f "$f" ] || continue
+		b=${f##*/}
+		[ "$(uki_base "$b")" = "$(uki_base "$cur")" ] && continue
+		uki_exhausted "$b" && continue
+		echo "fallback $b"
+		return 0
+	done
+	echo "no fallback"
+}
+
+# 本次启动的 LoaderBootCountPath（systemd-boot 只在 UKI 带计数时设置）；变量不存在就输出空。
+# 变量在但读不出来时输出一个看不懂的值，fallback_state 判 unknown。
+loader_count_path() {
+	local v=/sys/firmware/efi/efivars/LoaderBootCountPath-$LOADER_GUID s
+	[ -e "$v" ] || return 0
+	# EFI 变量：4 字节属性 + UTF-16LE 字符串
+	if s=$(tail -c +5 "$v" | iconv -f UTF-16LE -t UTF-8 | tr -d '\000') && [ -n "$s" ]; then
+		echo "$s"
+	else
+		echo "<读不出 ${v##*/}>"
+	fi
+}
+
+# ESP 上的 EFI/Linux；找不到 ESP 就输出空（bootctl 加超时：ESP 是自动挂载的，挂不上时不能卡住）
+esp_linux_dir() {
+	local esp d
+	esp=$(timeout 20 bootctl --print-esp-path 2>/dev/null) || esp=""
+	if [ -n "$esp" ] && [ -d "$esp" ]; then
+		echo "$esp/EFI/Linux"
+		return 0
+	fi
+	for d in /efi /boot; do
+		if [ -d "$d/EFI/Linux" ]; then
+			echo "$d/EFI/Linux"
+			return 0
+		fi
+	done
+	echo ""
+}
+
+run_checks() { # 把不成立的检查逐条输出；全部成立就什么都不输出
+	local _ active=""
+	for _ in $(seq 1 60); do
+		if systemctl is-active --quiet display-manager.service; then
+			active=1
+			break
+		fi
+		sleep 2
+	done
+	[ -n "$active" ] || echo "display-manager.service 不是 active（$(systemctl is-active display-manager.service 2>&1 || true)）"
+
+	local vs
+	vs=$(timeout 30 veritysetup status usr 2>&1) || true
+	if ! grep -qE '^[[:space:]]*status:[[:space:]]+verified' <<<"$vs"; then
+		echo "/usr 的 dm-verity 不是 verified：$(grep -E 'status:' <<<"$vs" | tr -s ' ' || echo 'veritysetup status usr 失败或超时')"
+	fi
+
+	if [ -e /usr/bin/mastersos-agent ]; then
+		timeout 30 /usr/bin/mastersos-agent --version >/dev/null 2>&1 ||
+			echo "/usr/bin/mastersos-agent --version 失败（退出码 $?）"
+	fi
+
+	# MASTERSOS_BROKEN=userspace 构建的回滚试验版本（mkosi.finalize 放的标记）；正式镜像没有它
+	[ ! -e /usr/lib/mastersos/health-broken ] || echo "deliberately broken build（$(cat /usr/lib/mastersos/health-broken)）"
+}
+
+main() {
+	local problems state version
+	# shellcheck disable=SC1091
+	version=$(. /usr/lib/os-release && echo "${IMAGE_VERSION:-?}")
+	problems=$(run_checks) || problems="${problems:-}；health-check 自身出错"
+	problems=${problems//$'\n'/；}
+	if [ -z "$problems" ]; then
+		echo "health ok: MastersOS $version"
+		return 0
+	fi
+	state=$(fallback_state "$(esp_linux_dir)" "$(loader_count_path)")
+	case "$state" in
+	"no counter" | "no fallback")
+		echo "health failed, ${state}（MastersOS $version 是唯一可用的版本，留在这个版本、不重启）：$problems"
+		return 0
+		;;
+	unknown:*)
+		echo "health failed, ${state}：MastersOS $version 不标好、也不重启（不知道有没有可退回的版本）：$problems"
+		return 1
+		;;
+	*)
+		echo "health failed: MastersOS ${version}，重启后由启动计数退回（${state}）：$problems"
+		systemctl --no-block reboot
+		return 1
+		;;
+	esac
+}
+
+# 被 source 时只定义函数
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+	main "$@"
+fi

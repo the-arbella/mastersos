@@ -1,0 +1,36 @@
+# The browser of the login screen's sign-in card (docs/superpowers/specs/2026-10-31-mastersos-login-card-design.md §6).
+# A system unit rather than a child of gnome-shell because Chrome has no per-instance policy: this one gets the directory
+# mastersos-agent writes (only the school's identity provider and the sign-in redirect are reachable) in place of
+# /etc/opt/chrome/policies/managed. The directory is there only on machines with SSO; without it the condition below keeps
+# the unit from starting. Started and stopped by the greeter (polkit: 49-mastersos-login-browser.rules). A template because the
+# greeter's user is dynamic: gdm-greeter, gdm-greeter-2 and on (GDM hands out the next one while the last is still going away,
+# so a greeter that was restarted is not the same user); the instance is that user.
+[Unit]
+Description=MastersOS sign-in card browser
+ConditionPathExists=/var/lib/mastersos-public/login-browser/policies/mastersos-login.json
+
+[Service]
+Type=exec
+User=%i
+Group=gdm
+ExecStart=/usr/lib/mastersos/login-browser
+Restart=no
+TimeoutStopSec=5
+KillMode=control-group
+
+BindReadOnlyPaths=/var/lib/mastersos-public/login-browser/policies:/etc/opt/chrome/policies/managed
+# No leading "-": if the profile is not loaded the browser does not start, it never runs unconfined.
+AppArmorProfile=mastersos-login-browser
+# gdm-greeter has no business with any of this, and the page in this browser is a website.
+PrivateTmp=yes
+ProtectSystem=strict
+InaccessiblePaths=-/home -/root -/var/lib/authd -/var/lib/authd-oidc -/var/lib/mastersos-system -/etc/authd -/var/lib/AccountsService
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+LockPersonality=yes
+UMask=0077

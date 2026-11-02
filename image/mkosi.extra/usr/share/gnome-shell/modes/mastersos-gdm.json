@@ -1,0 +1,7 @@
+{
+    "parentMode": "gdm",
+    "allowExtensions": true,
+    "enabledExtensions": [
+        "mastersos-login@mastersos.org"
+    ]
+}

@@ -1,0 +1,32 @@
+[
+  {
+    "name": "typical-30-days",
+    "statement": {
+      "version": 3,
+      "digest_hex": "3f0c5b2a9d1e4f6a8b7c0d2e1f3a5b4c6d8e7f9a0b1c2d3e4f5a6b7c8d9e0f1a",
+      "issued_at": 1791000000,
+      "not_after": 1793592000
+    },
+    "message_b64": "bWFzdGVyc29zLWhlYXJ0YmVhdC12MQoAAAAAAAAAAz8MWyqdHk9qi3wNLh86W0xtjn+aCxwtPk9aa3yNng8aAAAAAGrAfcAAAAAAaugKwA=="
+  },
+  {
+    "name": "big-version-1-day",
+    "statement": {
+      "version": 4294967301,
+      "digest_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "issued_at": 1800000123,
+      "not_after": 1800086523
+    },
+    "message_b64": "bWFzdGVyc29zLWhlYXJ0YmVhdC12MQoAAAABAAAABf//////////////////////////////////////////AAAAAGtJ0nsAAAAAa0sj+w=="
+  },
+  {
+    "name": "max-31-days",
+    "statement": {
+      "version": 1,
+      "digest_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "issued_at": 1790000000,
+      "not_after": 1792678400
+    },
+    "message_b64": "bWFzdGVyc29zLWhlYXJ0YmVhdC12MQoAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGqxO4AAAAAAatoaAA=="
+  }
+]

@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "Administrat de %s"
+
+msgid "Shut down"
+msgstr "Oprește"
+
+msgid "Browse as Guest"
+msgstr "Navighează ca invitat"
+
+msgid "Add person"
+msgstr "Adaugă o persoană"
+
+msgid "Apps"
+msgstr "Aplicații"
+
+msgid "Cancel"
+msgstr "Anulează"
+
+msgid "Retry"
+msgstr "Reîncearcă"
+
+msgid "Opening the sign-in page…"
+msgstr "Se deschide pagina de autentificare…"
+
+msgid "The sign-in page could not be opened."
+msgstr "Pagina de autentificare nu a putut fi deschisă."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Nu se poate contacta școala. Conectează-te la Wi-Fi din bara de sus, apoi reîncearcă."
+
+msgid "School email"
+msgstr "E-mail școlar"
+
+msgid "IT local account"
+msgstr "Cont local IT"
+
+msgid "Username"
+msgstr "Nume de utilizator"
+
+msgid "This account cannot sign in on this computer."
+msgstr "Acest cont nu se poate autentifica pe acest computer."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "Acest cont nu se poate autentifica pe acest computer. Folosește e-mailul școlar (%s)."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Te-ai autentificat cu alt cont. Autentifică-te din nou cu contul ales aici."
+
+msgid "Language"
+msgstr "Limbă"
+
+msgid "Keyboard"
+msgstr "Tastatură"
+
+msgid "Continue"
+msgstr "Continuă"
+
+msgid "The setting could not be saved. Try again."
+msgstr "Setarea nu a putut fi salvată. Încearcă din nou."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "Contul tău este dezactivat. Contactează administratorul."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "Acest dispozitiv este dezactivat. Contactează administratorul."
+
+msgid "Sign in with your school account."
+msgstr "Autentifică-te cu contul școlar."
+
+msgid "Could not sign in. Please try again."
+msgstr "Autentificarea nu a reușit. Încearcă din nou."
+
+msgid "Authentication request cancelled"
+msgstr "Cererea de autentificare a fost anulată"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "S-a atins numărul maxim de încercări de autentificare"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Eroare la obținerea jetonului de acces. Încearcă din nou."
+
+msgid "Invalid user name"
+msgstr "Nume de utilizator nevalid"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "Acest computer a fost blocat de școală; contactează departamentul IT"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "Autentificarea ca invitat nu este permisă pe acest computer"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "Conturile locale nu se pot autentifica pe acest computer"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "Conturile școlare nu se pot autentifica pe acest computer"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Această aplicație poate fi deschisă doar din ecranul de autentificare"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Această aplicație are nevoie de o rețea. Conectează-te la Wi-Fi din bara de sus, apoi reîncearcă."

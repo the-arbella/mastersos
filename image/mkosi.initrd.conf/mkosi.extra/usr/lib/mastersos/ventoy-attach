@@ -1,0 +1,201 @@
+#!/bin/bash
+# ExecStart of mastersos-ventoy-attach.service (initrd only, installer started from a Ventoy stick: the kernel command line has
+# mastersos.ventoy=<version> and mastersos.ventoy_size=<bytes>, written by make-installer.sh).
+#   1. finds the one exFAT/FAT partition (on any disk) whose root has a MastersOS folder (probe mounts are read-only and are
+#      dropped again; the Ventoy volume label is not used because IT may rename it);
+#   2. in that folder wants exactly one MastersOS-system_<version>_x86-64.raw (Mac "._" files do not match the pattern), of the
+#      installer's version, with the size from the command line. The file is not hashed (that read all 3.4 GB on every
+#      install): the copy on the stick is trusted. A damaged copy is not detected at install time (the installer
+#      copies the /usr partitions block for block without checking them); it shows up later as I/O errors on the installed
+#      machine, fixed by reinstalling from a fresh copy;
+#   3. leaves the partition mounted read-only on $RUN/mastersos-ventoy (under /run, so it survives switch-root for the installer),
+#      writes its device path to $RUN/mastersos-ventoy.part and attaches the file as a read-only loop device with partitions
+#      (systemd-dissect --attach --loop-ref=mastersos-ventoy), which gives /dev/disk/by-loop-ref/mastersos-ventoy-part<N>.
+# Every file is checked on that final mount, so what is checked is what is attached.
+# Any refusal prints the reason, what to do and "The disk has not been touched." on the console, then asks "Press Enter to
+# restart." through systemd-ask-password (the initrd's console agent, as factory-reset-confirm uses) and reboots on Enter.
+# The script never exits after a refusal: it ends in `exec sleep infinity` (while the reboot takes over, or for good when the
+# question cannot be asked), so the unit neither fails into the initrd's emergency/reboot path nor lets the boot carry on.
+# Everything printed is English only: the console font has no CJK glyphs.
+# Tools: sed head rm mkdir rmdir stat (coreutils), blkid mount umount (util-linux), systemd-dissect, udevadm,
+# systemd-ask-password, systemctl, sleep. build.sh checks they are in the initrd.
+# Paths are variables so tests/ventoy-attach-test.sh can point them elsewhere: VENTOY_SYSFS (/sys/class/block), VENTOY_RUN (/run),
+# VENTOY_CMDLINE (/proc/cmdline), VENTOY_SYSRQ (/proc/sysrq-trigger); the commands come from PATH.
+set -Eeuo pipefail
+
+SYSFS=${VENTOY_SYSFS:-/sys/class/block}
+RUN=${VENTOY_RUN:-/run}
+CMDLINE=${VENTOY_CMDLINE:-/proc/cmdline}
+SYSRQ=${VENTOY_SYSRQ:-/proc/sysrq-trigger}
+PROBE=$RUN/mastersos-ventoy.probe
+FINAL=$RUN/mastersos-ventoy
+PART_FILE=$RUN/mastersos-ventoy.part
+FOLDER=MastersOS
+LOOP_REF=mastersos-ventoy
+MNT_OPTS=ro,nosuid,nodev,noexec
+FINAL_MOUNTED=0
+SCAN_TRIES=${VENTOY_SCAN_TRIES:-30}
+# after the first hit, rescan this many more seconds: a second stick with a MastersOS folder whose SCSI scan finishes later
+# than the first one's was missed (PVE, Task 8: two sticks, refused on one boot, installed from the first on another).
+# Limit: this is a window, not a guarantee. A second stick that appears more than SCAN_SETTLE seconds after the first hit is not
+# seen, and the installer goes ahead with the first stick.
+SCAN_SETTLE=${VENTOY_SCAN_SETTLE:-5}
+
+# restart_prompt: wait for Enter, then reboot. Never returns: after the reboot request (or when the question cannot be asked)
+# the script sleeps, so the screen stays and the unit never finishes.
+restart_prompt() {
+	if systemd-ask-password --timeout=0 --echo=no --emoji=no --id=mastersos-ventoy-restart "Press Enter to restart." >/dev/null; then
+		# when systemctl cannot reboot, the kernel's sysrq trigger does (sync, remount read-only, reboot)
+		if ! systemctl reboot; then
+			for k in s u b; do echo "$k" >>"$SYSRQ" 2>/dev/null || break; done
+		fi
+	fi
+	exec sleep infinity
+}
+
+# refuse <reason> <what to do> [extra line]: the refusal screen, then the restart prompt
+refuse() {
+	if [ "$FINAL_MOUNTED" = 1 ]; then umount "$FINAL" || true; fi
+	echo
+	echo "$1"
+	echo "$2"
+	[ -z "${3:-}" ] || echo "$3"
+	echo "The disk has not been touched."
+	echo
+	restart_prompt
+}
+
+# ERR trap: a command that fails outside every refusal check (mkdir, the write of the .part file, ...) must not end the script
+# with a non-zero exit, which would fail the unit and send the initrd to emergency -> reboot. Show the internal-error screen
+# instead. Failures inside a subshell ($(...), pipelines) only end that subshell; the parent then sees the failure and gets here.
+on_error() {
+	trap - ERR
+	[ "$BASHPID" = "$$" ] || return 0
+	refuse "Internal error: the installer could not prepare the USB stick." \
+		"Restart and try again; if it happens again, copy the download to the stick again."
+}
+trap on_error ERR
+
+# cmdline_value <key> -> the value of key=value on the kernel command line; 1 when there is none
+cmdline_value() {
+	local v
+	v=$(sed -nE "s/^(.* )?$1=([^ ]+)( .*)?\$/\\2/p" "$CMDLINE" | head -n 1)
+	[ -n "$v" ] || return 1
+	echo "$v"
+}
+
+# scan_partitions: sets found (names of exfat/vfat partitions with a root MastersOS folder) and other_fs (an ntfs/udf one was seen);
+# both are the caller's locals. Probe mounts are read-only; one that cannot be unmounted is left alone (no recursive rm onto
+# a live filesystem), an empty mount point is removed with rmdir.
+scan_partitions() {
+	local p name type
+	found=()
+	for p in "$SYSFS"/*/partition; do
+		[ -e "$p" ] || continue
+		name=${p%/partition}
+		name=${name##*/}
+		type=$(blkid -p -o value -s TYPE "/dev/$name" 2>/dev/null) || continue
+		case $type in
+		exfat | vfat) ;;
+		ntfs | udf)
+			other_fs=1
+			continue
+			;;
+		*) continue ;;
+		esac
+		mkdir -p "$PROBE/$name"
+		if mount -t "$type" -o "$MNT_OPTS" "/dev/$name" "$PROBE/$name" 2>/dev/null; then
+			if [ -d "$PROBE/$name/$FOLDER" ]; then found+=("$name"); fi
+			umount "$PROBE/$name" 2>/dev/null || continue
+		fi
+		rmdir "$PROBE/$name" 2>/dev/null || true
+	done
+}
+
+main() {
+	local want_ver want_size
+	want_ver=$(cmdline_value mastersos.ventoy) || want_ver=
+	want_size=$(cmdline_value mastersos.ventoy_size) || want_size=
+	if [ -z "$want_ver" ] || ! [[ $want_size =~ ^[0-9]+$ ]]; then
+		refuse "Internal error: the installer's kernel command line is incomplete." \
+			"Restart and use the installer file from the original download."
+	fi
+
+	# 1. the partition(s) with a MastersOS folder. A stick whose SCSI scan finishes late may be missed by the first scan, so with
+	# zero hits scan again (settle, scan, sleep 1) for up to SCAN_TRIES seconds; "more than one" is final at once. After the
+	# first single hit keep rescanning for SCAN_SETTLE more seconds, so a second stick that shows up a little later is still
+	# refused instead of silently ignored.
+	local try other_fs=0 found=()
+	for ((try = 1; try <= SCAN_TRIES; try++)); do
+		udevadm settle || true
+		scan_partitions
+		[ ${#found[@]} -eq 0 ] || break
+		[ "$try" -ge "$SCAN_TRIES" ] || sleep 1
+	done
+	if [ ${#found[@]} -eq 1 ]; then
+		for ((try = 1; try <= SCAN_SETTLE; try++)); do
+			sleep 1
+			udevadm settle || true
+			scan_partitions
+			[ ${#found[@]} -le 1 ] || break
+		done
+	fi
+	rmdir "$PROBE" 2>/dev/null || true
+
+	if [ ${#found[@]} -eq 0 ]; then
+		local extra=
+		[ "$other_fs" = 0 ] || extra="The Ventoy stick must be exFAT (Ventoy's default)."
+		refuse "No MastersOS folder was found on any USB stick." \
+			"Unzip the download into the root of the Ventoy stick so it has a MastersOS folder, then restart." "$extra"
+	fi
+	if [ ${#found[@]} -gt 1 ]; then
+		refuse "More than one MastersOS folder was found (${found[*]})." \
+			"Keep only one: unplug the other sticks or delete the old folder, then restart."
+	fi
+
+	# 2. the system file, on the final mount
+	local part=${found[0]} fstype
+	fstype=$(blkid -p -o value -s TYPE "/dev/$part" 2>/dev/null) || fstype=
+	mkdir -p "$FINAL"
+	if [ -z "$fstype" ] || ! mount -t "$fstype" -o "$MNT_OPTS" "/dev/$part" "$FINAL"; then
+		refuse "The MastersOS folder on /dev/$part could not be opened." \
+			"Unplug the stick, plug it in again and restart."
+	fi
+	FINAL_MOUNTED=1
+
+	local files=("$FINAL/$FOLDER"/MastersOS-system_*_x86-64.raw) f ver
+	if [ ! -e "${files[0]}" ]; then
+		refuse "MastersOS-system_${want_ver}_x86-64.raw is missing from the MastersOS folder." \
+			"Unzip the whole download again, then restart."
+	fi
+	if [ ${#files[@]} -gt 1 ]; then
+		refuse "More than one system file is in the MastersOS folder." \
+			"Keep only the one that matches this installer (version $want_ver), then restart."
+	fi
+	f=${files[0]}
+	ver=${f##*/}
+	ver=${ver#MastersOS-system_}
+	ver=${ver%_x86-64.raw}
+	if [ "$ver" != "$want_ver" ]; then
+		refuse "The system file in the MastersOS folder is a different version ($ver); this installer is $want_ver." \
+			"Delete the MastersOS folder, unzip the same download again, then restart."
+	fi
+	if [ "$(stat -c %s "$f")" != "$want_size" ]; then
+		refuse "The system file is incomplete (copying did not finish)." \
+			"Copy it again; on a Mac, eject the stick before unplugging. Then restart."
+	fi
+
+	# 3. attach
+	local loop
+	loop=$(systemd-dissect --attach --loop-ref="$LOOP_REF" --read-only "$f") && [ -n "$loop" ] || loop=
+	if [ -z "$loop" ] ||
+		! udevadm trigger --action=change --settle "$loop" ||
+		! udevadm wait --timeout=30 "/dev/disk/by-loop-ref/$LOOP_REF-part4"; then
+		refuse "The system file could not be opened as a disk." \
+			"Restart and try again; if it happens again, copy the download to the stick again."
+	fi
+	echo "/dev/$part" >"$PART_FILE"
+	echo "MastersOS: the system file on /dev/$part is attached as $loop"
+}
+
+main

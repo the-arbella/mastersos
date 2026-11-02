@@ -1,0 +1,4 @@
+# 锁定应用的会话（计划 9）。gnome-session 50 只靠 systemd：这个文件只剩名字，会话的组件写在
+# /usr/lib/systemd/user/gnome-session@mastersos-kiosk.target.d/session.conf（形状照 gnome-kiosk 50 的 gnome-kiosk-script 会话）
+[GNOME Session]
+Name=MastersOS Kiosk

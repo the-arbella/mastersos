@@ -1,0 +1,26 @@
+#!/bin/bash
+# 旧镜像留下的 /etc 链接换掉，接着的 systemd-tmpfiles-setup 按新的策略表建（两份列表都由 mkosi.finalize 按 etc-policy.conf 生成）：
+#   /usr/lib/mastersos/etc-dirs    dir 路径（父目录在前）：是符号链接就删，tmpfiles 的 d 建成真实目录
+#   /usr/lib/mastersos/etc-copies  copy 路径（4b Task 20）：只删指回 /usr/share/factory 里同名项的链接——那是旧策略的 L 留下的；
+#                               tmpfiles 的 C 只在目标不存在时才拷，不删的话它永远是只读的链接（升级上来的机器 /etc/locale.conf
+#                               指回 factory，localed 写不进学校的语言）。指向别处的链接（timedatectl 写的 /etc/localtime）不动
+# 别的情况一概不动。MASTERSOS_ETC_MIGRATE_ROOT 只给 tests/etc-migrate-test.sh：把列表与 /etc 换到一个临时根下。
+set -euo pipefail
+R=${MASTERSOS_ETC_MIGRATE_ROOT:-}
+while IFS= read -r p; do
+	case "$p" in /etc/*) ;; *) continue ;; esac
+	if [ -L "$R$p" ]; then
+		echo "mastersos-etc-migrate: $p 是旧镜像留下的链接（→ $(readlink "$R$p")），删掉，改由 tmpfiles 建真实目录"
+		rm -f -- "$R$p"
+	fi
+done <"$R/usr/lib/mastersos/etc-dirs"
+[ -f "$R/usr/lib/mastersos/etc-copies" ] || exit 0
+while IFS= read -r p; do
+	case "$p" in /etc/*) ;; *) continue ;; esac
+	[ -L "$R$p" ] || continue
+	t=$(readlink "$R$p")
+	# 绝对的 /usr/share/factory/etc/<x>，或相对 /etc 的 ../usr/share/factory/etc/<x>
+	case "$t" in "/usr/share/factory$p" | "../usr/share/factory$p") ;; *) continue ;; esac
+	echo "mastersos-etc-migrate: $p 是旧镜像留下的链接（→ ${t}），删掉，改由 tmpfiles 从 factory 拷一份真文件"
+	rm -f -- "$R$p"
+done <"$R/usr/lib/mastersos/etc-copies"

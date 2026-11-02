@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "Géré par %s"
+
+msgid "Shut down"
+msgstr "Éteindre"
+
+msgid "Browse as Guest"
+msgstr "Naviguer en invité"
+
+msgid "Add person"
+msgstr "Ajouter une personne"
+
+msgid "Apps"
+msgstr "Applications"
+
+msgid "Cancel"
+msgstr "Annuler"
+
+msgid "Retry"
+msgstr "Réessayer"
+
+msgid "Opening the sign-in page…"
+msgstr "Ouverture de la page de connexion…"
+
+msgid "The sign-in page could not be opened."
+msgstr "Impossible d'ouvrir la page de connexion."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Impossible de joindre l'école. Connectez-vous au Wi-Fi depuis la barre supérieure, puis réessayez."
+
+msgid "School email"
+msgstr "Adresse e-mail de l'école"
+
+msgid "IT local account"
+msgstr "Compte local du service informatique"
+
+msgid "Username"
+msgstr "Nom d'utilisateur"
+
+msgid "This account cannot sign in on this computer."
+msgstr "Ce compte ne peut pas se connecter sur cet ordinateur."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "Ce compte ne peut pas se connecter sur cet ordinateur. Utilisez votre adresse e-mail de l'école (%s)."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Vous vous êtes connecté avec un autre compte. Reconnectez-vous avec le compte choisi ici."
+
+msgid "Language"
+msgstr "Langue"
+
+msgid "Keyboard"
+msgstr "Clavier"
+
+msgid "Continue"
+msgstr "Continuer"
+
+msgid "The setting could not be saved. Try again."
+msgstr "Impossible d'enregistrer le paramètre. Réessayez."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "Votre compte est désactivé. Contactez votre administrateur."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "Cet appareil est désactivé. Contactez votre administrateur."
+
+msgid "Sign in with your school account."
+msgstr "Connectez-vous avec votre compte scolaire."
+
+msgid "Could not sign in. Please try again."
+msgstr "Connexion impossible. Veuillez réessayer."
+
+msgid "Authentication request cancelled"
+msgstr "Demande d'authentification annulée"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "Nombre maximal de tentatives d'authentification atteint"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Erreur lors de la récupération du jeton d'accès. Veuillez réessayer."
+
+msgid "Invalid user name"
+msgstr "Nom d'utilisateur non valide"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "Cet ordinateur a été verrouillé par l'école ; veuillez contacter le service informatique"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "La connexion en invité n'est pas autorisée sur cet ordinateur"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "Les comptes locaux ne peuvent pas se connecter sur cet ordinateur"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "Les comptes scolaires ne peuvent pas se connecter sur cet ordinateur"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Cette application ne peut être ouverte que depuis l'écran de connexion"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Cette application a besoin d'un réseau. Connectez-vous au Wi-Fi depuis la barre supérieure, puis réessayez."

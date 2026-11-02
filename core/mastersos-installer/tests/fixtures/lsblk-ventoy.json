@@ -1,0 +1,8 @@
+{"blockdevices":[
+ {"name":"nvme0n1","path":"/dev/nvme0n1","type":"disk","size":512110190592,"rm":false,"tran":"nvme","model":"SAMSUNG MZVLB512HBJQ-000L7","partlabel":null,
+  "children":[{"name":"nvme0n1p1","path":"/dev/nvme0n1p1","type":"part","size":536870912,"rm":false,"tran":null,"model":null,"partlabel":"EFI system partition"}]},
+ {"name":"sdb","path":"/dev/sdb","type":"disk","size":68719476736,"rm":false,"tran":null,"model":"SD Card Reader","partlabel":null,
+  "children":[
+   {"name":"sdb1","path":"/dev/sdb1","type":"part","size":68717379584,"rm":false,"tran":null,"model":null,"partlabel":null},
+   {"name":"sdb2","path":"/dev/sdb2","type":"part","size":33554432,"rm":false,"tran":null,"model":null,"partlabel":null}]}
+]}

@@ -1,0 +1,18 @@
+# 策略表里的 dir 路径在已装好的机器上可能还是旧镜像留下的 L 链接（指回只读的 /usr），
+# tmpfiles 的 d 不会替换已有的链接，agent 就会永远写不进去（Ruling 3）。在 tmpfiles 之前把这些链接删掉。
+# copy 路径同理：指回 factory 的旧链接删掉，tmpfiles 的 C 才拷得出真文件（/usr/lib/mastersos/etc-copies，4b Task 20）。
+# 不用 tmpfiles 的 r：它对非空的真实目录会报「Directory not empty」（systemd 259 实测）。
+# 由 /usr/lib 里的 sysinit.target.wants 链接启用，不靠 preset——preset 只在首次开机套用一次，
+# 镜像更新后新加的单元靠它是起不来的。
+[Unit]
+Description=Replace stale /etc symlinks for MastersOS writable directories
+Documentation=file:/usr/lib/mastersos/etc-dirs
+DefaultDependencies=no
+After=local-fs.target
+Before=systemd-tmpfiles-setup.service sysinit.target
+ConditionPathExists=/usr/lib/mastersos/etc-dirs
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/mastersos/etc-migrate

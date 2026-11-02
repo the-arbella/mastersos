@@ -1,0 +1,7 @@
+{"blockdevices":[
+ {"name":"loop0","path":"/dev/loop0","type":"loop","size":100000000,"rm":false,"tran":null,"model":null,"partlabel":null},
+ {"name":"zram0","path":"/dev/zram0","type":"disk","size":8589934592,"rm":false,"tran":null,"model":null,"partlabel":null},
+ {"name":"mmcblk0boot0","path":"/dev/mmcblk0boot0","type":"disk","size":4194304,"rm":false,"tran":null,"model":null,"partlabel":null},
+ {"name":"sr0","path":"/dev/sr0","type":"rom","size":1073741312,"rm":true,"tran":"sata","model":"DVD","partlabel":null},
+ {"name":"sda","path":"/dev/sda","type":"disk","size":256060514304,"rm":"0","tran":"sata","model":"Samsung SSD 860","partlabel":null}
+]}

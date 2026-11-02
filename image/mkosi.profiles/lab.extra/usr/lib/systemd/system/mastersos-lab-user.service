@@ -1,0 +1,18 @@
+# 只在受管（带种子）的 lab 机器上建：没带种子的机器是未受管的个人电脑，第一个本机用户要由 mastersos-firstrun
+# 在 tty1 上建（Ruling 18，Task 11 Step 3）——这里先建出 student，mastersos-firstrun 就会以为已经有用户。
+# 没带种子的 lab 机器上 root 没有口令、没有 student：检查走 qemu-guest-agent（lab/gx.sh）。
+[Unit]
+Description=Create the MastersOS lab test user
+After=systemd-sysusers.service systemd-tmpfiles-setup.service
+Before=display-manager.service systemd-user-sessions.service
+ConditionPathExists=!/var/lib/mastersos-lab/user-created
+ConditionPathExists=|/var/lib/mastersos/seed.toml
+ConditionPathExists=|/var/lib/mastersos-seed/seed.toml
+RequiresMountsFor=/var/lib/mastersos-seed
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/mastersos/create-lab-user
+
+[Install]
+WantedBy=multi-user.target

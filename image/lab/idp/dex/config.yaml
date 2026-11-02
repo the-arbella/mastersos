@@ -1,0 +1,57 @@
+# Dex configuration (lab): the laptops (authd's OIDC broker) only talk to Dex, which hands the login to Kanidm.
+# Dex v2.45.1's oidc connector does PKCE (S256, detected from Kanidm's discovery since pkceChallenge is unset), so the
+# mastersos-dex client in Kanidm keeps PKCE required (no oauth2_allow_insecure_client_disable_pkce; v2.44 needed it).
+# Do not set DEX_SESSIONS_ENABLED (Dex >= v2.46): with sessions on, a refresh no longer asks Kanidm
+# (server/grants/refresh.go:107-121), so a disabled or re-passworded account keeps logging in online.
+# The broker config is issuer = https://dex.lan:5554, client_id = mastersos-authd (no secret).
+issuer: https://dex.lan:5554
+storage:
+  type: sqlite3
+  config: { file: /var/dex/dex.db }
+web:
+  https: 0.0.0.0:5554
+  tlsCert: /certs/dex.crt
+  tlsKey: /certs/dex.key
+oauth2:
+  skipApprovalScreen: true
+  responseTypes: [code]
+  # device code is what the laptop login uses; refresh_token lets authd re-check the account online (docs/idp.md)
+  grantTypes:
+    - authorization_code
+    - refresh_token
+    - urn:ietf:params:oauth:grant-type:device_code
+# Refresh tokens (docs/idp.md "会话期限"). Dex calls Kanidm on every refresh outside reuseInterval, so Kanidm decides
+# how long a laptop's online check lives (authsession_expiry from fleetd's routerui.idm.session_days, and mastersos-dex's
+# oauth2_refresh_token_expiry) and whether the account is still allowed (disabled / password changed → refused at
+# once). validIfNotUsedFor / absoluteLifetime are left unset (Dex: no limit) so there is no third value to keep in
+# step; if you set them, they must be no shorter than Kanidm's.
+expiry:
+  refreshTokens:
+    disableRotation: false
+    # concurrent refreshes of the same token within this window get the same answer without asking Kanidm again
+    reuseInterval: "3s"
+enablePasswordDB: false
+connectors:
+  - type: oidc
+    id: kanidm
+    name: Kanidm
+    config:
+      issuer: https://idm.lan:8300/oauth2/openid/mastersos-dex
+      clientID: mastersos-dex
+      clientSecret: $KANIDM_CLIENT_SECRET
+      redirectURI: https://dex.lan:5554/callback
+      rootCAs: [/certs/kanidm-ca.pem]
+      # offline_access: to refresh a downstream refresh token Dex must refresh the upstream one at Kanidm
+      scopes: [profile, email, offline_access]
+      # pass Kanidm's email_verified through; refuse unless true (the broker also only accepts verified email, Ruling 6)
+      insecureSkipEmailVerified: false
+      # Kanidm asks for the password again at device-code approval even if the browser is still logged in (a shared
+      # classroom PC or a borrowed phone cannot approve a laptop as someone else). Default would be "consent".
+      # Refresh keeps working afterwards (lab/idp/kanidm-prompt-login-experiment.py).
+      promptType: login
+staticClients:
+  - id: mastersos-authd
+    name: MastersOS laptops
+    public: true
+    # in the device flow Dex calls back /device/callback itself (required by the Dex docs)
+    redirectURIs: [/device/callback]

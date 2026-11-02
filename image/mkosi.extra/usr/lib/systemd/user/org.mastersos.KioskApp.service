@@ -1,0 +1,13 @@
+# 锁定会话里的应用（计划 9 设计 §4.4）：mastersos-kiosk run 按账号名 kiosk-<id> 起这个应用、守着它，该结束时自己结束会话
+# （loginctl）；它退出（成功或失败）也结束会话。只由 gnome-session@mastersos-kiosk.target 拉起，没有 [Install]。
+# 名字不是 mastersos-kiosk-<id>：那是会话里 in_session 应用的启动器（agent 的 desktop 步骤），id 为 app 的应用会撞名
+[Unit]
+Description=MastersOS locked app
+BindsTo=gnome-session.target
+After=gnome-session.target
+OnFailure=gnome-session-shutdown.target
+OnSuccess=gnome-session-shutdown.target
+
+[Service]
+ExecStart=/usr/bin/mastersos-kiosk run
+Restart=no

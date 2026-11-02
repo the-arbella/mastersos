@@ -1,0 +1,211 @@
+#!/bin/bash
+# 在镜像 chroot 里跑（包装完之后、finalize 之前）。/usr 之后是只读的，构建时能定的都在这里定。
+# 试验用户与 GDM 自动登录在 lab profile 的附加树里（mkosi.profiles/lab.extra），正式镜像没有。
+set -euo pipefail
+
+# 身份：agent 判断当前版本只看 IMAGE_VERSION（S2：sysupdate 的 current 不可信）
+# shellcheck disable=SC1091
+. /usr/lib/os-release
+cat >/usr/lib/os-release <<OSR
+NAME="MastersOS"
+ID=ubuntu
+ID_LIKE="mastersos-ubuntu debian"
+PRETTY_NAME="MastersOS ${IMAGE_VERSION:-dev} (Ubuntu $VERSION_ID)"
+VERSION_ID="$VERSION_ID"
+VERSION_CODENAME=$VERSION_CODENAME
+IMAGE_ID=MastersOS
+IMAGE_VERSION=${IMAGE_VERSION:-dev}
+OSR
+
+# 登录提示 5 分钟没人输入就超时（S1）
+if grep -qE '^[[:space:]]*LOGIN_TIMEOUT' /etc/login.defs; then
+	sed -i -E 's/^[[:space:]]*LOGIN_TIMEOUT.*/LOGIN_TIMEOUT\t\t300/' /etc/login.defs
+else
+	printf 'LOGIN_TIMEOUT\t\t300\n' >>/etc/login.defs
+fi
+grep -E '^LOGIN_TIMEOUT' /etc/login.defs
+
+# 语言只能在构建时生成（locale-archive 在只读的 /usr 里）；4b 按 locale -a 检查
+# Every UTF-8 locale glibc lists: a school may set any of them and the login screen offers them (design 2026-11-01).
+# shellcheck disable=SC2046 # one locale per word
+locale-gen $(sed -n 's/^\([^ ]*\) UTF-8$/\1/p' /usr/share/i18n/SUPPORTED)
+echo "postinst: $(locale -a | wc -l) locales"
+
+# authd 的 PAM（4a Task 12 去掉 Password 段；4b Task 9 按用户名分流、关掉终端查询）：
+# 4a 在 VM 168 实测，authd 的 Password 段原样留着时 common-password 里它是第一个 Primary、default=die，后面的 pam_unix
+# 又带 use_authtok——本机用户在终端里 passwd、GNOME 设置里改口令（它在 pty 里跑 passwd）都失败。所以 profile 仍去掉
+# Password 段，pam_unix 成为第一个 Primary、自己问新口令；pam-auth-update 之后再在它前面插两行：名字含 @ 的（SSO）先经
+# authd 改「本机的离线口令」（设在这台机器上、离线登录用的那个，不在学校的身份系统里），其余用户跳过 authd、只走 pam_unix。
+# authd 的 auth / account / password 行都带 --exec-env=CI=1：authd-pam 一启动就向终端查背景色、最多等 5 秒并吃掉
+# 终端里已有的输入，CI 让它不查（Task 9 Step 2）。细节、期望文本与逐行核对都在 pam-password.sh（取代 4a 的「common-password
+# 里没有 authd」那条核对）；profile 不是 authd 0.6.1 的原文、或生成的文件与期望不同，构建就失败
+"${SRCDIR:?}/pam-password.sh" profile /usr/share/pam-configs/authd
+DEBIAN_FRONTEND=noninteractive pam-auth-update --package
+"${SRCDIR:?}/pam-password.sh" apply /etc/pam.d
+grep -E '^password' /etc/pam.d/common-password
+
+# authd 的 OIDC broker（4b Task 8，Ruling 1）：broker 只认 0600 的配置文件、不许组/其他可写的 drop-in 目录（否则不启动）。
+# git 里存不了 0600，在这里定；finalize 按 factory 里的模式生成 tmpfiles 的 d 行。broker.conf.d/ 由 agent 写（Task 10）
+chmod 0600 /etc/authd/oidc/broker.conf
+install -d -m 0700 /etc/authd/oidc/broker.conf.d
+test -x /usr/libexec/authd-oidc
+grep -qxF 'dbus_name = com.ubuntu.authd.Oidc' /usr/lib/mastersos/authd/oidc-broker.conf
+
+# PAM 钩子（Ruling 4、5）：mastersos-agent 的 pam-check / pam-session 与插行一起进镜像——子命令还不存在时插了，
+# agent 对未知子命令退出码非 0，所有人都登录不了。所以只在 MASTERSOS_PAM_HOOKS=1 时插，没设或别的值都不插；
+# 两个 profile 都设成 1（Task 11 起，mkosi.conf 与 mkosi.profiles/lab.conf 的 [Build] Environment=）。插行与位置核对在 pam-hooks.sh
+if [ "${MASTERSOS_PAM_HOOKS:-}" = 1 ]; then
+	# systemd-user（user@<uid>.service 的栈）由 systemd 装在 /usr/lib/pam.d，pam-hooks.sh 在那里给它插守卫与 pam_namespace
+	"${SRCDIR:?}/pam-hooks.sh" /etc/pam.d /usr/lib/pam.d
+elif grep -rlF 'mastersos-agent pam-' /etc/pam.d; then
+	echo "postinst: 没有 MASTERSOS_PAM_HOOKS=1，/etc/pam.d 里却有 mastersos-agent 的钩子" >&2
+	exit 1
+else
+	echo "postinst: MASTERSOS_PAM_HOOKS 未设成 1，不插 PAM 钩子"
+fi
+
+# SSO 登录靠它：authd 的 gdm-authd 在 pam_authd 成功后跳过 common-auth，setcred 只剩 pam_gnome_keyring 能给出成功，
+# 缺了它 SSO 用户认证通过后仍被 Permission denied（Task 8 在 VM 165 实测）。有人把 libpam-gnome-keyring 拿掉就在这里拦下
+test -e /usr/lib/x86_64-linux-gnu/security/pam_gnome_keyring.so || {
+	echo "postinst: 镜像里没有 pam_gnome_keyring.so（libpam-gnome-keyring），SSO 用户会进不了桌面" >&2
+	exit 1
+}
+grep -qE '^auth[[:space:]].*pam_gnome_keyring\.so' /etc/pam.d/gdm-authd
+
+# 试验 CA（只在 lab profile：mkosi.profiles/lab.extra 放进 /usr/local/share/ca-certificates，Ruling 3）。
+# 正式镜像那个目录是空的，信任库就是 ca-certificates 包的那一份（tests/check-tree.sh 核对正式的树里没有别的 CA）
+if compgen -G '/usr/local/share/ca-certificates/*.crt' >/dev/null; then
+	update-ca-certificates
+fi
+
+# cracklib 的字典（Task 12 在 VM 168 实测）：GNOME 设置里改口令先过 libpwquality，它的字典检查读
+# /var/cache/cracklib/cracklib_dict.*——镜像只发 /usr，装好的机器上 /var 里没有它，任何口令都报「error loading dictionary」
+# （GNOME 显示「Avoid common words」、「更改」一直是灰的）。字典在构建时由 cracklib-runtime 生成，挪到 /usr 里，
+# pwquality.conf 的 dictpath 指过去（/etc/security 是指回 factory 的链接，跟着镜像走）。
+dict=/usr/share/mastersos/cracklib/cracklib_dict
+install -d -m 0755 "$(dirname "$dict")"
+for ext in hwm pwd pwi; do
+	install -m 0644 "/var/cache/cracklib/cracklib_dict.$ext" "$dict.$ext"
+done
+pq=/etc/security/pwquality.conf
+grep -qE '^#[[:space:]]*dictpath[[:space:]]*=' "$pq"
+sed -i -E "s|^#[[:space:]]*dictpath[[:space:]]*=.*|dictpath = $dict|" "$pq"
+grep -E '^dictpath' "$pq"
+# 核对：一条强口令过得了、一个字典词过不了（不过就不发这个镜像）
+python3 - <<'PY'
+import ctypes, sys
+l = ctypes.CDLL("libpwquality.so.1")
+l.pwquality_default_settings.restype = ctypes.c_void_p
+s = ctypes.c_void_p(l.pwquality_default_settings())
+if l.pwquality_read_config(s, None, None) != 0:
+    sys.exit("postinst: pwquality.conf 读不了")
+aux = ctypes.c_void_p()
+good = l.pwquality_check(s, b"Tq7-Rm4.Wz9-Lb2X", None, b"owner", ctypes.byref(aux))
+bad = l.pwquality_check(s, b"password", None, b"owner", ctypes.byref(aux))
+print(f"postinst: pwquality 强口令 {good}，字典词 {bad}")
+if good < 0 or bad >= 0:
+    sys.exit("postinst: pwquality 的字典检查不对（强口令应 >= 0，password 应 < 0）")
+PY
+
+# GNOME 的默认值（gschema override，排在发行版的 00_/10_ 之后）：Dock 里放 Chrome（Task 9）。改了 override 要重新编译
+glib-compile-schemas /usr/share/glib-2.0/schemas
+
+# gnome-shell extensions (phase B, Task 13): the quick-settings "managed by" line must load under the locked learning profile, where
+# disable-user-extensions=true switches the ordinary user-extension path off. Extensions listed in the session mode's JSON are not
+# affected, so add the uuid to ubuntu.json's enabledExtensions here (spike: image/lab/results/2026-10-3x-defaults-install/).
+# ubuntu.json belongs to the gnome-shell/ubuntu-session packages: change it by jq, and fail the build if the result is not as expected.
+mu=mastersos-managed@mastersos.org
+lu=mastersos-login@mastersos.org
+um=/usr/share/gnome-shell/modes/ubuntu.json
+jq -e '.enabledExtensions | type == "array"' "$um" >/dev/null
+jq --arg u "$mu" '.enabledExtensions |= (. - [$u] + [$u])' "$um" >"$um.new"
+cat "$um.new" >"$um"
+rm -f "$um.new"
+[ "$(jq -r --arg u "$mu" '[.enabledExtensions[] | select(. == $u)] | length' "$um")" = 1 ] || {
+	echo "postinst: $um should list $mu in enabledExtensions exactly once" >&2
+	exit 1
+}
+# the login screen: custom greeter mode, both extensions in /usr, shell-version covers the installed GNOME, the drop-in forces the mode
+gsmajor=$(gnome-shell --version | sed -nE 's/^GNOME Shell ([0-9]+).*/\1/p')
+[ -n "$gsmajor" ] || {
+	echo "postinst: cannot read the gnome-shell version" >&2
+	exit 1
+}
+for u in "$mu" "$lu"; do
+	md=/usr/share/gnome-shell/extensions/$u/metadata.json
+	jq -e --arg u "$u" --arg v "$gsmajor" '.uuid == $u and (."shell-version" | index($v))' "$md" >/dev/null || {
+		echo "postinst: $md should have uuid $u and shell-version containing $gsmajor (gnome-shell is $gsmajor)" >&2
+		exit 1
+	}
+	test -f "/usr/share/gnome-shell/extensions/$u/extension.js"
+done
+jq -e --arg u "$lu" '.parentMode == "gdm" and .allowExtensions == true and (.enabledExtensions | index($u))' /usr/share/gnome-shell/modes/mastersos-gdm.json >/dev/null
+grep -qxF 'ExecStart=/usr/bin/gnome-shell --mode=mastersos-gdm' '/usr/lib/systemd/user/org.gnome.Shell@gdm.service.d/50-mastersos-mode.conf'
+echo "postinst: gnome-shell $gsmajor: $mu in ubuntu.json, $lu in mode mastersos-gdm"
+
+# 锁定应用（计划 9 Task 8）：kiosk 会话（DCONF_PROFILE=mastersos-kiosk）的 dconf 数据库在构建时编好，放在只读的 /usr 里
+# （profile 是 file-db：不经 /etc、不靠机器上的 dconf update，agent 编 /etc/dconf/db 时也碰不到它）。核对每个锁住的键在这个
+# profile 下读出来是 @as []、而且不可写：键的类型与 schema 不符时 GSettings 不认这个值、照用默认，锁住的就成了默认的快捷键
+kdb=/usr/share/mastersos/dconf/mastersos-kiosk
+dconf compile /usr/share/mastersos/dconf/mastersos-kiosk /usr/share/mastersos/dconf/mastersos-kiosk.d
+chmod 0644 "$kdb"
+test -f /usr/share/dconf/profile/mastersos-kiosk
+kget() { env -u DBUS_SESSION_BUS_ADDRESS DCONF_PROFILE=mastersos-kiosk GSETTINGS_BACKEND=dconf HOME=/nonexistent XDG_CONFIG_HOME=/nonexistent gsettings "$@"; }
+nk=0
+while IFS= read -r key; do
+	case "$key" in '' | '#'*) continue ;; esac
+	# /org/gnome/mutter/wayland/keybindings/switch-to-session-1 → schema org.gnome.mutter.wayland.keybindings、键 switch-to-session-1
+	schema=${key#/}
+	schema=${schema%/*}
+	schema=${schema//\//.}
+	name=${key##*/}
+	got=$(kget get "$schema" "$name" 2>&1) || got="（gsettings 失败：$got）"
+	w=$(kget writable "$schema" "$name" 2>&1) || w="（gsettings 失败：$w）"
+	if [ "$got" != '@as []' ] || [ "$w" != false ]; then
+		echo "postinst: kiosk 的 dconf：$schema $name 读出 ${got}、可写 ${w}（应是 @as [] 与 false）" >&2
+		exit 1
+	fi
+	nk=$((nk + 1))
+done </usr/share/mastersos/dconf/mastersos-kiosk.d/locks/50-mastersos-kiosk
+[ "$nk" -ge 12 ] || {
+	echo "postinst: kiosk 的 dconf 只锁了 $nk 个键（至少 switch-to-session-1…12）" >&2
+	exit 1
+}
+echo "postinst: kiosk 的 dconf：$nk 个键在 profile mastersos-kiosk 下是 @as []、不可写"
+
+# kernel.sysrq = 0（锁定应用，设计 §4.6）：/usr/lib/sysctl.d/99-mastersos-kiosk.conf 要排在发行版的设置之后（50-default.conf、resolute 的 55-magic-sysrq.conf、
+# /etc/sysctl.d/10-magic-sysrq.conf）。按 systemd-sysctl 读的顺序取最后一处设置 kernel.sysrq 的值
+sysrq=$(/usr/lib/systemd/systemd-sysctl --cat-config --no-pager | sed -nE 's/^[[:space:]]*-?kernel[./]sysrq[[:space:]]*=[[:space:]]*([^[:space:]]*).*/\1/p' | tail -n 1)
+[ "$sysrq" = 0 ] || {
+	echo "postinst: 最后生效的 kernel.sysrq 是「${sysrq}」，应是 0（有排在 99-mastersos-kiosk.conf 之后的设置？）" >&2
+	exit 1
+}
+echo "postinst: kernel.sysrq 最后生效的是 0"
+
+# 最后再核对一次 PAM 钩子（Task 8 复审 M4）：上面之后的步骤（日后的 pam-auth-update 之类）改了 /etc/pam.d 也拦得下
+if [ "${MASTERSOS_PAM_HOOKS:-}" = 1 ]; then
+	for f in common-account gdm-password gdm-authd; do
+		[ "$(grep -cF 'mastersos-agent pam-' "/etc/pam.d/$f")" = 1 ] || {
+			echo "postinst: MASTERSOS_PAM_HOOKS=1，但 /etc/pam.d/$f 里 mastersos-agent 的钩子不是恰好一行" >&2
+			exit 1
+		}
+	done
+	# 锁定应用的 pam_namespace（计划 9 Task 8，复审 C1、I1）：两个 GDM 服务与 systemd-user（/etc 里没有就是 /usr/lib/pam.d 那份）
+	# 各恰好一行守卫、一行 pam_namespace，守卫就在 pam_namespace 的上一行
+	su=/etc/pam.d/systemd-user
+	[ -f "$su" ] || su=/usr/lib/pam.d/systemd-user
+	for f in /etc/pam.d/gdm-password /etc/pam.d/gdm-authd "$su"; do
+		ns=$(grep -nxF 'session required pam_namespace.so' "$f" | cut -d: -f1 || true)
+		g=$(grep -nxF 'session [success=1 default=ignore] pam_succeed_if.so quiet user !~ kiosk-*' "$f" | cut -d: -f1 || true)
+		if [ "$(grep -c pam_namespace "$f")" != 1 ] || [ "$(grep -c 'user !~ kiosk-' "$f")" != 1 ] ||
+			[ -z "$ns" ] || [ -z "$g" ] || [ "$g" != $((ns - 1)) ]; then
+			echo "postinst: $f 里应恰好一行守卫（pam_succeed_if … user !~ kiosk-*）紧挨着恰好一行「session required pam_namespace.so」" >&2
+			exit 1
+		fi
+	done
+elif grep -rlF 'mastersos-agent pam-' /etc/pam.d; then
+	echo "postinst: 没有 MASTERSOS_PAM_HOOKS=1，/etc/pam.d 里却有 mastersos-agent 的钩子" >&2
+	exit 1
+fi
+# 口令段的分流与 authd 的 --exec-env 也再核对一次（Task 9）
+"${SRCDIR:?}/pam-password.sh" check /etc/pam.d

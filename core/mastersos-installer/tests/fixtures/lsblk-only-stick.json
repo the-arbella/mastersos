@@ -1,0 +1,4 @@
+{"blockdevices":[
+ {"name":"sdb","path":"/dev/sdb","type":"disk","size":128000000000,"rm":false,"tran":"sata","model":"Fake fixed-looking stick","partlabel":null,
+  "children":[{"name":"sdb2","path":"/dev/sdb2","type":"part","size":67108864,"rm":false,"tran":null,"model":null,"partlabel":"mastersos-usb-seed"}]}
+]}

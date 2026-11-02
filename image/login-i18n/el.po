@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "Διαχειρίζεται από: %s"
+
+msgid "Shut down"
+msgstr "Τερματισμός"
+
+msgid "Browse as Guest"
+msgstr "Περιήγηση ως επισκέπτης"
+
+msgid "Add person"
+msgstr "Προσθήκη ατόμου"
+
+msgid "Apps"
+msgstr "Εφαρμογές"
+
+msgid "Cancel"
+msgstr "Ακύρωση"
+
+msgid "Retry"
+msgstr "Επανάληψη"
+
+msgid "Opening the sign-in page…"
+msgstr "Άνοιγμα της σελίδας σύνδεσης…"
+
+msgid "The sign-in page could not be opened."
+msgstr "Δεν ήταν δυνατό το άνοιγμα της σελίδας σύνδεσης."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Δεν είναι δυνατή η σύνδεση με το σχολείο. Συνδεθείτε στο Wi-Fi από την επάνω γραμμή και δοκιμάστε ξανά."
+
+msgid "School email"
+msgstr "Σχολικό email"
+
+msgid "IT local account"
+msgstr "Τοπικός λογαριασμός IT"
+
+msgid "Username"
+msgstr "Όνομα χρήστη"
+
+msgid "This account cannot sign in on this computer."
+msgstr "Αυτός ο λογαριασμός δεν μπορεί να συνδεθεί σε αυτόν τον υπολογιστή."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "Αυτός ο λογαριασμός δεν μπορεί να συνδεθεί σε αυτόν τον υπολογιστή. Χρησιμοποιήστε το σχολικό σας email (%s)."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Συνδεθήκατε με διαφορετικό λογαριασμό. Συνδεθείτε ξανά με τον λογαριασμό που επιλέξατε εδώ."
+
+msgid "Language"
+msgstr "Γλώσσα"
+
+msgid "Keyboard"
+msgstr "Πληκτρολόγιο"
+
+msgid "Continue"
+msgstr "Συνέχεια"
+
+msgid "The setting could not be saved. Try again."
+msgstr "Δεν ήταν δυνατή η αποθήκευση της ρύθμισης. Δοκιμάστε ξανά."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "Ο λογαριασμός σας είναι απενεργοποιημένος. Επικοινωνήστε με τον διαχειριστή σας."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "Αυτή η συσκευή είναι απενεργοποιημένη. Επικοινωνήστε με τον διαχειριστή σας."
+
+msgid "Sign in with your school account."
+msgstr "Συνδεθείτε με τον σχολικό σας λογαριασμό."
+
+msgid "Could not sign in. Please try again."
+msgstr "Δεν ήταν δυνατή η σύνδεση. Δοκιμάστε ξανά."
+
+msgid "Authentication request cancelled"
+msgstr "Το αίτημα ταυτοποίησης ακυρώθηκε"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "Συμπληρώθηκε ο μέγιστος αριθμός προσπαθειών ταυτοποίησης"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Σφάλμα κατά τη λήψη του διακριτικού πρόσβασης. Δοκιμάστε ξανά."
+
+msgid "Invalid user name"
+msgstr "Μη έγκυρο όνομα χρήστη"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "Αυτός ο υπολογιστής έχει κλειδωθεί από το σχολείο· επικοινωνήστε με το τμήμα IT"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "Η σύνδεση επισκέπτη δεν επιτρέπεται σε αυτόν τον υπολογιστή"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "Οι τοπικοί λογαριασμοί δεν μπορούν να συνδεθούν σε αυτόν τον υπολογιστή"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "Οι σχολικοί λογαριασμοί δεν μπορούν να συνδεθούν σε αυτόν τον υπολογιστή"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Αυτή η εφαρμογή ανοίγει μόνο από την οθόνη σύνδεσης"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Αυτή η εφαρμογή χρειάζεται δίκτυο. Συνδεθείτε στο Wi-Fi από την επάνω γραμμή και δοκιμάστε ξανά."

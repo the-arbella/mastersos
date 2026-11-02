@@ -1,0 +1,14 @@
+# Session guard (kiosk design §4.3, review I1): pam-session only sees the session GDM saved to AccountsService; this runs
+# in the session GDM actually started, after XDG_SESSION_DESKTOP is set and before the session manager and GNOME Shell.
+# `mastersos-kiosk guard` fails for a kiosk uid (1900–1989) outside mastersos-kiosk; gnome-session-pre.target requires
+# this unit (gnome-session-pre.target.d/mastersos-kiosk-guard.conf), so the failure ends the session. Every other account passes.
+[Unit]
+Description=MastersOS: kiosk accounts only run the locked app session
+DefaultDependencies=no
+Before=gnome-session-pre.target
+OnFailure=gnome-session-shutdown.target
+OnFailureJobMode=replace-irreversibly
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/mastersos-kiosk guard

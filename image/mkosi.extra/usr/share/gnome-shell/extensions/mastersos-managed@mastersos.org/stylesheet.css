@@ -1,0 +1,5 @@
+/* MastersOS quick settings: the "managed by" row. */
+.mastersos-managed-row {
+    padding: 8px 16px;
+    spacing: 8px;
+}

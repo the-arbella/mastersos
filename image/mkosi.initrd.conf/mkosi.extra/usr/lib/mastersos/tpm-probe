@@ -1,0 +1,91 @@
+#!/bin/bash
+# Is this machine's TPM 2.0 usable? (initrd; Ruling 17: a TPM 2.0 with a SHA-256 PCR bank is required)
+# Same rules as mastersos_agent::tpm::probe, which the installer uses; change one, change the other:
+#   exit 0    usable
+#   exit 1    certainly unusable: no TPM 2.0, no SHA-256 PCR bank, DA lockout, owner password; prints a one-line English
+#             reason on stdout
+#   exit 255  cannot tell (a command or libtss2 is missing, the firmware reports a TPM but the device never shows up, an unknown
+#             error, an unexpected failure of this script)
+# The exit codes are the reverse of the 4a probe (where 0 meant unusable). Callers must be After=tpm2.target
+# systemd-tpm2-setup-early.service.
+# Used by the factory reset confirmation: with an unusable TPM the data is kept (Ruling 22).
+set -euo pipefail
+# Any unexpected failure means "cannot tell", never 1 ("certainly unusable") (-E: failures inside functions and subshells hit
+# the trap too)
+set -E
+trap 'exit 255' ERR
+
+undecided() {
+	echo "mastersos-tpm-probe: cannot tell whether the TPM is usable: $*" >&2
+	exit 255
+}
+
+unusable() {
+	echo "$1"
+	exit 1
+}
+
+for b in systemd-analyze systemd-creds udevadm; do
+	command -v "$b" >/dev/null || undecided "the initrd has no $b"
+done
+
+# Let the coldplug events finish (the TPM driver loads there), then look at the device
+udevadm settle --timeout=10 || echo "mastersos-tpm-probe: udevadm settle timed out, going on" >&2
+
+has=$(systemd-analyze has-tpm2 2>&1 | tr '\n' ' ') || true # exits non-zero when support is partial; read the output
+case "$has" in *-libraries* | *-libtss2*) undecided "systemd-analyze has-tpm2 reports missing libraries: $has" ;; esac
+
+if [ ! -e /dev/tpmrm0 ]; then
+	case "$has" in
+	*-firmware*)
+		case "$has" in
+		*-driver*)
+			# The firmware reports no TPM2 (no EFI TCG2) and the kernel has no TPM2 device: certainly none (machines with
+			# only a TPM 1.2 end up here too)
+			unusable "No TPM 2.0"
+			;;
+		esac
+		;;
+	esac
+	# The firmware or the kernel says there is one: wait for the device (in the initrd the driver may not be bound yet; not
+	# waiting would turn a usable TPM into "cannot tell")
+	for _ in $(seq 1 30); do
+		[ -e /dev/tpmrm0 ] && break
+		sleep 1
+	done
+	[ -e /dev/tpmrm0 ] || undecided "the firmware or the kernel reports a TPM, but /dev/tpmrm0 did not appear within 30 seconds"
+fi
+
+# The UKI signs PCR policies for SHA-256 only: a TPM without a SHA-256 bank (only SHA-1 enabled, or only SHA-384) would
+# reboot-loop on the first boot
+if [ -e /sys/class/tpm/tpm0 ] && [ ! -e /sys/class/tpm/tpm0/pcr-sha256 ]; then
+	unusable "The TPM has no SHA-256 PCR bank"
+fi
+
+# Trial seal (with the SRK under the owner hierarchy, as repart does). The ciphertext goes to stdout and is dropped: given an
+# output file name, systemd-creds writes a temporary file and renames it, which would replace /dev/null. Up to three tries,
+# 2 seconds apart, so a one-off error (TPM_RC_RETRY and the like) does not count.
+out=""
+for attempt in 1 2 3; do
+	[ "$attempt" = 1 ] || sleep 2
+	rc=0
+	out=$(systemd-creds encrypt --with-key=tpm2 --name=probe - - </dev/null 2>&1 >/dev/null) || rc=$?
+	if [ "$rc" = 0 ]; then
+		echo "mastersos-tpm-probe: TPM 2.0 usable (trial seal ${attempt} succeeded)" >&2
+		exit 0
+	fi
+	if [ "$rc" = 126 ] || [ "$rc" = 127 ]; then
+		undecided "systemd-creds could not run (exit code ${rc})"
+	fi
+done
+out=$(printf '%s' "$out" | tr '\n' ' ')
+
+# All three failed: only known TPM return codes mean "certainly unusable"
+#   0x921  TPM_RC_LOCKOUT: DA lockout (creating an object under the SRK goes through DA, refused during lockout)
+#   0x9a2  TPM_RC_BAD_AUTH (session 1): the owner hierarchy has a password, creating the SRK / primary key is refused
+#   0x98e  TPM_RC_AUTH_FAIL (session 1): the same, another return code
+case "$out" in
+*0x00000921*) unusable "The TPM is in dictionary-attack lockout (0x921)" ;;
+*0x000009a2* | *0x0000098e*) unusable "The TPM has an owner password set (0x9a2 / 0x98e)" ;;
+esac
+undecided "three trial seals failed with an unknown error: $out"

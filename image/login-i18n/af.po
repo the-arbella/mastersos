@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "Bestuur deur %s"
+
+msgid "Shut down"
+msgstr "Skakel af"
+
+msgid "Browse as Guest"
+msgstr "Blaai as gas"
+
+msgid "Add person"
+msgstr "Voeg persoon by"
+
+msgid "Apps"
+msgstr "Toepassings"
+
+msgid "Cancel"
+msgstr "Kanselleer"
+
+msgid "Retry"
+msgstr "Probeer weer"
+
+msgid "Opening the sign-in page…"
+msgstr "Maak tans die aanmeldbladsy oop…"
+
+msgid "The sign-in page could not be opened."
+msgstr "Die aanmeldbladsy kon nie oopgemaak word nie."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Kan nie die skool bereik nie. Koppel via die boonste balk aan Wi-Fi en probeer dan weer."
+
+msgid "School email"
+msgstr "Skool-e-pos"
+
+msgid "IT local account"
+msgstr "Plaaslike IT-rekening"
+
+msgid "Username"
+msgstr "Gebruikernaam"
+
+msgid "This account cannot sign in on this computer."
+msgstr "Hierdie rekening kan nie op hierdie rekenaar aanmeld nie."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "Hierdie rekening kan nie op hierdie rekenaar aanmeld nie. Gebruik jou skool-e-pos (%s)."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Jy het met 'n ander rekening aangemeld. Meld weer aan met die rekening wat jy hier gekies het."
+
+msgid "Language"
+msgstr "Taal"
+
+msgid "Keyboard"
+msgstr "Sleutelbord"
+
+msgid "Continue"
+msgstr "Gaan voort"
+
+msgid "The setting could not be saved. Try again."
+msgstr "Die instelling kon nie gestoor word nie. Probeer weer."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "Jou rekening is gedeaktiveer. Kontak jou administrateur."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "Hierdie toestel is gedeaktiveer. Kontak jou administrateur."
+
+msgid "Sign in with your school account."
+msgstr "Meld aan met jou skoolrekening."
+
+msgid "Could not sign in. Please try again."
+msgstr "Kon nie aanmeld nie. Probeer asseblief weer."
+
+msgid "Authentication request cancelled"
+msgstr "Verifikasieversoek gekanselleer"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "Maksimum aantal verifikasiepogings bereik"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Fout met die verkryging van toegangstoken. Probeer asseblief weer."
+
+msgid "Invalid user name"
+msgstr "Ongeldige gebruikernaam"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "Hierdie rekenaar is deur die skool gesluit; kontak asseblief IT"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "Gasaanmelding word nie op hierdie rekenaar toegelaat nie"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "Plaaslike rekeninge kan nie op hierdie rekenaar aanmeld nie"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "Skoolrekeninge kan nie op hierdie rekenaar aanmeld nie"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Hierdie toepassing kan slegs vanaf die aanmeldskerm oopgemaak word"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Hierdie toep het 'n netwerk nodig. Koppel via die boonste balk aan Wi-Fi en probeer dan weer."

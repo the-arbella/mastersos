@@ -1,0 +1,28 @@
+# 把镜像里签好的 shim / systemd-boot / MokManager（/usr/lib/mastersos/esp/）复制到 ESP 的 EFI/BOOT/。
+# 只在这次开机已被标「好」（boot-complete.target 已到达，mastersos-health 过了）之后跑：坏版本的引导程序
+# 不会落到 ESP 上，启动计数退回旧版本时 ESP 上还是旧版本能用的那一套。
+# 用 Requisite= 而不是 Requires=（同 mastersos-update.service，Task 2 的裁定）：Requires 会在之后有人
+# 手动 start 时重新拉起已经失败的 mastersos-health（重跑检查、迟到的通过绕过 systemd-bless-boot）。
+# 开机时 multi-user.target 已经给 boot-complete.target 排了启动作业，Requisite 的核对与它合并，
+# 本单元排在它之后；健康检查失败时 boot-complete.target 失败，本单元以 dependency 失败、什么都不做。
+# 例外：健康检查失败但「没有计数」或「ESP 上没有可退回的版本」时，mastersos-health 照样 exit 0、boot-complete.target
+# 到达，本单元也会跑——这次开机的引导程序显然起得来，而且没有别的版本可退，换上它不会更糟。
+# After=systemd-bless-boot.service：bless 也在改 ESP（UKI 改名），不与它同时写。
+# 由 /usr/lib 的 multi-user.target.wants 链接启用（不靠 preset：已装好的机器更新到带本单元的镜像后
+# preset 不会再套用，Task 1 的发现）。
+[Unit]
+Description=MastersOS bootloader update (shim, systemd-boot, MokManager on the ESP)
+Documentation=file:/usr/lib/mastersos/bootloader-update
+Requisite=boot-complete.target
+After=boot-complete.target systemd-bless-boot.service
+ConditionPathExists=/usr/lib/mastersos/esp/BOOTX64.EFI
+ConditionVirtualization=!container
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/mastersos/bootloader-update
+TimeoutStartSec=5min
+
+[Install]
+WantedBy=multi-user.target

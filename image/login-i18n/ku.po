@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "Ji aliyê %s ve tê birêvebirin"
+
+msgid "Shut down"
+msgstr "Bigire"
+
+msgid "Browse as Guest"
+msgstr "Wekî mêvan bigere"
+
+msgid "Add person"
+msgstr "Kesek lê zêde bike"
+
+msgid "Apps"
+msgstr "Sepan"
+
+msgid "Cancel"
+msgstr "Betal bike"
+
+msgid "Retry"
+msgstr "Dîsa biceribîne"
+
+msgid "Opening the sign-in page…"
+msgstr "Rûpela têketinê tê vekirin…"
+
+msgid "The sign-in page could not be opened."
+msgstr "Rûpela têketinê nehat vekirin."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Gihîştina dibistanê pêk nehat. Ji darika jorîn bi Wi-Fi ve girêbide, paşê dîsa biceribîne."
+
+msgid "School email"
+msgstr "E-peyama dibistanê"
+
+msgid "IT local account"
+msgstr "Hesabê herêmî yê IT"
+
+msgid "Username"
+msgstr "Navê bikarhêner"
+
+msgid "This account cannot sign in on this computer."
+msgstr "Ev hesab nikare li ser vî komputerî têkeve."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "Ev hesab nikare li ser vî komputerî têkeve. E-peyama dibistana xwe (%s) bi kar bîne."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Te bi hesabekî din têketin kir. Dîsa bi hesabê ku te li vir hilbijart têkeve."
+
+msgid "Language"
+msgstr "Ziman"
+
+msgid "Keyboard"
+msgstr "Klavye"
+
+msgid "Continue"
+msgstr "Berdewam bike"
+
+msgid "The setting could not be saved. Try again."
+msgstr "Mîheng nehat tomarkirin. Dîsa biceribîne."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "Hesabê te neçalak e. Bi rêveberê xwe re têkilî deyne."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "Ev cihaz neçalak e. Bi rêveberê xwe re têkilî deyne."
+
+msgid "Sign in with your school account."
+msgstr "Bi hesabê dibistana xwe têkeve."
+
+msgid "Could not sign in. Please try again."
+msgstr "Têketin pêk nehat. Ji kerema xwe dîsa biceribîne."
+
+msgid "Authentication request cancelled"
+msgstr "Daxwaza piştrastkirinê hat betalkirin"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "Hejmara herî zêde ya ceribandinên piştrastkirinê hat gihîştin"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Di wergirtina nîşana gihîştinê de xeletî çêbû. Ji kerema xwe dîsa biceribîne."
+
+msgid "Invalid user name"
+msgstr "Navê bikarhêner nederbasdar e"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "Dibistanê ev komputer qefilandiye; ji kerema xwe bi IT re têkilî deyne"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "Li ser vî komputerî têketina wekî mêvan nayê destûrdan"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "Hesabên herêmî nikarin li ser vî komputerî têkevin"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "Hesabên dibistanê nikarin li ser vî komputerî têkevin"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Ev sepan tenê ji dîmendera têketinê tê vekirin"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Ev sepan tora tê hewce dike. Ji darika jorîn bi Wi-Fi ve girêbide, paşê dîsa biceribîne."

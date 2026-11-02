@@ -1,0 +1,136 @@
+#!/bin/bash
+# mkosi 的构建脚本（在 build overlay 里跑：BuildPackages= 的 git 只在这里有，不进镜像；Go 工具链见下面的 GO_VERSION）。
+# 从源码编 authd 的 OIDC broker（Ruling 1：镜像不装 snapd）。上游在 canonical/authd 的
+# authd-oidc-brokers/ 子目录（原来的 ubuntu/authd-oidc-brokers 仓库停在 0.3.0），按 oidc-<版本> 的 tag 发布。
+#
+# 固定 tag 与它指向的 commit：clone 之后核对 commit，不一致就失败（tag 被移动过）。
+# oidc-0.5.2 是 S1 在 authd 0.6.1（镜像里的 authd 版本）上测过的 snap 版本（authd-oidc 0.5.2，rev 184）。
+# 换 tag 要在 VM 上重做 Task 8 Step 3 的登录（与 authd 的 D-Bus 协议是否对得上，只有实测算数）。
+# Carried patches: patches/authd-oidc/*.patch are applied in name order on top of the pinned commit (docs/idp.md
+# "broker 的补丁"); a patch that no longer applies fails the build, and their sha256 go into authd-oidc.build-info.
+set -euo pipefail
+
+# mkosi 在宿主上调本脚本；进到镜像的 chroot 里再跑（git 在 build overlay 里，curl、tar 在镜像里）
+if [ "${container:-}" != mkosi ]; then
+	exec mkosi-chroot "$CHROOT_SCRIPT" "$@"
+fi
+
+TAG=oidc-0.5.2
+COMMIT=b0811b69edcd776f347eede8b80540949b7fdd3a
+VERSION=0.5.2
+REPO=https://github.com/canonical/authd
+# Go 工具链：官方的 linux-amd64 包，钉版本与 sha256（https://go.dev/dl/?mode=json），不用发行版的 golang-go
+# （快照 20261013 里只有 1.26.0，后面的补丁版本没有进 resolute；broker 以 root 解析网络上的 TLS/HTTP/JWT）。
+# 换版本：取 go.dev/dl 上同一行的 sha256，两行一起改
+GO_VERSION=1.26.9
+GO_SHA256=42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d
+
+[ "${WITH_NETWORK:-0}" = 1 ] || {
+	echo "mkosi.build: 要联网（git clone 与 go mod download），WithNetwork=yes" >&2
+	exit 1
+}
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$TAG" "$REPO" "$work/authd"
+got=$(git -C "$work/authd" rev-parse HEAD)
+if [ "$got" != "$COMMIT" ]; then
+	echo "mkosi.build: $TAG 指向 $got，不是写死的 $COMMIT" >&2
+	exit 1
+fi
+
+# Carried patches, in name order (build.sh compares the list recorded below with its patches/authd-oidc/)
+patches=none
+for p in "$SRCDIR"/patches/authd-oidc/*.patch; do
+	[ -e "$p" ] || continue
+	git -C "$work/authd" apply --check "$p" || {
+		echo "mkosi.build: $(basename "$p") no longer applies to $TAG ($COMMIT); refresh or drop it" >&2
+		exit 1
+	}
+	git -C "$work/authd" apply "$p"
+	entry=$(basename "$p"):$(sha256sum "$p" | cut -d' ' -f1)
+	if [ "$patches" = none ]; then patches=$entry; else patches="$patches $entry"; fi
+done
+echo "mkosi.build: authd-oidc patches: $patches"
+
+src=$work/authd/authd-oidc-brokers
+
+gotar=$work/go${GO_VERSION}.linux-amd64.tar.gz
+curl -fsSL --proto '=https' --tlsv1.2 -o "$gotar" "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz"
+echo "$GO_SHA256  $gotar" | sha256sum -c --strict - || {
+	echo "mkosi.build: go${GO_VERSION}.linux-amd64.tar.gz 的 sha256 不是写死的 $GO_SHA256" >&2
+	exit 1
+}
+tar -C "$work" -xzf "$gotar"
+export PATH=$work/go/bin:$PATH
+[ "$(go env GOVERSION)" = "go$GO_VERSION" ] || {
+	echo "mkosi.build: PATH 上的 go 是 $(go env GOVERSION)，不是 go$GO_VERSION" >&2
+	exit 1
+}
+# 只用 build overlay 里发行版的 Go，不自动下载新的工具链；依赖按仓库里的 go.sum 校验（-mod=readonly 不许改 go.mod/go.sum）。
+# 不用 cgo：generic OIDC 不需要（只有 msentraid 变体用 C），静态链接、不依赖镜像里的 libc 版本。
+export GOTOOLCHAIN=local GOFLAGS=-mod=readonly CGO_ENABLED=0
+export GOPATH=$work/gopath GOCACHE=$work/gocache GOMODCACHE=$work/gomod
+export GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org
+cd "$src"
+go mod download
+go mod verify
+# The patches carry their own tests (TestMastersOS*): run them, so a patch that still applies after a tag bump but no longer
+# does what it says fails the build here and not on a laptop. Only those: this runs as root in the chroot, and some
+# upstream tests (read-only data dir cases in TestIsAuthenticated) only pass as an ordinary user
+if [ "$patches" != none ]; then
+	mkdir -p "$work/tmp"
+	TMPDIR=$work/tmp go test -count=1 -v -run '^TestMastersOS' ./internal/broker/ >"$work/patch-tests.log" || {
+		cat "$work/patch-tests.log" >&2
+		echo "authd-oidc patch tests failed" >&2
+		exit 1
+	}
+	# A pattern that matches nothing still exits 0: require every TestMastersOS function in the patched tree to have passed
+	want=$(grep -rhoE '^func TestMastersOS[A-Za-z0-9_]*' internal/broker/ | sort -u | wc -l)
+	got=$(grep -cE '^--- PASS: TestMastersOS[A-Za-z0-9_]* ' "$work/patch-tests.log" || true)
+	if [ "$want" -eq 0 ] || [ "$got" -ne "$want" ]; then
+		cat "$work/patch-tests.log" >&2
+		echo "authd-oidc patch tests: expected $want top-level TestMastersOS passes, got $got" >&2
+		exit 1
+	fi
+	version_suffix=+mastersos
+fi
+# 默认 provider（!withgoogle && !withmsentraid）就是通用 OIDC；-tags=release 与上游 snap 的构建一致
+go build -trimpath -tags=release \
+	-ldflags="-buildid= -X=github.com/canonical/authd/authd-oidc-brokers/internal/consts.Version=$VERSION${version_suffix:-}" \
+	-o "$DESTDIR/usr/libexec/authd-oidc" ./cmd/authd-oidc
+"$DESTDIR/usr/libexec/authd-oidc" version
+
+# 上游 snap 的 broker 定义（conf/variants/oidc/authd.conf）给出总线名与对象路径；我们的注册文件
+# （mkosi.extra/usr/lib/mastersos/authd/oidc-broker.conf）与总线策略、D-Bus 服务文件必须与它一致，不一致就是上游改了名字，失败
+up=$src/conf/variants/oidc/authd.conf
+for kv in 'dbus_name = com.ubuntu.authd.Oidc' 'dbus_object = /com/ubuntu/authd/Oidc'; do
+	grep -qxF -- "$kv" "$up" || {
+		echo "mkosi.build: 上游 $up 里没有「$kv」，总线名或对象路径变了，改注册文件、总线策略与服务文件" >&2
+		exit 1
+	}
+done
+install -D -m 0644 "$work/authd/snap/variants/oidc/icon.svg" "$DESTDIR/usr/share/authd-oidc/icon.svg"
+# 上游的配置样例，留给 IT 对照（真正用的是 /etc/authd/oidc/broker.conf 与 broker.conf.d/）
+install -D -m 0644 "$src/conf/variants/oidc/broker.conf" "$DESTDIR/usr/share/doc/authd-oidc/broker.conf.example"
+
+# 构建来源：build.sh 从镜像里读出来写进 build-info.txt
+# The login screen's own text: one catalogue per language (login-i18n/README.md)
+ext=$DESTDIR/usr/share/gnome-shell/extensions/mastersos-login@mastersos.org
+for po in "$SRCDIR"/login-i18n/*.po; do
+	[ -e "$po" ] || continue
+	lang=$(basename "$po" .po)
+	install -d "$ext/locale/$lang/LC_MESSAGES"
+	msgfmt --check -o "$ext/locale/$lang/LC_MESSAGES/mastersos-login.mo" "$po"
+done
+
+install -d "$DESTDIR/usr/lib/mastersos"
+{
+	echo "authd_oidc_tag=$TAG"
+	echo "authd_oidc_commit=$got"
+	echo "authd_oidc_patches=$patches"
+	echo "authd_oidc_go=$(go version)"
+	echo "authd_oidc_go_sha256=$GO_SHA256"
+	echo "authd_oidc_sha256=$(sha256sum "$DESTDIR/usr/libexec/authd-oidc" | cut -d' ' -f1)"
+} >"$DESTDIR/usr/lib/mastersos/authd-oidc.build-info"
+cat "$DESTDIR/usr/lib/mastersos/authd-oidc.build-info"

@@ -1,0 +1,17 @@
+# 删掉比 /usr 新的 /etc/.updated，让这一次开机的 systemd-sysusers、systemd-hwdb-update 照常补上（4b Task 12 复审 F3）。
+# mastersos-update-done 写的记录的 mtime 就是 /usr 的 mtime，不会比 /usr 新；比它新的记录出现在三种情况（复审 N3，判断与
+# 说明在 /usr/lib/mastersos/update-done 的 stamp_stale）：从没有这个修法的旧镜像升上来（旧镜像记的是 sysext 合并的时刻）、
+# 在两个带这个修法的镜像之间回滚（新镜像的记录比旧镜像的 /usr 新）、时钟比构建时刻慢而本单元在合并之后被重新拉起。
+# 三种的代价都只是 sysusers 等多跑一次（幂等）。/var/.updated 不管：它只关 journal-catalog，那个每次开机都跑。
+[Unit]
+Description=Drop an /etc/.updated stamp that is newer than the image's /usr
+DefaultDependencies=no
+After=systemd-remount-fs.service
+Before=systemd-sysusers.service systemd-hwdb-update.service mastersos-update-done.service sysinit.target shutdown.target
+Conflicts=shutdown.target
+ConditionPathExists=/etc/.updated
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/mastersos/update-done drop-stale

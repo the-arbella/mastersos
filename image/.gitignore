@@ -1,0 +1,17 @@
+# mkosi 的缓存与产物
+mkosi.cache/
+mkosi.output/
+mkosi.tools/
+# build.sh 编出来的二进制附加树
+build/
+# 钥匙与本机配置只在 VM 161（~/mastersos-keys/），永不入库
+mkosi.key
+mkosi.crt
+mkosi.local.conf
+mkosi.local/
+/local/
+# sync.sh 写给构建机的提交号
+.build-commit
+# lab 里 Python 脚本跑过留下的字节码
+__pycache__/
+*.pyc

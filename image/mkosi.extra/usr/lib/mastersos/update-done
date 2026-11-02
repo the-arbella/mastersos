@@ -1,0 +1,60 @@
+#!/bin/bash
+# /etc/.updated、/var/.updated 要记镜像自己的 /usr（erofs）的 mtime，不是 Chrome 的 sysext 合并出来的 overlay 的
+# （4b Task 12 复审 F3）。两个单元调它：
+#   update-done drop-stale   mastersos-update-stamp.service，在 systemd-sysusers、systemd-hwdb-update 之前
+#   update-done record       mastersos-update-done.service，在它们之后、systemd-sysext 合并之前
+# 判断写成函数，tests/update-done-test.sh 直接 source 本文件测。
+set -euo pipefail
+
+# record_action <usr 顶层的文件系统类型> <usr> <etc 的记录> <var 的记录> → skip-overlay | record | current
+# /usr 顶层已经是 overlay（合并之后才跑到这里：先前失败过被重新拉起、或有人手动重启）就什么都不记，记了就是合并的时刻。
+record_action() {
+	local fstype=$1 usr=$2 etc=$3 var=$4
+	if [ "$fstype" = overlayfs ]; then
+		echo skip-overlay
+	elif [ ! -e "$etc" ] || [ ! -e "$var" ] || [ "$usr" -nt "$etc" ] || [ "$usr" -nt "$var" ]; then
+		echo record
+	else
+		echo current
+	fi
+}
+
+# stamp_stale <usr> <etc 的记录>：记录比 /usr 新时成立。这样的记录不可能由 record 写出（systemd-update-done 把 /usr 的
+# mtime 抄给记录），出现在这几种情况，删掉它的代价都只是 sysusers 等多跑一次（幂等）：
+#   - 从没有这两个单元的旧镜像升上来：旧镜像的 systemd-update-done 在合并之后记下了 overlay 的时刻；
+#   - 在两个都带这个修法的镜像之间回滚：新镜像的记录比旧镜像的 /usr 新（两个方向各补跑一次）；
+#   - 时钟比构建时刻慢：drop-stale 在合并之后被重新拉起时（新装时它因没有记录而跳过，之后又被别的事务拉起），比的是
+#     overlay 的 mtime，即合并那一刻的墙上时钟，可能比记录（erofs 的构建时刻）还旧，记录就被删掉，下次开机 record 重写。
+stamp_stale() {
+	[ -e "$2" ] && [ "$2" -nt "$1" ]
+}
+
+# /usr 顶层的文件系统类型。stat -f 看的是路径上最上面那层挂载；findmnt <路径> 会把叠在同一挂载点上的
+# erofs 与 overlay 两行都打出来（复审 N1），findmnt -f 给的又是下面那层，都不能用。
+usr_fstype() {
+	stat -f -c %T /usr
+}
+
+main() {
+	case "${1:-}" in
+	drop-stale)
+		if stamp_stale /usr /etc/.updated; then
+			echo "/etc/.updated 比 /usr 新（旧镜像在 sysext 合并之后记的、或在两版之间回滚过），删掉"
+			rm -f /etc/.updated
+		fi
+		;;
+	record)
+		case "$(record_action "$(usr_fstype)" /usr /etc/.updated /var/.updated)" in
+		skip-overlay) echo "/usr 已经合并了 sysext，不记" ;;
+		record) exec /usr/lib/systemd/systemd-update-done ;;
+		current) ;;
+		esac
+		;;
+	*)
+		echo "用法：update-done drop-stale|record" >&2
+		exit 2
+		;;
+	esac
+}
+
+[ "${BASH_SOURCE[0]}" != "$0" ] || main "$@"

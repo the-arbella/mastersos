@@ -1,0 +1,42 @@
+# After "Factory reset" was chosen in the boot menu (profile 1, command line has systemd.factory_reset=1) and before the initrd's
+# systemd-repart deletes the root partition, a person at the screen must confirm: with an unusable TPM the data is kept; a
+# managed machine (seed.toml in the seed partition on the boot disk) first asks for this machine's recovery key (checked
+# against the LUKS header), then for one typed word (Ruling 22, details at the top of the script). A wrong answer, 60 seconds
+# without one, or a question that cannot be asked all mean **no factory reset**: systemd's own "leave factory reset mode"
+# (systemd-factory-reset complete --retrigger: writes /run/systemd/factory-reset-complete, clears the EFI variable,
+# retriggers the block devices) makes repart delete no partition, and the machine boots normally.
+# Why: in systemd-boot every UKI entry has the hot key l, j/k move up and down and Enter boots - someone typing a recovery key
+# (modhex letters, including j k l, ending with Enter) may still be typing when the prompt times out and the machine restarts,
+# and so pick factory reset in the menu (it really happened in the Task 3 lab). The confirmation word ERASE has a and s, which
+# are not modhex letters, so a mistyped recovery key cannot spell it.
+# Only for systemd.factory_reset=1 on the kernel command line (chosen in the menu); the EFI variable set by
+# systemd-factory-reset request is a deliberate request from user space and is not asked about.
+# Pulled in with Requires= by systemd-repart.service.d/50-mastersos-factory-reset-confirm.conf: when this unit fails, repart
+# does not run.
+[Unit]
+Description=MastersOS: confirm factory reset (recovery key on managed machines, then type ERASE)
+DefaultDependencies=no
+ConditionPathExists=/etc/initrd-release
+# Only the key name: systemd also accepts systemd.factory_reset=yes / true / the bare key, and =1 here would let those skip
+# the confirmation and still reset. The price is that =0 also asks once (a wrong answer boots normally, harmless).
+ConditionKernelCommandLine=systemd.factory_reset
+After=systemd-vconsole-setup.service plymouth-start.service
+# tpm-probe needs the TPM driver (4b Task 3).
+After=tpm2.target systemd-tpm2-setup-early.service
+# Finding the disk with the root and seed partitions (Ruling 22): the /usr partition is on the same disk, and /usr being
+# mounted means the kernel knows the disk and has read its partition table (as in mastersos-luks-bootstrap-key.service, review
+# I4); the script then runs udevadm settle for the partitions' udev events. No ordering on the root-luks device itself: when the
+# root partition is missing that would wait for the device timeout. systemd-repart.service is After=initrd-usr-fs.target
+# anyway, so there is no cycle.
+After=initrd-usr-fs.target
+Before=systemd-repart.service systemd-cryptsetup@root.service
+Conflicts=shutdown.target initrd-switch-root.target
+Before=shutdown.target initrd-switch-root.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# The reason the data is kept (unusable TPM, no escrowed recovery key yet ...) must reach the person at the screen, not only
+# the journal.
+StandardOutput=journal+console
+ExecStart=/usr/lib/mastersos/factory-reset-confirm

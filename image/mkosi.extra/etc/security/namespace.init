@@ -1,0 +1,94 @@
+#!/bin/bash
+# pam_namespace 建好（或找到）一个多实例目录之后以 root 调本脚本（替换发行版的 /etc/security/namespace.init；镜像里它跟着
+# factory 走，/etc/security 是策略表里的 dir、本文件不在表里 → 指回 /usr/share/factory 的链接）。参数（pam_namespace 1.7）：
+#   $1 多实例化的目录（polydir）  $2 实例目录  $3 实例是不是刚建的（0/1）  $4 用户名
+#   $5 polydir 的各级（除最后一级）是否都属 root、只有 root 可写（0/1）  $6 实例路径同上
+# 失败的语义（pam_namespace 1.7.1 的 inst_init，复审 C2）：pam_namespace 先把实例 bind 到 polydir 上、再调本脚本，只有本脚本
+# **被信号杀死**才让会话失败；正常退出、不论退出码，会话照开（实例是空的或上一次留下的）。所以 kiosk 那一段的每条失败路径
+# （die 与 ERR trap）都 kill -KILL 自己。
+#
+# 锁定应用（计划 9 设计 §4.3）：agent 在 /etc/security/namespace.d/mastersos-kiosk.conf 里只给 kiosk 账号多实例化
+# /etc/opt/chrome/policies/managed，实例在 /var/lib/mastersos-kiosk-ns/<账号>（父目录 root 0000，tmpfiles 每次开机清空）。
+# 这里每次会话都把实例目录改成 root:root 0755、清空，再拷进 agent 写的这个应用自己的策略（/var/lib/mastersos-public/kiosk/<id>/
+# policies/ 下的普通文件，root 0644）。agent 对每种应用都写 policies/（本地程序拿禁止一切的那份：程序里的链接会在这个命名空间里
+# 起 Chrome，终审 I1）；policies/ 不在时这里照旧留一个空实例、不当错误——mastersos-kiosk run 看到空的托管目录就不起应用
+# （往拒绝的方向落）。不是 kiosk-<id> 账号、实例路径不对、pam_namespace 说路径不安全、清空或拷贝出错：自己被 SIGKILL，
+# 会话起不来（往拒绝的方向落）。这一段在 GDM 的会话与 kiosk 账号的 user@<uid>.service（PAM 栈 systemd-user）里各跑一次，
+# 两次都填同一个实例目录。
+# 下面四个常量与 mastersos-agent 的 system/kiosk.rs（NS_POLYDIR、NS_INSTANCE_PREFIX、PUBLIC_DIR、POLICIES_DIR）相同，
+# tests/check-tree.sh 第 34 条核对；tests/namespace-init-test.sh 换掉它们跑各个分支。
+# 其余的多实例目录照发行版原样处理（libpam-modules 1.7.0-5ubuntu3.2 的 namespace.init，原文在 tests/fixtures/namespace.init.distro）。
+set -euo pipefail
+# pam_namespace 起本脚本时不给环境
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+POLYDIR=/etc/opt/chrome/policies/managed
+INSTANCE_PREFIX=/var/lib/mastersos-kiosk-ns/
+PUBLIC=/var/lib/mastersos-public/kiosk
+POLICIES=policies
+OWNER=root:root
+
+# kiosk 那一段的失败：pam_namespace 只认信号（见上），正常退出就等于放行一个空的或旧的实例
+die() {
+	echo "namespace.init: $*" >&2 || true
+	kill -s KILL "$$"
+}
+
+kiosk_instance() {
+	local inst=${2:-} user=${4:-} src f n=0
+	[[ $user =~ ^kiosk-[a-z][a-z0-9-]{0,23}$ ]] || die "$POLYDIR 只给 kiosk-<id> 账号多实例化，用户却是 '$user'"
+	[ "$inst" = "$INSTANCE_PREFIX$user" ] || die "$user 的实例目录应是 $INSTANCE_PREFIX$user，实际 '$inst'"
+	if [ "${5:-}" != 1 ] || [ "${6:-}" != 1 ]; then
+		die "pam_namespace 说路径不安全（polydir ${5:-?}，实例 ${6:-?}），不碰 $inst"
+	fi
+	if [ ! -d "$inst" ] || [ -L "$inst" ]; then
+		die "$inst 不是目录"
+	fi
+	# pam_namespace 建实例时照 polydir 的属主与权限（root:root 0755）；这里再定一次，再清掉上一次会话拷进来的
+	chown -- "$OWNER" "$inst"
+	chmod 0755 "$inst"
+	find "$inst" -mindepth 1 -delete
+	src=$PUBLIC/${user#kiosk-}/$POLICIES
+	if [ -d "$src" ] && [ ! -L "$src" ]; then
+		for f in "$src"/*; do
+			if [ ! -f "$f" ] || [ -L "$f" ]; then continue; fi
+			install -m 0644 -o "${OWNER%:*}" -g "${OWNER#*:}" -- "$f" "$inst/${f##*/}"
+			n=$((n + 1))
+		done
+	fi
+	echo "namespace.init: $user 的 $POLYDIR = ${inst}（${n} 个策略文件）" || true
+}
+
+if [ "${1:-}" = "$POLYDIR" ]; then
+	# 意料之外的失败（chown、find、install……）同样是信号；set -E 让函数里的命令也触发它
+	set -E
+	trap 'die "第 $LINENO 行出错"' ERR
+	kiosk_instance "$@"
+	exit 0
+fi
+
+# 以下是发行版的 namespace.init 原样（它是 sh 写的、不带 -eu -o pipefail：照原来的语义跑）
+set +eu +o pipefail
+# shellcheck disable=SC2086 # 发行版原文的 chmod ${mode:-700}，一字不改
+# Executes only if the polydir path is safe
+if [ "$5" = 1 ]; then
+
+    if [ "$3" = 1 ]; then
+            # This line will fix the labeling on all newly created directories
+            [ -x /sbin/restorecon ] && /sbin/restorecon "$1"
+            user="$4"
+            passwd=$(getent passwd "$user")
+            homedir=$(echo "$passwd" | cut -f6 -d":")
+            if [ "$1" = "$homedir" ]; then
+                    gid=$(echo "$passwd" | cut -f4 -d":")
+                    cp -rT /etc/skel "$homedir"
+                    chown -R "$user":"$gid" "$homedir"
+                    mask=$(sed -E -n 's/^UMASK[[:space:]]+([^#[:space:]]+).*/\1/p' /etc/login.defs)
+                    mode=$(printf "%o" $((0777 & ~mask)))
+                    chmod ${mode:-700} "$homedir"
+                    [ -x /sbin/restorecon ] && /sbin/restorecon -R "$homedir"
+            fi
+    fi
+fi
+exit 0

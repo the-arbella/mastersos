@@ -1,0 +1,8 @@
+# cross images: a real musl cross toolchain (compiler, sysroot and headers), which `ring` (C and assembly) needs.
+# The tag is cross's release; bump it together with `cargo install cross`.
+[target.x86_64-unknown-linux-musl]
+image = "ghcr.io/cross-rs/x86_64-unknown-linux-musl:0.2.5"
+
+# mastersos-mcp's aarch64 Linux build
+[target.aarch64-unknown-linux-musl]
+image = "ghcr.io/cross-rs/aarch64-unknown-linux-musl:0.2.5"

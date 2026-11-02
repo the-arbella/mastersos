@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "Xestionado por %s"
+
+msgid "Shut down"
+msgstr "Apagar"
+
+msgid "Browse as Guest"
+msgstr "Navegar como convidado"
+
+msgid "Add person"
+msgstr "Engadir persoa"
+
+msgid "Apps"
+msgstr "Aplicacións"
+
+msgid "Cancel"
+msgstr "Cancelar"
+
+msgid "Retry"
+msgstr "Reintentar"
+
+msgid "Opening the sign-in page…"
+msgstr "Abrindo a páxina de inicio de sesión…"
+
+msgid "The sign-in page could not be opened."
+msgstr "Non se puido abrir a páxina de inicio de sesión."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Non se pode contactar coa escola. Conecta á Wi-Fi desde a barra superior e volve tentalo."
+
+msgid "School email"
+msgstr "Correo electrónico da escola"
+
+msgid "IT local account"
+msgstr "Conta local de TI"
+
+msgid "Username"
+msgstr "Nome de usuario"
+
+msgid "This account cannot sign in on this computer."
+msgstr "Esta conta non pode iniciar sesión neste ordenador."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "Esta conta non pode iniciar sesión neste ordenador. Usa o teu correo electrónico da escola (%s)."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Iniciaches sesión cunha conta diferente. Volve iniciar sesión coa conta que escolleches aquí."
+
+msgid "Language"
+msgstr "Idioma"
+
+msgid "Keyboard"
+msgstr "Teclado"
+
+msgid "Continue"
+msgstr "Continuar"
+
+msgid "The setting could not be saved. Try again."
+msgstr "Non se puido gardar o axuste. Téntao de novo."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "A túa conta está desactivada. Contacta coa túa persoa administradora."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "Este dispositivo está desactivado. Contacta coa túa persoa administradora."
+
+msgid "Sign in with your school account."
+msgstr "Inicia sesión coa túa conta da escola."
+
+msgid "Could not sign in. Please try again."
+msgstr "Non se puido iniciar sesión. Téntao de novo."
+
+msgid "Authentication request cancelled"
+msgstr "Solicitude de autenticación cancelada"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "Alcanzouse o número máximo de intentos de autenticación"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Erro ao obter o token de acceso. Téntao de novo."
+
+msgid "Invalid user name"
+msgstr "Nome de usuario non válido"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "A escola bloqueou este ordenador; contacta con TI"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "Non se permite iniciar sesión como convidado neste ordenador"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "As contas locais non poden iniciar sesión neste ordenador"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "As contas da escola non poden iniciar sesión neste ordenador"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Esta aplicación só se pode abrir desde a pantalla de inicio de sesión"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Esta aplicación necesita unha rede. Conecta á Wi-Fi desde a barra superior e volve tentalo."

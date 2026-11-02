@@ -1,0 +1,16 @@
+# initrd 里有两处 drop-in 照抄了 systemd 生成 / 打包的东西，只对这个 systemd 版本核对过：
+#   mkosi.initrd.conf/…/systemd-cryptsetup@root.service.d/50-mastersos.conf   照抄 gpt-auto 生成器的 ExecStart（Task 3 修复轮 1）
+#   mkosi.initrd.conf/…/systemd-repart.service.d/50-mastersos-bootstrap-key.conf  照抄 systemd-repart.service 的 ExecStart，末尾加 --key-file（4b Task 4）
+# systemd 259.5-0ubuntu3.4 的 systemd-repart.service 原文（`systemctl cat systemd-repart.service`，也见构建出的 initrd）：
+#   ExecStart=systemd-repart --dry-run=no
+# 我们的 drop-in 先 `ExecStart=` 清空，再写 `ExecStart=systemd-repart --dry-run=no --key-file=/run/mastersos/luks-bootstrap-key`，其余逐字相同。
+# 原文也记在 docs/keys.md「照抄的 systemd 原文」与 lab/results/4a-tpm-matrix.txt。镜像里的 systemd 包版本与下面
+# 不同时 mkosi.finalize 拒绝构建：先对着新版本的生成 / 打包结果重新比对这两处，跑矩阵第 1、3、5 行，
+# 再改这里。
+# 2026-10-27 升到 259.9-0ubuntu0.1（resolute 更新了 systemd，计划 9 的第一次 lab 构建被 finalize 拦下）：
+#   systemd-repart.service 的 ExecStart 仍是 `systemd-repart --dry-run=no`（resolute 容器里装 259.9-0ubuntu0.1 看的）；
+#   上游 v259.5…v259.9 的 gpt-auto-generator.c 与 shared/generator.c 逐行比过：cryptsetup 服务的 ExecStart 格式
+#   （generator.c 的 `attach '%s' '%s' '%s' '%s'`）与 add_root_cryptsetup 的参数没变；变的是 [Unit] 段多了
+#   After=systemd-udevd.service（我们的 drop-in 不碰 [Unit]）、配额检查与 verity 的报错处理。
+#   矩阵第 1、3、5 行在计划 9 的验收里跑（lab/kiosk-acceptance.md M26），结果记在 lab/results/2026-10-26-9/。
+259.9-0ubuntu0.1

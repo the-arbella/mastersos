@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "Administrert av %s"
+
+msgid "Shut down"
+msgstr "Slå av"
+
+msgid "Browse as Guest"
+msgstr "Surf som gjest"
+
+msgid "Add person"
+msgstr "Legg til person"
+
+msgid "Apps"
+msgstr "Apper"
+
+msgid "Cancel"
+msgstr "Avbryt"
+
+msgid "Retry"
+msgstr "Prøv igjen"
+
+msgid "Opening the sign-in page…"
+msgstr "Åpner påloggingssiden …"
+
+msgid "The sign-in page could not be opened."
+msgstr "Kunne ikke åpne påloggingssiden."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Får ikke kontakt med skolen. Koble til Wi-Fi fra linjen øverst og prøv igjen."
+
+msgid "School email"
+msgstr "Skolens e-postadresse"
+
+msgid "IT local account"
+msgstr "Lokal IT-konto"
+
+msgid "Username"
+msgstr "Brukernavn"
+
+msgid "This account cannot sign in on this computer."
+msgstr "Denne kontoen kan ikke logge på denne datamaskinen."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "Denne kontoen kan ikke logge på denne datamaskinen. Bruk skolens e-postadresse din (%s)."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Du logget på med en annen konto. Logg på igjen med kontoen du valgte her."
+
+msgid "Language"
+msgstr "Språk"
+
+msgid "Keyboard"
+msgstr "Tastatur"
+
+msgid "Continue"
+msgstr "Fortsett"
+
+msgid "The setting could not be saved. Try again."
+msgstr "Kunne ikke lagre innstillingen. Prøv igjen."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "Kontoen din er deaktivert. Kontakt administratoren."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "Denne enheten er deaktivert. Kontakt administratoren."
+
+msgid "Sign in with your school account."
+msgstr "Logg på med skolekontoen din."
+
+msgid "Could not sign in. Please try again."
+msgstr "Kunne ikke logge på. Prøv igjen."
+
+msgid "Authentication request cancelled"
+msgstr "Autentiseringsforespørselen ble avbrutt"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "Maksimalt antall autentiseringsforsøk er nådd"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Feil ved henting av tilgangstoken. Prøv igjen."
+
+msgid "Invalid user name"
+msgstr "Ugyldig brukernavn"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "Denne datamaskinen er låst av skolen. Kontakt IT-avdelingen"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "Gjestepålogging er ikke tillatt på denne datamaskinen"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "Lokale kontoer kan ikke logge på denne datamaskinen"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "Skolekontoer kan ikke logge på denne datamaskinen"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Denne appen kan bare åpnes fra påloggingsskjermen"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Denne appen trenger et nettverk. Koble til Wi-Fi fra linjen øverst og prøv igjen."

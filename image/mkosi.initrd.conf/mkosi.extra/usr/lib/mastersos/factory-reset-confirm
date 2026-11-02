@@ -1,0 +1,272 @@
+#!/bin/bash
+# ExecStart of mastersos-factory-reset-confirm.service (initrd only, when the command line has systemd.factory_reset, i.e. "Factory
+# reset" was chosen in the boot menu). The local part of Ruling 22, in order:
+#   1. tpm-probe is not 0 (unusable, or cannot tell) -> keep the data: a factory reset would delete the old partitions and then
+#      fail to create new ones.
+#   2. Is this machine managed: on the disk that holds the root partition, find the partition with GPT label mastersos-seed and
+#      mount it read-only to look for seed.toml. Present -> managed; the partition exists but cannot be mounted, or the disk
+#      cannot be found -> treated as managed (fail closed); no such partition or no seed.toml -> unmanaged.
+#   3. Managed and the root partition is LUKS: the LUKS header has a systemd-recovery token -> ask for this machine's recovery key
+#      first (300 seconds, at most 3 tries) and check it against the LUKS header with
+#      cryptsetup open --test-passphrase --disable-external-tokens (without --disable-external-tokens any passphrase "passes"
+#      through the TPM token, seen in 4a); no recovery token (escrow never succeeded) -> no local factory reset.
+#      Root partition: /dev/disk/by-designator/root-luks-ignore-factory-reset (in factory reset mode udev creates only this
+#      name, not root-luks - seen on VM 165), then root-luks; when neither exists, look on the boot disk by GPT type
+#      (x86-64 root). The disk certainly has no root partition, or isLuks says it is not LUKS (exit 1) -> no data to protect,
+#      go straight to step 4; cannot tell (disk not found, partitions cannot be listed, a partition's type cannot be read,
+#      isLuks exits with anything but 0/1) -> keep the data.
+#   4. Type ERASE (case-insensitive, 60 seconds).
+# Any step that is not right leaves factory reset mode (systemd-factory-reset complete --retrigger) and boots normally with the
+# data untouched; if leaving fails, exit non-zero: systemd-repart.service has Requires= on this unit, so repart does not run and
+# nothing is deleted. The recovery key never goes to the journal or onto any command line (only through a pipe into
+# cryptsetup's stdin).
+#
+# The recovery key is asked before ERASE: someone typing a recovery key (modhex letters, including j k l, ending with Enter)
+# may still be typing when the prompt times out and the machine restarts, and may pick factory reset in the systemd-boot menu
+# (every UKI entry has the hot key l, j/k move up and down); the rest of the key cannot spell ERASE (a and s are not modhex
+# letters), and on a managed machine the recovery key has to be passed first anyway.
+# A remote factory reset goes through the EFI variable set by systemd-factory-reset request; the kernel command line then has no
+# systemd.factory_reset, this unit does not run and asks nothing.
+#
+# Testable: the logic is in functions and the outside paths are the variables below (tests/factory-reset-confirm-test.sh points
+# them and the commands on PATH at stubs); when sourced it only defines, never runs.
+# Everything printed is English only: the console font has no CJK glyphs.
+set -euo pipefail
+
+FACTORY_RESET=/usr/lib/systemd/systemd-factory-reset
+TPM_PROBE=/usr/lib/mastersos/tpm-probe
+ROOT_LUKS=/dev/disk/by-designator/root-luks
+# In factory reset mode udev does not create root-luks, only this one (seen on VM 165: systemd 259's dissect renames the
+# partition that is about to be recreated)
+ROOT_LUKS_FR=/dev/disk/by-designator/root-luks-ignore-factory-reset
+SEED_MNT=/run/mastersos/seed-check
+EFIVARS=/sys/firmware/efi/efivars
+COMPLETE_FLAG=/run/systemd/factory-reset-complete
+
+LOADER_PART_VAR=LoaderDevicePartUUID-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f
+# GPT type of the x86-64 root partition (Type=root in repart.d/40-root.conf)
+ROOT_TYPE=4f68bce3-e8cd-4db1-96e7-fbcaf984b709
+SEED_LABEL=mastersos-seed
+WORD=ERASE
+KEY_TRIES=3
+
+say() { echo "mastersos-factory-reset: $*"; }
+
+# Leave factory reset mode (systemd's own way: write COMPLETE_FLAG, clear the EFI variable, retrigger the block devices), so
+# repart deletes no partition. If that fails, exit 1: repart does not run, this boot finds no root partition and the initrd
+# reboots - data is never deleted without the confirmation.
+keep_data() {
+	if ! "$FACTORY_RESET" complete --retrigger; then
+		say "could not leave factory reset mode (systemd-factory-reset complete failed), giving up this boot (data untouched)" >&2
+		exit 1
+	fi
+	if [ ! -e "$COMPLETE_FLAG" ]; then
+		say "could not leave factory reset mode (no ${COMPLETE_FLAG}), giving up this boot (data untouched)" >&2
+		exit 1
+	fi
+	say "left factory reset mode, the data is kept, booting normally"
+	exit 0
+}
+
+# 1. Go on only when the TPM is usable (tpm-probe exits 0); 1 (certainly unusable) and 255 (cannot tell) both keep the data.
+tpm_usable() {
+	local out rc=0
+	out=$("$TPM_PROBE") || rc=$?
+	[ "$rc" = 0 ] && return 0
+	say "The TPM is unusable; factory reset would fail, keeping the data${out:+ (${out})}"
+	return 1
+}
+
+# The root partition's device link (whichever of the two names exists first); 1 when neither does.
+root_link() {
+	local p
+	for p in "$ROOT_LUKS_FR" "$ROOT_LUKS"; do
+		if [ -e "$p" ]; then
+			printf '%s\n' "$p"
+			return 0
+		fi
+	done
+	return 1
+}
+
+# The disk that holds the root partition (or, without one, the ESP we booted from), e.g. vda, nvme0n1.
+boot_disk() {
+	local part="" uuid disk
+	if part=$(root_link); then
+		:
+	elif [ -r "$EFIVARS/$LOADER_PART_VAR" ]; then
+		# 4 bytes of attributes, then the UUID in UTF-16LE
+		uuid=$(tail -c +5 "$EFIVARS/$LOADER_PART_VAR" | tr -d '\0' | tr 'A-F' 'a-f')
+		[ -n "$uuid" ] && part=/dev/disk/by-partuuid/$uuid
+	fi
+	[ -n "$part" ] || return 1
+	disk=$(lsblk -no PKNAME "$part" 2>/dev/null) || return 1
+	disk=${disk%%$'\n'*}
+	[ -n "$disk" ] || return 1
+	printf '%s\n' "$disk"
+}
+
+# The root partition to check: a device link; without one, the root partition found by GPT type on boot disk $1.
+# Found: prints the path, returns 0; the disk certainly has no root partition: returns 1 (no data to protect); cannot tell:
+# returns 2 (disk not found, partitions cannot be listed, a partition's type cannot be read and no root partition was seen).
+root_device() {
+	local disk=$1 rows name type unknown=0
+	root_link && return 0
+	[ -n "$disk" ] || return 2
+	rows=$(lsblk -nrpo NAME,PARTTYPE "/dev/$disk") || return 2
+	while read -r name type; do
+		[ -n "$name" ] || continue
+		if [ "${type,,}" = "$ROOT_TYPE" ]; then
+			printf '%s\n' "$name"
+			return 0
+		fi
+		[ -n "$type" ] || unknown=1
+	done <<<"$rows"
+	[ "$unknown" = 0 ] && return 1
+	return 2
+}
+
+# Is the root partition LUKS: 0 yes, 1 no, 2 cannot tell (cryptsetup isLuks exits with anything but 0 / 1: device cannot be
+# opened and the like).
+luks_state() {
+	local rc=0
+	cryptsetup isLuks "$1" || rc=$?
+	case "$rc" in
+	0 | 1) return "$rc" ;;
+	*) return 2 ;;
+	esac
+}
+
+# 2. Managed: returns 0. Only mastersos-seed on boot disk $1 (empty = not found) counts (same-named partitions on sticks or
+# other disks do not).
+is_managed() {
+	local disk=$1 parts name label seed="" found=1
+	if [ -z "$disk" ]; then
+		say "cannot find the disk that holds the root partition, treating the machine as managed"
+		return 0
+	fi
+	if ! parts=$(lsblk -nrpo NAME,PARTLABEL "/dev/$disk"); then
+		say "cannot list the partitions of /dev/$disk, treating the machine as managed"
+		return 0
+	fi
+	while read -r name label; do
+		if [ "$label" = "$SEED_LABEL" ]; then
+			seed=$name
+			break
+		fi
+	done <<<"$parts"
+	if [ -z "$seed" ]; then
+		say "/dev/$disk has no $SEED_LABEL partition: unmanaged"
+		return 1
+	fi
+	# /run/mastersos is also created (0700) by the first-boot bootstrap key unit: whoever creates it, it is 0700
+	(umask 077 && mkdir -p "$SEED_MNT")
+	if ! mount -t ext4 -o ro,nosuid,nodev,noexec "$seed" "$SEED_MNT"; then
+		say "the $SEED_LABEL partition (${seed}) cannot be mounted, treating the machine as managed"
+		return 0
+	fi
+	[ -e "$SEED_MNT/seed.toml" ] && found=0
+	umount "$SEED_MNT" || say "unmounting $SEED_MNT failed" >&2
+	if [ "$found" = 0 ]; then
+		say "the $SEED_LABEL partition has seed.toml: managed"
+	else
+		say "the $SEED_LABEL partition has no seed.toml: unmanaged"
+	fi
+	return "$found"
+}
+
+# The LUKS header has the token systemd-cryptenroll --recovery-key leaves (until escrow succeeds the agent keeps no other
+# passphrase slot).
+has_recovery_token() {
+	local meta
+	meta=$(cryptsetup luksDump --dump-json-metadata "$1") || return 1
+	[[ $meta == *'"systemd-recovery"'* ]]
+}
+
+# Normalise a typed recovery key (Ruling 22): drop whitespace and -, lower-case; 64 modhex letters get a - after every 8 again.
+# Writes to stdout only.
+normalize_key() {
+	local k=${1//[[:space:]]/} out="" i
+	k=${k//-/}
+	k=${k,,}
+	if [ "${#k}" = 64 ] && [[ $k =~ ^[cbdefghijklnrtuv]+$ ]]; then
+		for ((i = 0; i < 64; i += 8)); do
+			out+=${out:+-}${k:i:8}
+		done
+		k=$out
+	fi
+	printf '%s' "$k"
+}
+
+# 3. Ask for the recovery key and check it against the LUKS header of root partition $1; 0 when right. The key only lives in
+# this shell's variables and on the pipe, never on a command line (printf is a builtin).
+recovery_key_ok() {
+	local dev=$1 n raw
+	for ((n = 1; n <= KEY_TRIES; n++)); do
+		if ! raw=$(systemd-ask-password --timeout=300 --echo=masked --id=mastersos-factory-reset-key --emoji=no \
+			"This computer is managed: enter its recovery key to factory reset (attempt $n of $KEY_TRIES):"); then
+			say "no recovery key within 300 seconds (or the question could not be asked), not resetting"
+			return 1
+		fi
+		if normalize_key "$raw" | cryptsetup open --test-passphrase --disable-external-tokens --key-file=- "$dev"; then
+			say "recovery key is correct"
+			return 0
+		fi
+		say "Wrong recovery key (attempt $n of $KEY_TRIES)"
+	done
+	say "the recovery key was wrong $KEY_TRIES times, not resetting"
+	return 1
+}
+
+# 4. Type ERASE (case-insensitive, whitespace ignored); a wrong word, 60 seconds without an answer or a question that cannot be
+# asked all return 1.
+erase_confirmed() {
+	local answer=""
+	if ! answer=$(systemd-ask-password --timeout=60 --echo=yes --id=mastersos-factory-reset \
+		--emoji=no "Factory reset ERASES ALL DATA on this computer. Type ${WORD} to continue, anything else to keep the data:"); then
+		say "no answer within 60 seconds (or the question could not be asked), not resetting"
+		return 1
+	fi
+	answer=$(printf '%s' "$answer" | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]')
+	if [ "$answer" != "$WORD" ]; then
+		[ -n "$answer" ] && say "that was not ${WORD}, not resetting"
+		return 1
+	fi
+	return 0
+}
+
+main() {
+	local disk root rc=0
+	tpm_usable || keep_data
+	# The unit runs after initrd-usr-fs.target (/usr, the root partition and the seed partition are on the same disk, so the
+	# disk is known); wait for the udev events of its partitions so the by-designator links and partition labels are
+	# complete. A failure does not block.
+	udevadm settle --timeout=30 || say "udevadm settle did not finish, going on" >&2
+	disk=$(boot_disk) || disk=""
+	if is_managed "$disk"; then
+		root=$(root_device "$disk") || rc=$?
+		[ "$rc" = 0 ] && { luks_state "$root" || rc=$((10 + $?)); }
+		# rc: 0 LUKS; 1 no root partition on the disk; 11 the root partition is not LUKS; 2 / 12 cannot tell
+		if [ "$rc" = 2 ] || [ "$rc" = 12 ]; then
+			say "cannot tell whether a root partition exists or is LUKS, keeping the data this time"
+			keep_data
+		elif [ "$rc" = 0 ]; then
+			say "root partition ${root} is LUKS, checking the recovery key first"
+			if ! has_recovery_token "$root"; then
+				say "No escrowed recovery key yet: use remote reset or reinstall from USB"
+				keep_data
+			fi
+			recovery_key_ok "$root" || keep_data
+		else
+			say "no encrypted root partition on the boot disk (or it is not LUKS): no data to protect, only ${WORD} is needed"
+		fi
+	fi
+	erase_confirmed || keep_data
+	say "confirmed (${WORD}), factory reset: deleting and recreating the encrypted root partition"
+	exit 0
+}
+
+# When sourced, only define the functions
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+	main "$@"
+fi

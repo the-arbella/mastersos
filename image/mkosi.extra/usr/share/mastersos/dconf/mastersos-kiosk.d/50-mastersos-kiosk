@@ -1,0 +1,36 @@
+# kiosk 账号的会话（DCONF_PROFILE=mastersos-kiosk）读的默认值与锁（计划 9 设计 §4.6）。postinst 用 dconf compile 编成
+# /usr/share/mastersos/dconf/mastersos-kiosk（file-db，在只读的 /usr 里，不经 /etc 与机器上的 dconf update）。
+# Ctrl+Alt+F1…F12：gnome-kiosk 自己也会把切 VT 的快捷键去掉，这里再清空并锁住（不靠它的默认）。
+# 媒体键里起程序的快捷键（终端 Ctrl+Alt+T、主目录、浏览器、邮件、搜索、设置、帮助、计算器，含键盘上专用键的 -static）与自定义
+# 快捷键：gsd-media-keys 在这个会话里跑（音量键要用），这几项清空并锁住。类型照 resolute 的 gnome-settings-daemon 50 与
+# mutter 50 的 schema 一律是 as——类型不对的值 GSettings 不认、照用默认值，锁住的就成了默认的快捷键（postinst 逐项核对）
+[org/gnome/mutter/wayland/keybindings]
+switch-to-session-1=@as []
+switch-to-session-2=@as []
+switch-to-session-3=@as []
+switch-to-session-4=@as []
+switch-to-session-5=@as []
+switch-to-session-6=@as []
+switch-to-session-7=@as []
+switch-to-session-8=@as []
+switch-to-session-9=@as []
+switch-to-session-10=@as []
+switch-to-session-11=@as []
+switch-to-session-12=@as []
+
+[org/gnome/settings-daemon/plugins/media-keys]
+terminal=@as []
+home=@as []
+www=@as []
+email=@as []
+search=@as []
+control-center=@as []
+help=@as []
+calculator=@as []
+home-static=@as []
+www-static=@as []
+email-static=@as []
+search-static=@as []
+control-center-static=@as []
+calculator-static=@as []
+custom-keybindings=@as []

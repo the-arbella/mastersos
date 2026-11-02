@@ -1,0 +1,152 @@
+name: mastersos
+on:
+  push:
+    # Dependabot branches run through their pull request only
+    branches-ignore: ["dependabot/**"]
+  pull_request:
+  # Advisories land without any commit here
+  schedule:
+    - cron: "17 2 * * 1"
+  # server-dist by hand (a release build of mastersos-server)
+  workflow_dispatch:
+
+jobs:
+  core:
+    # The public repository has the faster runners; the test host runs this suite for the internal one
+    if: github.repository == 'the-arbella/mastersos' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The runner's ~14 GB free fills up with a debug workspace build plus the test binaries (2026-10-21: ENOSPC / ld bus error);
+      # drop the preinstalled toolchains this job never uses
+      - run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: "1.98"
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      # mastersos-agent 的测试依赖 glib（Ruling 15：网页应用启动器的转义对着 GLib 读回），glib-sys 要系统的开发包
+      - run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev pkg-config
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace --no-fail-fast
+  # Known vulnerabilities, licences and registries (core/deny.toml)
+  deps:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: "1.98"
+      - run: cargo install cargo-deny --locked --version 0.20.2
+      - run: cargo deny --workspace check
+
+  # The image is only built on the build host (spec §9); CI runs static checks only: shellcheck and tests/check-tree.sh
+  image-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # sbsigntool、systemd-boot-efi、openssl：shim 证书链的两个测试（shim-chain-test 与 publish-test 的证书链闸门，4b Task 22）
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck zstd unzip gnupg dosfstools mtools sbsigntool systemd-boot-efi openssl
+      - run: >-
+          shellcheck -x image/*.sh image/lab/*.sh image/lab/idp/*.sh image/tests/*.sh image/ceremony/*.sh
+          image/mkosi.finalize image/mkosi.postinst.chroot image/mkosi.build
+          image/mkosi.extra/usr/lib/mastersos/health-check
+          image/mkosi.extra/usr/lib/mastersos/bootloader-update
+          image/mkosi.extra/usr/lib/mastersos/golden-lib
+          image/mkosi.extra/usr/lib/mastersos/integrity
+          image/mkosi.extra/usr/lib/mastersos/golden-fetch
+          image/mkosi.extra/usr/lib/mastersos/installer-mount
+          image/mkosi.extra/usr/lib/systemd/system-generators/mastersos-seed-generator
+          image/mkosi.extra/usr/lib/mastersos/etc-migrate
+          image/mkosi.extra/usr/lib/mastersos/update-done
+          image/mkosi.extra/usr/lib/mastersos/update-run
+          image/mkosi.extra/usr/lib/mastersos/interface-denied
+          image/mkosi.extra/usr/lib/mastersos/browser-wait
+          image/mkosi.extra/usr/lib/mastersos/login-browser
+          image/mkosi.extra/usr/bin/mastersos-kiosk
+          image/mkosi.extra/usr/lib/mastersos/mastersos-kiosk-exit
+          image/mkosi.extra/etc/security/namespace.init
+          image/mkosi.profiles/lab.extra/usr/lib/mastersos/create-lab-user
+          image/mkosi.initrd.conf/mkosi.extra/usr/lib/mastersos/tpm-probe
+          image/mkosi.initrd.conf/mkosi.extra/usr/lib/mastersos/golden-lib
+          image/mkosi.initrd.conf/mkosi.extra/usr/lib/mastersos/factory-reset-confirm
+          image/mkosi.initrd.conf/mkosi.extra/usr/lib/mastersos/luks-bootstrap-key
+          image/mkosi.initrd.conf/mkosi.extra/usr/lib/mastersos/luks-bootstrap-persist
+          image/mkosi.initrd.conf/mkosi.extra/usr/lib/mastersos/usr-repair
+          image/mkosi.initrd.conf/mkosi.extra/usr/lib/mastersos/ventoy-attach
+          image/tests/fake-aws
+      - run: bash image/tests/check-tree.sh
+      # 正式私钥只从 tmpfs 读（keyset_priv release）与 key-leak-check.py；ceremony-test.sh 要 root 与 loop 设备，只 shellcheck、不在这里跑
+      - run: bash image/tests/keyset-test.sh
+      - run: bash image/tests/health-check-test.sh
+      # golden-lib: partition lookup, signature/UKI parsing, decision table; (i) functions under an initrd-only PATH (usr-self-repair Task 2)
+      - run: bash image/tests/golden-lib-test.sh
+      # integrity: --boot-ok, active/golden verdicts, 7-day full-read interval, JSON history, notification text and session choice (usr-self-repair Task 4)
+      - run: bash image/tests/integrity-test.sh
+      # golden-fetch: file:// channel with a throwaway gpg key; signed SHA256SUMS, sha256 of each file, running root hash, write order, cache then official source, never downgrade (usr-self-repair Task 7)
+      - run: bash image/tests/golden-fetch-test.sh
+      # usr-repair: initrd decision table, block-for-block repair from the golden copy, attempt count, lab hook; whole runs under an initrd-only PATH (usr-self-repair Task 6)
+      - run: bash image/tests/usr-repair-test.sh
+      # ventoy-attach: finds the one MastersOS folder, checks version and size of the system file (no hash: the copy is trusted; a damaged one shows up later as I/O errors on the installed machine), attaches it; every refusal waits for Enter, then restarts (Ventoy installer Task 2)
+      - run: bash image/tests/ventoy-attach-test.sh
+      # installer-mount: stick mode needs LoaderDevicePartUUID and mounts ESP + seed; Ventoy mode mounts only the loop disk's partition 1 read-only (Ventoy installer Task 3)
+      - run: bash image/tests/installer-mount-test.sh
+      - run: bash image/tests/luks-bootstrap-test.sh
+      # /etc/.updated 在 sysext 合并之前记、比 /usr 新的旧记录删掉（4b Task 12 复审 F3、N1）
+      - run: bash image/tests/update-done-test.sh
+      # School cache fallback: if updating via the cache fails, retry from the official source using the fallback dir the agent wrote (plan 5 Task 12)
+      - run: bash image/tests/update-run-test.sh
+      # browser-wait: Chrome there, full / no session-mode (one notification), learning (zenity until Chrome appears), window closed, kiosk-* skipped, th/zh first line (offline status Task 4)
+      - run: bash image/tests/browser-wait-test.sh
+      # 考试扩展的 crx3 打包（计划 9 Task 7）：一次性钥匙现生成，openssl 验签，id、updates.xml、宿主清单、kiosk-ext.json、不漏私钥
+      - run: bash image/tests/kiosk-ext-pack-test.sh
+        env:
+          MASTERSOS_KIOSK_EXT_TEST_REQUIRE: "1"
+      # PAM 钩子的插行位置（MASTERSOS_PAM_HOOKS=1 时由 postinst 调 pam-hooks.sh），样本是 VM 165 上的原文件
+      - run: bash image/tests/pam-hooks-test.sh
+      # 锁定应用的 namespace.init（计划 9 Task 8）：kiosk 账号的 Chrome 策略实例怎么填、哪些情形拒绝，换掉路径与属主后跑真的脚本
+      - run: bash image/tests/namespace-init-test.sh
+      # common-password 按用户名分流、authd 行带 --exec-env=CI=1（postinst 调 pam-password.sh），样本是 authd 0.6.1 的 profile 与 VM 165 上的原文件
+      - run: bash image/tests/pam-password-test.sh
+      # /etc/systemd/user 的启用链接按允许清单搬到 /usr、清单外的拒绝构建（mkosi.finalize 调 user-units.sh）
+      - run: bash image/tests/user-units-test.sh
+      # 旧镜像留下的 /etc 链接：dir 的删掉、copy 只删指回 factory 的（4b Task 20：升级上来的机器 /etc/locale.conf 写不进）
+      - run: bash image/tests/etc-migrate-test.sh
+      # 恢复出厂的本机确认（Ruling 22）：TPM、受管、恢复密钥、ERASE 的各个分支，桩代替 cryptsetup 等
+      - run: bash image/tests/factory-reset-confirm-test.sh
+      # UKI 的 PCR 签名把关（只签 enter-initrd）：build.sh / make-installer.sh / check_uki 共用的 keyset_check_uki
+      - run: bash image/tests/uki-check-test.sh
+      # accept-4a.sh 在 guest agent 失败或远端块没打印时不许空着通过（不碰 VM）
+      - run: bash image/tests/accept-4a-vacuous-test.sh
+      # 缺 sbsigntool / systemd-boot-efi 时算失败，不是整套跳过（复审 Minor 2）
+      - run: bash image/tests/publish-test.sh
+        env:
+          MASTERSOS_PUBLISH_TEST_REQUIRE: "1"
+      # 微软 DBXUpdate.bin 的导入（plan 5 Task 6）；缺 sbsigntool 算失败
+      - run: bash image/tests/dbx-import-test.sh
+        env:
+          MASTERSOS_PUBLISH_TEST_REQUIRE: "1"
+      # sync-s3.sh 的顺序（先版本文件、再清单、失效完成后才删）与拒绝，假 aws 顶替真的
+      - run: bash image/tests/sync-s3-test.sh
+        env:
+          MASTERSOS_PUBLISH_TEST_REQUIRE: "1"
+      # 真的 mastersos-agent shim-check 对真的 sbverify：测试 CA 单签、双签的映像，printf 拼的 db（4b Task 22）；缺工具算失败
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: "1.98"
+      # shim-chain-test 现编 mastersos-agent（--locked）：缓存依赖，免得每次冷编整棵依赖树（复审 Minor 3）
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: core
+      - run: bash image/tests/shim-chain-test.sh
+        env:
+          MASTERSOS_SHIM_CHAIN_REQUIRE: "1"
+      # loop 挂载的 FAT32 上注入失败与断电（要 root）
+      - run: sudo bash image/tests/bootloader-update-test.sh
+

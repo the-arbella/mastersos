@@ -1,0 +1,117 @@
+name: mastersos-image
+on:
+  # By hand only: a build costs about an hour of the free plan's Actions minutes
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Key set
+        type: choice
+        options: [lab, release]
+        default: lab
+      version:
+        description: Image version such as 20261102.1; empty means today plus the run number
+        required: false
+      snapshot:
+        description: Ubuntu snapshot such as 20261102T000000Z; empty means today
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mastersos-image
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'the-arbella/mastersos-internal'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 300
+    env:
+      PROFILE: ${{ inputs.profile || 'lab' }}
+    steps:
+      # GitHub Free has no approval gate for a private repository; this guard is the whole protection (ruled 2026-11-02)
+      - name: Release builds only from master, by hand, by the owner
+        if: env.PROFILE == 'release' && (github.ref != 'refs/heads/master' || github.event_name != 'workflow_dispatch' || github.triggering_actor != 'dawei101')
+        run: |
+          echo "release images are built from master, by hand, by the owner" >&2
+          exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up the runner
+        env:
+          MASTERSOS_LAB_KEYS_B64: ${{ env.PROFILE == 'lab' && secrets.MASTERSOS_LAB_KEYS_B64 || '' }}
+        run: bash image/ci-runner-setup.sh "$PROFILE"
+      - name: Load the release keys
+        if: env.PROFILE == 'release'
+        env:
+          MASTERSOS_RELEASE_KEYS_AGE_B64: ${{ secrets.MASTERSOS_RELEASE_KEYS_AGE_B64 }}
+          MASTERSOS_AGE_PASSPHRASE: ${{ secrets.MASTERSOS_AGE_PASSPHRASE }}
+        run: |
+          age_file=$(mktemp -p /dev/shm)
+          base64 -d <<<"$MASTERSOS_RELEASE_KEYS_AGE_B64" >"$age_file"
+          python3 -I image/ci-load-release-keys.py "$age_file"
+          rm -f "$age_file"
+      - name: Build
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_SNAPSHOT: ${{ inputs.snapshot }}
+        run: |
+          version=${INPUT_VERSION:-$(date -u +%Y%m%d).$GITHUB_RUN_NUMBER}
+          [[ $version =~ ^[0-9]{8}\.[0-9]+$ ]] || { echo "bad version" >&2; exit 1; }
+          echo "VERSION=$version" >>"$GITHUB_ENV"
+          if [ -n "$INPUT_SNAPSHOT" ]; then
+            [[ $INPUT_SNAPSHOT =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || { echo "bad snapshot" >&2; exit 1; }
+            export MASTERSOS_SNAPSHOT=$INPUT_SNAPSHOT
+          fi
+          args=()
+          if [ "$PROFILE" = lab ]; then args=(--profile lab); fi
+          # snapshot.ubuntu.com answers 5xx now and then; a retry keeps mkosi's package cache and only fetches what is missing
+          for attempt in 1 2 3; do
+            if image/build.sh "$version" "${args[@]}"; then exit 0; fi
+            echo "::warning::build attempt $attempt failed"
+            sleep 120
+          done
+          exit 1
+      - name: Scan the output for private keys
+        id: leak_scan
+        if: always()
+        run: |
+          keys=/run/mastersos-release-keys
+          if [ "$PROFILE" = lab ]; then keys=$HOME/mastersos-keys/lab; fi
+          python3 -I image/key-leak-check.py "$keys" image/mkosi.output
+      - name: Wipe the release keys
+        if: always() && env.PROFILE == 'release'
+        run: image/keys-unload.sh
+      # A release asset is at most 2 GiB; a bigger file goes up in parts, `cat <file>.part-* > <file>` restores it
+      - name: Publish to a GitHub Release
+        if: steps.leak_scan.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          out=image/mkosi.output/$VERSION
+          assets=$(mktemp -d)
+          cp "$out"/build-info.txt "$assets/"
+          for f in "$out"/MastersOS-*.zip "$out"/MastersOS-*.img.zst; do
+            [ -e "$f" ] || continue
+            if [ "$(stat -c %s "$f")" -gt 2000000000 ]; then
+              split -b 1900M -d "$f" "$assets/$(basename "$f").part-"
+            else
+              cp "$f" "$assets/"
+            fi
+          done
+          (cd "$assets" && sha256sum -- * >SHA256SUMS)
+          gh release create "image-$PROFILE-$VERSION" "$assets"/* --prerelease --target "$GITHUB_SHA" \
+            --title "MastersOS $VERSION ($PROFILE)" --notes "Commit $GITHUB_SHA, run $GITHUB_RUN_ID."
+      - name: Keep the build record
+        if: always() && steps.leak_scan.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mastersos-image-record
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            image/mkosi.output/build-*.log
+            image/mkosi.output/*/build-info.txt
+            image/mkosi.output/*/*.manifest

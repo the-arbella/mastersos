@@ -1,0 +1,8 @@
+MastersOS is licensed under the MIT License (see LICENSE), except as noted here.
+
+image/patches/authd-oidc/ contains patches to the authd OIDC broker
+(https://github.com/canonical/authd). The broker is licensed under GPL-3.0,
+and these patches are distributed under the GPL-3.0 as modifications of it.
+
+Operating system images built from this repository contain third-party
+packages under their own licences.

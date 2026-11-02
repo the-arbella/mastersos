@@ -1,0 +1,21 @@
+# Task 20 test bundle: a laptop cart (the learning mode, school accounts and guest, two web apps, URLBlocklist).
+# One [[group]] and its [[config]]; accept-4b.sh's bundle() builds the full manifest (see teacher.toml).
+[[group]]
+id = "cart"
+name = "Grade 3 cart T20"
+config = "cart"
+
+[[config]]
+id = "cart"
+name = "Grade 3 cart T20"
+login_methods = ["sso", "guest"]
+interface = "learning"
+
+[config.apps]
+web = [
+  { name = "Wikipedia", url = "https://www.wikipedia.org/", icon = "https://www.wikipedia.org/static/apple-touch/wikipedia.png" },
+  { name = "Khan Academy", url = "https://www.khanacademy.org/" },
+]
+
+[config.chrome_policy]
+URLBlocklist = ["example.org"]

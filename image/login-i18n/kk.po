@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "Басқарушы: %s"
+
+msgid "Shut down"
+msgstr "Өшіру"
+
+msgid "Browse as Guest"
+msgstr "Қонақ ретінде шолу"
+
+msgid "Add person"
+msgstr "Адам қосу"
+
+msgid "Apps"
+msgstr "Қолданбалар"
+
+msgid "Cancel"
+msgstr "Бас тарту"
+
+msgid "Retry"
+msgstr "Қайталау"
+
+msgid "Opening the sign-in page…"
+msgstr "Кіру беті ашылуда…"
+
+msgid "The sign-in page could not be opened."
+msgstr "Кіру бетін ашу мүмкін болмады."
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Мектепке қосылу мүмкін емес. Жоғарғы жолақтан Wi-Fi желісіне қосылып, қайталап көріңіз."
+
+msgid "School email"
+msgstr "Мектеп электрондық поштасы"
+
+msgid "IT local account"
+msgstr "IT жергілікті тіркелгісі"
+
+msgid "Username"
+msgstr "Пайдаланушы аты"
+
+msgid "This account cannot sign in on this computer."
+msgstr "Бұл тіркелгімен осы компьютерге кіру мүмкін емес."
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "Бұл тіркелгімен осы компьютерге кіру мүмкін емес. Мектеп поштасын (%s) пайдаланыңыз."
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "Сіз басқа тіркелгімен кірдіңіз. Осында таңдаған тіркелгімен қайта кіріңіз."
+
+msgid "Language"
+msgstr "Тіл"
+
+msgid "Keyboard"
+msgstr "Пернетақта"
+
+msgid "Continue"
+msgstr "Жалғастыру"
+
+msgid "The setting could not be saved. Try again."
+msgstr "Параметрді сақтау мүмкін болмады. Қайталап көріңіз."
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "Тіркелгіңіз өшірілген. Әкімшіге хабарласыңыз."
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "Бұл құрылғы өшірілген. Әкімшіге хабарласыңыз."
+
+msgid "Sign in with your school account."
+msgstr "Мектеп тіркелгісімен кіріңіз."
+
+msgid "Could not sign in. Please try again."
+msgstr "Кіру мүмкін болмады. Қайталап көріңіз."
+
+msgid "Authentication request cancelled"
+msgstr "Аутентификация сұрауы тоқтатылды"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "Аутентификация әрекеттерінің ең көп саны таусылды"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "Қолжетімділік токенін алу қатесі. Қайталап көріңіз."
+
+msgid "Invalid user name"
+msgstr "Пайдаланушы аты жарамсыз"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "Бұл компьютерді мектеп құлыптаған; IT бөліміне хабарласыңыз"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "Бұл компьютерде қонақ ретінде кіруге рұқсат жоқ"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "Жергілікті тіркелгілермен бұл компьютерге кіру мүмкін емес"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "Мектеп тіркелгілерімен бұл компьютерге кіру мүмкін емес"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "Бұл қолданбаны тек кіру экранынан ашуға болады"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "Бұл қолданбаға желі қажет. Жоғарғы жолақтан Wi-Fi желісіне қосылып, қайталап көріңіз."

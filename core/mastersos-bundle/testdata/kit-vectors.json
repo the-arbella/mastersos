@@ -1,0 +1,50 @@
+{
+  "note": "TEST-ONLY masters: fixed, public values. Never use these kits for a school.",
+  "vectors": [
+    {
+      "name": "test-only-zero",
+      "master_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "text": "MASTERSKIT1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQDW73HA",
+      "display": "MAST ERSK IT1Q QQQQ QQQQ QQQQ QQQQ QQQQ QQQQ QQQQ QQQQ QQQQ QQQQ QQQQ QQQQ QQQD W73H A",
+      "ed25519_seed_hex": "f6d33c6a4fe4ebe94434a8b32a52f45a232ed5a5cb883e36aa15d4103da2983d",
+      "key_id": "rk-52b09b06",
+      "public_key": "gotU2wLmxLbW15zLRsGEg4vY4AI+33935bc2zw6PTrA=",
+      "fingerprint": "52b0-9b06-0025-b147",
+      "escrow_identity": "AGE-SECRET-KEY-16FUW2HTH2KQ8XFDHCWP23GNUAP6LGVE0835TQ0NDZKSQMRSLG5USZH6GXQ",
+      "escrow_recipient": "age1962wfdvfcg5z5wlmnlkylrjpcvm3lh9vqf22yw9pa2s6jnjqr4sqx26wpu",
+      "binding_nonce_b64": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+      "binding_message_b64": "bWFzdGVyc29zLWVzY3Jvdy1yZWNpcGllbnQtdjEKYWdlMTk2MndmZHZmY2c1ejV3bG1ubGt5bHJqcGN2bTNsaDl2cWYyMnl3OXBhMnM2am5qcXI0c3F4MjZ3cHUKWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+      "binding_sig_b64": "avNY5nVwzH+y3lgMFQTmDGKTRt7hhel8E+j9LzsxFsOUMYp3SVW6BkBUXSPpI/0kQbzHX4gdR6CZfZpy3FDOBQ=="
+    },
+    {
+      "name": "test-only-counting",
+      "master_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "text": "MASTERSKIT1QQQSYQCYQ5RQWZQFPG9SCRGWPUGPZYSNZS23V9CCRYDPK8QARC0SY64NHY",
+      "display": "MAST ERSK IT1Q QQSY QCYQ 5RQW ZQFP G9SC RGWP UGPZ YSNZ S23V 9CCR YDPK 8QAR C0SY 64NH Y",
+      "ed25519_seed_hex": "251a0d4d307998636b292b518415f56b85708063531ec727a7119b073da66548",
+      "key_id": "rk-67e5b2a4",
+      "public_key": "deRQegMQ/URzBLVgsuWwB/XSJuoAEKssOoiOklCKTF8=",
+      "fingerprint": "67e5-b2a4-0e2f-cb70",
+      "escrow_identity": "AGE-SECRET-KEY-1K490Z504DP799LDMQ4QMVRUYNCEV6JTE6NTCLFSPFK847XPKWZ7SF6HGFH",
+      "escrow_recipient": "age1kfjjl6ewlrterxagu2hj8dj2skdej607kffwvw9myr30wxx53e7qptmwz6",
+      "binding_nonce_b64": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+      "binding_message_b64": "bWFzdGVyc29zLWVzY3Jvdy1yZWNpcGllbnQtdjEKYWdlMWtmampsNmV3bHJ0ZXJ4YWd1MmhqOGRqMnNrZGVqNjA3a2Zmd3Z3OW15cjMwd3h4NTNlN3FwdG13ejYKWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+      "binding_sig_b64": "2T/0O5whibBf/wWWWctJlPzGSOkPF0N3z5AHzenlOWyLCEOEFfv0IFC78sDmWz25c9riyaH9pYOq2bZU4rR6Dg=="
+    },
+    {
+      "name": "test-only-ff",
+      "master_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "text": "MASTERSKIT1LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLS0SAQ72",
+      "display": "MAST ERSK IT1L LLLL LLLL LLLL LLLL LLLL LLLL LLLL LLLL LLLL LLLL LLLL LLLL LLS0 SAQ7 2",
+      "ed25519_seed_hex": "ef2d8dd3b582271f0f31401befcbe52d0b25112cdc2a0f853e89dc0e661bc1d4",
+      "key_id": "rk-a5397023",
+      "public_key": "zrVdGLyglNEf1+uyEB9BerbbK1OMS19BX7C6I1niO30=",
+      "fingerprint": "a539-7023-4870-0721",
+      "escrow_identity": "AGE-SECRET-KEY-1K0RMVX6GYTQPF45GE3K8GVLW2276L8UKF4XE2JQ2EWD4NWHZ9CFQCAW9R8",
+      "escrow_recipient": "age1tazzq7q58qthpqqs0dzksl8zltnnjzm32ghp3z0jvnnnsvkaqq6s0rmesl",
+      "binding_nonce_b64": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+      "binding_message_b64": "bWFzdGVyc29zLWVzY3Jvdy1yZWNpcGllbnQtdjEKYWdlMXRhenpxN3E1OHF0aHBxcXMwZHprc2w4emx0bm5qem0zMmdocDN6MGp2bm5uc3ZrYXFxNnMwcm1lc2wKWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+      "binding_sig_b64": "wVyKSfHl+WUiGp4KRnFCs005rm7I1qTMqUIlN84pcW/SBvtIdR8HERMCYs9S7gIVajnYzbcqW40BIXAIkIBmCg=="
+    }
+  ]
+}

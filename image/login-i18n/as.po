@@ -1,0 +1,108 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-login\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Managed by %s"
+msgstr "%s-ৰ দ্বাৰা পৰিচালিত"
+
+msgid "Shut down"
+msgstr "বন্ধ কৰক"
+
+msgid "Browse as Guest"
+msgstr "অতিথি হিচাপে ব্ৰাউজ কৰক"
+
+msgid "Add person"
+msgstr "ব্যক্তি যোগ কৰক"
+
+msgid "Apps"
+msgstr "এপসমূহ"
+
+msgid "Cancel"
+msgstr "বাতিল কৰক"
+
+msgid "Retry"
+msgstr "পুনৰ চেষ্টা কৰক"
+
+msgid "Opening the sign-in page…"
+msgstr "ছাইন ইনৰ পৃষ্ঠা খোলা হৈ আছে…"
+
+msgid "The sign-in page could not be opened."
+msgstr "ছাইন ইনৰ পৃষ্ঠা খুলিব পৰা নগ'ল।"
+
+msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
+msgstr "বিদ্যালয়ৰ লগত সংযোগ কৰিব পৰা নগ'ল। ওপৰৰ বাৰৰ পৰা Wi-Fi-ত সংযোগ কৰক, তাৰ পিছত পুনৰ চেষ্টা কৰক।"
+
+msgid "School email"
+msgstr "বিদ্যালয়ৰ ইমেইল"
+
+msgid "IT local account"
+msgstr "আই.টি. স্থানীয় একাউণ্ট"
+
+msgid "Username"
+msgstr "ব্যৱহাৰকাৰীৰ নাম"
+
+msgid "This account cannot sign in on this computer."
+msgstr "এই একাউণ্টে এই কমপিউটাৰত ছাইন ইন কৰিব নোৱাৰে।"
+
+msgid "This account cannot sign in on this computer. Use your school email (%s)."
+msgstr "এই একাউণ্টে এই কমপিউটাৰত ছাইন ইন কৰিব নোৱাৰে। আপোনাৰ বিদ্যালয়ৰ ইমেইল (%s) ব্যৱহাৰ কৰক।"
+
+msgid "You signed in with a different account. Sign in again with the account you chose here."
+msgstr "আপুনি বেলেগ একাউণ্টেৰে ছাইন ইন কৰিছে। ইয়াত আপুনি বাছনি কৰা একাউণ্টেৰে পুনৰ ছাইন ইন কৰক।"
+
+msgid "Language"
+msgstr "ভাষা"
+
+msgid "Keyboard"
+msgstr "কীব'ৰ্ড"
+
+msgid "Continue"
+msgstr "অব্যাহত ৰাখক"
+
+msgid "The setting could not be saved. Try again."
+msgstr "ছেটিং সংৰক্ষণ কৰিব পৰা নগ'ল। পুনৰ চেষ্টা কৰক।"
+
+msgid "Your account is disabled. Contact your administrator."
+msgstr "আপোনাৰ একাউণ্ট নিষ্ক্ৰিয় কৰা হৈছে। আপোনাৰ প্ৰশাসকৰ সৈতে যোগাযোগ কৰক।"
+
+msgid "This device is disabled. Contact your administrator."
+msgstr "এই ডিভাইচটো নিষ্ক্ৰিয় কৰা হৈছে। আপোনাৰ প্ৰশাসকৰ সৈতে যোগাযোগ কৰক।"
+
+msgid "Sign in with your school account."
+msgstr "আপোনাৰ বিদ্যালয়ৰ একাউণ্টেৰে ছাইন ইন কৰক।"
+
+msgid "Could not sign in. Please try again."
+msgstr "ছাইন ইন কৰিব পৰা নগ'ল। অনুগ্ৰহ কৰি পুনৰ চেষ্টা কৰক।"
+
+msgid "Authentication request cancelled"
+msgstr "প্ৰমাণীকৰণৰ অনুৰোধ বাতিল কৰা হ'ল"
+
+msgid "Maximum number of authentication attempts reached"
+msgstr "প্ৰমাণীকৰণৰ সৰ্বাধিক প্ৰচেষ্টা সম্পূৰ্ণ হ'ল"
+
+msgid "Error retrieving access token. Please try again."
+msgstr "এক্সেছ টোকেন আনোতে ত্ৰুটি হ'ল। অনুগ্ৰহ কৰি পুনৰ চেষ্টা কৰক।"
+
+msgid "Invalid user name"
+msgstr "অবৈধ ব্যৱহাৰকাৰীৰ নাম"
+
+msgid "This computer has been locked by the school; please contact IT"
+msgstr "এই কমপিউটাৰটো বিদ্যালয়ৰ দ্বাৰা লক কৰা হৈছে; অনুগ্ৰহ কৰি আই.টি.ৰ সৈতে যোগাযোগ কৰক"
+
+msgid "Guest sign-in is not allowed on this computer"
+msgstr "এই কমপিউটাৰত অতিথি হিচাপে ছাইন ইন কৰাৰ অনুমতি নাই"
+
+msgid "Local accounts cannot sign in on this computer"
+msgstr "স্থানীয় একাউণ্টে এই কমপিউটাৰত ছাইন ইন কৰিব নোৱাৰে"
+
+msgid "School accounts cannot sign in on this computer"
+msgstr "বিদ্যালয়ৰ একাউণ্টে এই কমপিউটাৰত ছাইন ইন কৰিব নোৱাৰে"
+
+msgid "This app can only be opened from the sign-in screen"
+msgstr "এই এপটো কেৱল ছাইন ইন স্ক্ৰীনৰ পৰাই খুলিব পাৰি"
+
+msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
+msgstr "এই এপ্‌টোৰ বাবে নেটৱৰ্ক লাগে। ওপৰৰ বাৰৰ পৰা Wi-Fi-ত সংযোগ কৰক, তাৰ পিছত পুনৰ চেষ্টা কৰক।"

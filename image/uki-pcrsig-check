@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+# UKI 的 PCR 签名把关（4b Task 4，Ruling 28）。channel-common.sh 的 check_uki（publish/promote）、build.sh（mkosi 之后、
+# 写 build-info 之前）与 make-installer.sh（放进 U 盘的 UKI）都调它——同一份逻辑，不复制。
+#   python3 -I uki-pcrsig-check <uki> <PCR 公钥 PEM> <pkfp> [退役的 PCR 公钥 PEM …]
+# 要求：
+#   - 每个 .pcrpkey 与 <PEM> 逐字节相同，且不是任何一把退役的公钥；
+#   - 每个 profile 都有 .pcrsig，sha256 签名**恰好一条**，pkfp 是这把公钥、覆盖 PCR 11；
+#   - 那一条的策略（pol）**等于按 enter-initrd 阶段算出来的 PolicyPCR 摘要**：照 systemd-stub / systemd-measure 的
+#     做法，把这个 profile 量到 PCR 11 的各段（.linux … .efifw，不含 .pcrsig；profile 自己的段盖过基础段）按 systemd 的
+#     固定顺序扩展（先段名含结尾 NUL，再段内容），再扩展阶段词 enter-initrd，最后算 TPM2_PolicyPCR(PCR 11, sha256)。
+#     这样「签了一条、但签的是离开 initrd 之后的阶段」也拦得下（复审 M1）。
+# 不过关退出 1（stderr 一行原因）；过关退出 0（stdout 一行摘要）。
+import hashlib
+import json
+import struct
+import sys
+
+# systemd src/fundamental/uki.c 的 unified_sections 顺序；.pcrsig 不量
+MEASURED = [".linux", ".osrel", ".cmdline", ".initrd", ".ucode", ".splash", ".dtb", ".uname", ".sbat",
+            ".pcrpkey", ".profile", ".dtbauto", ".hwids", ".efifw"]
+PHASE = "enter-initrd"
+TPM_CC_POLICY_PCR = 0x0000017F
+TPM_ALG_SHA256 = 0x000B
+
+
+def sha256(b):
+    return hashlib.sha256(b).digest()
+
+
+def extend(pcr, data):
+    return sha256(pcr + sha256(data))
+
+
+def pcr11_from_digests(digests, phase=PHASE):
+    """digests：{段名: 段内容的 sha256（bytes）}。照 systemd 的固定顺序扩展（段名含结尾 NUL、段内容），再扩展阶段词。
+    只用摘要，所以真 UKI 抽出来的测试样本不必带段内容（tests/fixtures/uki-v1-measured.json）。"""
+    pcr = b"\0" * 32
+    for name in MEASURED:
+        if name in digests:
+            pcr = extend(pcr, name.encode() + b"\0")
+            pcr = sha256(pcr + digests[name])
+    for word in phase.split(":"):
+        pcr = extend(pcr, word.encode())
+    return pcr
+
+
+def pcr11_enter_initrd(secs, phase=PHASE):
+    """secs：这个 profile 实际量的 {段名: 内容}。返回该阶段（默认 enter-initrd）时 PCR 11 的值。"""
+    return pcr11_from_digests({n: sha256(b) for n, b in secs.items()}, phase)
+
+
+def policy_pcr11(pcr_value):
+    sel = struct.pack(">IHB", 1, TPM_ALG_SHA256, 3) + bytes([0x00, 0x08, 0x00])  # PCR 11
+    return sha256(b"\0" * 32 + struct.pack(">I", TPM_CC_POLICY_PCR) + sel + sha256(pcr_value))
+
+
+# 这些段 systemd-stub 有特殊的量法（多份 .dtbauto 按硬件挑一份、.hwids 选设备树、.efifw 固件），我们的 UKI 不带，
+# 也不去模仿：出现就拒绝（fail closed）。
+UNSUPPORTED = {".dtbauto", ".hwids", ".efifw"}
+# 每组里最多一份的段：量的段、签名与公钥。重复时 systemd 与我们可能取不同的那份——不去猜，直接拒绝。
+UNIQUE = set(MEASURED) | {".pcrsig"}
+SIG_KEYS = {"pcrs", "pkfp", "pol", "sig"}
+
+
+class Bad(Exception):
+    pass
+
+
+def sections_of(data):
+    """PE 段表 → [(名字, 内容)]，按文件里的顺序。越界、截断、内容超出原始数据都拒绝。"""
+    try:
+        if data[:2] != b"MZ":
+            raise Bad("不是 PE 文件")
+        pe = struct.unpack_from("<I", data, 0x3C)[0]
+        if data[pe:pe + 4] != b"PE\0\0":
+            raise Bad("不是 PE 文件")
+        nsec, = struct.unpack_from("<H", data, pe + 6)
+        optsize, = struct.unpack_from("<H", data, pe + 20)
+        off = pe + 24 + optsize
+        out = []
+        for _ in range(nsec):
+            raw = data[off:off + 8]
+            if len(raw) != 8:
+                raise Bad("段表被截断")
+            try:
+                # systemd-stub 取段名到第一个 NUL 为止（复审 N2）：".linux\0z" 就是 .linux
+                name = raw.split(b"\0", 1)[0].decode("ascii")
+            except UnicodeDecodeError:
+                raise Bad("段名不是 ASCII")
+            vsize, = struct.unpack_from("<I", data, off + 8)
+            rsize, rptr = struct.unpack_from("<II", data, off + 16)
+            # systemd-stub 按 VirtualSize 取段：它比原始数据长时多出来的是补零，我们的 UKI 没有这种段，拒绝
+            if vsize > rsize or rptr + vsize > len(data):
+                raise Bad(f"段 {name} 的大小不对（VirtualSize {vsize}、原始 {rsize}、偏移 {rptr}）")
+            out.append((name, data[rptr:rptr + vsize]))
+            off += 40
+        return out
+    except struct.error:
+        raise Bad("PE 头被截断")
+
+
+def strict_json(body):
+    """.pcrsig 的内容：JSON 对象，任何一层有重复的键都拒绝；尾部只许 NUL 补齐（不许别的字节）。"""
+    text = body.rstrip(b"\0")
+    if b"\0" in text:
+        raise Bad(".pcrsig 中间有 NUL")
+
+    def no_dup(pairs):
+        keys = [k for k, _ in pairs]
+        if len(keys) != len(set(keys)):
+            raise Bad(f".pcrsig 的 JSON 有重复的键：{sorted({k for k in keys if keys.count(k) > 1})}")
+        return dict(pairs)
+
+    try:
+        j = json.loads(text.decode("utf-8"), object_pairs_hook=no_dup)
+    except (UnicodeDecodeError, ValueError) as e:
+        if isinstance(e, Bad):
+            raise
+        raise Bad(f".pcrsig 不是合格的 JSON（{e}）")
+    if not isinstance(j, dict):
+        raise Bad(".pcrsig 不是 JSON 对象")
+    return j
+
+
+def check_sig(label, j, pkfp, want_pol):
+    """只许一个 bank：sha256；它恰好一条；那一条的键、PCR、pkfp 与策略都对。
+    .pcrsig 里没有写阶段名，阶段由策略摘要决定：pol 必须等于按 enter-initrd 算出来的那个。"""
+    if set(j) != {"sha256"}:
+        raise Bad(f"{label} 的 .pcrsig 应只有 sha256 一个 bank，实际 {sorted(j)}（别的 bank 的签名也会被 TPM 认）")
+    sha = j["sha256"]
+    if not isinstance(sha, list):
+        raise Bad(f"{label} 的 .pcrsig sha256 不是数组")
+    if len(sha) != 1:
+        raise Bad(f"{label} 的 .pcrsig 应只有一条 sha256 签名（只签 enter-initrd），实际 {len(sha)} 条")
+    e = sha[0]
+    if not isinstance(e, dict) or set(e) != SIG_KEYS:
+        raise Bad(f"{label} 的签名条目的键应恰好是 {sorted(SIG_KEYS)}，实际 {sorted(e) if isinstance(e, dict) else type(e).__name__}")
+    if e["pcrs"] != [11]:
+        raise Bad(f"{label} 的签名应只覆盖 PCR 11，实际 {e['pcrs']}")
+    if e["pkfp"] != pkfp:
+        raise Bad(f"{label} 的 .pcrsig 不是用这把 PCR 钥匙签的（pkfp {e['pkfp']}，应为 {pkfp}）")
+    if not isinstance(e["sig"], str) or not e["sig"]:
+        raise Bad(f"{label} 的签名是空的")
+    if e["pol"] != want_pol:
+        raise Bad(f"{label} 的 sha256 签名不是 enter-initrd 阶段的（pol {e['pol']}，按 enter-initrd 算出 {want_pol}）："
+                  "签名覆盖了离开 initrd 之后的阶段，或者 UKI 被改过")
+
+
+def main():
+    uki, pem_path, pkfp = sys.argv[1], sys.argv[2], sys.argv[3]
+    pem = open(pem_path, "rb").read().rstrip(b"\0")
+    retired = [open(p, "rb").read().rstrip(b"\0") for p in sys.argv[4:]]
+
+    def fail(msg):
+        print(f"check_uki: {uki}: {msg}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        sections = sections_of(open(uki, "rb").read())
+
+        # 分组与 systemd-stub 相同：第一个 .profile 之前是基础段；之后每个 .profile 开一个 profile。
+        # 每个 profile 实际生效的段 = 基础段，被这个 profile 自己的同名段盖过（没有自己的就继承基础段，含 .pcrsig）。
+        groups = [("基础", [])]
+        for name, body in sections:
+            if name == ".profile":
+                groups.append((f"profile {len(groups) - 1}", []))
+            groups[-1][1].append((name, body))
+        for label, secs in groups:
+            names = [n for n, _ in secs]
+            for n in UNIQUE:
+                if names.count(n) > 1:
+                    raise Bad(f"{label} 里有 {names.count(n)} 个 {n} 段（systemd 取哪一个不好说，不收）")
+            bad = UNSUPPORTED & set(names)
+            if bad:
+                raise Bad(f"{label} 里有 {sorted(bad)}（这些段的量法特殊，我们的 UKI 不该带）")
+        base = dict(groups[0][1])
+        profiles = groups[1:] if len(groups) > 1 else [("隐含的唯一 profile", [])]
+
+        # 每一份 .pcrpkey 都要是这把公钥、不是退役的
+        pkeys = [body for name, body in sections if name == ".pcrpkey"]
+        if not pkeys:
+            raise Bad("没有 .pcrpkey")
+        for body in pkeys:
+            k = body.rstrip(b"\0")
+            if k in retired:
+                raise Bad("这个构建用的是退役的 PCR 钥匙（四个阶段都签过）：换过签名钥匙，它签的 UKI 永远有效但发不出去，重新用当前钥匙构建")
+            if k != pem:
+                raise Bad(f".pcrpkey 不符：UKI 里的 PCR 公钥不是 {pem_path}（用错了 PCR 签名钥匙？lab 与正式各有一把）")
+
+        used_base_sig = False
+        for label, secs in profiles:
+            own = dict(secs)
+            eff = dict(base)
+            eff.update(own)
+            if ".pcrsig" not in eff:
+                raise Bad(f"{label} 没有 .pcrsig（这个 profile 启动时 TPM 解不开数据分区）")
+            if ".pcrsig" not in own:
+                used_base_sig = True
+            measured = {n: b for n, b in eff.items() if n in MEASURED}
+            want_pol = policy_pcr11(pcr11_enter_initrd(measured)).hex()
+            check_sig(label, strict_json(eff[".pcrsig"]), pkfp, want_pol)
+        # 基础段里的 .pcrsig 没有任何 profile 用（每个 profile 都有自己的）：结构对不上我们的构建，不收
+        if ".pcrsig" in base and len(groups) > 1 and not used_base_sig:
+            raise Bad("基础段里有一份没有 profile 使用的 .pcrsig")
+    except Bad as e:
+        fail(str(e))
+    except OSError as e:
+        fail(f"读不了：{e}")
+
+    print(f"check_uki: {uki.rsplit('/', 1)[-1]}：.pcrpkey 与 {pem_path} 相同；"
+          f"{len(profiles)} 个 profile 都只签 enter-initrd 一条（pkfp {pkfp[:16]}…）")
+
+
+if __name__ == "__main__":
+    main()

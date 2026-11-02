@@ -1,0 +1,28 @@
+[package]
+name = "mastersos-mcp"
+version = "0.3.0"
+edition.workspace = true
+license.workspace = true
+
+# The crate keeps its name and directory; the program is `mastersos` (`mastersos mcp` is the MCP server).
+[[bin]]
+name = "mastersos"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+base64.workspace = true
+clap.workspace = true
+reqwest.workspace = true
+rmcp.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+rmcp = { workspace = true, features = ["client", "transport-child-process"] }
+tempfile.workspace = true
+toml.workspace = true
