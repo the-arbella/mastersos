@@ -80,7 +80,7 @@ type RangedIssue = Box<(Lint, Option<Range<usize>>)>;
 
 /// [`parse_issue`] with the error's byte range in `text` instead of a span.
 fn parse_ranged(text: &str) -> Result<Manifest, RangedIssue> {
-    let doc = match toml_edit::ImDocument::parse(text) {
+    let doc = match toml_edit::Document::parse(text) {
         Ok(doc) => doc,
         Err(e) => {
             let lint = Lint::new(
@@ -187,7 +187,7 @@ pub fn locate(text: &str, path: &str) -> Option<Span> {
 /// One parsed text, to place any number of lint paths in it without parsing it again: each
 /// [`Locator::locate`] costs the depth of the path and the length of one line, not the text.
 pub struct Locator {
-    doc: toml_edit::ImDocument<String>,
+    doc: toml_edit::Document<String>,
     lines: LineIndex,
     /// Indices into the `[[group]]` array by `id`, in order (a repeated id has several).
     groups: IdIndex,
@@ -199,7 +199,7 @@ pub struct Locator {
 type IdIndex = std::collections::HashMap<String, Vec<usize>>;
 
 /// The [`IdIndex`] of the array of tables `key`.
-fn ids_of(doc: &toml_edit::ImDocument<String>, key: &str) -> IdIndex {
+fn ids_of(doc: &toml_edit::Document<String>, key: &str) -> IdIndex {
     let mut out = IdIndex::default();
     if let Some(aot) = doc.get(key).and_then(|g| g.as_array_of_tables()) {
         for (i, t) in aot.iter().enumerate() {
@@ -214,7 +214,7 @@ fn ids_of(doc: &toml_edit::ImDocument<String>, key: &str) -> IdIndex {
 impl Locator {
     /// `None` when `text` is not TOML.
     pub fn new(text: &str) -> Option<Self> {
-        let doc = toml_edit::ImDocument::parse(text.to_owned()).ok()?;
+        let doc = toml_edit::Document::parse(text.to_owned()).ok()?;
         let groups = ids_of(&doc, "group");
         let configs = ids_of(&doc, "config");
         Some(Locator {
