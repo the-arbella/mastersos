@@ -20,7 +20,10 @@ use std::fmt;
 use std::str::FromStr as _;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use bech32::{FromBase32 as _, ToBase32 as _, Variant};
+use bech32::primitives::decode::{
+    CharError, ChecksumError, UncheckedHrpstring, UncheckedHrpstringError,
+};
+use bech32::{Bech32, Bech32m, Hrp};
 use hkdf::Hkdf;
 use ring::rand::{SecureRandom as _, SystemRandom};
 use sha2::Sha256;
@@ -106,37 +109,50 @@ impl Kit {
         // Sized up front so it never reallocates (and leaves a copy behind) while filling.
         let mut clean = Zeroizing::new(String::with_capacity(text.len()));
         clean.extend(text.chars().filter(|c| !c.is_whitespace() && *c != '-'));
-        let (hrp, data, variant) = bech32::decode(&clean).map_err(|e| match e {
-            bech32::Error::MixedCase => KitError::MixedCase,
-            bech32::Error::InvalidChecksum => KitError::Checksum,
+        let unchecked = UncheckedHrpstring::new(&clean).map_err(|e| match e {
+            // Case is checked over the whole text (HRP included) before the HRP is parsed.
+            UncheckedHrpstringError::Char(CharError::MixedCase) => KitError::MixedCase,
             _ => KitError::Malformed,
         })?;
-        if variant != Variant::Bech32m {
-            return Err(KitError::Checksum);
-        }
-        if hrp != KIT_HRP {
+        // Only a bech32m checksum is accepted: a valid plain bech32 checksum is refused like a
+        // bad one. Bech32m's code length (1023 characters) only stops texts far longer than a
+        // kit, so it is reported as a wrong length.
+        unchecked
+            .validate_checksum::<Bech32m>()
+            .map_err(|e| match e {
+                ChecksumError::InvalidLength => KitError::Malformed,
+                ChecksumError::CodeLength(_) => KitError::Length,
+                _ => KitError::Checksum,
+            })?;
+        if unchecked.hrp() != Hrp::parse_unchecked(KIT_HRP) {
             return Err(KitError::WrongHrp);
         }
-        if data.len() != DATA_CHARS {
+        let checked = unchecked.remove_checksum::<Bech32m>();
+        if checked.data_part_ascii_no_checksum().len() != DATA_CHARS {
             return Err(KitError::Length);
         }
-        let bytes =
-            Zeroizing::new(Vec::<u8>::from_base32(&data).map_err(|_| KitError::NonCanonical)?);
-        if bytes.len() != 32 {
-            return Err(KitError::Length);
-        }
+        // BIP-173's padding rule (at most 4 bits, all zero); the "segwit" in the name is only
+        // where the library keeps it.
+        checked
+            .validate_segwit_padding()
+            .map_err(|_| KitError::NonCanonical)?;
         let mut master = Zeroizing::new([0u8; 32]);
-        master.copy_from_slice(&bytes);
+        let mut bytes = checked.byte_iter();
+        for b in master.iter_mut() {
+            *b = bytes.next().ok_or(KitError::Length)?;
+        }
+        if bytes.next().is_some() {
+            return Err(KitError::Length);
+        }
         Ok(Kit { master })
     }
 
     /// The canonical text: bech32m, upper case, no separators (69 characters).
     pub fn to_text(&self) -> Zeroizing<String> {
-        let lower = Zeroizing::new(
-            bech32::encode(KIT_HRP, self.master.to_base32(), Variant::Bech32m)
-                .expect("the kit HRP is valid"),
-        );
-        Zeroizing::new(lower.to_uppercase())
+        Zeroizing::new(
+            bech32::encode_upper::<Bech32m>(Hrp::parse_unchecked(KIT_HRP), &self.master[..])
+                .expect("a 32-byte kit is far below the bech32m code length"),
+        )
     }
 
     /// [`Kit::to_text`] in groups of four separated by spaces, for printing.
@@ -172,11 +188,10 @@ impl Kit {
     /// The age X25519 identity the escrowed LUKS recovery keys are sealed to.
     pub fn escrow_identity(&self) -> age::x25519::Identity {
         let scalar = derive(&self.master, INFO_ESCROW);
-        let lower = Zeroizing::new(
-            bech32::encode(AGE_SECRET_HRP, scalar.to_base32(), Variant::Bech32)
-                .expect("the age HRP is valid"),
+        let upper = Zeroizing::new(
+            bech32::encode_upper::<Bech32>(Hrp::parse_unchecked(AGE_SECRET_HRP), &scalar[..])
+                .expect("a 32-byte age key is far below the bech32 code length"),
         );
-        let upper = Zeroizing::new(lower.to_uppercase());
         age::x25519::Identity::from_str(&upper).expect("a 32-byte age secret key always parses")
     }
 
@@ -207,7 +222,7 @@ pub fn recipient_binding_message(recipient: &str, nonce: &[u8]) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::{trust_fingerprint, verify_signature, KeyAlg, SignatureFile};
-    use bech32::u5;
+    use bech32::{ByteIterExt as _, Fe32, Fe32IterExt as _};
     use serde::{Deserialize, Serialize};
 
     const CHARSET: &str = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
@@ -400,7 +415,7 @@ mod tests {
     #[test]
     fn kit_rejects_bech32_non_m_checksum() {
         let k = kit(5);
-        let plain = bech32::encode(KIT_HRP, k.master.to_base32(), Variant::Bech32).unwrap();
+        let plain = bech32::encode::<Bech32>(Hrp::parse(KIT_HRP).unwrap(), &k.master[..]).unwrap();
         assert_eq!(Kit::parse(&plain).unwrap_err(), KitError::Checksum);
         assert_eq!(
             Kit::parse(&plain.to_uppercase()).unwrap_err(),
@@ -410,16 +425,21 @@ mod tests {
 
     #[test]
     fn kit_rejects_noncanonical_padding() {
-        let mut data = kit(1).master.to_base32();
+        let hrp = Hrp::parse(KIT_HRP).unwrap();
+        let mut data: Vec<Fe32> = kit(1).master.iter().copied().bytes_to_fes().collect();
         assert_eq!(data.len(), DATA_CHARS);
         // The last character holds 1 data bit and 4 padding bits: set a padding bit.
         let last = data[DATA_CHARS - 1].to_u8();
-        data[DATA_CHARS - 1] = u5::try_from_u8(last | 0b0001).unwrap();
-        let t = bech32::encode(KIT_HRP, &data, Variant::Bech32m).unwrap();
+        data[DATA_CHARS - 1] = Fe32::try_from(last | 0b0001).unwrap();
+        let t: String = data
+            .into_iter()
+            .with_checksum::<Bech32m>(&hrp)
+            .chars()
+            .collect();
         assert_eq!(Kit::parse(&t).unwrap_err(), KitError::NonCanonical);
         // 33 bytes, 31 bytes: wrong length.
         for n in [31usize, 33] {
-            let t = bech32::encode(KIT_HRP, vec![1u8; n].to_base32(), Variant::Bech32m).unwrap();
+            let t = bech32::encode::<Bech32m>(hrp, &vec![1u8; n]).unwrap();
             assert_eq!(Kit::parse(&t).unwrap_err(), KitError::Length, "{n}");
         }
     }
@@ -428,7 +448,7 @@ mod tests {
     fn kit_wrong_hrp_rejected() {
         let k = kit(2);
         for hrp in ["masterskid", "age", "mastersoskit"] {
-            let t = bech32::encode(hrp, k.master.to_base32(), Variant::Bech32m).unwrap();
+            let t = bech32::encode::<Bech32m>(Hrp::parse(hrp).unwrap(), &k.master[..]).unwrap();
             assert_eq!(Kit::parse(&t).unwrap_err(), KitError::WrongHrp, "{hrp}");
         }
         assert_eq!(Kit::parse("").unwrap_err(), KitError::Malformed);
