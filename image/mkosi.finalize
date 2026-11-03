@@ -20,6 +20,8 @@ if [ "$have_systemd" != "$want_systemd" ]; then
 	exit 1
 fi
 echo "finalize: systemd ${have_systemd}（与 initrd drop-in 核对过的版本相同）"
+# 诊断开关的 drop-in 照抄了 authd 与 wpa_supplicant 打包的 ExecStart（docs/specs/2026-11-03-diagnostics-design.md）
+bash "$SRCDIR/check-execstart-copies.sh" "$R"
 
 # --- 更新源、构建变体 ------------------------------------------------------------
 # MASTERSOS_UPDATE_BASE 换掉 transfer 里的 @BASE@。正式镜像只收 https:// 加域名（不收 IP、localhost——

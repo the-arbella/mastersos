@@ -128,7 +128,25 @@ if PATH=$fake:$PATH pack "$staging" "$tmp/ro" x.tar.zst 2>/dev/null || [ -n "$(l
 else ok "$t (tar fails)"; fi
 rm -f "$fake/tar"
 
+t=journal_long_timeout
+new_root
+staging=$tmp/st && rm -rf "$staging" && mkdir -p "$staging"
+mkfake journalctl 'case "$*" in *--list-boots*) printf "IDX BOOT ID FIRST LAST\n  0 bbb x y\n";; *) sleep 2; echo "journal $*";; esac'
+PATH=$fake:$PATH DIAG_CMD_TIMEOUT=1 DIAG_JOURNAL_TIMEOUT=10 collect
+if ! grep -qxF 'journal/boot-0.txt 0' "$staging/commands.txt"; then
+	fail $t "$(grep journal "$staging/commands.txt")"
+else ok $t; fi
+
+t=journal_without_boot_list
+staging=$tmp/st && rm -rf "$staging" && mkdir -p "$staging"
+mkfake journalctl 'case "$*" in *--list-boots*) exit 1;; *) echo "journal $*";; esac'
+PATH=$fake:$PATH collect
+if ! grep -qxF 'journal/boot-0.txt 0' "$staging/commands.txt"; then
+	fail $t "boot 0 not collected: $(grep journal "$staging/commands.txt")"
+else ok $t; fi
+
 t=staging_cleanup
+mkfake journalctl 'case "$*" in *--list-boots*) printf "IDX BOOT ID FIRST LAST\n  0 bbb x y\n";; *) echo "journal $*";; esac'
 new_root
 switch_on
 mkfake nmcli 'sleep 30'

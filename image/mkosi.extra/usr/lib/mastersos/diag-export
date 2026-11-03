@@ -8,7 +8,8 @@
 # may be seen before the seed partition is mounted).
 # Sensitive data is not filtered out: this is a developer tool, its packages never go into the repository. Home folders are
 # not collected (their logs are in the journal). Each command runs at most DIAG_CMD_TIMEOUT (20) seconds: a wedged
-# NetworkManager must not stop the export. MASTERSOS_DIAG_ROOT prefixes the files read (tests/diag-export-test.sh only).
+# NetworkManager must not stop the export. The journal dumps get DIAG_JOURNAL_TIMEOUT (300) seconds: with debug logging a
+# boot is easily a million lines, journalctl prints oldest first, and a cut would lose the newest lines, the incident itself. MASTERSOS_DIAG_ROOT prefixes the files read (tests/diag-export-test.sh only).
 set -euo pipefail
 R=${MASTERSOS_DIAG_ROOT:-}
 switch=$R/var/lib/mastersos-seed/debug.conf
@@ -87,10 +88,12 @@ collect() {
 	run_cmd boots.txt journalctl --list-boots --no-pager
 	# the last 5 boots, by index (0 = this one)
 	boots=$(column 1 '^-?[0-9]+$' "$staging/boots.txt" | tail -n 5)
+	# this boot even when the list failed or is empty
+	printf '%s\n' "$boots" | grep -qx 0 || boots="$boots 0"
 	for n in $boots; do
-		run_cmd "journal/boot-$n.txt" journalctl -b "$n" -o short-precise --no-pager
+		DIAG_CMD_TIMEOUT=${DIAG_JOURNAL_TIMEOUT:-300} run_cmd "journal/boot-$n.txt" journalctl -b "$n" -o short-precise --no-pager
 	done
-	run_cmd journal/kernel-boot-0.txt journalctl -k -b 0 -o short-precise --no-pager
+	DIAG_CMD_TIMEOUT=${DIAG_JOURNAL_TIMEOUT:-300} run_cmd journal/kernel-boot-0.txt journalctl -k -b 0 -o short-precise --no-pager
 	run_cmd coredumps.txt coredumpctl list --no-pager
 	for pid in $(column 5 '^[0-9]+$' "$staging/coredumps.txt" | tail -n 20); do
 		run_cmd "coredump/$pid.txt" coredumpctl info --no-pager "$pid"

@@ -121,6 +121,7 @@ jobs:
       # developer diagnostics (docs/specs/2026-11-03-diagnostics-design.md): the debug.conf switch and the USB stick export
       - run: bash image/tests/diag-setup-test.sh
       - run: bash image/tests/diag-export-test.sh
+      - run: bash image/tests/execstart-copies-test.sh
       # /etc/.updated 在 sysext 合并之前记、比 /usr 新的旧记录删掉（4b Task 12 复审 F3、N1）
       - run: bash image/tests/update-done-test.sh
       # School cache fallback: if updating via the cache fails, retry from the official source using the fallback dir the agent wrote (plan 5 Task 12)
