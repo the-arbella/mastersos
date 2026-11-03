@@ -89,7 +89,7 @@ enum Cmd {
     Publish {
         /// The settings directory (default: the current directory)
         dir: Option<PathBuf>,
-        /// A recovery key file: verify and sign on this computer (without it, IT signs on the signing page with a Passkey)
+        /// A recovery key file: verify and sign on this computer (without it, IT signs on the signing page with a Passkey, or the first version with the recovery kit)
         #[arg(long)]
         key: Option<PathBuf>,
     },
@@ -857,9 +857,16 @@ async fn publish_dir(
             );
             Ok(ExitCode::SUCCESS)
         }
-        Ok(PublishOutcome::NeedsPasskey { url, pending_id }) => {
-            println!("Uploaded pending bundle {pending_id}. Nothing is published yet: IT signs it with a Passkey at\n{url}");
-            println!("After signing in the browser, run `mastersos pull` to update your base.");
+        Ok(PublishOutcome::NeedsPasskey {
+            url,
+            pending_id,
+            version,
+            digest_hex,
+        }) => {
+            println!(
+                "{}",
+                crate::publish::needs_signing_text(&url, &pending_id, version, &digest_hex)
+            );
             Ok(ExitCode::SUCCESS)
         }
         Err(e) => match e.downcast::<CheckFailed>() {

@@ -664,8 +664,6 @@ struct Pending {
     manifest_text: String,
     files: Vec<PendingFile>,
     #[serde(default)]
-    diff: Value,
-    #[serde(default)]
     lints: Value,
 }
 
@@ -791,22 +789,10 @@ fn print_server_notes(out: &mut dyn Write, p: &Pending, secrets: &SecretValues) 
         out,
         "\n== 服务端说明（仅供参考：不是将要签名的内容，以上面本地算出的为准）=="
     )?;
+    // The server's `manifest_diff` is not printed: it holds the real secret values, and a
+    // multi-line or escaped one cannot be hidden reliably in its text. The local diff above
+    // shows the same change with secrets reported by name only.
     let hide = |s: &str| secrets.as_deref().map(|v| hide_values(s, v));
-    if let Some(d) = p.diff["manifest_diff"].as_str().filter(|d| !d.is_empty()) {
-        match hide(d) {
-            Some(d) => {
-                writeln!(out, "服务端给的清单差异：")?;
-                write!(out, "{}", safe::text(&d))?;
-                if !d.ends_with('\n') {
-                    writeln!(out)?;
-                }
-            }
-            None => writeln!(
-                out,
-                "The server's manifest diff is hidden: secrets could not be separated"
-            )?,
-        }
-    }
     match p.lints.as_array() {
         Some(ls) if !ls.is_empty() => {
             for l in ls {
@@ -835,6 +821,22 @@ pub async fn sign_pending(
     key: impl Into<SigningKey<'_>>,
     pin_dir: &Path,
     pending: &str,
+    confirm: &mut dyn BufRead,
+    out: &mut dyn Write,
+) -> Result<u64> {
+    sign_pending_expecting(api, key, pin_dir, pending, None, confirm, out).await
+}
+
+/// [`sign_pending`], and when `expect_digest` is given (lower- or upper-case hex), the pending
+/// bundle's content digest computed here from the downloaded content must equal it: the caller
+/// uploaded that content and computed its digest itself, so a server that swapped the pending
+/// bundle is refused before anything is shown or signed.
+pub async fn sign_pending_expecting(
+    api: &Api,
+    key: impl Into<SigningKey<'_>>,
+    pin_dir: &Path,
+    pending: &str,
+    expect_digest: Option<&str>,
     confirm: &mut dyn BufRead,
     out: &mut dyn Write,
 ) -> Result<u64> {
@@ -872,6 +874,14 @@ pub async fn sign_pending(
             "摘要不一致：本地按下载的内容算出 {digest}，服务端说是 {}。服务端给的内容与它要提交的不是同一份，不签",
             p.digest_hex
         );
+    }
+    if let Some(want) = expect_digest {
+        if !digest.eq_ignore_ascii_case(want.trim()) {
+            bail!(
+                "the pending bundle's digest is {digest}, but the content uploaded from this computer has digest {}: the server holds other content under this pending id; not signing",
+                want.trim()
+            );
+        }
     }
     let manifest = Manifest::parse(&contents.manifest_text)?;
     let present: BTreeSet<String> = contents.files.keys().cloned().collect();
@@ -1361,15 +1371,18 @@ mod tests {
         assert!(text.contains("+version = 2"), "{text}");
 
         // The server's notes are cleaned with the same values.
-        let p = Pending {
-            pending_id: "p".into(),
-            version: 2,
-            digest_hex: String::new(),
-            manifest_text: String::new(),
-            files: Vec::new(),
-            diff: json!({ "manifest_diff": "-psk = \"oldpass-111\"\n+psk = \"newpass-222\"\n" }),
-            lints: json!([{ "level": "warning", "code": "x", "message": "psk newpass-222 is weak" }]),
-        };
+        // The server's answer carries its manifest diff, with real values (an escaped one and a
+        // multi-line PEM among them): it is never printed.
+        let p: Pending = serde_json::from_value(json!({
+            "pending_id": "p",
+            "version": 2,
+            "digest_hex": "",
+            "manifest_text": "",
+            "files": [],
+            "diff": { "manifest_diff": "-psk = \"oldpass-111\"\n+psk = \"newpass-222\"\n+psk = \"esc\\\"aped-555\"\n+client_key = \"\"\"\n+MIIEvQIBADANBgkqhkiG9w0BAQEF\n+\"\"\"\n" },
+            "lints": [{ "level": "warning", "code": "x", "message": "psk newpass-222 is weak" }],
+        }))
+        .unwrap();
         let mut out = Vec::new();
         print_server_notes(&mut out, &p, &values).unwrap();
         let notes = String::from_utf8(out).unwrap();
@@ -1377,6 +1390,12 @@ mod tests {
             !notes.contains("oldpass-111") && !notes.contains("newpass-222"),
             "{notes}"
         );
+        for v in ["aped-555", "MIIEvQIBADANBgkqhkiG9w0BAQEF", "psk ="] {
+            assert!(
+                !notes.contains(v),
+                "the server's diff is not printed: {notes}"
+            );
+        }
 
         // A side whose secrets cannot be separated: no text diff at all.
         let bad = Contents {

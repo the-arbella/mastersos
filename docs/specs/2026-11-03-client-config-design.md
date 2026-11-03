@@ -81,11 +81,14 @@
      `trust` 照 `manifest.toml` 写的，不自动填。
   3. 上传成待签名包。服务端拒收（包括 base 之后已有人发布、阻断检查不过）就停并显示原因；版本被占用时提示重新 `pull`、
      重做改动。
-  4. 本机配了恢复钥匙就用 `mastersos-sign` 签并 commit；否则打印签名页链接（带 pending id），IT 用 passkey 签。
+  4. 本地按上传的内容算摘要，与服务端回的 `digest_hex` 比，不一致就停。本机配了恢复钥匙就用 `mastersos-sign` 签并
+     commit（签之前再核对一次摘要）；否则打印签名页链接（带 pending id）和摘要前 8 位，IT 核对签名页显示的摘要后用
+     passkey 签（第一版只能在签名页用恢复包签）。
   5. 成功后把 `base_version` 与 `.mastersos/base/` 更新为新版本。
 - **`mastersos devices list`、`mastersos keys list`**：从服务端取机器、已登记的钥匙，供手写 `[[device]]` 与 `trust`。
 - **IT 账号口令**：`mastersos hash-password`（不回显）输出哈希，IT 写进 `secrets.toml`。
-- **新学校**：`mastersos init` 用模板（今天服务端的草稿模板）建目录，`base_version = 0`；第一版用恢复钥匙签（R1g 不变）。
+- **新学校**：`mastersos init` 用模板（今天服务端的草稿模板）建目录，`base_version = 0`；第一版用恢复钥匙签（R1g 不变）：
+  不带 `--key` 时照常上传并打印签名页链接，在签名页载入恢复包签。
 - **logo**：`mastersos logo upload <登录页 png> <图标 png>` 只核对尺寸并上传，打印两个 sha256，IT 写进 `[school]`。
 
 ### AI 与 MCP

@@ -1,7 +1,9 @@
 //! `mastersos publish`: the local directory is checked, its secrets are filled back in, version
 //! and time are stamped, and the result is uploaded as a pending bundle. With a recovery key the
-//! bundle is then verified and signed on this computer ([`mastersos_sign::sign_pending`]);
-//! without one, the signing page link is returned for IT to open with a Passkey.
+//! bundle is then verified and signed on this computer ([`mastersos_sign::sign_pending_expecting`]);
+//! without one, the signing page link is returned for IT to open and sign with a Passkey (or, for
+//! the first version, the recovery kit). Either way the content digest is computed here from what
+//! was uploaded and must equal the server's, and only that digest is signed.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
@@ -12,7 +14,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{DateTime, SecondsFormat, Utc};
 use mastersos_bundle::secret_ref;
 use mastersos_bundle::stamp::{school_name_to_write, stamp};
-use mastersos_bundle::{has_errors, Lint};
+use mastersos_bundle::{content_digest, has_errors, Contents, Lint};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -34,8 +36,33 @@ pub struct SignOpts<'a> {
 pub enum PublishOutcome {
     /// Signed here and accepted: this is the new version, and the directory's base now is it.
     Published(u64),
-    /// Uploaded, not signed: IT opens `url` and signs with a Passkey, then runs `mastersos pull`.
-    NeedsPasskey { url: String, pending_id: String },
+    /// Uploaded, not signed: IT opens `url` and signs with a Passkey (the first version: with the
+    /// recovery kit), then runs `mastersos pull`.
+    NeedsPasskey {
+        url: String,
+        pending_id: String,
+        /// The version uploaded (1: the first, which only the recovery kit may sign).
+        version: u64,
+        /// The content digest computed here from what was uploaded (lower-case hex); the signing
+        /// page shows its first 8 characters.
+        digest_hex: String,
+    },
+}
+
+/// How many characters of the digest are printed: as many as the signing page shows.
+pub const DIGEST_SHOWN: usize = 8;
+
+/// The lines printed after a pending bundle is uploaded but not signed here.
+pub fn needs_signing_text(url: &str, pending_id: &str, version: u64, digest_hex: &str) -> String {
+    let short = &digest_hex[..digest_hex.len().min(DIGEST_SHOWN)];
+    let how = if version == 1 {
+        format!("Uploaded pending bundle {pending_id} (version 1, the first). Nothing is published yet: sign it with your recovery kit on this page:\n{url}")
+    } else {
+        format!("Uploaded pending bundle {pending_id} (version {version}). Nothing is published yet: IT signs it with a Passkey at\n{url}")
+    };
+    format!(
+        "{how}\nDigest, first {DIGEST_SHOWN} characters: {short}\nCheck that the signing page shows the same digest before you sign; if it differs, do not sign.\nAfter signing in the browser, run `mastersos pull` to update your base."
+    )
 }
 
 /// The local check found errors; nothing was sent.
@@ -149,10 +176,27 @@ fn error_code(body: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// The signing page link for a pending bundle.
-fn sign_link(c: &AuthConfig, pending_id: &str) -> String {
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// The domain of the school's host `<slug>.<domain>` (what the admin page's `domainOfHost` gives):
+/// the signing page needs it when the cloud serves several domains. `None` for another host (a
+/// local server).
+fn domain_of(server: &str, slug: &str) -> Option<String> {
+    let url = reqwest::Url::parse(server).ok()?;
+    let host = url.host_str()?;
+    let rest = host.strip_prefix(slug)?.strip_prefix('.')?;
+    (!rest.is_empty()).then(|| rest.to_ascii_lowercase())
+}
+
+/// The signing page link for a pending bundle; `server` is the school's address.
+fn sign_link(c: &AuthConfig, server: &str, pending_id: &str) -> String {
+    let domain = domain_of(server, &c.slug)
+        .map(|d| format!("&domain={d}"))
+        .unwrap_or_default();
     format!(
-        "{}/#school={}&sid={}&op=commit&pending={}",
+        "{}/#school={}&sid={}&op=commit{domain}&pending={}",
         c.signing_origin.trim_end_matches('/'),
         c.slug,
         c.school_id,
@@ -169,9 +213,8 @@ pub async fn publish(
     out: &mut dyn Write,
 ) -> Result<PublishOutcome> {
     let meta = w.meta()?;
-    if meta.base_version == 0 && sign.is_none() {
-        bail!("The first version must be signed with the recovery key: mastersos publish --key <file>");
-    }
+    // The first version (no base) is uploaded like any other: without `--key` the signing page
+    // offers only the recovery kit for it, and the server's commit enforces R1g.
     // One read: what is checked, uploaded, kept and later made the base is this snapshot.
     let snap = w.freeze()?;
     if w.equals_base(&snap)? {
@@ -209,6 +252,12 @@ pub async fn publish(
         &issued_at,
         school_name_to_write(&filled, &cfg.name),
     )?;
+    // The digest is computed here over exactly what is uploaded: the server's must equal it, and
+    // only this digest is signed (here) or shown to compare (on the signing page).
+    let local_digest = hex(&content_digest(&Contents {
+        manifest_text: stamped.clone(),
+        files: files.clone(),
+    }));
     let body = json!({
         "manifest_text": stamped,
         "files": files.iter().map(|(p, b)| (p.clone(), STANDARD.encode(b))).collect::<BTreeMap<String, String>>(),
@@ -262,12 +311,23 @@ pub async fn publish(
             prepared.version
         );
     }
+    if !prepared
+        .digest_hex
+        .trim()
+        .eq_ignore_ascii_case(&local_digest)
+    {
+        bail!(
+            "the server reports digest {} for the upload, but its content has digest {local_digest} as computed here: the server does not hold what was uploaded. Nothing was signed; do not sign pending bundle {} on the signing page",
+            prepared.digest_hex.trim(),
+            prepared.pending_id
+        );
+    }
 
     w.save_uploaded(
         &snap,
         &UploadInfo {
             version,
-            digest_hex: prepared.digest_hex.clone(),
+            digest_hex: local_digest.clone(),
         },
     )?;
     let warnings: Vec<Value> = prepared
@@ -280,11 +340,12 @@ pub async fn publish(
     match sign {
         Some(s) => {
             let sign_api = mastersos_sign::Api::from_token_file(&meta.server, s.token_file)?;
-            let v = mastersos_sign::sign_pending(
+            let v = mastersos_sign::sign_pending_expecting(
                 &sign_api,
                 s.key,
                 s.pin_dir,
                 &prepared.pending_id,
+                Some(&local_digest),
                 confirm,
                 out,
             )
@@ -293,8 +354,10 @@ pub async fn publish(
             Ok(PublishOutcome::Published(v))
         }
         None => Ok(PublishOutcome::NeedsPasskey {
-            url: sign_link(&cfg, &prepared.pending_id),
+            url: sign_link(&cfg, &meta.server, &prepared.pending_id),
             pending_id: prepared.pending_id,
+            version,
+            digest_hex: local_digest,
         }),
     }
 }
@@ -306,7 +369,7 @@ mod tests {
     use mastersos_bundle::Contents;
     use std::collections::BTreeMap;
     use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
     const SID: &str = "11111111-1111-1111-1111-111111111111";
 
@@ -374,10 +437,36 @@ mod tests {
             .collect()
     }
 
-    fn accepted(version: u64) -> ResponseTemplate {
-        ResponseTemplate::new(200).set_body_json(json!({
-            "pending_id": "p-1", "version": version, "digest_hex": "ab", "lints": []
+    /// The content digest of an upload body (lower-case hex), as the server computes it.
+    fn digest_of(upload: &Value) -> String {
+        let files = upload["files"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(p, b)| (p.clone(), STANDARD.decode(b.as_str().unwrap()).unwrap()))
+            .collect();
+        hex(&content_digest(&Contents {
+            manifest_text: upload["manifest_text"].as_str().unwrap().to_owned(),
+            files,
         }))
+    }
+
+    /// An honest server: accepts the upload as `version`, with its true digest (upper-case, as
+    /// the server may write it) and `lints`.
+    struct Accept(u64, Vec<Value>);
+
+    impl Respond for Accept {
+        fn respond(&self, r: &Request) -> ResponseTemplate {
+            let up: Value = serde_json::from_slice(&r.body).unwrap();
+            ResponseTemplate::new(200).set_body_json(json!({
+                "pending_id": "p-1", "version": self.0,
+                "digest_hex": digest_of(&up).to_uppercase(), "lints": self.1
+            }))
+        }
+    }
+
+    fn accepted(version: u64) -> Accept {
+        Accept(version, Vec::new())
     }
 
     #[tokio::test]
@@ -468,17 +557,21 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let w = workdir(&t.path().join("school"));
         let got = run(&s, &w).await.unwrap();
+        let digest = digest_of(&uploads(&s).await[0]);
         assert_eq!(
             got,
             PublishOutcome::NeedsPasskey {
                 url: format!("https://sign.example/#school=demo&sid={SID}&op=commit&pending=p-1"),
-                pending_id: "p-1".into()
+                pending_id: "p-1".into(),
+                version: 5,
+                digest_hex: digest.clone(),
             }
         );
-        // Not signed here: the base stays until IT signs and pulls; the upload is recorded so
-        // that pull accepts the directory as clean once it is published.
+        // Not signed here: the base stays until IT signs and pulls; the upload is recorded (with
+        // the digest computed here) so that pull accepts the directory as clean once it is
+        // published.
         assert_eq!(w.meta().unwrap().base_version, 4);
-        assert!(Workdir::is_published_upload(&w.root, 5, "ab").unwrap());
+        assert!(Workdir::is_published_upload(&w.root, 5, &digest).unwrap());
     }
 
     #[tokio::test]
@@ -494,8 +587,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn first_version_needs_the_recovery_key() {
+    async fn first_version_without_key_uploads_for_the_kit() {
+        // C1: a new school has only recovery kits (no key file): the first version is uploaded
+        // and the link says to sign it with the kit on the signing page.
         let s = server().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/admin/publish/pending"))
+            .respond_with(accepted(1))
+            .mount(&s)
+            .await;
         let t = tempfile::tempdir().unwrap();
         let meta = Meta {
             server: "https://school.example".into(),
@@ -503,12 +603,171 @@ mod tests {
             base_version: 0,
         };
         let w = Workdir::init(&t.path().join("school"), meta, &manifest_text()).unwrap();
-        let err = run(&s, &w).await.unwrap_err().to_string();
-        assert_eq!(
-            err,
-            "The first version must be signed with the recovery key: mastersos publish --key <file>"
+        let got = run(&s, &w).await.unwrap();
+        let up = uploads(&s).await;
+        assert!(up[0]["manifest_text"]
+            .as_str()
+            .unwrap()
+            .contains("version = 1"));
+        let PublishOutcome::NeedsPasskey {
+            url,
+            pending_id,
+            version,
+            digest_hex,
+        } = got
+        else {
+            panic!("not uploaded for signing: {got:?}");
+        };
+        assert_eq!(version, 1);
+        assert_eq!(digest_hex, digest_of(&up[0]));
+        let text = needs_signing_text(&url, &pending_id, version, &digest_hex);
+        assert!(
+            text.contains("sign it with your recovery kit on this page"),
+            "{text}"
         );
-        assert!(s.received_requests().await.unwrap().is_empty());
+        assert!(text.contains(&url), "{text}");
+        assert!(text.contains(&digest_hex[..8]), "{text}");
+        assert!(!text.contains(&digest_hex), "only 8 characters: {text}");
+        assert_eq!(w.meta().unwrap().base_version, 0);
+    }
+
+    #[test]
+    fn later_versions_name_the_passkey_and_the_digest() {
+        let text = needs_signing_text("https://sign.example/#x", "p-1", 5, "0123456789abcdef");
+        assert!(
+            text.contains("signs it with a Passkey at\nhttps://sign.example/#x"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Digest, first 8 characters: 01234567\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("signing page shows the same digest"),
+            "{text}"
+        );
+        assert!(text.contains("mastersos pull"), "{text}");
+        assert!(!text.contains("recovery kit"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn server_digest_must_match_the_upload() {
+        // I1: a server that reports another digest than the uploaded content's is refused, and
+        // nothing is recorded as uploaded.
+        let s = server().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/admin/publish/pending"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "pending_id": "p-1", "version": 5, "digest_hex": "ab".repeat(32), "lints": []
+            })))
+            .mount(&s)
+            .await;
+        let t = tempfile::tempdir().unwrap();
+        let w = workdir(&t.path().join("school"));
+        let err = run(&s, &w).await.unwrap_err().to_string();
+        assert!(err.contains("does not hold what was uploaded"), "{err}");
+        assert!(err.contains("do not sign pending bundle p-1"), "{err}");
+        assert!(Workdir::uploaded_unchanged(&w.root).unwrap().is_none());
+        assert_eq!(w.meta().unwrap().base_version, 4);
+    }
+
+    #[tokio::test]
+    async fn key_path_refuses_a_swapped_pending() {
+        // I1: the upload is answered honestly, but the pending bundle later served for signing
+        // is other (self-consistent) content: `sign_pending_expecting` refuses before signing.
+        let s = server().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/admin/publish/pending"))
+            .respond_with(accepted(5))
+            .mount(&s)
+            .await;
+        let other = "version = 5\n[[group]]\nid = \"default\"\nname = \"Swapped\"\n";
+        let other_digest = hex(&content_digest(&Contents {
+            manifest_text: other.into(),
+            files: BTreeMap::new(),
+        }));
+        Mock::given(method("GET"))
+            .and(path("/v1/admin/publish/pending/p-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "pending_id": "p-1", "version": 5, "digest_hex": other_digest,
+                "manifest_text": other, "files": []
+            })))
+            .mount(&s)
+            .await;
+        let t = tempfile::tempdir().unwrap();
+        let mut files = BTreeMap::new();
+        files.insert("files/a.txt".to_string(), b"hello".to_vec());
+        let meta = Meta {
+            server: s.uri(),
+            school_id: SID.into(),
+            base_version: 4,
+        };
+        let c = Contents {
+            manifest_text: manifest_text(),
+            files,
+        };
+        let w = Workdir::write_pulled(&t.path().join("school"), meta, &c, false).unwrap();
+        let text = format!("{}# edited\n", w.manifest().unwrap());
+        std::fs::write(w.root.join("manifest.toml"), text).unwrap();
+        let key = t.path().join("rk.pem");
+        mastersos_sign::keygen(&key).unwrap();
+        let token = t.path().join("token");
+        std::fs::write(&token, "tok").unwrap();
+        let pins = t.path().join("pins");
+        let api = Api::new(&s.uri(), "tok").unwrap();
+        let mut out = Vec::new();
+        let err = publish(
+            &api,
+            &w,
+            Some(SignOpts {
+                key: &key,
+                token_file: &token,
+                pin_dir: &pins,
+            }),
+            now(),
+            &mut std::io::empty(),
+            &mut out,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("the server holds other content under this pending id"),
+            "{err}"
+        );
+        assert!(!s
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .any(|r| r.url.path().ends_with("/commit")));
+        assert_eq!(w.meta().unwrap().base_version, 4);
+    }
+
+    #[test]
+    fn sign_link_names_the_domain_of_the_school_host() {
+        let c = AuthConfig {
+            name: "Demo".into(),
+            slug: "demo".into(),
+            school_id: SID.into(),
+            signing_origin: "https://sign.os.example.com/".into(),
+        };
+        assert_eq!(
+            sign_link(&c, "https://demo.os.example.com", "p-1"),
+            format!("https://sign.os.example.com/#school=demo&sid={SID}&op=commit&domain=os.example.com&pending=p-1")
+        );
+        // Another host (a local server, or a name that is not `<slug>.<domain>`): no domain.
+        for server in [
+            "http://localhost:8080",
+            "https://demo2.os.example.com",
+            "https://demo",
+        ] {
+            assert_eq!(
+                sign_link(&c, server, "p-1"),
+                format!("https://sign.os.example.com/#school=demo&sid={SID}&op=commit&pending=p-1"),
+                "{server}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -557,10 +816,10 @@ mod tests {
         let s = server().await;
         Mock::given(method("POST"))
             .and(path("/v1/admin/publish/pending"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "pending_id": "p-1", "version": 5, "digest_hex": "ab",
-                "lints": [{ "level": "warning", "code": "wifi_weak", "message": "psk guestpass1 is weak" }]
-            })))
+            .respond_with(Accept(
+                5,
+                vec![json!({ "level": "warning", "code": "wifi_weak", "message": "psk guestpass1 is weak" })],
+            ))
             .mount(&s)
             .await;
         let t = tempfile::tempdir().unwrap();
@@ -591,7 +850,7 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("# edited"));
-        assert!(Workdir::is_published_upload(&w.root, 5, "ab").unwrap());
+        assert!(Workdir::is_published_upload(&w.root, 5, &digest_of(&up[0])).unwrap());
         assert!(workdir::check_snapshot(&w, &snap)
             .unwrap()
             .iter()
