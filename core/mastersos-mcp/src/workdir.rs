@@ -85,6 +85,18 @@ pub struct UploadInfo {
 }
 
 fn read_snapshot(dir: &Path) -> Result<Snapshot> {
+    // The state directories are never links (the settings directory itself may be reached by one).
+    if dir
+        .parent()
+        .and_then(Path::file_name)
+        .is_some_and(|n| n == STATE)
+    {
+        refuse_link(dir.parent().unwrap())?;
+        refuse_link(dir)?;
+    }
+    for d in MEMBER_DIRS {
+        refuse_link(&dir.join(d))?;
+    }
     let manifest = read_text(&dir.join(MANIFEST))?;
     let secrets_raw = read_text(&dir.join(SECRETS))?;
     let secrets = parse_secrets(&secrets_raw)
@@ -101,8 +113,30 @@ fn read_snapshot(dir: &Path) -> Result<Snapshot> {
     })
 }
 
+/// Refuse a symlink (it could point at any file the user can read). A missing path is fine.
+fn refuse_link(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(m) if m.file_type().is_symlink() => {
+            bail!("{} is a symbolic link, which is refused", path.display())
+        }
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("could not read {}", path.display())),
+    }
+}
+
+/// Refuse anything but a regular file (or nothing at all).
+fn refuse_irregular(path: &Path) -> Result<()> {
+    refuse_link(path)?;
+    match fs::symlink_metadata(path) {
+        Ok(m) if !m.is_file() => bail!("{} is not a regular file", path.display()),
+        _ => Ok(()),
+    }
+}
+
 /// A missing file reads as empty.
 fn read_text(path: &Path) -> Result<String> {
+    refuse_irregular(path)?;
     match fs::read_to_string(path) {
         Ok(t) => Ok(t),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
@@ -282,6 +316,7 @@ impl Workdir {
     /// The upload record, when the directory still holds exactly what was uploaded (offline).
     pub fn uploaded_unchanged(root: &Path) -> Result<Option<UploadInfo>> {
         let dir = Workdir::uploaded_dir(root);
+        refuse_irregular(&dir.join(UPLOAD_INFO))?;
         let Ok(text) = fs::read_to_string(dir.join(UPLOAD_INFO)) else {
             return Ok(None);
         };
@@ -299,6 +334,7 @@ impl Workdir {
 
     /// Open an existing settings directory.
     pub fn open(root: &Path) -> Result<Workdir> {
+        refuse_irregular(&root.join(META))?;
         if !root.join(META).is_file() {
             bail!(
                 "{} is not a settings directory (no {META}): run `mastersos init` or `mastersos pull` first",
@@ -383,6 +419,7 @@ impl Workdir {
 
     pub fn meta(&self) -> Result<Meta> {
         let path = self.root.join(META);
+        refuse_irregular(&path)?;
         let text = fs::read_to_string(&path)
             .with_context(|| format!("could not read {}", path.display()))?;
         toml::from_str(&text).with_context(|| format!("{} is not valid", path.display()))
@@ -603,6 +640,65 @@ mod tests {
 
     fn codes(l: &[Lint]) -> Vec<&'static str> {
         l.iter().map(|l| l.code).collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn manifest_symlink_is_refused() {
+        let t = tempfile::tempdir().unwrap();
+        let w = pulled(&t.path().join("school"));
+        let target = t.path().join("target.txt");
+        std::fs::write(&target, "TOPSECRET-KEY").unwrap();
+        std::fs::remove_file(w.root.join("manifest.toml")).unwrap();
+        std::os::unix::fs::symlink(&target, w.root.join("manifest.toml")).unwrap();
+        let e = format!("{:#}", w.manifest().unwrap_err());
+        assert!(
+            e.contains("manifest.toml") && !e.contains("TOPSECRET"),
+            "{e}"
+        );
+        assert!(check(&w).is_err() && diff(&w).is_err() && w.freeze().is_err());
+        let e =
+            crate::tools::call_local(&w.root, "read_manifest", serde_json::json!({})).unwrap_err();
+        assert!(!e.contains("TOPSECRET"), "{e}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secrets_symlink_is_refused() {
+        let t = tempfile::tempdir().unwrap();
+        let w = pulled(&t.path().join("school"));
+        let target = t.path().join("target.txt");
+        std::fs::write(&target, "x = \"TOPSECRET-KEY\"\n").unwrap();
+        std::fs::remove_file(w.root.join("secrets.toml")).unwrap();
+        std::os::unix::fs::symlink(&target, w.root.join("secrets.toml")).unwrap();
+        let e = format!("{:#}", w.secrets().unwrap_err());
+        assert!(
+            e.contains("secrets.toml") && !e.contains("TOPSECRET"),
+            "{e}"
+        );
+        let e =
+            crate::tools::call_local(&w.root, "read_manifest", serde_json::json!({})).unwrap_err();
+        assert!(!e.contains("TOPSECRET"), "{e}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn base_dir_symlink_is_refused() {
+        let t = tempfile::tempdir().unwrap();
+        let w = pulled(&t.path().join("school"));
+        let moved = t.path().join("moved-base");
+        std::fs::rename(w.root.join(".mastersos/base"), &moved).unwrap();
+        std::os::unix::fs::symlink(&moved, w.root.join(".mastersos/base")).unwrap();
+        let e = format!("{:#}", diff(&w).unwrap_err());
+        assert!(e.contains("base") && e.contains("symbolic link"), "{e}");
+        assert!(w.is_dirty().is_err());
+        // The state directory itself.
+        std::fs::remove_file(w.root.join(".mastersos/base")).unwrap();
+        std::fs::rename(&moved, w.root.join(".mastersos/base")).unwrap();
+        let state = t.path().join("moved-state");
+        std::fs::rename(w.root.join(".mastersos"), &state).unwrap();
+        std::os::unix::fs::symlink(&state, w.root.join(".mastersos")).unwrap();
+        assert!(diff(&w).is_err());
     }
 
     #[test]
