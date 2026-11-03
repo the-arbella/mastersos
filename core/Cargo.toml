@@ -11,7 +11,7 @@ license = "MIT"
 # 设置包与签名
 ring = "0.17"
 sha2 = "0.10"
-base64 = "0.22"
+base64 = "0.23"
 tar = "0.4"
 flate2 = "1"
 toml = "0.8"

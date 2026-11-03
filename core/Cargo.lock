@@ -1851,7 +1851,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "clap",
  "glib",
@@ -1880,7 +1880,7 @@ name = "mastersos-bundle"
 version = "0.2.0"
 dependencies = [
  "age",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bech32 0.12.0",
  "chrono",
  "flate2",
@@ -1918,7 +1918,7 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "clap",
  "mastersos-bundle",
@@ -1945,7 +1945,7 @@ dependencies = [
  "age",
  "anyhow",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "clap",
  "mastersos-bundle",
