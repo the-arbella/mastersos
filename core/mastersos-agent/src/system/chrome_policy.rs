@@ -114,22 +114,25 @@ pub fn settle(
     if !errs.is_empty() {
         return failed(
             UPDATE_ITEM,
-            format!("{}；这一项不生效，照常更新", errs.join("；")),
+            format!(
+                "{}; this item has no effect, updating as usual",
+                errs.join("; ")
+            ),
         );
     }
     let mut parts = vec![];
     if let Some(w) = &sys.chrome_window {
         let tz = checks::utc_offset_label(now.offset().local_minus_utc());
-        parts.push(format!("更新时段 {w}（本机时间 {tz}）"));
+        parts.push(format!("update window {w} (local time {tz})"));
     }
     if let Some(p) = &sys.chrome_pause_until {
-        parts.push(format!("暂停到 {p}"));
+        parts.push(format!("paused until {p}"));
     }
     ItemResult {
         detail: Some(if parts.is_empty() {
-            "不限".into()
+            "unrestricted".into()
         } else {
-            parts.join("；")
+            parts.join("; ")
         }),
         ..ok(UPDATE_ITEM)
     }
@@ -155,7 +158,7 @@ fn apply(root: &Path, policy: &toml::Table) -> Result<()> {
     text.push('\n');
     let dir = safefs::open_dir(root, Path::new(POLICY_DIR), true)?;
     safefs::write_at(&dir, POLICY_FILE, text.as_bytes(), 0o644)
-        .with_context(|| format!("写入 /{POLICY_DIR}/{POLICY_FILE}"))?;
+        .with_context(|| format!("write /{POLICY_DIR}/{POLICY_FILE}"))?;
     Ok(())
 }
 

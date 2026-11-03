@@ -111,7 +111,7 @@ fn main() -> ExitCode {
     {
         Ok(rt) => rt,
         Err(e) => {
-            eprintln!("Error: 建 tokio 运行时失败：{e}");
+            eprintln!("Error: failed to build the tokio runtime: {e}");
             return ExitCode::FAILURE;
         }
     };
@@ -158,8 +158,8 @@ async fn agent_main() -> anyhow::Result<()> {
             })
             .await
             {
-                Ok(Err(e)) => log::warn!("exec-block：{e:#}"),
-                Err(e) => log::warn!("exec-block：{e}"),
+                Ok(Err(e)) => log::warn!("exec-block: {e:#}"),
+                Err(e) => log::warn!("exec-block: {e}"),
                 Ok(Ok(_)) => {}
             }
             mastersos_agent::apply_local(cfg, applier).await

@@ -417,7 +417,7 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
     let (ids, mut out) = match webapps(ctx, env.paths, env.sys) {
         Ok(r) => r,
         Err(e) => {
-            errs.push(format!("网页应用：{e:#}"));
+            errs.push(format!("web apps: {e:#}"));
             (Vec::new(), Vec::new())
         }
     };
@@ -426,13 +426,13 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
     let kiosk = match kiosk_launchers(env.paths, ctx.config) {
         Ok(k) => k,
         Err(e) => {
-            errs.push(format!("锁定应用的启动器：{e:#}"));
+            errs.push(format!("locked app launchers: {e:#}"));
             Vec::new()
         }
     };
     let (keyfile, locks) = render_dconf(ctx.config, &ids, &kiosk, &flatpaks);
     if let Err(e) = apply_dconf(&env.paths.root, env.runner, env.sys, &keyfile, &locks) {
-        errs.push(format!("dconf：{e:#}"));
+        errs.push(format!("dconf: {e:#}"));
     }
     let r = if p.locked() {
         let mut keep = vec![CHROME_DESKTOP.to_string()];
@@ -443,15 +443,15 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
         remove_overrides(env.paths)
     };
     if let Err(e) = r {
-        errs.push(format!("覆盖：{e:#}"));
+        errs.push(format!("overrides: {e:#}"));
     }
     if let Err(e) = exec_block::apply(env.paths, env.runner, p.locked()) {
-        errs.push(format!("终端、文件管理器与设置：{e:#}"));
+        errs.push(format!("terminal, file manager and settings: {e:#}"));
     }
     out.push(if errs.is_empty() {
         ok(ITEM)
     } else {
-        failed(ITEM, errs.join("；"))
+        failed(ITEM, errs.join("; "))
     });
     out
 }
@@ -502,7 +502,10 @@ fn webapps(
         }
         let file = webapp_file(&app.url);
         if !seen.insert(file.clone()) {
-            out.push(failed(&item, "地址与前面的网页应用相同，跳过".into()));
+            out.push(failed(
+                &item,
+                "same address as an earlier web app; skipped".into(),
+            ));
             continue;
         }
         let icon = place_icon(ctx, &icons_dir, app, &present, &mut dl);
@@ -513,7 +516,7 @@ fn webapps(
                 (None, Some(abs.to_string_lossy().into_owned()))
             }
             Ok(None) => (None, None),
-            Err(why) => (Some(format!("{why}，用了通用图标")), None),
+            Err(why) => (Some(format!("{why}; using the generic icon")), None),
         };
         let (_, text) = render_webapp(app, path.as_deref());
         match safefs::write_at(&apps_dir, &file, text.as_bytes(), 0o644) {
@@ -525,7 +528,7 @@ fn webapps(
                     detail,
                 });
             }
-            Err(e) => out.push(failed(&item, format!("写入启动器：{e:#}"))),
+            Err(e) => out.push(failed(&item, format!("write launcher: {e:#}"))),
         }
     }
     let written: BTreeSet<&String> = ids.iter().collect();
@@ -575,7 +578,7 @@ fn kiosk_launchers(paths: &SysPaths, config: &Config) -> Result<Vec<String>> {
         });
         let (file, text) = render_kiosk_launcher(id, &app.name, icon.as_deref());
         safefs::write_at(&apps_dir, &file, text.as_bytes(), 0o644)
-            .with_context(|| format!("写入 {file}"))?;
+            .with_context(|| format!("write {file}"))?;
         written.push(file);
     }
     for name in safefs::list_at(&apps_dir)? {
@@ -598,11 +601,11 @@ fn bundle_icons(bundle_dir: &Path, apps: &[WebApp]) -> BTreeSet<String> {
 pub(crate) fn read_bundle_file(bundle_dir: &Path, rel: &str) -> Result<Vec<u8>> {
     let p = Path::new(rel);
     let (Some(parent), Some(name)) = (p.parent(), p.file_name().and_then(|n| n.to_str())) else {
-        bail!("路径不规范");
+        bail!("not a normalized path");
     };
     let dir = safefs::open_dir(bundle_dir, parent, false)?;
     let Some(f) = safefs::open_file_at(&dir, name)? else {
-        bail!("包里没有这个文件");
+        bail!("this file is not in the bundle");
     };
     let mut buf = Vec::new();
     f.take(MAX_ICON_BYTES as u64 + 1).read_to_end(&mut buf)?;
@@ -640,11 +643,11 @@ pub fn sniff_icon(b: &[u8]) -> Option<&'static str> {
 /// 内容本身的问题（太大、不是 PNG 或 SVG）：换哪一轮下都一样。
 pub(crate) fn icon_problem(bytes: &[u8]) -> Option<String> {
     if bytes.len() > MAX_ICON_BYTES {
-        return Some(format!("图标超过 {} KiB", MAX_ICON_BYTES / 1024));
+        return Some(format!("icon is over {} KiB", MAX_ICON_BYTES / 1024));
     }
     sniff_icon(bytes)
         .is_none()
-        .then(|| "图标不是 PNG 或 SVG".into())
+        .then(|| "icon is not PNG or SVG".into())
 }
 
 fn store_icon(icons_dir: &OwnedFd, base: &str, bytes: &[u8]) -> Result<String, String> {
@@ -652,10 +655,10 @@ fn store_icon(icons_dir: &OwnedFd, base: &str, bytes: &[u8]) -> Result<String, S
         return Err(p);
     }
     let Some(ext) = sniff_icon(bytes) else {
-        return Err("图标不是 PNG 或 SVG".into());
+        return Err("icon is not PNG or SVG".into());
     };
     let name = format!("{base}.{ext}");
-    safefs::write_at(icons_dir, &name, bytes, 0o644).map_err(|e| format!("写入图标：{e:#}"))?;
+    safefs::write_at(icons_dir, &name, bytes, 0o644).map_err(|e| format!("write icon: {e:#}"))?;
     Ok(name)
 }
 
@@ -670,11 +673,13 @@ fn place_icon(
     match icon_source(app.icon.as_deref(), present) {
         IconSource::Generic => match &app.icon {
             None => Ok(None),
-            Some(i) => Err(format!("图标 {i} 不在包里，也不是 https 链接")),
+            Some(i) => Err(format!(
+                "icon {i} is neither in the bundle nor an https link"
+            )),
         },
         IconSource::Bundle(src) => {
             let bytes = read_bundle_file(ctx.bundle_dir, &src)
-                .map_err(|e| format!("读不了包里的图标 {src}：{e:#}"))?;
+                .map_err(|e| format!("cannot read icon {src} from the bundle: {e:#}"))?;
             let base = format!("{WEB_PREFIX}{}", slug(&app.url));
             store_icon(icons_dir, &base, &bytes).map(Some)
         }
@@ -687,25 +692,34 @@ fn place_icon(
                 }
             }
             if ctx.phase != Phase::Full {
-                return Err("图标还没下载（开机的快速应用不下载）".into());
+                return Err(
+                    "icon not downloaded yet (the quick apply at boot does not download)".into(),
+                );
             }
             if dl.failed.contains(&url) {
-                return Err("图标上次下载失败，网页应用清单变了再试".into());
+                return Err(
+                    "icon download failed last time; will retry when the web app manifest changes"
+                        .into(),
+                );
             }
             if ctx.superseded.load(std::sync::atomic::Ordering::SeqCst) {
-                return Err("有更新的应用请求，这一轮不下载图标".into());
+                return Err(
+                    "a newer apply request is pending; not downloading icons this round".into(),
+                );
             }
             let left = dl
                 .deadline
                 .saturating_duration_since(std::time::Instant::now());
             if left < Duration::from_secs(1) {
-                return Err("这一轮的图标下载时间用完了，下一轮再下".into());
+                return Err(
+                    "icon download time for this round is used up; will download next round".into(),
+                );
             }
             // 只记下换一轮也不会好的失败（复审 T13 R3）：4xx、太大、不是图片。超时、连不上、5xx、被这一轮的时间截断、
             // 写盘失败都下一轮完整应用再试
             let r = match download_icon(&url, left) {
                 Err(e) => Err((
-                    format!("下载图标失败：{e:#}"),
+                    format!("icon download failed: {e:#}"),
                     e.downcast_ref::<Definitive>().is_some(),
                 )),
                 Ok(bytes) => match icon_problem(&bytes) {
@@ -766,10 +780,10 @@ pub(crate) fn download_icon(url: &str, total: Duration) -> Result<Vec<u8>> {
             .send()
             .await?;
         if resp.status().is_client_error() {
-            return Err(Definitive(format!("图标地址回 {}", resp.status())).into());
+            return Err(Definitive(format!("icon address returned {}", resp.status())).into());
         }
         let mut resp = resp.error_for_status()?;
-        let too_big = || Definitive(format!("图标超过 {} KiB", MAX_ICON_BYTES / 1024));
+        let too_big = || Definitive(format!("icon is over {} KiB", MAX_ICON_BYTES / 1024));
         if resp
             .content_length()
             .is_some_and(|n| n > MAX_ICON_BYTES as u64)
@@ -790,7 +804,7 @@ pub(crate) fn download_icon(url: &str, total: Duration) -> Result<Vec<u8>> {
         Err(_) => tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .context("建 tokio 运行时")?
+            .context("build the tokio runtime")?
             .block_on(fut),
     }
 }
@@ -805,7 +819,7 @@ fn apply_dconf(
 ) -> Result<()> {
     let dir = safefs::open_dir(root, Path::new(DCONF_DIR), true)?;
     let mut changed = safefs::write_at(&dir, DCONF_FILE, keyfile.as_bytes(), 0o644)
-        .with_context(|| format!("写入 /{DCONF_DIR}/{DCONF_FILE}"))?;
+        .with_context(|| format!("write /{DCONF_DIR}/{DCONF_FILE}"))?;
     let ld = safefs::open_dir(root, Path::new(DCONF_LOCKS_DIR), true)?;
     if locks.is_empty() {
         if safefs::read_at(&ld, DCONF_FILE)?.is_some() {
@@ -814,7 +828,7 @@ fn apply_dconf(
         }
     } else {
         changed |= safefs::write_at(&ld, DCONF_FILE, locks.as_bytes(), 0o644)
-            .with_context(|| format!("写入 /{DCONF_LOCKS_DIR}/{DCONF_FILE}"))?;
+            .with_context(|| format!("write /{DCONF_LOCKS_DIR}/{DCONF_FILE}"))?;
     }
     if changed {
         sys.dconf_update_pending = true;
@@ -861,7 +875,7 @@ fn visible_in(root: &Path, d: &str) -> Result<BTreeSet<String>> {
     let rd = match std::fs::read_dir(&dir) {
         Ok(rd) => rd,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
-        Err(e) => return Err(e).with_context(|| format!("列出 /{d}")),
+        Err(e) => return Err(e).with_context(|| format!("list /{d}")),
     };
     for e in rd {
         let e = e?;
@@ -899,7 +913,7 @@ fn write_overrides(paths: &SysPaths, keep: &[String], keep_apps: &[String]) -> R
     let hide = hidden_overrides(&visible_desktop_ids(&paths.root)?, keep, keep_apps);
     for id in &hide {
         safefs::write_at(&apps_dir, id, HIDDEN_ENTRY.as_bytes(), 0o644)
-            .with_context(|| format!("写入 {id} 的覆盖"))?;
+            .with_context(|| format!("write the override for {id}"))?;
     }
     for name in safefs::list_at(&apps_dir)? {
         if is_override(&name) && !hide.contains(&name) {
@@ -909,7 +923,7 @@ fn write_overrides(paths: &SysPaths, keep: &[String], keep_apps: &[String]) -> R
     let services = sub_dir(&sub_dir(&xdg, "dbus-1")?, "services")?;
     for s in DBUS_OVERRIDES {
         safefs::write_at(&services, s, dbus_override(s).as_bytes(), 0o644)
-            .with_context(|| format!("写入 D-Bus 覆盖 {s}"))?;
+            .with_context(|| format!("write D-Bus override {s}"))?;
     }
     Ok(())
 }

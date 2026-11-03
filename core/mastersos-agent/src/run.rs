@@ -117,7 +117,7 @@ pub async fn run(
     shutdown: CancellationToken,
 ) -> Result<()> {
     let wake = Arc::new(Notify::new());
-    let mut usr1 = signal(SignalKind::user_defined1()).context("注册 SIGUSR1")?;
+    let mut usr1 = signal(SignalKind::user_defined1()).context("register SIGUSR1")?;
     let w = wake.clone();
     let forward = tokio::spawn(async move {
         while usr1.recv().await.is_some() {
@@ -256,7 +256,7 @@ async fn run_resident(
             };
             if tokio::time::timeout(FIRST_REPORT_GATE, all).await.is_err() {
                 log::warn!(
-                    "后台任务 {} 秒内没跑完第一轮，先回报",
+                    "background jobs did not finish their first round within {} seconds; reporting now",
                     FIRST_REPORT_GATE.as_secs()
                 );
             }
@@ -346,17 +346,17 @@ pub async fn apply_local_with(
             Ok(Ok(o)) if o.code == 0 => true,
             Ok(Ok(o)) => {
                 log::warn!(
-                    "网络没有就绪（nm-online 退出码 {}），按种子的默认值开机",
+                    "network not ready (nm-online exit code {}); booting with the seed defaults",
                     o.code
                 );
                 false
             }
             Ok(Err(e)) => {
-                log::warn!("等网络失败：{e:#}");
+                log::warn!("waiting for the network failed: {e:#}");
                 false
             }
             Err(e) => {
-                log::warn!("等网络失败：{e}");
+                log::warn!("waiting for the network failed: {e}");
                 false
             }
         };
@@ -367,7 +367,7 @@ pub async fn apply_local_with(
             loop {
                 let left = deadline.saturating_duration_since(Instant::now());
                 if left.is_zero() {
-                    log::warn!("开机拉取超时");
+                    log::warn!("boot fetch timed out");
                     break;
                 }
                 let after = agent.after().unwrap_or(0);
@@ -397,19 +397,19 @@ pub async fn apply_local_with(
                                 > LOCAL_RETRY_PAUSE =>
                     {
                         log::info!(
-                            "开机拉取连不上服务端，{} 秒后再试：{e:#}",
+                            "boot fetch cannot reach the server; retrying in {} seconds: {e:#}",
                             LOCAL_RETRY_PAUSE.as_secs()
                         );
                         agent.fetch_result(Some(&e));
                         tokio::time::sleep(LOCAL_RETRY_PAUSE).await;
                     }
                     Ok(Err(e)) => {
-                        log::warn!("开机拉取失败：{e:#}");
+                        log::warn!("boot fetch failed: {e:#}");
                         agent.fetch_result(Some(&e));
                         break;
                     }
                     Err(_) => {
-                        log::warn!("开机拉取超时");
+                        log::warn!("boot fetch timed out");
                         agent.fetch_error.send_replace(Some(format!(
                             "fetching settings timed out after {} s",
                             LOCAL_FETCH_TIMEOUT.as_secs()
@@ -423,7 +423,7 @@ pub async fn apply_local_with(
     let results = agent.apply_direct(Phase::Boot).await;
     for r in results.iter().filter(|r| !r.ok) {
         log::warn!(
-            "开机应用 {} 失败：{}",
+            "boot apply of {} failed: {}",
             r.item,
             r.detail.as_deref().unwrap_or("")
         );
@@ -612,11 +612,14 @@ impl Agent {
         hold_reports: bool,
     ) -> Result<Agent> {
         let imported = seedpart::import_if_fresh(&cfg.state_dir, &cfg.seed_dir)
-            .context("从种子分区导入失败")?;
+            .context("import from the seed partition failed")?;
         let (seed, mut state) = state::load(&cfg.state_dir)?;
         // 每次启动都收紧：里面有种子（fetch_token）、可能带 Wi‑Fi 口令的包。
         if let Err(e) = state::ensure_state_dir(&cfg.state_dir) {
-            log::error!("收紧 {} 的权限失败：{e:#}", cfg.state_dir.display());
+            log::error!(
+                "failed to tighten the permissions of {}: {e:#}",
+                cfg.state_dir.display()
+            );
         }
         // identity.json：还没有 device_id（新装、恢复出厂）时以它为准，恢复出厂后在面板上仍是同一台；
         // 已有 device_id 时只用它的托管凭据（恢复密钥托管，Task 8），device_id 仍以 state 为准——
@@ -627,7 +630,7 @@ impl Agent {
         }) {
             Ok(id) => Some(id),
             Err(e) => {
-                log::warn!("读取种子分区的 identity.json 失败（没有托管凭据；没有 device_id 时改用本机生成的）：{e:#}");
+                log::warn!("failed to read identity.json from the seed partition (no managed credentials; a locally generated device_id is used if there is none): {e:#}");
                 None
             }
         };
@@ -638,7 +641,7 @@ impl Agent {
             .filter(|id| Some(&id.device_id) != state.device_id.as_ref())
         {
             log::warn!(
-                "identity.json 的 device_id（{}）与 state.json 的不同，以 state.json 为准",
+                "device_id in identity.json ({}) differs from state.json; using state.json",
                 id.device_id
             );
         }
@@ -660,7 +663,7 @@ impl Agent {
             }
             // 立即落盘：apply-local 要到最后才 save，中途断电下次就是 Existing，指纹再也记不上。
             if let Err(e) = state::save(&cfg.state_dir, &state) {
-                log::error!("保存导入记录失败：{e:#}");
+                log::error!("failed to save the import record: {e:#}");
             }
         }
         let machine = Machine::read(&cfg, &mut state);
@@ -793,14 +796,14 @@ impl Agent {
         let archive = match std::fs::read(&path) {
             Ok(b) => b,
             Err(e) => {
-                log::warn!("读取 {} 失败：{e}", path.display());
+                log::warn!("failed to read {}: {e}", path.display());
                 return;
             }
         };
         let claimed = claimed_version(&archive);
         match self.take_new(&archive, claimed, true).await {
-            Ok(true) => log::info!("接受了种子分区缓存的设置包 v{claimed}"),
-            Ok(false) => log::warn!("种子分区缓存的设置包没通过验证，丢掉、照常拉取"),
+            Ok(true) => log::info!("accepted settings bundle v{claimed} cached on the seed partition"),
+            Ok(false) => log::warn!("the settings bundle cached on the seed partition failed verification; discarding it and fetching as usual"),
             Err(e) => log::warn!("{e:#}"),
         }
     }
@@ -810,7 +813,7 @@ impl Agent {
         let r = safefs::open_dir(&self.cfg.state_dir, Path::new(""), false)
             .and_then(|d| safefs::remove_at(&d, seedpart::INCOMING));
         if let Err(e) = r {
-            log::warn!("删除 {} 失败：{e:#}", seedpart::INCOMING);
+            log::warn!("failed to delete {}: {e:#}", seedpart::INCOMING);
         }
     }
 
@@ -904,7 +907,7 @@ impl Agent {
                 }
             }
             Err(_) => log::warn!(
-                "退出时应用任务 {} 秒内没有停下",
+                "the apply task did not stop within {} seconds at exit",
                 SHUTDOWN_APPLY_GRACE.as_secs()
             ),
         }
@@ -932,7 +935,10 @@ impl Agent {
         if uids.is_empty() {
             return;
         }
-        log::info!("有 {} 个会话登录，拉取之后跑 login 脚本", uids.len());
+        log::info!(
+            "{} sessions logged in; running login scripts after the fetch",
+            uids.len()
+        );
         self.login.pending.extend(uids.iter().copied());
         self.login.notify.extend(uids);
         if self.login.fetch_wait.is_none() {
@@ -1070,7 +1076,7 @@ impl Agent {
             })
         })
         .await
-        .unwrap_or_else(|e| vec![failed("applier", format!("异常退出：{e}"))])
+        .unwrap_or_else(|e| vec![failed("applier", format!("crashed: {e}"))])
     }
 
     /// 验新包时的「当前版本」。本地的包丢了或没通过复验时退一格，好把同一版重新拿回来；
@@ -1096,7 +1102,7 @@ impl Agent {
 
     fn save(&self) {
         if let Err(e) = state::save(&self.cfg.state_dir, &self.state) {
-            log::error!("保存 state.json 失败：{e:#}");
+            log::error!("failed to save state.json: {e:#}");
         }
     }
 
@@ -1327,7 +1333,7 @@ impl Agent {
         let cred = self.device_cred();
         let sent = self.fetcher.report(&r, cred.as_ref(), lab).await;
         if let Err(e) = &sent {
-            log::warn!("回报状态失败：{e:#}");
+            log::warn!("failed to report status: {e:#}");
         }
         sent
     }
@@ -1381,7 +1387,10 @@ impl Agent {
             )));
             if self.rejected.is_none() {
                 // 重启后第一次再见到它：回报里补上这条失败。
-                self.rejected = Some(failed("bundle", format!("v{version}：与先前拒收的包相同")));
+                self.rejected = Some(failed(
+                    "bundle",
+                    format!("v{version}: same as a previously rejected bundle"),
+                ));
                 let _ = self.report().await;
             }
             return Ok(false);
@@ -1415,7 +1424,7 @@ impl Agent {
                 if let Err(e) = state::store_bundle(&self.cfg.state_dir, archive, &bundle) {
                     self.fetch_error
                         .send_replace(Some(format!("settings bundle could not be saved: {e:#}")));
-                    return Err(e.context("保存设置包失败"));
+                    return Err(e.context("failed to save the settings bundle"));
                 }
                 // 验过它的钥匙留给开机复验；之后的新包按它列出的 trust 验。
                 self.state.bundle_trust =
@@ -1441,7 +1450,7 @@ impl Agent {
                 self.state.clear_refusal();
                 self.rejected = None;
                 self.reject_backoff = self.cfg.reject_wait;
-                log::info!("已接受设置包 v{}", bundle.manifest.version);
+                log::info!("accepted settings bundle v{}", bundle.manifest.version);
                 self.bundle = Some(Arc::new(bundle));
                 if !from_cache {
                     self.fetch_ok();
@@ -1472,7 +1481,7 @@ impl Agent {
                 Ok(false)
             }
             Err(e) => {
-                log::warn!("拒收设置包（自称 v{version}）：{e}");
+                log::warn!("rejected settings bundle (claims v{version}): {e}");
                 self.fetch_error.send_replace(Some(format!(
                     "settings bundle rejected: {}",
                     rejected_reason(&e)
@@ -1480,7 +1489,7 @@ impl Agent {
                 self.state.record_refusal(sha);
                 self.backoff_attempt = 0;
                 self.save();
-                self.rejected = Some(failed("bundle", format!("v{version}：{e}")));
+                self.rejected = Some(failed("bundle", format!("v{version}: {e}")));
                 let _ = self.report().await;
                 Ok(false)
             }
@@ -1639,7 +1648,7 @@ impl Agent {
                 None
             }
             Err(e) => {
-                log::warn!("拉取设置包失败：{e:#}");
+                log::warn!("fetching the settings bundle failed: {e:#}");
                 if e.downcast_ref::<crate::fetch::Unauthorized>().is_some() {
                     self.on_unauthorized().await;
                 }
@@ -1690,7 +1699,7 @@ impl Agent {
             Ok(Some(text)) => self.take_heartbeat(&text, now),
             Ok(None) => None,
             Err(e) => {
-                log::warn!("取心跳失败：{e:#}");
+                log::warn!("fetching the heartbeat failed: {e:#}");
                 None
             }
         };
@@ -1713,10 +1722,10 @@ impl Agent {
                 }
                 Ok(_) => {
                     self.fetch_ok();
-                    log::warn!("签过名的心跳说有第 {v} 版，服务端却说没有新版本");
+                    log::warn!("the signed heartbeat announces v{v}, but the server says there is no new version");
                     self.state.newer_withheld = Some(v);
                 }
-                Err(e) => log::warn!("按心跳重拉失败：{e:#}"),
+                Err(e) => log::warn!("refetch after the heartbeat failed: {e:#}"),
             }
         }
         self.save();
@@ -1731,12 +1740,12 @@ impl Agent {
         let s = match verify_heartbeat(text, &self.state.trust) {
             Ok(s) => s,
             Err(e) => {
-                log::warn!("心跳不采信：{e}");
+                log::warn!("heartbeat ignored: {e}");
                 return None;
             }
         };
         if s.issued_at > (now + HEARTBEAT_FUTURE_SLACK).timestamp() {
-            log::warn!("心跳不采信：签发时刻晚于本机时间超过 1 天");
+            log::warn!("heartbeat ignored: issued more than 1 day ahead of the local clock");
             return None;
         }
         let current = self.state.version.unwrap_or(0);
@@ -1747,7 +1756,10 @@ impl Agent {
                 .filter(|b| b.manifest.version == s.version)
                 .map(|b| hex(&content_digest(&b.contents)));
             if local.as_deref() != Some(s.digest_hex.as_str()) {
-                log::warn!("心跳不采信：第 {} 版的摘要与本机的包不同", s.version);
+                log::warn!(
+                    "heartbeat ignored: the digest of v{} differs from the local bundle",
+                    s.version
+                );
                 return None;
             }
             if let Some(t) = DateTime::from_timestamp(s.not_after, 0) {
@@ -1794,14 +1806,14 @@ impl Agent {
                 );
                 self.fetcher.set_token(t);
                 match saved {
-                    Ok(()) => passed("fetch-token", "已换成新的拉取令牌".into()),
+                    Ok(()) => passed("fetch-token", "switched to a new fetch token".into()),
                     Err(e) if e.downcast_ref::<token::SeedNotWritten>().is_some() => {
-                        passed("fetch-token", format!("已换成新的拉取令牌；{e}"))
+                        passed("fetch-token", format!("switched to a new fetch token; {e}"))
                     }
                     Err(e) => failed(
                         "fetch-token",
                         format!(
-                            "已换成新的拉取令牌，但没存下来（重启后退回旧令牌、再换一次）：{e:#}"
+                            "switched to a new fetch token but could not save it (after a restart the old token is used and renewed again): {e:#}"
                         ),
                     ),
                 }
@@ -1810,7 +1822,7 @@ impl Agent {
             Err(e) => failed("fetch-token", format!("{e:#}")),
         };
         log::info!(
-            "换领拉取令牌：{}",
+            "fetch token renewal: {}",
             result.detail.as_deref().unwrap_or_default()
         );
         self.fetch_token = Some(result);
@@ -1830,9 +1842,9 @@ impl Agent {
         let Some(alt) = alt else {
             return;
         };
-        log::warn!("拉取令牌被拒（401），换用另一处保存的令牌");
+        log::warn!("fetch token rejected (401); switching to the token saved in the other place");
         self.fetcher.set_token(alt);
-        self.fetch_token = Some(failed("fetch-token", "令牌被拒（401）".into()));
+        self.fetch_token = Some(failed("fetch-token", "token rejected (401)".into()));
         let _ = self.report().await;
     }
 
@@ -1882,7 +1894,7 @@ fn failed(item: &str, detail: String) -> ItemResult {
 fn seed_writable(cfg: &AgentConfig) -> Result<()> {
     if cfg.seed_requires_mount && !seedpart::is_mount_point(&cfg.seed_dir)? {
         anyhow::bail!(
-            "种子分区没有挂上（{} 不是挂载点），不写",
+            "seed partition is not mounted ({} is not a mount point); not writing",
             cfg.seed_dir.display()
         );
     }
@@ -1913,7 +1925,7 @@ async fn login_finished(
         }
         Err(e) => {
             running.remove(&e.id());
-            log::warn!("跑 login 脚本的线程异常退出：{e}");
+            log::warn!("the login script thread crashed: {e}");
             None
         }
     }

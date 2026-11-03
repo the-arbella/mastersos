@@ -175,7 +175,7 @@ fn save_skips_unmounted_seed_partition() {
     let e = save(&d.state, &d.seedp, "new-token-1").unwrap_err();
     let msg = format!("{e:#}");
     assert!(e.downcast_ref::<SeedNotWritten>().is_some(), "{msg}");
-    assert!(msg.contains("种子分区没挂上"), "{msg}");
+    assert!(msg.contains("seed partition is not mounted"), "{msg}");
     assert!(!msg.contains("new-token-1"), "{msg}");
     assert_eq!(
         std::fs::read_to_string(d.state.join(TOKEN_FILE)).unwrap(),

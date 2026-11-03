@@ -165,7 +165,7 @@ fn uid_in_use(runner: &dyn Runner, uid: u32) -> Result<bool> {
     match out.code {
         0 => Ok(true),
         2 => Ok(false),
-        c => bail!("getent passwd {uid} 退出码 {c}"),
+        c => bail!("getent passwd {uid} exited with code {c}"),
     }
 }
 
@@ -205,18 +205,18 @@ pub fn render_namespace(users: &[String]) -> String {
 /// 读镜像里的考试扩展（裁定 R1）并校验；不行就是给回报用的原因。
 fn load_exam(root: &Path) -> Result<ExamExtension, String> {
     let why = |w: String| {
-        format!("镜像里的 /{EXAM_EXT_FILE} {w}：网页 / PWA 锁定应用要强制安装考试扩展，这一项跳过")
+        format!("/{EXAM_EXT_FILE} in the image {w}: web and PWA locked apps need the exam extension force-installed; skipping this item")
     };
     let p = Path::new(EXAM_EXT_FILE);
     let (Some(dir), Some(name)) = (p.parent(), p.file_name().and_then(|n| n.to_str())) else {
-        return Err(why("路径不规范".into()));
+        return Err(why("is not a normalized path".into()));
     };
     let bytes = safefs::open_dir(root, dir, false)
         .and_then(|d| safefs::read_at(&d, name))
-        .map_err(|e| why(format!("读不了（{e:#}）")))?
-        .ok_or_else(|| why("不存在".into()))?;
+        .map_err(|e| why(format!("cannot be read ({e:#})")))?
+        .ok_or_else(|| why("does not exist".into()))?;
     let ext: ExamExtension =
-        serde_json::from_slice(&bytes).map_err(|e| why(format!("解析不了（{e}）")))?;
+        serde_json::from_slice(&bytes).map_err(|e| why(format!("cannot be parsed ({e})")))?;
     ext.check().map_err(why)?;
     Ok(ext)
 }
@@ -280,7 +280,7 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
     let mut errs: Vec<String> = Vec::new();
     let base = match kiosk_base(env) {
         Ok(b) => b,
-        Err(e) => return vec![failed(ITEM, format!("打开 /{PUBLIC_DIR}：{e:#}"))],
+        Err(e) => return vec![failed(ITEM, format!("open /{PUBLIC_DIR}: {e:#}"))],
     };
     let apps = &ctx.config.apps.kiosk;
     let mut icon_failed = std::mem::take(&mut env.sys.kiosk_icon_failures);
@@ -303,7 +303,7 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
             Ok(p) => p,
             Err(why) => {
                 let why = if env.sys.kiosk_accounts.contains_key(id) {
-                    format!("{why}；上一次的账号与配置原样留着")
+                    format!("{why}; the previous account and configuration are left as they were")
                 } else {
                     why
                 };
@@ -330,7 +330,7 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
         .map(|id| kiosk::account_name(id))
         .collect();
     if let Err(e) = write_namespace(&env.paths.root, &users) {
-        errs.push(format!("/{NAMESPACE_CONF}：{e:#}"));
+        errs.push(format!("/{NAMESPACE_CONF}: {e:#}"));
     }
 
     // 3. 清单里没有了的：结束会话、userdel、清理，再删文件；删完才从状态里去掉
@@ -348,15 +348,18 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
             }
             Err(e) => out.push(failed(
                 &format!("kiosk:{id}"),
-                format!("删除锁定应用的账号 {}：{e:#}", kiosk::account_name(&id)),
+                format!(
+                    "delete locked app account {}: {e:#}",
+                    kiosk::account_name(&id)
+                ),
             )),
         }
     }
     // 状态这一轮没读出来时不扫：不在状态里的不等于不是我们的
     if env.sys.load_failed {
-        log::warn!("system-state.json 这一轮没读出来，不清理不在状态里的 kiosk 目录与 drop-in");
+        log::warn!("system-state.json could not be read this round; not cleaning up kiosk directories and drop-ins missing from the state");
     } else if let Err(e) = sweep(env, &mut round) {
-        errs.push(format!("清理不再用的目录与 drop-in：{e:#}"));
+        errs.push(format!("clean up unused directories and drop-ins: {e:#}"));
     }
 
     // 4. drop-in 变了（或上次没 reload 成功）才 daemon-reload；之后才拉起清理
@@ -369,7 +372,7 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
             Cmd::new("systemctl", &["daemon-reload"]).timeout(CMD_TIMEOUT),
         ) {
             Ok(_) => env.sys.kiosk_reload_pending = false,
-            Err(e) => errs.push(format!("systemctl daemon-reload：{e:#}")),
+            Err(e) => errs.push(format!("systemctl daemon-reload: {e:#}")),
         }
     }
     // 开机：断电时可能有人在锁定会话里，每个账号都清理一次（第一位进来的人拿到新的 tmpfs）
@@ -401,7 +404,7 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
                     k.initialized = true;
                 }
             }
-            Err(e) => errs.push(format!("拉起 {unit}：{e:#}")),
+            Err(e) => errs.push(format!("start {unit}: {e:#}")),
         }
     }
 
@@ -411,7 +414,7 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
     env.sys.kiosk_icon_failures = icon_failed;
 
     if !errs.is_empty() {
-        out.push(failed(ITEM, errs.join("；")));
+        out.push(failed(ITEM, errs.join("; ")));
     }
     out
 }
@@ -443,14 +446,14 @@ fn ensure(
     let existing = account(r, &user)?;
     let uid = match existing {
         Some((u, _)) if !KIOSK_UIDS.contains(&u) => bail!(
-            "已有的 {user} 账号 uid 是 {u}，不在 {}–{}；不动它",
+            "the existing {user} account has uid {u}, not in {}-{}; leaving it alone",
             KIOSK_UIDS.start(),
             KIOSK_UIDS.end()
         ),
         Some((u, _)) => u,
         None => uid_for(r, &env.sys.kiosk_accounts, id)?.ok_or_else(|| {
             anyhow!(
-                "{}–{} 的 uid 都占满了",
+                "all uids in {}-{} are taken",
                 KIOSK_UIDS.start(),
                 KIOSK_UIDS.end()
             )
@@ -465,7 +468,7 @@ fn ensure(
         &serde_json::to_vec_pretty(&planned.launch)?,
         0o644,
     )
-    .context("写入 launch.json")?;
+    .context("write launch.json")?;
     // 每种应用都有（终审 I1）：namespace.init 把它拷进会话的托管策略目录
     let pd = sub_dir(&dir, POLICIES_DIR)?;
     safefs::write_at(
@@ -474,17 +477,17 @@ fn ensure(
         &serde_json::to_vec_pretty(&planned.policy)?,
         0o644,
     )
-    .context("写入 Chrome 策略")?;
+    .context("write the Chrome policy")?;
     let (has_icon, detail) = place_icon(ctx, &dir, app, &mut round.icons);
 
     // AccountsService 的记录与模板（先于 useradd：accounts-daemon 看到新账号时就读得到）、drop-in
     let icon = has_icon.then(|| format!("/{PUBLIC_DIR}/{id}/{ICON_FILE}"));
     let keyfile = render_accounts(app, icon.as_deref());
     safefs::write_at(&dir, ACCOUNTS_TEMPLATE, keyfile.as_bytes(), 0o644)
-        .context("写入 AccountsService 记录的模板")?;
+        .context("write the AccountsService record template")?;
     let users = safefs::open_dir(&env.paths.root, Path::new(ACCOUNTS_DIR), true)?;
     safefs::write_at(&users, &user, keyfile.as_bytes(), 0o600)
-        .with_context(|| format!("写入 /{ACCOUNTS_DIR}/{user}"))?;
+        .with_context(|| format!("write /{ACCOUNTS_DIR}/{user}"))?;
     round.units_changed |= write_dropin(&env.paths.root, uid, &user)?;
 
     // 账号
@@ -573,7 +576,7 @@ fn place_icon(
         Err(why) => {
             let _ = safefs::remove_at(dir, ICON_FILE);
             let _ = safefs::remove_at(dir, ICON_URL_FILE);
-            (false, Some(format!("{why}，用通用头像")))
+            (false, Some(format!("{why}; using the generic avatar")))
         }
     }
 }
@@ -584,7 +587,7 @@ fn try_icon(
     app: &KioskApp,
     icons: &mut Icons,
 ) -> Result<bool, String> {
-    let fs_err = |e: anyhow::Error| format!("写入图标：{e:#}");
+    let fs_err = |e: anyhow::Error| format!("write icon: {e:#}");
     let Some(src) = app.icon.as_deref() else {
         safefs::remove_at(dir, ICON_FILE).map_err(fs_err)?;
         safefs::remove_at(dir, ICON_URL_FILE).map_err(fs_err)?;
@@ -592,7 +595,7 @@ fn try_icon(
     };
     if src.starts_with("files/") {
         let bytes = desktop::read_bundle_file(ctx.bundle_dir, src)
-            .map_err(|e| format!("读不了包里的图标 {src}：{e:#}"))?;
+            .map_err(|e| format!("cannot read icon {src} from the bundle: {e:#}"))?;
         if let Some(p) = desktop::icon_problem(&bytes) {
             return Err(p);
         }
@@ -601,7 +604,9 @@ fn try_icon(
         return Ok(true);
     }
     if !src.starts_with("https://") {
-        return Err(format!("图标 {src} 不在包里，也不是 https 链接"));
+        return Err(format!(
+            "icon {src} is neither in the bundle nor an https link"
+        ));
     }
     let cached = safefs::read_at(dir, ICON_URL_FILE).ok().flatten();
     if cached.as_deref() == Some(src.as_bytes())
@@ -610,24 +615,28 @@ fn try_icon(
         return Ok(true);
     }
     if ctx.phase != Phase::Full {
-        return Err("图标还没下载（开机的快速应用不下载）".into());
+        return Err("icon not downloaded yet (the quick apply at boot does not download)".into());
     }
     if icons.failed.contains(src) {
-        return Err("图标上次下载失败，图标地址变了再试".into());
+        return Err(
+            "icon download failed last time; will retry when the icon address changes".into(),
+        );
     }
     if ctx.superseded.load(std::sync::atomic::Ordering::SeqCst) {
-        return Err("有更新的应用请求，这一轮不下载图标".into());
+        return Err("a newer apply request is pending; not downloading icons this round".into());
     }
     let left = icons.deadline.saturating_duration_since(Instant::now());
     if left < Duration::from_secs(1) {
-        return Err("这一轮的图标下载时间用完了，下一轮再下".into());
+        return Err(
+            "icon download time for this round is used up; will download next round".into(),
+        );
     }
     match desktop::download_icon(src, left) {
         Err(e) => {
             if e.downcast_ref::<Definitive>().is_some() {
                 icons.failed.insert(src.to_string());
             }
-            Err(format!("下载图标失败：{e:#}"))
+            Err(format!("icon download failed: {e:#}"))
         }
         Ok(bytes) => {
             if let Some(p) = desktop::icon_problem(&bytes) {
@@ -646,7 +655,7 @@ fn write_dropin(root: &Path, uid: u32, user: &str) -> Result<bool> {
     let units = safefs::open_dir(root, Path::new(UNIT_DIR), true)?;
     let d = sub_dir(&units, &format!("user@{uid}.service.d"))?;
     safefs::write_at(&d, DROPIN_FILE, render_dropin(user).as_bytes(), 0o644)
-        .with_context(|| format!("写入 user@{uid}.service.d/{DROPIN_FILE}"))
+        .with_context(|| format!("write user@{uid}.service.d/{DROPIN_FILE}"))
 }
 
 /// 删掉 `user@<uid>.service.d` 里我们的 drop-in（目录空了一并删）；原来有它返回 `true`。
@@ -672,7 +681,7 @@ fn remove_dropin(root: &Path, uid: u32) -> Result<bool> {
 fn write_namespace(root: &Path, users: &[String]) -> Result<()> {
     let p = Path::new(NAMESPACE_CONF);
     let (Some(dir), Some(name)) = (p.parent(), p.file_name().and_then(|n| n.to_str())) else {
-        bail!("路径不规范");
+        bail!("not a normalized path");
     };
     if users.is_empty() {
         return match safefs::open_dir(root, dir, false) {
@@ -711,7 +720,10 @@ fn remove(env: &mut Env, round: &mut Round, id: &str, st: &KioskAccountState) ->
     wait_slice_gone(&eenv)?;
     match account(r, &user)? {
         Some((u, _)) if u != st.uid => {
-            bail!("{user} 账号的 uid 是 {u}，不是记着的 {}；不删它", st.uid)
+            bail!(
+                "the {user} account has uid {u}, not the recorded {}; not deleting it",
+                st.uid
+            )
         }
         Some(_) => {
             run_ok(r, Cmd::new("userdel", &[&user]).timeout(CMD_TIMEOUT))?;
@@ -719,7 +731,7 @@ fn remove(env: &mut Env, round: &mut Round, id: &str, st: &KioskAccountState) ->
         None => {}
     }
     // 账号已不在：清理只卸掉家目录、清 /tmp 等处属于这个 uid 的东西、删按名字留下的与标记，不挂、不写标记
-    cleanup(&eenv).context("清理")?;
+    cleanup(&eenv).context("cleanup")?;
     remove_named(&eenv, ACCOUNTS_DIR, &user)?;
     safefs::remove_tree_at(&round.base, id)?;
     round.units_changed |= remove_dropin(&env.paths.root, st.uid)?;

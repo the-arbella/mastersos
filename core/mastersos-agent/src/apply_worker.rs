@@ -236,7 +236,7 @@ impl Worker {
             let results =
                 tokio::task::spawn_blocking(move || applier.apply_without_bundle(&seed, phase))
                     .await
-                    .unwrap_or_else(|e| vec![failed("applier", format!("异常退出：{e}"))]);
+                    .unwrap_or_else(|e| vec![failed("applier", format!("crashed: {e}"))]);
             return Some(outcome(results, managed, hashes));
         };
         // 这一轮从头到尾只用这个包自己的目录（解好之后不再改动）；登记为正在用，主循环不会删它。
@@ -260,7 +260,7 @@ impl Worker {
             })
         })
         .await
-        .unwrap_or_else(|e| vec![failed("applier", format!("异常退出：{e}"))]);
+        .unwrap_or_else(|e| vec![failed("applier", format!("crashed: {e}"))]);
         if flag.load(Ordering::SeqCst) {
             return None;
         }
@@ -282,7 +282,10 @@ impl Worker {
         let work = match state::run_dir(&self.cfg.state_dir) {
             Ok(w) => w,
             Err(e) => {
-                results.push(failed("scripts", format!("准备执行目录失败：{e:#}")));
+                results.push(failed(
+                    "scripts",
+                    format!("failed to prepare the execution directory: {e:#}"),
+                ));
                 return Some(outcome(results, managed, hashes));
             }
         };
@@ -297,7 +300,7 @@ impl Worker {
                 Some(outcome(results, st.managed_paths, st.script_hashes))
             }
             Err(e) => {
-                results.push(failed("scripts", format!("异常退出：{e}")));
+                results.push(failed("scripts", format!("crashed: {e}")));
                 Some(outcome(results, managed, hashes))
             }
         }

@@ -52,7 +52,7 @@ fn parse_users(json: &str) -> Result<Vec<LoginUser>> {
     if json.trim().is_empty() {
         return Ok(Vec::new());
     }
-    serde_json::from_str(json).context("解析 loginctl list-users 的输出")
+    serde_json::from_str(json).context("parse the output of loginctl list-users")
 }
 
 /// 是不是要结束的人：名字里有 `@`（SSO 账号）的不论 uid（与 `login::decide` 一致：authd 的 uid 范围哪天配到 60000 以上，
@@ -125,13 +125,13 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
     // 只有挂失才结束会话；设置太大而改写的锁定只挡新的登录。
     if ctx.lock.is_some() {
         if let Err(e) = end_sessions(env.runner, &policy.admin_users, &pause) {
-            problems.push(format!("结束会话：{e:#}"));
+            problems.push(format!("end sessions: {e:#}"));
         }
     }
     vec![if problems.is_empty() {
         ok(ITEM)
     } else {
-        failed(ITEM, problems.join("；"))
+        failed(ITEM, problems.join("; "))
     }]
 }
 
@@ -157,7 +157,7 @@ fn end_sessions(runner: &dyn Runner, admins: &[String], pause: &dyn Fn(Duration)
             Ok(v) => v.into_iter().filter(|u| !done.contains(u)).collect(),
             Err(e) if round == 0 => return Err(e),
             Err(e) => {
-                errs.push(format!("第 {} 轮列用户：{e:#}", round + 1));
+                errs.push(format!("list users in round {}: {e:#}", round + 1));
                 break;
             }
         };
@@ -166,7 +166,7 @@ fn end_sessions(runner: &dyn Runner, admins: &[String], pause: &dyn Fn(Duration)
         }
         if round == END_ROUNDS {
             errs.push(format!(
-                "{END_ROUNDS} 轮之后还有新的会话（uid {fresh:?}），下次重试再结束"
+                "new sessions still appear after {END_ROUNDS} rounds (uid {fresh:?}); ending them on the next retry"
             ));
             break;
         }
@@ -175,15 +175,15 @@ fn end_sessions(runner: &dyn Runner, admins: &[String], pause: &dyn Fn(Duration)
             let id = uid.to_string();
             let linger_off = run_ok(runner, login_cmd("loginctl", &["disable-linger", &id]));
             if let Err(e) = &linger_off {
-                errs.push(format!("uid {id} 关 linger：{e:#}"));
+                errs.push(format!("uid {id} disable linger: {e:#}"));
             }
             if let Err(e) = run_ok(runner, login_cmd("loginctl", &["terminate-user", &id])) {
-                errs.push(format!("uid {id}：{e:#}"));
+                errs.push(format!("uid {id}: {e:#}"));
             }
             if linger_off.is_err() {
                 let unit = format!("user@{id}.service");
                 if let Err(e) = run_ok(runner, login_cmd("systemctl", &["stop", &unit])) {
-                    errs.push(format!("停 {unit}：{e:#}"));
+                    errs.push(format!("stop {unit}: {e:#}"));
                 }
             }
         }
@@ -192,7 +192,7 @@ fn end_sessions(runner: &dyn Runner, admins: &[String], pause: &dyn Fn(Duration)
     if errs.is_empty() {
         Ok(())
     } else {
-        anyhow::bail!("{}", errs.join("；"))
+        anyhow::bail!("{}", errs.join("; "))
     }
 }
 
@@ -485,7 +485,7 @@ mod tests {
                 "loginctl terminate-user 1999",
             ]
         );
-        assert!(format!("{err:#}").contains("关 linger"), "{err:#}");
+        assert!(format!("{err:#}").contains("disable linger"), "{err:#}");
     }
 
     /// 复审 N3：第一轮之后列表拿不到时，之前各轮的错误留在回报里。
@@ -500,7 +500,7 @@ mod tests {
             end_sessions(&r, &[ADMIN.to_ascii_lowercase()], &|_| {}).unwrap_err()
         );
         assert!(err.contains("uid 10001"), "{err}");
-        assert!(err.contains("第 2 轮列用户"), "{err}");
+        assert!(err.contains("list users in round 2"), "{err}");
     }
 
     /// 复审 N4：loginctl 与 systemctl 都带短超时。
@@ -529,7 +529,7 @@ mod tests {
                 .detail
                 .as_deref()
                 .unwrap()
-                .contains("轮之后还有新的会话"),
+                .contains("new sessions still appear after"),
             "{out:?}"
         );
         assert_eq!(terminated(&r).len(), END_ROUNDS);

@@ -123,12 +123,12 @@ fn converge_inner(env: &mut Env, want: bool) -> Result<()> {
             Ok(())
         }
         (true, Some((uid, _))) if uid != GUEST_UID => {
-            bail!("已有的 {GUEST_USER} 账号 uid 是 {uid}，不是 {GUEST_UID}；不动它")
+            bail!("the existing {GUEST_USER} account has uid {uid}, not {GUEST_UID}; leaving it alone")
         }
         (true, Some(_)) | (false, None) => Ok(()),
         (false, Some((uid, _))) => {
             if uid != GUEST_UID {
-                bail!("已有的 {GUEST_USER} 账号 uid 是 {uid}，不是 {GUEST_UID}；不动它");
+                bail!("the existing {GUEST_USER} account has uid {uid}, not {GUEST_UID}; leaving it alone");
             }
             let acct = ephemeral::guest();
             let procs = SystemdProcs {
@@ -270,7 +270,7 @@ pub fn session_action(
                 if GUEST_SERVICES.contains(&service) && desktop != Some(kiosk::SESSION) =>
             {
                 eprintln!(
-                    "mastersos-agent pam-session: {user}：会话是 {desktop:?}，不是 {}；拒绝",
+                    "mastersos-agent pam-session: {user}: session is {desktop:?}, not {}; denied",
                     kiosk::SESSION
                 );
                 SessionAction::DenyEphemeral(login::DENY_KIOSK_SESSION)
@@ -279,7 +279,7 @@ pub fn session_action(
                 match ephemeral::kiosk_account(policy, user, uid) {
                     Ok(acct) => SessionAction::EphemeralOpen(acct),
                     Err(why) => {
-                        eprintln!("mastersos-agent pam-session: {user}：{why}；拒绝");
+                        eprintln!("mastersos-agent pam-session: {user}: {why}; denied");
                         SessionAction::DenyEphemeral(login::DENY_KIOSK_UNKNOWN)
                     }
                 }
@@ -310,7 +310,7 @@ pub fn after_action(
     }
     let Some(uid) = uid().filter(|u| ephemeral::KIOSK_UIDS.contains(u)) else {
         eprintln!(
-            "mastersos-agent pam-session: {user} 的 uid 不在 1900–1989，不改 AccountsService"
+            "mastersos-agent pam-session: uid of {user} is not in 1900-1989; not changing AccountsService"
         );
         return;
     };
@@ -334,11 +334,11 @@ pub fn after_action(
         match r {
             Ok(o) if o.code == 0 => {}
             Ok(o) => eprintln!(
-                "mastersos-agent pam-session: {user}：{method} 退出码 {}：{}",
+                "mastersos-agent pam-session: {user}: {method} exited with code {}: {}",
                 o.code,
                 o.stderr.trim()
             ),
-            Err(e) => eprintln!("mastersos-agent pam-session: {user}：{method}：{e:#}"),
+            Err(e) => eprintln!("mastersos-agent pam-session: {user}: {method}: {e:#}"),
         }
     }
 }
@@ -368,14 +368,14 @@ pub fn seat_guard(
         Ok(None) => action,
         Ok(Some(other)) => {
             eprintln!(
-                "mastersos-agent pam-session: {}：座位上还有会话 {other}；拒绝",
+                "mastersos-agent pam-session: {}: seat still has session {other}; denied",
                 acct.user
             );
             SessionAction::DenyEphemeral(login::DENY_KIOSK_OTHER_SESSION)
         }
         Err(e) => {
             eprintln!(
-                "mastersos-agent pam-session: {}：查不到座位上的会话（{e:#}）；拒绝",
+                "mastersos-agent pam-session: {}: cannot list the sessions on the seat ({e:#}); denied",
                 acct.user
             );
             SessionAction::DenyEphemeral(login::DENY_KIOSK_SEAT_UNKNOWN)
@@ -399,18 +399,18 @@ pub fn seat_sessions_busy(
         Cmd::new("loginctl", &["--json=short", "list-sessions"]).timeout(PAM_CMD_TIMEOUT),
     )?;
     let v: serde_json::Value =
-        serde_json::from_str(out.trim()).context("loginctl 的输出不是 JSON")?;
-    let rows = v.as_array().context("loginctl 的输出不是数组")?;
+        serde_json::from_str(out.trim()).context("loginctl output is not JSON")?;
+    let rows = v.as_array().context("loginctl output is not an array")?;
     for row in rows {
-        let o = row.as_object().context("loginctl 的一行不是对象")?;
+        let o = row.as_object().context("loginctl row is not an object")?;
         let field = |k: &str| o.get(k).and_then(|x| x.as_str());
-        let class = field("class").context("loginctl 的一行没有 class")?;
+        let class = field("class").context("loginctl row has no class")?;
         // seat 栏同样要有：null、"" 与 "-" 是没有座位（ssh）；缺栏或别的类型读不懂，往拒绝的方向落
-        let on = match o.get("seat").context("loginctl 的一行没有 seat")? {
+        let on = match o.get("seat").context("loginctl row has no seat")? {
             serde_json::Value::Null => "",
             serde_json::Value::String(s) if s == "-" => "",
             serde_json::Value::String(s) => s.as_str(),
-            _ => anyhow::bail!("loginctl 的 seat 栏不是字符串"),
+            _ => anyhow::bail!("loginctl seat field is not a string"),
         };
         let same_seat = match seat {
             Some(want) => on == want,
@@ -457,7 +457,10 @@ pub fn pam_session_main() -> ExitCode {
     // 什么都不许做——不拿标记、不复制、不拉起清理、不进登录队列（提交安全审查：授权）
     if !rustix::process::geteuid().is_root() {
         let mut out = std::io::stdout().lock();
-        let _ = writeln!(out, "mastersos-agent pam-session 只能由 PAM 以 root 调用");
+        let _ = writeln!(
+            out,
+            "mastersos-agent pam-session must be called by PAM as root"
+        );
         let _ = out.flush();
         return ExitCode::FAILURE;
     }
@@ -714,7 +717,7 @@ mod tests {
                 .unwrap()
                 .get(&(st.st_dev as u64, st.st_ino as u64))
                 .copied()
-                .ok_or_else(|| anyhow!("不是登记过的挂载"))
+                .ok_or_else(|| anyhow!("not a registered mount"))
         }
         fn detach(&self, fd: &std::os::fd::OwnedFd) -> Result<()> {
             let id = self.mount_id(fd)?;
@@ -1182,7 +1185,8 @@ mod tests {
         let procs = FakeProcs::new(&r, &[], false);
         let e = cleanup(&genv(&r, &procs, root.path(), me(), &fm)).unwrap_err();
         assert!(
-            format!("{e:#}").contains("对不上") || format!("{e:#}").contains("路径变过"),
+            format!("{e:#}").contains("does not match")
+                || format!("{e:#}").contains("path changed"),
             "{e:#}"
         );
         assert!(fm.detached_ids().is_empty());
@@ -1244,7 +1248,7 @@ mod tests {
         let fm = answers(&r, me(), &[]);
         let procs = FakeProcs::new(&r, &[], false);
         let e = cleanup(&genv(&r, &procs, root.path(), me(), &fm)).unwrap_err();
-        assert!(format!("{e:#}").contains("不可写"), "{e:#}");
+        assert!(format!("{e:#}").contains("not writable"), "{e:#}");
         assert!(idx(&r.calls(), "mount -c -t tmpfs").is_none());
         assert!(!mark(root.path()).exists());
     }

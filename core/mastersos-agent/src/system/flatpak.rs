@@ -108,7 +108,8 @@ enum Loaded {
 /// 不存在为默认值；读不了（I/O）报错；内容坏了改名成 `.bad`、当作空（[`Loaded::Corrupt`]）。
 fn load_or_quarantine(paths: &SysPaths) -> Result<Loaded> {
     let dir = var_dir(paths)?;
-    let Some(b) = safefs::read_at(&dir, STATE_FILE).with_context(|| format!("读 {STATE_FILE}"))?
+    let Some(b) =
+        safefs::read_at(&dir, STATE_FILE).with_context(|| format!("read {STATE_FILE}"))?
     else {
         return Ok(Loaded::Ok(FlatpakState::default()));
     };
@@ -118,9 +119,9 @@ fn load_or_quarantine(paths: &SysPaths) -> Result<Loaded> {
             let moved = safefs::rename_at(&dir, STATE_FILE, BAD_STATE_FILE);
             let why = match moved {
                 Ok(()) => format!(
-                    "{STATE_FILE} 解析失败（{e}），已改名为 {BAD_STATE_FILE}、当作空：之前按清单装的应用不再算我们装的，不会被卸"
+                    "failed to parse {STATE_FILE} ({e}); renamed it to {BAD_STATE_FILE} and treating it as empty: apps installed from the list before no longer count as ours and will not be removed"
                 ),
-                Err(m) => format!("{STATE_FILE} 解析失败（{e}），改名失败（{m:#}），当作空"),
+                Err(m) => format!("failed to parse {STATE_FILE} ({e}); renaming failed ({m:#}); treating it as empty"),
             };
             log::warn!("{why}");
             Ok(Loaded::Corrupt(why))
@@ -131,10 +132,12 @@ fn load_or_quarantine(paths: &SysPaths) -> Result<Loaded> {
 /// 不存在为默认值；读不了、解析不了报错。
 pub fn load_state(paths: &SysPaths) -> Result<FlatpakState> {
     match safefs::read_at(&var_dir(paths)?, STATE_FILE)
-        .with_context(|| format!("读 {STATE_FILE}"))?
+        .with_context(|| format!("read {STATE_FILE}"))?
     {
         None => Ok(FlatpakState::default()),
-        Some(b) => serde_json::from_slice(&b).with_context(|| format!("{STATE_FILE} 解析失败")),
+        Some(b) => {
+            serde_json::from_slice(&b).with_context(|| format!("failed to parse {STATE_FILE}"))
+        }
     }
 }
 
@@ -149,7 +152,7 @@ fn save_state(paths: &SysPaths, s: &FlatpakState) -> Result<()> {
     {
         if let Some(n) = TEST_SAVE_BUDGET.with(|c| c.get()) {
             if n == 0 {
-                anyhow::bail!("写 {STATE_FILE}：测试注入的失败");
+                anyhow::bail!("write {STATE_FILE}: failure injected by a test");
             }
             TEST_SAVE_BUDGET.with(|c| c.set(Some(n - 1)));
         }
@@ -160,7 +163,7 @@ fn save_state(paths: &SysPaths, s: &FlatpakState) -> Result<()> {
         &serde_json::to_vec_pretty(s)?,
         0o600,
     )
-    .with_context(|| format!("写 {STATE_FILE}"))?;
+    .with_context(|| format!("write {STATE_FILE}"))?;
     Ok(())
 }
 
@@ -247,7 +250,7 @@ pub fn reconcile(
             ),
         )
         .map(|_| ())
-        .map_err(|e| format!("加 Flathub 源失败：{e:#}"))
+        .map_err(|e| format!("failed to add the Flathub remote: {e:#}"))
     } else {
         Ok(())
     };
@@ -260,7 +263,7 @@ pub fn reconcile(
     ) {
         Ok(s) => parse_installed(&s),
         Err(e) => {
-            let why = format!("列出已装的 Flatpak 失败：{e:#}");
+            let why = format!("failed to list installed Flatpaks: {e:#}");
             let all: BTreeSet<&String> = wanted.iter().chain(st.managed.iter()).collect();
             out.extend(all.into_iter().map(|id| failed(&item(id), why.clone())));
             // 坏状态改了名：这里把空状态写下（之后不再报 flatpak:state）
@@ -297,7 +300,7 @@ pub fn reconcile(
             out.push(ItemResult {
                 item: it,
                 ok: true,
-                detail: Some("浏览器模式：不安装".into()),
+                detail: Some("browser mode: not installing".into()),
             });
             continue;
         }
@@ -308,7 +311,7 @@ pub fn reconcile(
                 ItemResult {
                     item: it,
                     ok: true,
-                    detail: Some("本机已装（不是按清单装的，清单删掉时不卸，不进 Dock）".into()),
+                    detail: Some("already installed on this computer (not from the list; not removed when dropped from the list, not added to the Dock)".into()),
                 }
             });
             continue;
@@ -326,7 +329,10 @@ pub fn reconcile(
         st.pending.insert(id.clone());
         if let Err(e) = save_state(paths, &st) {
             st.pending.remove(id);
-            out.push(failed(&it, format!("没装：记录要装的应用失败：{e:#}")));
+            out.push(failed(
+                &it,
+                format!("not installed: failed to record the app to install: {e:#}"),
+            ));
             continue;
         }
         let cmd = Cmd::new(
@@ -341,11 +347,14 @@ pub fn reconcile(
                 out.push(match save_state(paths, &st) {
                     Ok(()) => ok(&it),
                     // 盘上 pending 里还有它：下一轮看到已装就收进 managed
-                    Err(e) => failed(&it, format!("装好了，但记录失败（下一轮补记）：{e:#}")),
+                    Err(e) => failed(
+                        &it,
+                        format!("installed, but recording failed (will record next round): {e:#}"),
+                    ),
                 });
             }
             // pending 里留着：其实装上了（超时在最后一步）下一轮收下；没装上下一轮再装
-            Err(e) => out.push(failed(&it, format!("安装失败：{e:#}"))),
+            Err(e) => out.push(failed(&it, format!("install failed: {e:#}"))),
         }
     }
     let mut removed_any = false;
@@ -365,13 +374,13 @@ pub fn reconcile(
                         Ok(()) => ItemResult {
                             item: it,
                             ok: true,
-                            detail: Some("清单里删掉了，已卸载".into()),
+                            detail: Some("removed from the list; uninstalled".into()),
                         },
                         // 盘上还记着它：下一轮看到没装了、清单里也没有，就丢掉
-                        Err(e) => failed(&it, format!("卸掉了，但记录失败：{e:#}")),
+                        Err(e) => failed(&it, format!("uninstalled, but recording failed: {e:#}")),
                     });
                 }
-                Err(e) => out.push(failed(&it, format!("卸载失败：{e:#}"))),
+                Err(e) => out.push(failed(&it, format!("uninstall failed: {e:#}"))),
             }
         }
     }
@@ -391,9 +400,12 @@ pub fn reconcile(
             Ok(_) => ItemResult {
                 item: RUNTIMES_ITEM.into(),
                 ok: true,
-                detail: Some("清掉了不再有应用用的运行时".into()),
+                detail: Some("removed runtimes no app uses any more".into()),
             },
-            Err(e) => failed(RUNTIMES_ITEM, format!("清理不用的运行时失败：{e:#}")),
+            Err(e) => failed(
+                RUNTIMES_ITEM,
+                format!("failed to remove unused runtimes: {e:#}"),
+            ),
         });
     }
     let changed = st.managed != before.managed;
@@ -444,7 +456,7 @@ pub fn update(
                     item: UPDATE_ITEM.into(),
                     ok: true,
                     detail: Some(format!(
-                        "更新了，但记录时刻失败（下一小时会再更新一次）：{e:#}"
+                        "updated, but recording the time failed (will update again next hour): {e:#}"
                     )),
                 },
             }
@@ -494,7 +506,7 @@ impl Job for FlatpakJob {
                     out
                 }
                 Err(e) => {
-                    log::error!("Flatpak 对账异常退出：{e}");
+                    log::error!("Flatpak reconcile crashed: {e}");
                     vec![]
                 }
             }
@@ -566,7 +578,7 @@ impl Job for FlatpakUpdateJob {
             .await
             {
                 Ok(r) => r.into_iter().collect(),
-                Err(e) => vec![failed(UPDATE_ITEM, format!("异常退出：{e}"))],
+                Err(e) => vec![failed(UPDATE_ITEM, format!("crashed: {e}"))],
             }
         })
     }

@@ -111,7 +111,7 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
     }
     let r = r.and_then(|()| match channel {
         "beta" | "stable" => Ok(()),
-        other => bail!("未知的更新通道 {other}，按 stable 处理"),
+        other => bail!("unknown update channel {other}; treating it as stable"),
     });
     out.push(match r {
         Ok(()) => ok(ITEM),
@@ -132,19 +132,19 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
 /// 模板目录里的 `*.transfer`：(文件名, 内容)。
 fn templates(root: &Path) -> Result<Vec<(String, String)>> {
     let dir = safefs::open_dir(root, Path::new(TEMPLATES), false)
-        .with_context(|| format!("打开 /{TEMPLATES}"))?;
+        .with_context(|| format!("open /{TEMPLATES}"))?;
     let mut out = Vec::new();
     for name in safefs::list_at(&dir)? {
         if !name.ends_with(".transfer") {
             continue;
         }
-        let bytes =
-            safefs::read_at(&dir, &name)?.with_context(|| format!("/{TEMPLATES}/{name} 不见了"))?;
-        let text = String::from_utf8(bytes).with_context(|| format!("{name} 不是 UTF-8"))?;
+        let bytes = safefs::read_at(&dir, &name)?
+            .with_context(|| format!("/{TEMPLATES}/{name} disappeared"))?;
+        let text = String::from_utf8(bytes).with_context(|| format!("{name} is not UTF-8"))?;
         out.push((name, text));
     }
     if out.is_empty() {
-        bail!("/{TEMPLATES} 里没有 .transfer 模板");
+        bail!("no .transfer templates in /{TEMPLATES}");
     }
     Ok(out)
 }
@@ -163,7 +163,7 @@ fn write_overrides(root: &Path, channel: &str, mirror: Option<&str>) -> Result<(
     let dir = safefs::open_dir(root, Path::new(TARGET), true)?;
     for (name, text) in files {
         safefs::write_at(&dir, &name, text.as_bytes(), 0o644)
-            .with_context(|| format!("写入 /{TARGET}/{name}"))?;
+            .with_context(|| format!("write /{TARGET}/{name}"))?;
     }
     Ok(())
 }
@@ -176,7 +176,7 @@ fn remove_overrides(root: &Path) -> Result<()> {
         Err(e) => return Err(e),
     };
     for (name, _) in tpl {
-        safefs::remove_at(&dir, &name).with_context(|| format!("删除 /{TARGET}/{name}"))?;
+        safefs::remove_at(&dir, &name).with_context(|| format!("delete /{TARGET}/{name}"))?;
     }
     Ok(())
 }
@@ -353,7 +353,7 @@ mod tests {
         assert!(!r[0].ok);
         assert_eq!(
             r[0].detail.as_deref(),
-            Some("未知的更新通道 nightly，按 stable 处理")
+            Some("unknown update channel nightly; treating it as stable")
         );
         for n in NAMES {
             assert!(!etc(root.path()).join(n).exists(), "{n}");
