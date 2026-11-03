@@ -38,8 +38,8 @@ msgstr "ਸਕੂਲ ਨਾਲ ਸੰਪਰਕ ਨਹੀਂ ਹੋ ਸਕਿਆ�
 msgid "School email"
 msgstr "ਸਕੂਲ ਈਮੇਲ"
 
-msgid "IT local account"
-msgstr "IT ਲੋਕਲ ਖਾਤਾ"
+msgid "Local manager"
+msgstr "ਲੋਕਲ ਪ੍ਰਸ਼ਾਸਕ"
 
 msgid "Username"
 msgstr "ਵਰਤੋਂਕਾਰ ਨਾਮ"

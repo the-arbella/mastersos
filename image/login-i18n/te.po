@@ -38,8 +38,8 @@ msgstr "పాఠశాలను చేరుకోలేకపోయింద�
 msgid "School email"
 msgstr "పాఠశాల ఇమెయిల్"
 
-msgid "IT local account"
-msgstr "IT స్థానిక ఖాతా"
+msgid "Local manager"
+msgstr "స్థానిక నిర్వాహకులు"
 
 msgid "Username"
 msgstr "వినియోగదారు పేరు"

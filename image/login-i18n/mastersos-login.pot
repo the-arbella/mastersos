@@ -38,7 +38,7 @@ msgstr ""
 msgid "School email"
 msgstr ""
 
-msgid "IT local account"
+msgid "Local manager"
 msgstr ""
 
 msgid "Username"

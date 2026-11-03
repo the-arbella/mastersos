@@ -38,8 +38,8 @@ msgstr "বিদ্যালয়ৰ লগত সংযোগ কৰিব �
 msgid "School email"
 msgstr "বিদ্যালয়ৰ ইমেইল"
 
-msgid "IT local account"
-msgstr "আই.টি. স্থানীয় একাউণ্ট"
+msgid "Local manager"
+msgstr "স্থানীয় প্ৰশাসক"
 
 msgid "Username"
 msgstr "ব্যৱহাৰকাৰীৰ নাম"

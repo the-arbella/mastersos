@@ -38,8 +38,8 @@ msgstr "ไม่สามารถเชื่อมต่อกับโรง
 msgid "School email"
 msgstr "อีเมลโรงเรียน"
 
-msgid "IT local account"
-msgstr "บัญชีภายในเครื่องของฝ่าย IT"
+msgid "Local manager"
+msgstr "ผู้ดูแลระบบภายในเครื่อง"
 
 msgid "Username"
 msgstr "ชื่อผู้ใช้"

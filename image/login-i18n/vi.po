@@ -38,8 +38,8 @@ msgstr "Không thể kết nối với nhà trường. Hãy kết nối Wi-Fi t�
 msgid "School email"
 msgstr "Email trường học"
 
-msgid "IT local account"
-msgstr "Tài khoản cục bộ của bộ phận IT"
+msgid "Local manager"
+msgstr "Quản trị viên cục bộ"
 
 msgid "Username"
 msgstr "Tên người dùng"

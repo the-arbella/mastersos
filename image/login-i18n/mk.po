@@ -38,8 +38,8 @@ msgstr "Училиштето не може да се достигне. Повр�
 msgid "School email"
 msgstr "Училишна е-пошта"
 
-msgid "IT local account"
-msgstr "Локална IT сметка"
+msgid "Local manager"
+msgstr "Локален администратор"
 
 msgid "Username"
 msgstr "Корисничко име"

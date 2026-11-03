@@ -38,8 +38,8 @@ msgstr "学校に接続できません。上部のバーから Wi-Fi に接続�
 msgid "School email"
 msgstr "学校のメールアドレス"
 
-msgid "IT local account"
-msgstr "IT 管理者のローカルアカウント"
+msgid "Local manager"
+msgstr "ローカル管理者"
 
 msgid "Username"
 msgstr "ユーザー名"

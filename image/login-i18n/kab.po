@@ -39,8 +39,8 @@ msgstr "Ur izmir ara ad yaweḍ ɣer uɣerbaz. Qqen ɣer Wi-Fi seg ufeggag n ufe
 msgid "School email"
 msgstr "Imayl n uɣerbaz"
 
-msgid "IT local account"
-msgstr "Amiḍan adigan n IT"
+msgid "Local manager"
+msgstr "Anedbal adigan"
 
 msgid "Username"
 msgstr "Isem n useqdac"

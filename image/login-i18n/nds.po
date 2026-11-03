@@ -38,8 +38,8 @@ msgstr "De School is nich to erreken. Verbinn di boven in de Balken mit Wi-Fi un
 msgid "School email"
 msgstr "School-E-Mail"
 
-msgid "IT local account"
-msgstr "Lokaal IT-Konto"
+msgid "Local manager"
+msgstr "Lokaal Administrator"
 
 msgid "Username"
 msgstr "Brukernaam"

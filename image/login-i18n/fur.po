@@ -38,8 +38,8 @@ msgstr "No si rive a contatâ la scuele. Conetiti a une rêt Wi-Fi de sbare pars
 msgid "School email"
 msgstr "Pueste eletroniche de scuele"
 
-msgid "IT local account"
-msgstr "Account locâl dal IT"
+msgid "Local manager"
+msgstr "Aministradôr locâl"
 
 msgid "Username"
 msgstr "Non utent"

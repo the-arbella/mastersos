@@ -39,8 +39,8 @@ msgstr "སློབ་གྲྭ་དང་ འབྲེལ་མ་ཚུག�
 msgid "School email"
 msgstr "སློབ་གྲྭའི་ གློག་འཕྲིན།"
 
-msgid "IT local account"
-msgstr "IT ས་གནས་ཀྱི་ རྩིས་ཐོ།"
+msgid "Local manager"
+msgstr "ས་གནས་ཀྱི་ འཛིན་སྐྱོང་པ།"
 
 msgid "Username"
 msgstr "ལག་ལེན་པའི་མིང་།"

@@ -38,8 +38,8 @@ msgstr "શાળા સુધી પહોંચી શકાતું નથ�
 msgid "School email"
 msgstr "શાળાનું ઇમેઇલ"
 
-msgid "IT local account"
-msgstr "IT સ્થાનિક ખાતું"
+msgid "Local manager"
+msgstr "સ્થાનિક એડમિનિસ્ટ્રેટર"
 
 msgid "Username"
 msgstr "વપરાશકર્તા નામ"

@@ -38,8 +38,8 @@ msgstr "Koulua ei tavoiteta. Yhdistä Wi-Fi-verkkoon yläpalkista ja yritä uude
 msgid "School email"
 msgstr "Koulun sähköposti"
 
-msgid "IT local account"
-msgstr "IT-osaston paikallinen tili"
+msgid "Local manager"
+msgstr "Paikallinen ylläpitäjä"
 
 msgid "Username"
 msgstr "Käyttäjänimi"

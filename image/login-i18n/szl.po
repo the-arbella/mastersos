@@ -39,8 +39,8 @@ msgstr "Niy idzie sie połōnczyć ze szkołōm. Połōncz sie z Wi-Fi z gōrneg
 msgid "School email"
 msgstr "Szkolny e-mejl"
 
-msgid "IT local account"
-msgstr "Lokalne kōnto IT"
+msgid "Local manager"
+msgstr "Lokalny administrator"
 
 msgid "Username"
 msgstr "Miano użytkowńika"

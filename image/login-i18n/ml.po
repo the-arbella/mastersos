@@ -38,8 +38,8 @@ msgstr "സ്കൂളുമായി ബന്ധപ്പെടാൻ കഴ�
 msgid "School email"
 msgstr "സ്കൂൾ ഇമെയിൽ"
 
-msgid "IT local account"
-msgstr "IT ലോക്കൽ അക്കൗണ്ട്"
+msgid "Local manager"
+msgstr "ലോക്കൽ അഡ്മിനിസ്ട്രേറ്റർ"
 
 msgid "Username"
 msgstr "ഉപയോക്തൃനാമം"

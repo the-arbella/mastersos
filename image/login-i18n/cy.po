@@ -38,8 +38,8 @@ msgstr "Methu cyrraedd yr ysgol. Cysylltwch â Wi-Fi o'r bar uchaf, yna ceisiwch
 msgid "School email"
 msgstr "E-bost yr ysgol"
 
-msgid "IT local account"
-msgstr "Cyfrif lleol TG"
+msgid "Local manager"
+msgstr "Gweinyddwr lleol"
 
 msgid "Username"
 msgstr "Enw defnyddiwr"

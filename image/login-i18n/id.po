@@ -38,8 +38,8 @@ msgstr "Tidak dapat terhubung ke sekolah. Sambungkan ke Wi-Fi dari bilah atas, l
 msgid "School email"
 msgstr "Email sekolah"
 
-msgid "IT local account"
-msgstr "Akun lokal IT"
+msgid "Local manager"
+msgstr "Administrator lokal"
 
 msgid "Username"
 msgstr "Nama pengguna"

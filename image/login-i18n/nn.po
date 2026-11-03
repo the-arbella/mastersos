@@ -38,8 +38,8 @@ msgstr "Får ikkje kontakt med skulen. Kopla til Wi-Fi frå toppfeltet og prøv 
 msgid "School email"
 msgstr "E-post frå skulen"
 
-msgid "IT local account"
-msgstr "Lokal IT-konto"
+msgid "Local manager"
+msgstr "Lokal administrator"
 
 msgid "Username"
 msgstr "Brukarnamn"

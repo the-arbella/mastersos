@@ -38,8 +38,8 @@ msgstr "De school is niet bereikbaar. Maak verbinding met Wi-Fi via de bovenbalk
 msgid "School email"
 msgstr "School-e-mailadres"
 
-msgid "IT local account"
-msgstr "Lokaal ICT-account"
+msgid "Local manager"
+msgstr "Lokale beheerder"
 
 msgid "Username"
 msgstr "Gebruikersnaam"

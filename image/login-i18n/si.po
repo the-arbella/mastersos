@@ -38,8 +38,8 @@ msgstr "පාසලට සම්බන්ධ විය නොහැක. ඉහ�
 msgid "School email"
 msgstr "පාසල් විද්‍යුත් තැපෑල"
 
-msgid "IT local account"
-msgstr "IT දේශීය ගිණුම"
+msgid "Local manager"
+msgstr "දේශීය පරිපාලක"
 
 msgid "Username"
 msgstr "පරිශීලක නාමය"

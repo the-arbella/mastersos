@@ -38,8 +38,8 @@ msgstr "ትምህርት ቤቱን ማግኘት አልተቻለም። ከላይ�
 msgid "School email"
 msgstr "የትምህርት ቤት ኢሜይል"
 
-msgid "IT local account"
-msgstr "የአይቲ አካባቢያዊ መለያ"
+msgid "Local manager"
+msgstr "አካባቢያዊ አስተዳዳሪ"
 
 msgid "Username"
 msgstr "የተጠቃሚ ስም"

@@ -38,8 +38,8 @@ msgstr "স্কুলের সাথে যোগাযোগ করা য�
 msgid "School email"
 msgstr "স্কুলের ইমেইল"
 
-msgid "IT local account"
-msgstr "আইটি স্থানীয় অ্যাকাউন্ট"
+msgid "Local manager"
+msgstr "স্থানীয় অ্যাডমিনিস্ট্রেটর"
 
 msgid "Username"
 msgstr "ব্যবহারকারীর নাম"

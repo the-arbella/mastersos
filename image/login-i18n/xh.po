@@ -39,8 +39,8 @@ msgstr "Akukwazeki ukufikelela isikolo. Qhagamshela kwi-Wi-Fi ukusuka kwibha eph
 msgid "School email"
 msgstr "I-imeyile yesikolo"
 
-msgid "IT local account"
-msgstr "I-akhawunti yasekhaya ye-IT"
+msgid "Local manager"
+msgstr "Umlawuli wasekhaya"
 
 msgid "Username"
 msgstr "Igama lomsebenzisi"

@@ -38,8 +38,8 @@ msgstr "نەتوانرا پەیوەندی بە قوتابخانەوە بکرێت
 msgid "School email"
 msgstr "ئیمەیڵی قوتابخانە"
 
-msgid "IT local account"
-msgstr "هەژماری ناوخۆیی IT"
+msgid "Local manager"
+msgstr "بەڕێوەبەری ناوخۆیی"
 
 msgid "Username"
 msgstr "ناوی بەکارهێنەر"

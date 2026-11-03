@@ -38,8 +38,8 @@ msgstr "Məktəbə qoşulmaq mümkün olmadı. Yuxarı paneldən Wi-Fi şəbək�
 msgid "School email"
 msgstr "Məktəb e-poçtu"
 
-msgid "IT local account"
-msgstr "İT lokal hesabı"
+msgid "Local manager"
+msgstr "Lokal administrator"
 
 msgid "Username"
 msgstr "İstifadəçi adı"

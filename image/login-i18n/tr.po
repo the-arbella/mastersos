@@ -38,8 +38,8 @@ msgstr "Okula ulaşılamıyor. Üst çubuktan Wi-Fi'ye bağlanın ve yeniden den
 msgid "School email"
 msgstr "Okul e-postası"
 
-msgid "IT local account"
-msgstr "BT yerel hesabı"
+msgid "Local manager"
+msgstr "Yerel yönetici"
 
 msgid "Username"
 msgstr "Kullanıcı adı"

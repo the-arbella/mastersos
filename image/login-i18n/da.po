@@ -38,8 +38,8 @@ msgstr "Kan ikke nå skolen. Opret forbindelse til Wi-Fi fra den øverste bjælk
 msgid "School email"
 msgstr "Skolemail"
 
-msgid "IT local account"
-msgstr "Lokal IT-konto"
+msgid "Local manager"
+msgstr "Lokal administrator"
 
 msgid "Username"
 msgstr "Brugernavn"

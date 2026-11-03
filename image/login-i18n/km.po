@@ -38,8 +38,8 @@ msgstr "មិនអាចភ្ជាប់ទៅសាលាបានទេ។
 msgid "School email"
 msgstr "អ៊ីមែលសាលា"
 
-msgid "IT local account"
-msgstr "គណនីមូលដ្ឋានរបស់ IT"
+msgid "Local manager"
+msgstr "អ្នកគ្រប់គ្រងមូលដ្ឋាន"
 
 msgid "Username"
 msgstr "ឈ្មោះអ្នកប្រើ"

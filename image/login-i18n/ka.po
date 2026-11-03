@@ -38,8 +38,8 @@ msgstr "სკოლასთან დაკავშირება ვერ 
 msgid "School email"
 msgstr "სკოლის ელფოსტა"
 
-msgid "IT local account"
-msgstr "IT-ის ლოკალური ანგარიში"
+msgid "Local manager"
+msgstr "ლოკალური ადმინისტრატორი"
 
 msgid "Username"
 msgstr "მომხმარებლის სახელი"

@@ -38,8 +38,8 @@ msgstr "Die Schule ist nicht erreichbar. Verbinden Sie sich über die obere Leis
 msgid "School email"
 msgstr "Schul-E-Mail"
 
-msgid "IT local account"
-msgstr "Lokales IT-Konto"
+msgid "Local manager"
+msgstr "Lokaler Administrator"
 
 msgid "Username"
 msgstr "Benutzername"

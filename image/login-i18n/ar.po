@@ -38,8 +38,8 @@ msgstr "تعذّر الوصول إلى المدرسة. اتصل بشبكة Wi-Fi
 msgid "School email"
 msgstr "البريد الإلكتروني المدرسي"
 
-msgid "IT local account"
-msgstr "حساب محلي لقسم تقنية المعلومات"
+msgid "Local manager"
+msgstr "المسؤول المحلي"
 
 msgid "Username"
 msgstr "اسم المستخدم"

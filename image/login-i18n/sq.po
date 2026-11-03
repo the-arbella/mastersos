@@ -38,8 +38,8 @@ msgstr "Nuk lidhet dot me shkollën. Lidhu me Wi-Fi nga shiriti lart dhe provo p
 msgid "School email"
 msgstr "Email-i i shkollës"
 
-msgid "IT local account"
-msgstr "Llogari lokale e IT-së"
+msgid "Local manager"
+msgstr "Administratori lokal"
 
 msgid "Username"
 msgstr "Emri i përdoruesit"

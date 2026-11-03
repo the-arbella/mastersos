@@ -38,8 +38,8 @@ msgstr "ବିଦ୍ୟାଳୟକୁ ସଂଯୋଗ ହୋଇପାରୁନ�
 msgid "School email"
 msgstr "ବିଦ୍ୟାଳୟ ଇମେଲ୍"
 
-msgid "IT local account"
-msgstr "IT ସ୍ଥାନୀୟ ଆକାଉଣ୍ଟ"
+msgid "Local manager"
+msgstr "ସ୍ଥାନୀୟ ପ୍ରଶାସକ"
 
 msgid "Username"
 msgstr "ଉପଯୋଗକର୍ତ୍ତା ନାମ"

@@ -38,8 +38,8 @@ msgstr "Kooliga ei saa ühendust. Looge ülariba kaudu Wi-Fi-ühendus ja proovig
 msgid "School email"
 msgstr "Kooli e-post"
 
-msgid "IT local account"
-msgstr "IT kohalik konto"
+msgid "Local manager"
+msgstr "Kohalik administraator"
 
 msgid "Username"
 msgstr "Kasutajanimi"

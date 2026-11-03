@@ -38,8 +38,8 @@ msgstr "Бо мактаб алоқа барқарор нашуд. Аз наво�
 msgid "School email"
 msgstr "Почтаи электронии мактаб"
 
-msgid "IT local account"
-msgstr "Ҳисоби маҳаллии IT"
+msgid "Local manager"
+msgstr "Маъмури маҳаллӣ"
 
 msgid "Username"
 msgstr "Номи корбар"

@@ -38,8 +38,8 @@ msgstr "Не удаётся связаться со школой. Подключ
 msgid "School email"
 msgstr "Школьная электронная почта"
 
-msgid "IT local account"
-msgstr "Локальная учётная запись ИТ"
+msgid "Local manager"
+msgstr "Локальный администратор"
 
 msgid "Username"
 msgstr "Имя пользователя"

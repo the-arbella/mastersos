@@ -38,8 +38,8 @@ msgstr "Nevar sazināties ar skolu. Izveidojiet savienojumu ar Wi-Fi augšējā 
 msgid "School email"
 msgstr "Skolas e-pasts"
 
-msgid "IT local account"
-msgstr "Vietējais IT konts"
+msgid "Local manager"
+msgstr "Vietējais administrators"
 
 msgid "Username"
 msgstr "Lietotājvārds"

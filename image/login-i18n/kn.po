@@ -38,8 +38,8 @@ msgstr "ಶಾಲೆಯನ್ನು ತಲುಪಲು ಸಾಧ್ಯವಾಗ�
 msgid "School email"
 msgstr "ಶಾಲೆಯ ಇಮೇಲ್"
 
-msgid "IT local account"
-msgstr "IT ಸ್ಥಳೀಯ ಖಾತೆ"
+msgid "Local manager"
+msgstr "ಸ್ಥಳೀಯ ನಿರ್ವಾಹಕ"
 
 msgid "Username"
 msgstr "ಬಳಕೆದಾರ ಹೆಸರು"

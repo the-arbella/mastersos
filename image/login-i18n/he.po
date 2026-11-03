@@ -38,8 +38,8 @@ msgstr "אין חיבור לבית הספר. התחברו ל-Wi-Fi מהסרגל 
 msgid "School email"
 msgstr "דוא״ל בית הספר"
 
-msgid "IT local account"
-msgstr "חשבון מקומי של צוות ה-IT"
+msgid "Local manager"
+msgstr "מנהל מערכת מקומי"
 
 msgid "Username"
 msgstr "שם משתמש"

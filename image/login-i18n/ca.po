@@ -38,8 +38,8 @@ msgstr "No es pot contactar amb l'escola. Connecteu-vos al Wi-Fi des de la barra
 msgid "School email"
 msgstr "Correu de l'escola"
 
-msgid "IT local account"
-msgstr "Compte local de TI"
+msgid "Local manager"
+msgstr "Administrador local"
 
 msgid "Username"
 msgstr "Nom d'usuari"

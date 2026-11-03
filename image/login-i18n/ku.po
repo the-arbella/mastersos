@@ -38,8 +38,8 @@ msgstr "Gihîştina dibistanê pêk nehat. Ji darika jorîn bi Wi-Fi ve girêbid
 msgid "School email"
 msgstr "E-peyama dibistanê"
 
-msgid "IT local account"
-msgstr "Hesabê herêmî yê IT"
+msgid "Local manager"
+msgstr "Rêveberê herêmî"
 
 msgid "Username"
 msgstr "Navê bikarhêner"

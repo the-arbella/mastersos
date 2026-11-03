@@ -38,8 +38,8 @@ msgstr "Nije moguće povezati se sa školom. Povežite se na Wi-Fi putem gornje 
 msgid "School email"
 msgstr "Školska e-pošta"
 
-msgid "IT local account"
-msgstr "Lokalni IT račun"
+msgid "Local manager"
+msgstr "Lokalni administrator"
 
 msgid "Username"
 msgstr "Korisničko ime"

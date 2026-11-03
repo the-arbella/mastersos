@@ -38,8 +38,8 @@ msgstr "無法連線到學校。請從頂端列連接 Wi-Fi，然後重試。"
 msgid "School email"
 msgstr "學校電子郵件"
 
-msgid "IT local account"
-msgstr "IT 本機帳號"
+msgid "Local manager"
+msgstr "本機管理員"
 
 msgid "Username"
 msgstr "使用者名稱"

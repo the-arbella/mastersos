@@ -38,8 +38,8 @@ msgstr "ကျောင်းနှင့် ဆက်သွယ်၍ မရပ�
 msgid "School email"
 msgstr "ကျောင်းအီးမေးလ်"
 
-msgid "IT local account"
-msgstr "IT ဒေသတွင်း အကောင့်"
+msgid "Local manager"
+msgstr "ဒေသတွင်း စီမံခန့်ခွဲသူ"
 
 msgid "Username"
 msgstr "အသုံးပြုသူအမည်"

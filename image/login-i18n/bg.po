@@ -38,8 +38,8 @@ msgstr "Няма връзка с училището. Свържете се с Wi
 msgid "School email"
 msgstr "Училищна електронна поща"
 
-msgid "IT local account"
-msgstr "Локален ИТ акаунт"
+msgid "Local manager"
+msgstr "Локален администратор"
 
 msgid "Username"
 msgstr "Потребителско име"

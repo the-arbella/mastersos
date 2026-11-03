@@ -38,8 +38,8 @@ msgstr "Мектепке қосылу мүмкін емес. Жоғарғы жо
 msgid "School email"
 msgstr "Мектеп электрондық поштасы"
 
-msgid "IT local account"
-msgstr "IT жергілікті тіркелгісі"
+msgid "Local manager"
+msgstr "Жергілікті әкімші"
 
 msgid "Username"
 msgstr "Пайдаланушы аты"

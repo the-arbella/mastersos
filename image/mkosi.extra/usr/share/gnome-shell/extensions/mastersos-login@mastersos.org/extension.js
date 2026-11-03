@@ -42,6 +42,8 @@ const BROKER_CHOICE = 'authd-broker-selection';
 const MODE_CHOICE = 'authd-auth-mode-selection';
 const LOCAL_BROKER = 'local';
 const GUEST = 'guest';
+// The device's IT maintenance account (the agent's IT_ACCOUNT_USER, phase B design §10.4).
+const IT_ACCOUNT = 'itadmin';
 // How often the first-run state is read again, in ticks of 400 ms.
 const FIRST_RUN_TICKS = 5;
 const OFFLINE_PROBLEM = /connecting to provider/i;
@@ -442,9 +444,10 @@ export default class MastersosLoginExtension extends Extension {
             prompt._inputWell.add_child(button);
             return button;
         };
+        // "Local manager" goes straight to the IT account's password: nobody types its user name.
         this._itLink = link(this._text.itLink, () => {
-            prompt.setQuestion(this._text.itPrompt);
             this._itLink.hide();
+            this._signInAs(IT_ACCOUNT);
         });
 
         this._dialogIds = [

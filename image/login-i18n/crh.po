@@ -38,8 +38,8 @@ msgstr "Mektepke bağlanmaq mümkün degil. Üst panelden Wi-Fi ağına bağlan�
 msgid "School email"
 msgstr "Mektep e-poçtası"
 
-msgid "IT local account"
-msgstr "IT yerli hesabı"
+msgid "Local manager"
+msgstr "Yerli idareci"
 
 msgid "Username"
 msgstr "Qullanıcı adı"

@@ -38,8 +38,8 @@ msgstr "Šole ni mogoče doseči. Povežite se z omrežjem Wi-Fi v zgornji vrsti
 msgid "School email"
 msgstr "Šolski e-poštni naslov"
 
-msgid "IT local account"
-msgstr "Lokalni račun IT"
+msgid "Local manager"
+msgstr "Lokalni skrbnik"
 
 msgid "Username"
 msgstr "Uporabniško ime"

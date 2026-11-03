@@ -38,8 +38,8 @@ msgstr "Nie można połączyć się ze szkołą. Połącz się z siecią Wi-Fi n
 msgid "School email"
 msgstr "Szkolny adres e-mail"
 
-msgid "IT local account"
-msgstr "Lokalne konto IT"
+msgid "Local manager"
+msgstr "Administrator lokalny"
 
 msgid "Username"
 msgstr "Nazwa użytkownika"

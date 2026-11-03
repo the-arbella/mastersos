@@ -38,8 +38,8 @@ msgstr "Az iskola nem érhető el. Csatlakozz a Wi-Fi-hez a felső sávon, majd 
 msgid "School email"
 msgstr "Iskolai e-mail-cím"
 
-msgid "IT local account"
-msgstr "Helyi informatikai fiók"
+msgid "Local manager"
+msgstr "Helyi rendszergazda"
 
 msgid "Username"
 msgstr "Felhasználónév"

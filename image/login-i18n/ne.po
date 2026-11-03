@@ -38,8 +38,8 @@ msgstr "विद्यालयसँग सम्पर्क हुन सक
 msgid "School email"
 msgstr "विद्यालयको इमेल"
 
-msgid "IT local account"
-msgstr "IT स्थानीय खाता"
+msgid "Local manager"
+msgstr "स्थानीय प्रशासक"
 
 msgid "Username"
 msgstr "प्रयोगकर्ता नाम"

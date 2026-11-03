@@ -38,8 +38,8 @@ msgstr "Nepodarilo sa spojiť so školou. Pripojte sa k sieti Wi-Fi na hornom pa
 msgid "School email"
 msgstr "Školský e-mail"
 
-msgid "IT local account"
-msgstr "Lokálny účet IT"
+msgid "Local manager"
+msgstr "Lokálny správca"
 
 msgid "Username"
 msgstr "Používateľské meno"

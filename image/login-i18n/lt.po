@@ -38,8 +38,8 @@ msgstr "Nepavyksta pasiekti mokyklos. Prisijunkite prie Wi-Fi viršutinėje juos
 msgid "School email"
 msgstr "Mokyklos el. paštas"
 
-msgid "IT local account"
-msgstr "Vietinė IT paskyra"
+msgid "Local manager"
+msgstr "Vietinis administratorius"
 
 msgid "Username"
 msgstr "Naudotojo vardas"

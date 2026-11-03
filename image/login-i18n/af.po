@@ -38,8 +38,8 @@ msgstr "Kan nie die skool bereik nie. Koppel via die boonste balk aan Wi-Fi en p
 msgid "School email"
 msgstr "Skool-e-pos"
 
-msgid "IT local account"
-msgstr "Plaaslike IT-rekening"
+msgid "Local manager"
+msgstr "Plaaslike administrateur"
 
 msgid "Username"
 msgstr "Gebruikernaam"

@@ -38,8 +38,8 @@ msgstr "학교에 연결할 수 없습니다. 상단 막대에서 Wi-Fi에 연�
 msgid "School email"
 msgstr "학교 이메일"
 
-msgid "IT local account"
-msgstr "IT 로컬 계정"
+msgid "Local manager"
+msgstr "로컬 관리자"
 
 msgid "Username"
 msgstr "사용자 이름"

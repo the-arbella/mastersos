@@ -38,8 +38,8 @@ msgstr "Nu se poate contacta școala. Conectează-te la Wi-Fi din bara de sus, a
 msgid "School email"
 msgstr "E-mail școlar"
 
-msgid "IT local account"
-msgstr "Cont local IT"
+msgid "Local manager"
+msgstr "Administrator local"
 
 msgid "Username"
 msgstr "Nume de utilizator"

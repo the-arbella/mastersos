@@ -38,8 +38,8 @@ msgstr "Δεν είναι δυνατή η σύνδεση με το σχολεί�
 msgid "School email"
 msgstr "Σχολικό email"
 
-msgid "IT local account"
-msgstr "Τοπικός λογαριασμός IT"
+msgid "Local manager"
+msgstr "Τοπικός διαχειριστής"
 
 msgid "Username"
 msgstr "Όνομα χρήστη"

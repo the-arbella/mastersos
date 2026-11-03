@@ -38,8 +38,8 @@ msgstr "Det går inte att nå skolan. Anslut till Wi-Fi från översta fältet o
 msgid "School email"
 msgstr "Skolans e-post"
 
-msgid "IT local account"
-msgstr "Lokalt IT-konto"
+msgid "Local manager"
+msgstr "Lokal administratör"
 
 msgid "Username"
 msgstr "Användarnamn"

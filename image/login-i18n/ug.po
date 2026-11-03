@@ -38,8 +38,8 @@ msgstr "مەكتەپكە ئۇلانغىلى بولمىدى. ئۈستى بالد�
 msgid "School email"
 msgstr "مەكتەپ ئېلخېتى"
 
-msgid "IT local account"
-msgstr "IT يەرلىك ھېسابات"
+msgid "Local manager"
+msgstr "يەرلىك باشقۇرغۇچى"
 
 msgid "Username"
 msgstr "ئىشلەتكۈچى ئىسمى"

@@ -38,8 +38,8 @@ msgstr "Næ ekki sambandi við skólann. Tengstu Wi-Fi úr efri stikunni og reyn
 msgid "School email"
 msgstr "Skólanetfang"
 
-msgid "IT local account"
-msgstr "Staðbundinn tæknideildarreikningur"
+msgid "Local manager"
+msgstr "Staðbundinn kerfisstjóri"
 
 msgid "Username"
 msgstr "Notandanafn"

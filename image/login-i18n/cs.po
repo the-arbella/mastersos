@@ -38,8 +38,8 @@ msgstr "Škola není dostupná. Připojte se k Wi-Fi v horní liště a zkuste t
 msgid "School email"
 msgstr "Školní e-mail"
 
-msgid "IT local account"
-msgstr "Místní účet IT"
+msgid "Local manager"
+msgstr "Místní správce"
 
 msgid "Username"
 msgstr "Uživatelské jméno"

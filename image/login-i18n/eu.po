@@ -38,8 +38,8 @@ msgstr "Ezin da ikastetxea atzitu. Konektatu Wi-Fi sarera goiko barratik eta sai
 msgid "School email"
 msgstr "Ikastetxeko posta elektronikoa"
 
-msgid "IT local account"
-msgstr "IT sailaren kontu lokala"
+msgid "Local manager"
+msgstr "Administratzaile lokala"
 
 msgid "Username"
 msgstr "Erabiltzaile-izena"

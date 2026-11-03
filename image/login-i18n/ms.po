@@ -38,8 +38,8 @@ msgstr "Tidak dapat menghubungi sekolah. Sambung ke Wi-Fi daripada bar atas, kem
 msgid "School email"
 msgstr "E-mel sekolah"
 
-msgid "IT local account"
-msgstr "Akaun tempatan IT"
+msgid "Local manager"
+msgstr "Pentadbir tempatan"
 
 msgid "Username"
 msgstr "Nama pengguna"

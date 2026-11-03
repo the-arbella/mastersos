@@ -38,8 +38,8 @@ msgstr "Chan urrainn dhuinn ceangal ris an sgoil. Ceangail ri Wi-Fi on bhàr gu 
 msgid "School email"
 msgstr "Post-d na sgoile"
 
-msgid "IT local account"
-msgstr "Cunntas ionadail IT"
+msgid "Local manager"
+msgstr "Rianaire ionadail"
 
 msgid "Username"
 msgstr "Ainm-cleachdaiche"

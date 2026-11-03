@@ -38,8 +38,8 @@ msgstr "பள்ளியுடன் இணைக்க முடியவி�
 msgid "School email"
 msgstr "பள்ளி மின்னஞ்சல்"
 
-msgid "IT local account"
-msgstr "IT உள்ளூர் கணக்கு"
+msgid "Local manager"
+msgstr "உள்ளூர் நிர்வாகி"
 
 msgid "Username"
 msgstr "பயனர்பெயர்"

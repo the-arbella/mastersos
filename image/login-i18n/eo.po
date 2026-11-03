@@ -38,8 +38,8 @@ msgstr "Ne eblas atingi la lernejon. Konektu al Wi-Fi per la supra breto kaj rep
 msgid "School email"
 msgstr "Lerneja retpoŝto"
 
-msgid "IT local account"
-msgstr "Loka konto de IT"
+msgid "Local manager"
+msgstr "Loka administranto"
 
 msgid "Username"
 msgstr "Uzantnomo"

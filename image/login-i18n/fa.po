@@ -38,8 +38,8 @@ msgstr "دسترسی به مدرسه ممکن نیست. از نوار بالا �
 msgid "School email"
 msgstr "ایمیل مدرسه"
 
-msgid "IT local account"
-msgstr "حساب محلی فناوری اطلاعات"
+msgid "Local manager"
+msgstr "مدیر محلی"
 
 msgid "Username"
 msgstr "نام کاربری"

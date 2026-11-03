@@ -38,8 +38,8 @@ msgstr "Nun se pue acceder a la escuela. Conéctate a una rede Wi-Fi dende la ba
 msgid "School email"
 msgstr "Corréu de la escuela"
 
-msgid "IT local account"
-msgstr "Cuenta llocal de TI"
+msgid "Local manager"
+msgstr "Alministrador llocal"
 
 msgid "Username"
 msgstr "Nome d'usuariu"
