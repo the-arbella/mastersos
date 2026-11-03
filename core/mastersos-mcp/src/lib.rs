@@ -281,7 +281,7 @@ pub async fn connect(server: &str, token_file: &Path, wanted: TokenUse) -> Resul
     })?;
     let api = Api::new(server, &token)?;
     let who = whoami(&api).await?;
-    check_scopes(&who)?;
+    check_scopes(&who, wanted)?;
     check_kind(&who, wanted, token_file)?;
     Ok(api)
 }
@@ -321,7 +321,7 @@ pub fn check_kind(who: &Value, wanted: TokenUse, token_file: &Path) -> Result<()
 
 /// Scope check. An allow-list, not a block-list: any scope other than read and draft (publish,
 /// keys, recovery and any added later) is refused.
-pub fn check_scopes(who: &Value) -> Result<(), StartError> {
+pub fn check_scopes(who: &Value, wanted: TokenUse) -> Result<(), StartError> {
     let raw = who["scopes"]
         .as_array()
         .ok_or_else(|| StartError::Other("The whoami response has no scopes".into()))?;
@@ -336,10 +336,16 @@ pub fn check_scopes(who: &Value) -> Result<(), StartError> {
         }
     }
     if !extra.is_empty() {
-        return Err(StartError::Refused(format!(
-            "This token has scopes beyond read and draft ({}); it can publish, manage keys or read recovery secrets and must not be given to an AI. Create a separate token with only read and draft for it (AI tools in the web console)",
-            extra.join(", ")
-        )));
+        let extra = extra.join(", ");
+        return Err(StartError::Refused(match wanted {
+            TokenUse::Ai => format!(
+                "This token has scopes beyond read and draft ({extra}); it can publish, manage keys or read recovery secrets and must not be given to an AI. Create a separate token with only read and draft for it (AI tools in the web console)"
+            ),
+            // Least privilege for people too, but the reason is not an AI.
+            TokenUse::It | TokenUse::Any => format!(
+                "This token has more than read and draft ({extra}); mastersos does not use a token that can do more. Create a command-line token on the admin site's 'Command-line tokens' page"
+            ),
+        }));
     }
     if !scopes.contains(&"read") {
         return Err(StartError::Refused(
@@ -538,6 +544,25 @@ mod tests {
         assert!(e.to_string().contains("IT's own token"), "{e}");
         // No label at all: not an AI token.
         assert!(check_kind(&json!({ "scopes": ["read"] }), TokenUse::Ai, f).is_err());
+    }
+
+    #[test]
+    fn scope_refusal_names_ai_only_for_the_ai_path() {
+        let broad = who("token:ops", &["read", "draft", "publish"]);
+        let e = check_scopes(&broad, TokenUse::Ai).unwrap_err();
+        assert_eq!(e.exit_code(), 2);
+        assert!(e.to_string().contains("must not be given to an AI"), "{e}");
+        for wanted in [TokenUse::It, TokenUse::Any] {
+            let e = check_scopes(&broad, wanted).unwrap_err();
+            assert_eq!(e.exit_code(), 2);
+            let m = e.to_string();
+            assert!(m.contains("more than read and draft (publish)"), "{m}");
+            assert!(m.contains("'Command-line tokens' page"), "{m}");
+            assert!(!m.contains("AI"), "{m}");
+        }
+        let fine = who("token:it", &["read", "draft"]);
+        assert!(check_scopes(&fine, TokenUse::It).is_ok());
+        assert!(check_scopes(&fine, TokenUse::Ai).is_ok());
     }
 
     #[tokio::test]

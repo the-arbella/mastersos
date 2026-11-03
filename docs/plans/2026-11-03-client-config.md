@@ -125,7 +125,7 @@ CLI：`mastersos init <dir>`（school id 取 `GET /v1/auth/config`，`base_versi
 
 流程：`check` 有 Error 就停 → `fill` → `stamp(version = base_version + 1, issued_at = now RFC 3339 秒级 Z, school_name_to_write(text, auth_config.name))` → 上传（Global Constraints 的体）→ 409 时报 “Someone published v… after your base v…; run `mastersos pull` and redo your change” 并不改 `base_version` → 有 `--key` 时 `mastersos_sign::sign_pending(api, key, pin_dir, Some(id), …)`，成功后 `mark_published` → 否则返回签名页链接（IT 用 passkey 签完后跑 `mastersos pull` 更新 base）。
 
-另加：`mastersos device list|show`（保留现有实现）、`mastersos keys list`（`GET /v1/admin/keys`，打印 id、算法、标签）、`mastersos hash-password`（不回显读两次，输出 IT 账号口令哈希，算法与网页现在用的相同——看云端 `api/configs.rs` 的 IT 账号接口怎么算），`mastersos logo upload <login.png> <icon.png>`（尺寸核对：登录页高 96、宽 1–480，图标 40×40；上传到现有 logo 接口，打印两个 sha256）。
+另加：`mastersos device list|show`（保留现有实现）、`mastersos keys list`（`GET /v1/admin/signing-keys`，打印 key_id、种类、算法、标签、是否在最新已发布的 trust 里）、`mastersos hash-password`（不回显读两次，输出 IT 账号口令哈希，算法与网页现在用的相同——看云端 `api/configs.rs` 的 IT 账号接口怎么算），`mastersos logo upload <login.png> <icon.png>`（尺寸核对：登录页高 96、宽 1–480，图标 40×40；上传到现有 logo 接口，打印两个 sha256）。
 
 删除：`draft`、`config`、`group`、`school`、`defaults`、`publish`（旧的发布请求）、`requests` 子命令，`devices assign`，`write_manifest`、`restore_version`、`draft_rev`、`check_before_write`、`guard_manifest`。
 

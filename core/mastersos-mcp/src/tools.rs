@@ -84,7 +84,7 @@ pub const TOOLS: &[Tool] = &[
     Tool {
         name: "keys_list",
         kind: Kind::Server,
-        description: "The signing keys the server knows: id, algorithm, label. No parameters.",
+        description: "The signing keys registered for the school: key_id, kind (passkey or recovery), alg, label, and whether each is in the latest published trust (in_published_trust). No parameters.",
     },
     Tool {
         name: "spec",
@@ -227,7 +227,7 @@ pub fn build(name: &str, a: Value) -> Result<Req, String> {
         }
         "keys_list" => {
             args::<NoParams>(name, a)?;
-            admin("keys")
+            admin("signing-keys")
         }
         "spec" => {
             let p: ManifestSpec = args(name, a)?;
@@ -386,6 +386,13 @@ mod tests {
 
     fn read(w: &Workdir, path: &str) -> Result<String, String> {
         call_local(&w.root, "read_file", json!({ "path": path }))
+    }
+
+    #[test]
+    fn keys_list_reads_the_signing_keys_endpoint() {
+        let r = build("keys_list", serde_json::json!({})).unwrap();
+        assert_eq!(r.segments, ["v1", "admin", "signing-keys"]);
+        assert!(r.query.is_empty());
     }
 
     #[test]

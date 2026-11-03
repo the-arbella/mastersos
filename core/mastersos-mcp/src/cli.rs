@@ -283,11 +283,11 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
             publish_dir(&api, &server, &token_file, dir.as_deref(), key.as_deref()).await
         }
         Cmd::Keys(KeysCmd::List) => {
-            let text = api.send(Req::get(&["v1", "admin", "keys"])).await?;
+            let text = api.send(Req::get(&["v1", "admin", "signing-keys"])).await?;
             out.print(&text, |v| {
                 table(
-                    &["ID", "ALGORITHM", "LABEL"],
-                    rows(v, &["id", "alg", "label"]),
+                    &["KEY ID", "KIND", "ALGORITHM", "LABEL", "IN TRUST"],
+                    rows(v, &["key_id", "kind", "alg", "label", "in_published_trust"]),
                 )
             });
             Ok(ExitCode::SUCCESS)
