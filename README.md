@@ -267,7 +267,7 @@ $S escrow-read --server https://<slug>.os.khundavid.com --token-file recovery.to
 ### 第一版与 trust 的变化
 
 1. 在网页登记 passkey，建议在不同设备上登记两把。用临时 `keys` token 经 `mastersos-sign register` 登记恢复钥匙，登记完删掉这个 token。
-2. 在本地目录的 `manifest.toml` 里把 `[[trust]]` 写成登记过的钥匙（`mastersos keys list` 可查），用 `mastersos-sign sign` 以恢复钥匙签第一版（R1g）。
+2. 在本地目录的 `manifest.toml` 里把 `[[trust]]` 写成登记过的钥匙（`mastersos keys list` 可查），`mastersos init <目录>` → 编辑（`[[trust]]` 列出这把恢复钥匙）→ `mastersos publish --key rk.key`：`base_version = 0` 时 `publish` 走 `mastersos_sign::sign_pending` 的第一版（R1g）分支，打印整份 trust，要 IT 对照指纹、键入版本号 `1` 与 `trust`，用恢复钥匙签并 commit（也可以单独用 `mastersos-sign sign --pending <id>`）。
    发布第一版之前没有种子可下载（`GET /v1/admin/seed` 回 409 `no_published_version`）。
 3. 之后的日常发布可以用网页 passkey 签。每次发布之后续签一次心跳。trust 的变化只能用恢复钥匙经 `mastersos-sign` 签。
 

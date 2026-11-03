@@ -27,31 +27,33 @@ laid over them). The same Config applies whoever signs in on the Device.
 The settings file can also carry files (`files/…`, such as wallpapers or icons) and scripts
 (`scripts/…`). The settings file plus these files is the **settings bundle**.
 
-### Draft, check, Publish
+### Edit, check, Publish
 
-1. You edit the **Draft** in the console (or an AI assistant edits it for you). A Draft can be saved
-   even when it has problems.
-2. The Draft is **checked** and its **Issues** are listed: the console shows the saved Draft's
-   Issues, and any text, saved or not, can be checked on demand through the API
-   (`POST /v1/admin/manifest/check`). An Issue has a level:
+1. The settings are a **local directory** that IT keeps: `mastersos pull <dir>` downloads the latest
+   published Version into it (`mastersos init <dir>` starts one for a new school). You (or an AI
+   assistant) edit `manifest.toml` there, and add files under `files/`. The server holds no draft.
+2. `mastersos check` **checks** the directory on your computer and lists its **Issues**. An Issue has a level:
    - **error**: blocks Publish;
    - **warning**: shown, does not block;
    - **info**: reports the current state (for example a Chrome update pause), not a problem.
-3. When there are no errors you **Publish**: the server freezes the Draft as the next **Version**,
-   and someone signs it with a **Passkey** (or a **Recovery kit**). Devices accept only Versions
-   signed by a key in **trust**, and only Versions newer than the one they have.
+3. When there are no errors, `mastersos publish` builds the next **Version** from the directory (it puts the
+   secrets in) and uploads it; someone signs it with a **Passkey** on the signing page, or with a
+   **Recovery kit** key on the computer (`--key`). Devices accept only Versions signed by a key in
+   **trust**, and only Versions newer than the one they have. Afterwards `mastersos pull` takes the published
+   Version as the new base.
 
 Some keys are written for you; do not write them by hand:
 
 | Key | Written by |
 |---|---|
-| `format` | the server, when it saves the Draft (the lowest the text needs) |
-| `version`, `issued_at` | the server, on Publish |
-| `[[trust]]` | the Keys page (registered signing keys) |
-| `[school] id` | the server, in every new Draft |
+| `format` | `mastersos init` / `pull` (the lowest the text needs); leave it as it is |
+| `version`, `issued_at` | `mastersos publish`, when it builds the Version |
+| `[[trust]]` | you, from `mastersos keys list` (registered signing keys); IT changes it and signs with a recovery key |
+| `[school] id` | `mastersos init` / `pull`: the school's id; do not change it |
 | `[school] escrow_recipients` | the signing page, when recovery-kit escrow is set up |
-| `[school] name`, `[school] logo_sha256`, `[school] logo_icon_sha256` | the server, from the school's name and uploaded logo |
-| `it_account` `password_hash` | the console, from the password IT types |
+| `[school] name` | `mastersos publish`, from the school's name |
+| `[school] logo_sha256`, `logo_icon_sha256` | IT, pasted from the output of `mastersos logo upload` |
+| `it_account` `password_hash` | a `secret:` reference; IT puts the hash (`mastersos hash-password`) in `secrets.toml` |
 
 ### How a Device finds its Group
 
@@ -69,7 +71,7 @@ The seed is the small file on the installer USB stick that lets a new Device fin
 it has downloaded any settings. A seed made on the console's Install page is for one Group and
 carries: the server address, the school id and name, the signing public keys, that Group's `group`,
 the latest published `[school.oidc]`, the Wi-Fi of that Group's Config as it comes out of the
-Defaults and the Config's own entries (the latest published Version, not the Draft), and the
+Defaults and the Config's own entries (the latest published Version, not your local changes), and the
 Config's `it_account` hash, if it has one. A new Device therefore joins the school's networks, shows
 the sign-in, and creates the IT account before its first settings download. The seed holds Wi-Fi
 passwords and the IT password hash: keep the USB stick like a key.
@@ -106,7 +108,7 @@ case-sensitive and must be spelled exactly as in this reference; an unknown key 
 
 Blocks marked `check=ok` pass the check with no errors; blocks marked `check=<code>` report that
 Issue (and no other error). `files=…` lists the files the example assumes are in the settings
-bundle. The examples leave out `[[trust]]` and `[school] id`, which your Draft already has; the
+bundle. The examples leave out `[[trust]]` and `[school] id`, which your directory already has; the
 test that runs them adds a valid trust and school id.
 
 A complete, small settings file:
@@ -133,7 +135,7 @@ id = "teachers"
 name = "Teacher Devices"
 login_methods = ["sso", "local"]
 interface = "full"
-wifi = [{ ssid = "School-Staff", psk = "example-password-not-real" }]
+wifi = [{ ssid = "School-Staff", psk = "secret:school-staff" }]
 
 [config.apps]
 web = [{ name = "Khan Academy", url = "https://www.khanacademy.org/", icon = "files/khan-academy.png" }]
@@ -164,10 +166,10 @@ Columns: **Key**, **Type**, **Required / default** (what happens when the key is
 
 | Key | Type | Required / default | Allowed values | Example | Notes |
 |---|---|---|---|---|---|
-| `format` | integer | `1` when left out; written by the server | `1`, `2` | `format = 2` | The settings syntax version, on the first line. The server writes the lowest one the text needs: `2` once `[defaults]`, `drop`, `it_account` or `[school]` `name` / `logo_sha256` / `logo_icon_sha256` are used (they are `invalid_value` under `1`). A Device whose OS reads an older format does not apply the Version and asks to update the OS first. Leave it as the server wrote it. |
-| `version` | integer | written by the server | a positive integer, higher than the last Version | `version = 42` | Leave it out of the Draft; the server writes it on Publish. |
-| `issued_at` | string | written by the server | RFC 3339 time | `issued_at = "2026-10-10T07:00:00Z"` | Leave it out of the Draft. |
-| `trust` | list of tables | required, at least one key | see [`[[trust]]`](#trust) | — | Written from the Keys page. Empty is `trust_empty`. |
+| `format` | integer | `1` when left out; written by `init`/`pull` | `1`, `2` | `format = 2` | The settings syntax version, on the first line. `init` and `pull` write the lowest one the text needs: `2` once `[defaults]`, `drop`, `it_account` or `[school]` `name` / `logo_sha256` / `logo_icon_sha256` are used (they are `invalid_value` under `1`). A Device whose OS reads an older format does not apply the Version and asks to update the OS first. Leave it as `init` or `pull` wrote it. |
+| `version` | integer | written by `publish` | a positive integer, higher than the last Version | `version = 42` | `mastersos publish` writes it (the pulled version plus one). |
+| `issued_at` | string | written by `publish` | RFC 3339 time | `issued_at = "2026-10-10T07:00:00Z"` | `mastersos publish` writes it. |
+| `trust` | list of tables | required, at least one key | see [`[[trust]]`](#trust) | — | Listed in `manifest.toml` (see `mastersos keys list`); IT changes it. Empty is `trust_empty`. |
 | `school` | table | optional; defaults below | see [`[school]`](#school) | — | Settings for every Device. |
 | `defaults` | table | optional; nothing inherited | see [`[defaults]`](#defaults) | — | What every Config starts from (`format = 2`). |
 | `config` | list of tables | required: at least the Config of the `default` Group | see [`[[config]]`](#config) | — | Each `[[config]]` header adds one Config. |
@@ -190,8 +192,8 @@ Settings shared by every Device, whatever its Group.
 | `locale` | string | optional; Devices keep their current language | `xx_YY.UTF-8`; the image provides `th_TH.UTF-8`, `en_US.UTF-8`, `en_GB.UTF-8`, `zh_CN.UTF-8` | `locale = "th_TH.UTF-8"` | Other well-formed languages pass the check, but Devices report that the image lacks them. |
 | `wifi` | list of tables | optional; none | see [`[[school.wifi]]`](#schoolwifi); never an empty list | — | Moved to `[defaults] wifi` (written here in a `format = 2` text it is `school_wifi_moved`); versions that still carry it work as before: its networks come before the Defaults' ones. A Defaults or Config entry with the same `ssid` replaces the school's. Write entries or leave the key out: `wifi = []` is `invalid_value`. |
 | `name` | string | written by the server | 1-100 characters | `name = "Example International School"` | The school's display name, shown on Devices ("Managed by …"). Do not write it by hand (`format = 2`); a name that is empty, over 100 characters or holds control characters is `school_name_invalid`. |
-| `logo_sha256` | string | written by the server | 64 lowercase hex digits | — | The SHA-256 of the sign-in screen logo (a PNG 96 pixels high, at most 480 wide) Devices download from the school's server at `/logos/<sha256>.png` and show only when it matches; written, with `logo_icon_sha256`, when IT uploads a logo on the console. Do not write it by hand (`format = 2`); anything else is `logo_sha256_invalid`, and one of the two keys without the other is `logo_incomplete`. |
-| `logo_icon_sha256` | string | written by the server | 64 lowercase hex digits | — | The SHA-256 of the quick menu icon (a PNG of 40 x 40 pixels), downloaded and checked like `logo_sha256`. Written together with `logo_sha256`; do not write it by hand (`format = 2`). |
+| `logo_sha256` | string | written by IT | 64 lowercase hex digits | — | The SHA-256 of the sign-in screen logo (a PNG 96 pixels high, at most 480 wide) Devices download from the school's server at `/logos/<sha256>.png` and show only when it matches; written, with `logo_icon_sha256`, when IT runs `mastersos logo upload` and pastes the lines it prints. Do not invent it (`format = 2`); anything else is `logo_sha256_invalid`, and one of the two keys without the other is `logo_incomplete`. |
+| `logo_icon_sha256` | string | written by IT | 64 lowercase hex digits | — | The SHA-256 of the quick menu icon (a PNG of 40 x 40 pixels), downloaded and checked like `logo_sha256`. Written together with `logo_sha256`; do not write it by hand (`format = 2`). |
 | `escrow_recipients` | list of strings | optional; no escrow | 1 to 8 age X25519 public keys (`age1…`) in canonical lowercase form, none twice; never an empty list | — | Devices encrypt their disk recovery key to these keys before sending it to the cloud. Written by the signing page; each must belong to a Recovery kit in trust (`escrow_recipient_unregistered`). Write the key with entries or leave it out: `escrow_recipients = []` is `invalid_value`. |
 
 ```toml check=ok
@@ -430,21 +432,21 @@ config = "grade-3-cart"
 ### `[config.it_account]`
 
 The IT maintenance account (`format = 2`), in `[defaults]` or a Config. Its user name is always
-`itadmin`. Set its password on the console, which writes the hash; the password can be set only
-there, at least 16 characters, and nobody writes the hash by hand (a malformed one is
-`it_account_invalid`). A Config's own `it_account` replaces the Defaults' one. Left out everywhere:
+`itadmin`. The password is at least 16 characters. IT runs `mastersos hash-password` (it reads the password
+without echo) and puts the hash into `secrets.toml`; `password_hash` in `manifest.toml` is a `secret:`
+reference, and nobody writes the hash into it (a malformed one is `it_account_invalid`). A Config's own `it_account` replaces the Defaults' one. Left out everywhere:
 no IT account, and an account made earlier is locked (its home folder is kept).
 
 On a Device the account is a local administrator that does not appear in the login screen's user
 list: IT chooses "Not listed?" and types `itadmin` and the password. It can sign in whatever
 `login_methods` says and whatever `local_users_admin` is, but not on a locked Device. Changing the
-password on the console and publishing changes it on every Device at its next sync. The hash is in
+password (a new hash in `secrets.toml`) and publishing changes it on every Device at its next sync. The hash is in
 the installer seed: the password must be long, and when a USB stick is lost, revoke that seed and
 change the password.
 
 | Key | Type | Required / default | Allowed values | Example | Notes |
 |---|---|---|---|---|---|
-| `password_hash` | string | required | a crypt hash starting `$y$` or `$6$rounds=500000$`, at most 256 characters | — | Written by the console. A secret: AI tokens read it as `<kept>`. |
+| `password_hash` | string | required | a crypt hash starting `$y$` or `$6$rounds=500000$`, at most 256 characters | — | A secret: in `manifest.toml` it is a `"secret:<name>"` reference; IT computes the hash with `mastersos hash-password` and puts it in `secrets.toml`. |
 
 ### `[config.drop]`
 
@@ -540,7 +542,7 @@ Settings files written before Configs existed have no `[[config]]`: each `[[grou
 own settings and a `mode` key (`"browser"`, the default, or `"desktop"`). Devices and the console
 still read Versions published in that shape: each such Group acts as a Config with the same id,
 `desktop` as `full` and `browser` as the old browser mode (Devices keep it exactly as it was, and do
-not install its Flatpak apps). A Draft in that shape is `legacy_shape`, and a file that mixes the
+not install its Flatpak apps). A file in that shape is `legacy_shape`, and a file that mixes the
 two shapes is `config_shape_mixed`. To convert one, move each Group's settings into a `[[config]]`
 with the same id and name, write `interface = "full"` for `mode = "desktop"` and
 `interface = "learning"` otherwise, and leave `id`, `name` and `config` in the `[[group]]`. A
@@ -556,18 +558,15 @@ entry with the same `ssid` as an inherited entry replaces that entry as a whole,
 `drop.wifi = ["ssid"]` leaves one out. Passwords, keys and key passphrases are stored only on the Devices and are
 never reported back.
 
-The secrets (`psk`, `password`, `client_key`, `client_key_password`) only come in and go out through
-the admin web page. With an AI token (the `mastersos` command line and the MCP server) every secret
-reads as `"<kept>"`, in the whole text, the forms, diffs and published versions alike. Writing
-`"<kept>"` back keeps the value of the same network (same layer, school or Config, and same `ssid`);
-any other value, `"<kept>"` on a new or renamed network, or `"<kept>"` while changing where the secret
-is sent (`eap`, `phase2`, `identity`, `anonymous_identity`, `server_domain`, `ca_cert`,
-`check_server`), is refused (`secret_via_web`). An AI token never creates a WPA password network:
-an entry it adds (or one whose credentials it removes) with none of `open`, `psk` and `eap` is
-refused (`secret_via_web`), since Devices would join it as open. It can add open networks
-(`open = true`) and enterprise networks without the password: the draft check reports
-`wifi_invalid` until IT enters the password in the web page. Password networks are created in the
-admin web page.
+The secrets (`psk`, `password`, `client_key`, `client_key_password`) are not written in `manifest.toml`.
+There each one is a reference such as `psk = "secret:guest-wifi"`; the value lives in `secrets.toml` (mode
+0600, kept out of git), which IT fills in (`guest-wifi = "…"`). `mastersos pull` moves existing values there;
+`mastersos publish` puts them back when it builds the Version. An AI assistant never reads `secrets.toml`:
+for a new password network it writes the reference and asks IT to add the value. `mastersos check` reports
+`secret_unknown` (a reference with no value: error), `secret_unused` (a value nothing refers to: warning) and
+`secret_rerouted` (a network that has a secret changed `eap`, `phase2`, `identity`, `anonymous_identity`,
+`server_domain`, `ca_cert` or `check_server`, so the secret would be sent somewhere new: warning; IT
+confirms). A renamed `ssid` is a new network and needs its own secret.
 
 The kind of network follows from the keys written:
 
@@ -676,7 +675,7 @@ still carry `[[school.wifi]]` work as before: a Device gets the school's network
 whose `ssid` the Defaults also list, then the Defaults' networks, then its Config's own; an entry
 with the same `ssid` later in that order replaces the earlier one as a whole (no key-by-key merge).
 Writing it in a `format = 2` text is `school_wifi_moved` (a warning); a format-1 text keeps it
-there without a warning, because the console keeps Defaults-only Wi-Fi under `[school]` until
+there without a warning, because a format-1 setup keeps Defaults-only Wi-Fi under `[school]` until
 something else needs format 2. The same `ssid` twice in
 `[[school.wifi]]` is `wifi_ssid_duplicate`. Entries are written like
 [`[[config.wifi]]`](#configwifi). Any `[[school.wifi]]` needs feature `wifi_ext` (see
@@ -750,7 +749,7 @@ apps as soon as they sign in.
 |---|---|---|---|---|---|
 | `name` | string | required | non-empty, no control characters | `name = "Khan Academy"` | The launcher's name. |
 | `url` | string | required | starts with `https://` or `http://`; no spaces or any of ``" ' ` \`` | `url = "https://www.khanacademy.org/"` | `http://` works but warns (`web_app_not_https`). |
-| `icon` | string | optional; a generic browser icon | a `files/…` file in the bundle, or an `https://` link | `icon = "files/khan-academy.png"` | A file must be uploaded to the Draft's files. A downloaded icon that fails falls back to the generic icon. |
+| `icon` | string | optional; a generic browser icon | a `files/…` file in the bundle, or an `https://` link | `icon = "files/khan-academy.png"` | A file must be under `files/` in the directory. A downloaded icon that fails falls back to the generic icon. |
 
 ```toml check=ok files=files/khan-academy.png
 [[config]]
@@ -919,7 +918,7 @@ removed from the list is deleted from the Devices.
 
 | Key | Type | Required / default | Allowed values | Example | Notes |
 |---|---|---|---|---|---|
-| `src` | string | required | starts with `files/` and is a file in the bundle | `src = "files/wallpaper.jpg"` | Upload the file to the Draft first. |
+| `src` | string | required | starts with `files/` and is a file in the bundle | `src = "files/wallpaper.jpg"` | Put the file under `files/` in the directory first. |
 | `dest` | string | required | an absolute path (starts with `/`) | `dest = "/var/lib/school/wallpaper.jpg"` | Must be in a writable place: `/usr` and `/opt` are read-only, and most of `/etc` cannot be written. A path through a symbolic link fails on the Device. |
 
 ```toml check=ok files=files/wallpaper.jpg
@@ -1080,7 +1079,7 @@ Each Issue has a `level`, a stable `code`, an English `message`, a `path` (such 
 (line and column in the text, when known). A parse problem (`toml_syntax`, `unknown_field`,
 `missing_field`, `wrong_type`, `invalid_value`, `config_shape_mixed`) stops the check: it is the only Issue until fixed.
 Issues marked *server* need the school's state (registered keys, the school's id, the Devices, the
-last Version), so only the console's check and Publish report them.
+last Version), so only the server's check at `mastersos publish` reports them.
 
 <!-- prompt:omit -->
 | Code | Level | About |
@@ -1143,7 +1142,7 @@ last Version), so only the console's check and Publish report them.
 | `kiosk_url_not_https` | error | kiosk `url` |
 | `kiosk_user_agent` | info | kiosk `user_agent` set |
 | `kiosk_user_agent_invalid` | error | kiosk `user_agent` |
-| `legacy_shape` | error | Draft in the older shape, without `[[config]]` |
+| `legacy_shape` | error | Settings in the older shape, without `[[config]]` |
 | `locale_invalid` | error | `[school] locale` |
 | `lock_message_too_long` | error | `locked.message` |
 | `logo_incomplete` | error | only one of `[school] logo_sha256` / `logo_icon_sha256` |
@@ -1915,7 +1914,7 @@ settings bundle.
 **Why:** Devices would have nothing to place or run.
 <!-- /prompt:omit -->
 
-**How to fix:** upload the file to the Draft's files, or correct the path (it is case-sensitive).
+**How to fix:** put the file under `files/` in the directory, or correct the path (it is case-sensitive).
 
 <!-- prompt:omit -->
 ```toml check=file_missing
@@ -2143,7 +2142,7 @@ bundle nor an `https://` link.
 **Why:** Devices could not find the icon.
 <!-- /prompt:omit -->
 
-**How to fix:** upload the image to the Draft's files and write `files/<name>`, or use an `https://`
+**How to fix:** put the image under `files/` in the directory and write `files/<name>`, or use an `https://`
 link; or remove `icon` for the generic icon.
 
 <!-- prompt:omit -->
@@ -2212,7 +2211,7 @@ example, for length).
 **Why:** a Device would refuse the hash and have no usable IT account. The message never repeats the hash.
 <!-- /prompt:omit -->
 
-**How to fix:** set the IT password again on the console, which writes a valid hash; do not edit the hash by hand.
+**How to fix:** ask IT to run `mastersos hash-password` again and put the new hash in `secrets.toml`; do not edit the hash by hand.
 
 <!-- prompt:omit -->
 ```toml check=it_account_invalid
@@ -2711,7 +2710,7 @@ config = "standard"
 
 ### `legacy_shape`
 
-**Level:** error. **Meaning:** the Draft is in the older shape: there is no `[[config]]`, and each
+**Level:** error. **Meaning:** the settings are in the older shape: there is no `[[config]]`, and each
 `[[group]]` carries its own settings (and `mode`).
 
 <!-- prompt:omit -->
@@ -2793,10 +2792,10 @@ locked = { message = "This Device was reported lost. Please bring it to the IT o
 **Level:** error. **Meaning:** `[school]` has one of `logo_sha256` (the sign-in screen logo) and `logo_icon_sha256` (the quick menu icon) but not the other.
 
 <!-- prompt:omit -->
-**Why:** the console uploads the two images together and writes both keys; one alone comes from a hand edit, and Devices would show the logo in one place but not the other.
+**Why:** `mastersos logo upload` uploads the two images together and prints both keys; one alone comes from a hand edit, and Devices would show the logo in one place but not the other.
 <!-- /prompt:omit -->
 
-**How to fix:** upload the logo again on the console, which writes both; or remove the remaining key.
+**How to fix:** ask IT to run `mastersos logo upload` again and paste both lines; or remove the remaining key.
 
 <!-- prompt:omit -->
 ```toml check=logo_incomplete
@@ -2823,7 +2822,7 @@ config = "standard"
 **Why:** Devices download the logo and show it only when its SHA-256 matches, so a malformed value can never match.
 <!-- /prompt:omit -->
 
-**How to fix:** do not write it by hand: upload the logo again on the console, which writes the right value; or remove the key.
+**How to fix:** do not write it by hand: ask IT to run `mastersos logo upload` and paste its output; or remove the key.
 
 <!-- prompt:omit -->
 ```toml check=logo_sha256_invalid
@@ -2851,7 +2850,7 @@ config = "standard"
 **Why:** Devices download the logo from the school's server and show it only when its SHA-256 matches; a value that was written by hand or pasted from another school would name a logo the server cannot give.
 <!-- /prompt:omit -->
 
-**How to fix:** upload the logo again on the console, which stores it and writes the right value; or remove the key. Needs the school's stored logos, so there is no standalone example.
+**How to fix:** ask IT to run `mastersos logo upload` and paste its output; or remove the key. Needs the school's stored logos, so there is no standalone example.
 
 ### `missing_field`
 
@@ -2886,7 +2885,7 @@ config = "standard"
 no hidden administrator account.
 <!-- /prompt:omit -->
 
-**How to fix:** set the IT account password in Defaults on the console, or add IT staff to
+**How to fix:** ask IT to set up the IT account (a `secret:` reference for `password_hash`, the hash in `secrets.toml`), or add IT staff to
 `admin_users` (with `sso` in the Config's `login_methods`), or accept it if intended.
 
 <!-- prompt:omit -->
@@ -3048,7 +3047,7 @@ config = "standard"
 **Why:** Devices accept only settings naming their own school.
 <!-- /prompt:omit -->
 
-**How to fix:** write the id the message gives under `[school]` (new Drafts already have it; do not
+**How to fix:** write the id the message gives under `[school]` (`init` and `pull` already write it; do not
 change it). Needs the school's id, so there is no standalone example.
 
 ### `school_name_invalid`
@@ -3059,7 +3058,7 @@ change it). Needs the school's id, so there is no standalone example.
 **Why:** Devices show it as "Managed by …" on the login screen.
 <!-- /prompt:omit -->
 
-**How to fix:** do not write it by hand: set the school's name on the console; or remove the key.
+**How to fix:** do not write it by hand: `mastersos publish` writes it; or remove the key.
 
 <!-- prompt:omit -->
 ```toml check=school_name_invalid
@@ -3086,7 +3085,7 @@ config = "standard"
 **Why:** the old place keeps working (its networks come before the Defaults' ones), so this is only a nudge; one place for shared settings is easier to read.
 <!-- /prompt:omit -->
 
-**How to fix:** move the networks into `[[defaults.wifi]]` (the console does this when it saves the Defaults) and delete `[[school.wifi]]`.
+**How to fix:** move the networks into `[[defaults.wifi]]` (move them by hand) and delete `[[school.wifi]]`.
 
 <!-- prompt:omit -->
 ```toml check=school_wifi_moved
@@ -3691,7 +3690,7 @@ config = "staff"
 id = "standard"
 name = "Standard"
 wifi = [
-  { ssid = "School-Staff", psk = "example-password-not-real" },
+  { ssid = "School-Staff", psk = "secret:school-staff" },
   { ssid = "School-Staff", psk = "another-example-password" },
 ]
 
@@ -3730,13 +3729,13 @@ config = "standard"
 
 ## Recipes
 
-Each recipe shows the part of the settings file to add or change. Keep the rest of your Draft as it
+Each recipe shows the part of the settings file to add or change. Keep the rest of your `manifest.toml` as it
 is.
 
 ### Add a web app
 
 Add a `[[config.apps.web]]` block under the Config (after its `[[config]]` header, before the next
-header that is not `[config.…]` or `[[config.…]]`). Upload the icon to the Draft's files first, or use an `https://` link, or leave `icon` out.
+header that is not `[config.…]` or `[[config.…]]`). Put the icon under `files/` in the directory first, or use an `https://` link, or leave `icon` out.
 
 ```toml check=ok files=files/khan-academy.png
 [[config]]
@@ -3805,20 +3804,19 @@ config = "standard"
 
 ### Set up Wi-Fi
 
-For a network every Device should join, use the Defaults page in the web console or
-`mastersos defaults wifi add` (open and enterprise networks; passwords are typed in the web console).
-Every Config inherits it. The server decides where it is stored and writes the `format` line itself: a
-setup whose Defaults hold only Wi-Fi stays `format = 1` (the networks sit under `[school] wifi`), so
-do not add or change `format` by hand. For only one Config's Devices, write the network in that
-Config. Replace the example password with the real one; it is kept only in the settings and on the
-Devices. Write `open = true` for an open network.
+For a network every Device should join, write it under `[defaults]` (`[[defaults.wifi]]`).
+For a network with a password, write a `secret:` reference (`psk = "secret:school-staff"`) and ask IT to add the
+password to `secrets.toml`; never write the password itself. Open networks need nothing more.
+Every Config inherits it. Do not add or change the `format` line by hand: a
+setup whose Defaults hold only Wi-Fi stays `format = 1` (the networks sit under `[school] wifi`). For only one Config's Devices, write the network in that
+Config. Write `open = true` for an open network.
 
 ```toml check=ok
 [[config]]
 id = "standard"
 name = "Standard"
 wifi = [
-  { ssid = "School-Staff", psk = "example-password-not-real" },
+  { ssid = "School-Staff", psk = "secret:school-staff" },
   { ssid = "School-Guest", open = true },
 ]
 
@@ -3880,7 +3878,7 @@ every Group that uses it.
 id = "student"
 name = "Student"
 login_methods = ["guest"]
-wifi = [{ ssid = "School-Students", psk = "example-password-not-real" }]
+wifi = [{ ssid = "School-Students", psk = "secret:school-staff" }]
 
 [[group]]
 id = "cart-g3"
@@ -3943,8 +3941,8 @@ group = "grade-3-cart"
 | Learning | The Mode for students: Chrome, web apps, kiosk apps and the Config's Flatpak apps, without system access (`interface = "learning"`). |
 | Full | The Mode for teachers and staff: the full desktop (`interface = "full"`). |
 | Settings | What Devices are told to do: the settings file (`manifest.toml`) and the files that come with it. The TOML key names stay as written in this reference. |
-| Draft | The settings being edited, not yet published. A Draft may have errors. |
-| Publish | Turning the Draft into a new, signed Version that Devices download. |
+| Local directory | The settings on IT's computer (`manifest.toml`, `files/`, `secrets.toml`), edited and checked before Publish. It may have errors. |
+| Publish | Turning the directory into a new, signed Version that Devices download (`mastersos publish`). |
 | Version | One published state of the settings, numbered upward. |
 | Issue | A finding of the check, with a level: error (blocks Publish), warning, or info. |
 | Signing key | A key that can sign a Version: a Passkey or a Recovery kit key. |
@@ -3961,7 +3959,7 @@ group = "grade-3-cart"
 
 ### Why not YAML?
 
-The settings stay TOML, and the console shows them laid out with indented sub-tables for reading.
+The settings stay TOML.
 YAML guesses types (`no` becomes false, `0755` becomes an octal number), lets indentation decide
 the structure (one space less and a network hangs under another Config), can be written in many
 ways, which suits signing exact bytes badly, and its parsers have a long record of security bugs.

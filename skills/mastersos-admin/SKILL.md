@@ -93,6 +93,7 @@ The tools never show secret values, only their names.
 If the publish is refused because someone else published first (the version is taken), IT runs `mastersos pull`
 again (add `--force` only if they accept losing the unpublished edits; otherwise copy your changes aside first)
 and you redo your edit on the new files.
+
 Say Settings, Config, Group, Device and Kiosk app to the person, not the file's internal names.
 
 ## Red lines
