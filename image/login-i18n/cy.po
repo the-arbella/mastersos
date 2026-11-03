@@ -14,9 +14,6 @@ msgstr "Diffodd"
 msgid "Browse as Guest"
 msgstr "Pori fel gwestai"
 
-msgid "Add person"
-msgstr "Ychwanegu person"
-
 msgid "Apps"
 msgstr "Apiau"
 
@@ -34,9 +31,6 @@ msgstr "Doedd dim modd agor y dudalen mewngofnodi."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Methu cyrraedd yr ysgol. Cysylltwch â Wi-Fi o'r bar uchaf, yna ceisiwch eto."
-
-msgid "School email"
-msgstr "E-bost yr ysgol"
 
 msgid "Local manager"
 msgstr "Gweinyddwr lleol"
@@ -118,3 +112,9 @@ msgstr "Wrthi'n gosod y porwr gwe. Gallwch fewngofnodi; bydd yn ymddangos pan fy
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Doedd dim modd gosod y porwr gwe eto; bydd yn ceisio eto. Gallwch fewngofnodi."
+
+msgid "Name or school email"
+msgstr "Enw neu e-bost yr ysgol"
+
+msgid "Keep typing to narrow down"
+msgstr "Daliwch ati i deipio i gulhau'r rhestr"

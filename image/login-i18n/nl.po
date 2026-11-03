@@ -14,9 +14,6 @@ msgstr "Afsluiten"
 msgid "Browse as Guest"
 msgstr "Surfen als gast"
 
-msgid "Add person"
-msgstr "Persoon toevoegen"
-
 msgid "Apps"
 msgstr "Apps"
 
@@ -34,9 +31,6 @@ msgstr "De aanmeldpagina kon niet worden geopend."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "De school is niet bereikbaar. Maak verbinding met Wi-Fi via de bovenbalk en probeer het opnieuw."
-
-msgid "School email"
-msgstr "School-e-mailadres"
 
 msgid "Local manager"
 msgstr "Lokale beheerder"
@@ -118,3 +112,9 @@ msgstr "De webbrowser wordt geïnstalleerd. Je kunt je al aanmelden; hij verschi
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "De webbrowser kon nog niet worden geïnstalleerd; er wordt opnieuw geprobeerd. Je kunt je aanmelden."
+
+msgid "Name or school email"
+msgstr "Naam of school-e-mailadres"
+
+msgid "Keep typing to narrow down"
+msgstr "Blijf typen om de lijst te verkleinen"

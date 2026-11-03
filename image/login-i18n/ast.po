@@ -14,9 +14,6 @@ msgstr "Apagar"
 msgid "Browse as Guest"
 msgstr "Restolar como invitáu"
 
-msgid "Add person"
-msgstr "Amestar persona"
-
 msgid "Apps"
 msgstr "Aplicaciones"
 
@@ -34,9 +31,6 @@ msgstr "Nun se pudo abrir la páxina d'aniciu de sesión."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Nun se pue acceder a la escuela. Conéctate a una rede Wi-Fi dende la barra de riba y volvi intentalo."
-
-msgid "School email"
-msgstr "Corréu de la escuela"
 
 msgid "Local manager"
 msgstr "Alministrador llocal"
@@ -118,3 +112,9 @@ msgstr "Instalando'l restolador web. Pues aniciar sesión; apaecerá cuando tea 
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Entá nun se pudo instalar el restolador web; volverá intentase. Pues aniciar sesión."
+
+msgid "Name or school email"
+msgstr "Nome o corréu de la escuela"
+
+msgid "Keep typing to narrow down"
+msgstr "Sigui escribiendo p'amenorgar la llista"

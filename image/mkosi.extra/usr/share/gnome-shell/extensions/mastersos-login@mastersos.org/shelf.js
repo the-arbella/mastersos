@@ -1,4 +1,4 @@
-// The row of pill buttons at the bottom left of the login screen: Shut down, Browse as Guest, Add person, Apps. The notice
+// The row of pill buttons at the bottom left of the login screen: Shut down, Browse as Guest, Apps. The notice
 // (why a sign-in did not go through, with Retry when trying again can help) sits beside it, outside the login area.
 // Apps lists the locked apps the school shows on the login screen, read from /var/lib/mastersos-public/kiosk/<id>/.
 
@@ -76,7 +76,7 @@ function pill(iconName, label, onClick) {
 }
 
 export class Shelf {
-    // actions: {shutDown(), guest(), addPerson(), openApp(app)}
+    // actions: {shutDown(), guest(), openApp(app)}
     constructor(text, managedLine, actions) {
         this._actions = actions;
         this._text = text;
@@ -97,7 +97,6 @@ export class Shelf {
         this._guest = pill('avatar-default-symbolic', text.guest, () => actions.guest());
         this._guest.hide();
         this._row.add_child(this._guest);
-        this._row.add_child(pill('list-add-symbolic', text.addPerson, () => actions.addPerson()));
         this._appsButton = pill('view-app-grid-symbolic', text.apps, () => this._toggleApps());
         this._appsButton.hide();
         this._row.add_child(this._appsButton);

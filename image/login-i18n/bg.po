@@ -14,9 +14,6 @@ msgstr "Изключване"
 msgid "Browse as Guest"
 msgstr "Разглеждане като гост"
 
-msgid "Add person"
-msgstr "Добавяне на човек"
-
 msgid "Apps"
 msgstr "Приложения"
 
@@ -34,9 +31,6 @@ msgstr "Страницата за вход не можа да се отвори.
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Няма връзка с училището. Свържете се с Wi-Fi от горната лента и опитайте отново."
-
-msgid "School email"
-msgstr "Училищна електронна поща"
 
 msgid "Local manager"
 msgstr "Локален администратор"
@@ -118,3 +112,9 @@ msgstr "Уеб браузърът се инсталира. Можете да в�
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Уеб браузърът все още не можа да бъде инсталиран; ще бъде направен нов опит. Можете да влезете."
+
+msgid "Name or school email"
+msgstr "Име или училищна електронна поща"
+
+msgid "Keep typing to narrow down"
+msgstr "Продължете да пишете, за да стесните списъка"

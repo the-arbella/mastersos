@@ -14,9 +14,6 @@ msgstr "Utmaken"
 msgid "Browse as Guest"
 msgstr "As Gast surfen"
 
-msgid "Add person"
-msgstr "Person tofögen"
-
 msgid "Apps"
 msgstr "Apps"
 
@@ -34,9 +31,6 @@ msgstr "De Anmellsiet leet sik nich opmaken."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "De School is nich to erreken. Verbinn di boven in de Balken mit Wi-Fi un versöök dat nochmal."
-
-msgid "School email"
-msgstr "School-E-Mail"
 
 msgid "Local manager"
 msgstr "Lokaal Administrator"
@@ -118,3 +112,9 @@ msgstr "De Webbrowser warrt installeert. Du kannst di anmellen; he dukt op, wenn
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "De Webbrowser kunn noch nich installeert warrn; dat warrt nochmal versöcht. Du kannst di anmellen."
+
+msgid "Name or school email"
+msgstr "Naam or School-E-Mail"
+
+msgid "Keep typing to narrow down"
+msgstr "Wieder tippen, üm de List lütter to maken"

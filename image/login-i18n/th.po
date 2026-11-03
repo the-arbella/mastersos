@@ -14,9 +14,6 @@ msgstr "ปิดเครื่อง"
 msgid "Browse as Guest"
 msgstr "เรียกดูในฐานะผู้เยี่ยมชม"
 
-msgid "Add person"
-msgstr "เพิ่มผู้ใช้"
-
 msgid "Apps"
 msgstr "แอป"
 
@@ -34,9 +31,6 @@ msgstr "ไม่สามารถเปิดหน้าลงชื่อเ
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "ไม่สามารถเชื่อมต่อกับโรงเรียนได้ เชื่อมต่อ Wi-Fi จากแถบด้านบน แล้วลองอีกครั้ง"
-
-msgid "School email"
-msgstr "อีเมลโรงเรียน"
 
 msgid "Local manager"
 msgstr "ผู้ดูแลระบบภายในเครื่อง"
@@ -118,3 +112,9 @@ msgstr "กำลังติดตั้งเว็บเบราว์เซ
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "ยังติดตั้งเว็บเบราว์เซอร์ไม่สำเร็จ ระบบจะลองอีกครั้ง คุณลงชื่อเข้าใช้ได้"
+
+msgid "Name or school email"
+msgstr "ชื่อหรืออีเมลโรงเรียน"
+
+msgid "Keep typing to narrow down"
+msgstr "พิมพ์ต่อเพื่อจำกัดรายการให้แคบลง"

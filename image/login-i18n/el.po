@@ -14,9 +14,6 @@ msgstr "Τερματισμός"
 msgid "Browse as Guest"
 msgstr "Περιήγηση ως επισκέπτης"
 
-msgid "Add person"
-msgstr "Προσθήκη ατόμου"
-
 msgid "Apps"
 msgstr "Εφαρμογές"
 
@@ -34,9 +31,6 @@ msgstr "Δεν ήταν δυνατό το άνοιγμα της σελίδας �
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Δεν είναι δυνατή η σύνδεση με το σχολείο. Συνδεθείτε στο Wi-Fi από την επάνω γραμμή και δοκιμάστε ξανά."
-
-msgid "School email"
-msgstr "Σχολικό email"
 
 msgid "Local manager"
 msgstr "Τοπικός διαχειριστής"
@@ -118,3 +112,9 @@ msgstr "Γίνεται εγκατάσταση του προγράμματος π
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Δεν ήταν ακόμη δυνατή η εγκατάσταση του προγράμματος περιήγησης· θα γίνει νέα προσπάθεια. Μπορείτε να συνδεθείτε."
+
+msgid "Name or school email"
+msgstr "Όνομα ή σχολικό email"
+
+msgid "Keep typing to narrow down"
+msgstr "Συνεχίστε να πληκτρολογείτε για να περιορίσετε τη λίστα"

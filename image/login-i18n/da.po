@@ -14,9 +14,6 @@ msgstr "Luk ned"
 msgid "Browse as Guest"
 msgstr "Brug som gæst"
 
-msgid "Add person"
-msgstr "Tilføj person"
-
 msgid "Apps"
 msgstr "Apps"
 
@@ -34,9 +31,6 @@ msgstr "Login-siden kunne ikke åbnes."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Kan ikke nå skolen. Opret forbindelse til Wi-Fi fra den øverste bjælke, og prøv igen."
-
-msgid "School email"
-msgstr "Skolemail"
 
 msgid "Local manager"
 msgstr "Lokal administrator"
@@ -118,3 +112,9 @@ msgstr "Webbrowseren installeres. Du kan logge ind; den vises, når den er klar.
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Webbrowseren kunne ikke installeres endnu; der prøves igen. Du kan logge ind."
+
+msgid "Name or school email"
+msgstr "Navn eller skolemail"
+
+msgid "Keep typing to narrow down"
+msgstr "Skriv videre for at indsnævre listen"

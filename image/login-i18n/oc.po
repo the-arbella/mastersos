@@ -14,9 +14,6 @@ msgstr "Atudar"
 msgid "Browse as Guest"
 msgstr "Navegar coma convidat"
 
-msgid "Add person"
-msgstr "Apondre una persona"
-
 msgid "Apps"
 msgstr "Aplicacions"
 
@@ -34,9 +31,6 @@ msgstr "Impossible de dobrir la pagina de connexion."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Impossible de contactar l'escòla. Connectatz-vos al Wi-Fi dempuèi la barra de dessús, puèi tornatz ensajar."
-
-msgid "School email"
-msgstr "Corrièr electronic de l'escòla"
 
 msgid "Local manager"
 msgstr "Administrator local"
@@ -118,3 +112,9 @@ msgstr "Installacion del navegador web. Podètz vos connectar ; apareisserà qua
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Lo navegador web a pas encara pogut èsser installat ; serà tornat ensajar. Podètz vos connectar."
+
+msgid "Name or school email"
+msgstr "Nom o corrièr electronic de l'escòla"
+
+msgid "Keep typing to narrow down"
+msgstr "Contunhatz d'escriure per reduire la lista"

@@ -14,9 +14,6 @@ msgstr "Вимкнути"
 msgid "Browse as Guest"
 msgstr "Переглядати як гість"
 
-msgid "Add person"
-msgstr "Додати користувача"
-
 msgid "Apps"
 msgstr "Застосунки"
 
@@ -34,9 +31,6 @@ msgstr "Не вдалося відкрити сторінку входу."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Не вдається зв’язатися зі школою. Підключіться до Wi-Fi на верхній панелі та повторіть спробу."
-
-msgid "School email"
-msgstr "Шкільна електронна пошта"
 
 msgid "Local manager"
 msgstr "Локальний адміністратор"
@@ -118,3 +112,9 @@ msgstr "Встановлюється веббраузер. Ви можете у�
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Поки що не вдалося встановити веббраузер; буде здійснено повторну спробу. Ви можете увійти."
+
+msgid "Name or school email"
+msgstr "Ім'я або шкільна електронна пошта"
+
+msgid "Keep typing to narrow down"
+msgstr "Продовжуйте вводити, щоб звузити список"

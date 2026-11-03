@@ -14,9 +14,6 @@ msgstr "خاموش کردن"
 msgid "Browse as Guest"
 msgstr "مرور به‌عنوان مهمان"
 
-msgid "Add person"
-msgstr "افزودن فرد"
-
 msgid "Apps"
 msgstr "برنامه‌ها"
 
@@ -34,9 +31,6 @@ msgstr "صفحهٔ ورود باز نشد."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "دسترسی به مدرسه ممکن نیست. از نوار بالا به Wi-Fi وصل شوید و دوباره تلاش کنید."
-
-msgid "School email"
-msgstr "ایمیل مدرسه"
 
 msgid "Local manager"
 msgstr "مدیر محلی"
@@ -118,3 +112,9 @@ msgstr "مرورگر وب در حال نصب است. می‌توانید وار�
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "مرورگر وب هنوز نصب نشده است؛ دوباره تلاش خواهد شد. می‌توانید وارد شوید."
+
+msgid "Name or school email"
+msgstr "نام یا ایمیل مدرسه"
+
+msgid "Keep typing to narrow down"
+msgstr "برای محدود کردن فهرست به تایپ ادامه دهید"

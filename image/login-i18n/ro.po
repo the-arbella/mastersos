@@ -14,9 +14,6 @@ msgstr "Oprește"
 msgid "Browse as Guest"
 msgstr "Navighează ca invitat"
 
-msgid "Add person"
-msgstr "Adaugă o persoană"
-
 msgid "Apps"
 msgstr "Aplicații"
 
@@ -34,9 +31,6 @@ msgstr "Pagina de autentificare nu a putut fi deschisă."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Nu se poate contacta școala. Conectează-te la Wi-Fi din bara de sus, apoi reîncearcă."
-
-msgid "School email"
-msgstr "E-mail școlar"
 
 msgid "Local manager"
 msgstr "Administrator local"
@@ -118,3 +112,9 @@ msgstr "Se instalează browserul web. Te poți autentifica; va apărea când est
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Browserul web nu a putut fi instalat încă; se va încerca din nou. Te poți autentifica."
+
+msgid "Name or school email"
+msgstr "Nume sau e-mail școlar"
+
+msgid "Keep typing to narrow down"
+msgstr "Continuați să tastați pentru a restrânge lista"

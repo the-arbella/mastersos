@@ -14,9 +14,6 @@ msgstr "Хомӯш кардан"
 msgid "Browse as Guest"
 msgstr "Ҳамчун меҳмон ворид шудан"
 
-msgid "Add person"
-msgstr "Илова кардани корбар"
-
 msgid "Apps"
 msgstr "Барномаҳо"
 
@@ -34,9 +31,6 @@ msgstr "Саҳифаи воридшавӣ кушода нашуд."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Бо мактаб алоқа барқарор нашуд. Аз навори боло ба Wi-Fi пайваст шавед ва бори дигар кӯшиш кунед."
-
-msgid "School email"
-msgstr "Почтаи электронии мактаб"
 
 msgid "Local manager"
 msgstr "Маъмури маҳаллӣ"
@@ -118,3 +112,9 @@ msgstr "Браузери веб насб шуда истодааст. Шумо �
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Браузери веб ҳоло насб нашуд; бори дигар кӯшиш карда мешавад. Шумо метавонед ворид шавед."
+
+msgid "Name or school email"
+msgstr "Ном ё почтаи электронии мактаб"
+
+msgid "Keep typing to narrow down"
+msgstr "Барои танг кардани рӯйхат навиштанро идома диҳед"

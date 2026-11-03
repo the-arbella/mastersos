@@ -14,9 +14,6 @@ msgstr "Leállítás"
 msgid "Browse as Guest"
 msgstr "Böngészés vendégként"
 
-msgid "Add person"
-msgstr "Személy hozzáadása"
-
 msgid "Apps"
 msgstr "Alkalmazások"
 
@@ -34,9 +31,6 @@ msgstr "A bejelentkezési oldal nem nyitható meg."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Az iskola nem érhető el. Csatlakozz a Wi-Fi-hez a felső sávon, majd próbáld újra."
-
-msgid "School email"
-msgstr "Iskolai e-mail-cím"
 
 msgid "Local manager"
 msgstr "Helyi rendszergazda"
@@ -118,3 +112,9 @@ msgstr "A webböngésző telepítése folyamatban. Bejelentkezhetsz; megjelenik,
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "A webböngészőt még nem sikerült telepíteni; a rendszer újra megpróbálja. Bejelentkezhetsz."
+
+msgid "Name or school email"
+msgstr "Név vagy iskolai e-mail-cím"
+
+msgid "Keep typing to narrow down"
+msgstr "Gépeljen tovább a lista szűkítéséhez"

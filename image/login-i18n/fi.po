@@ -14,9 +14,6 @@ msgstr "Sammuta"
 msgid "Browse as Guest"
 msgstr "Selaa vieraana"
 
-msgid "Add person"
-msgstr "Lisää henkilö"
-
 msgid "Apps"
 msgstr "Sovellukset"
 
@@ -34,9 +31,6 @@ msgstr "Kirjautumissivua ei voitu avata."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Koulua ei tavoiteta. Yhdistä Wi-Fi-verkkoon yläpalkista ja yritä uudelleen."
-
-msgid "School email"
-msgstr "Koulun sähköposti"
 
 msgid "Local manager"
 msgstr "Paikallinen ylläpitäjä"
@@ -118,3 +112,9 @@ msgstr "Verkkoselainta asennetaan. Voit kirjautua sisään; se tulee näkyviin, 
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Verkkoselainta ei vielä voitu asentaa; asennusta yritetään uudelleen. Voit kirjautua sisään."
+
+msgid "Name or school email"
+msgstr "Nimi tai koulun sähköposti"
+
+msgid "Keep typing to narrow down"
+msgstr "Jatka kirjoittamista rajataksesi luetteloa"

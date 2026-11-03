@@ -14,9 +14,6 @@ msgstr "إيقاف التشغيل"
 msgid "Browse as Guest"
 msgstr "التصفح كضيف"
 
-msgid "Add person"
-msgstr "إضافة شخص"
-
 msgid "Apps"
 msgstr "التطبيقات"
 
@@ -34,9 +31,6 @@ msgstr "تعذّر فتح صفحة تسجيل الدخول."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "تعذّر الوصول إلى المدرسة. اتصل بشبكة Wi-Fi من الشريط العلوي ثم أعد المحاولة."
-
-msgid "School email"
-msgstr "البريد الإلكتروني المدرسي"
 
 msgid "Local manager"
 msgstr "المسؤول المحلي"
@@ -118,3 +112,9 @@ msgstr "جارٍ تثبيت متصفح الويب. يمكنك تسجيل الد�
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "تعذّر تثبيت متصفح الويب حتى الآن؛ ستتم إعادة المحاولة. يمكنك تسجيل الدخول."
+
+msgid "Name or school email"
+msgstr "الاسم أو البريد الإلكتروني المدرسي"
+
+msgid "Keep typing to narrow down"
+msgstr "تابع الكتابة لتضييق النتائج"

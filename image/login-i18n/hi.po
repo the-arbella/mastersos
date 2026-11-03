@@ -14,9 +14,6 @@ msgstr "शट डाउन करें"
 msgid "Browse as Guest"
 msgstr "अतिथि के रूप में ब्राउज़ करें"
 
-msgid "Add person"
-msgstr "व्यक्ति जोड़ें"
-
 msgid "Apps"
 msgstr "ऐप्स"
 
@@ -34,9 +31,6 @@ msgstr "साइन-इन पेज नहीं खुल सका।"
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "स्कूल से कनेक्ट नहीं हो पा रहा। ऊपर की पट्टी से Wi-Fi से जुड़ें, फिर दोबारा कोशिश करें।"
-
-msgid "School email"
-msgstr "स्कूल ईमेल"
 
 msgid "Local manager"
 msgstr "स्थानीय एडमिनिस्ट्रेटर"
@@ -118,3 +112,9 @@ msgstr "वेब ब्राउज़र इंस्टॉल हो रह�
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "वेब ब्राउज़र अभी इंस्टॉल नहीं हो सका; फिर से कोशिश की जाएगी। आप साइन इन कर सकते हैं।"
+
+msgid "Name or school email"
+msgstr "नाम या स्कूल ईमेल"
+
+msgid "Keep typing to narrow down"
+msgstr "सूची छोटी करने के लिए टाइप करते रहें"

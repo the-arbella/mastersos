@@ -14,9 +14,6 @@ msgstr "Matikan"
 msgid "Browse as Guest"
 msgstr "Layari sebagai Tetamu"
 
-msgid "Add person"
-msgstr "Tambah orang"
-
 msgid "Apps"
 msgstr "Apl"
 
@@ -34,9 +31,6 @@ msgstr "Halaman log masuk tidak dapat dibuka."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Tidak dapat menghubungi sekolah. Sambung ke Wi-Fi daripada bar atas, kemudian cuba lagi."
-
-msgid "School email"
-msgstr "E-mel sekolah"
 
 msgid "Local manager"
 msgstr "Pentadbir tempatan"
@@ -118,3 +112,9 @@ msgstr "Memasang pelayar web. Anda boleh log masuk; ia akan muncul apabila sedia
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Pelayar web belum dapat dipasang; ia akan dicuba lagi. Anda boleh log masuk."
+
+msgid "Name or school email"
+msgstr "Nama atau e-mel sekolah"
+
+msgid "Keep typing to narrow down"
+msgstr "Teruskan menaip untuk mengecilkan senarai"

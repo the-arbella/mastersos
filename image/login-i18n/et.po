@@ -14,9 +14,6 @@ msgstr "Lülita välja"
 msgid "Browse as Guest"
 msgstr "Sirvi külalisena"
 
-msgid "Add person"
-msgstr "Lisa isik"
-
 msgid "Apps"
 msgstr "Rakendused"
 
@@ -34,9 +31,6 @@ msgstr "Sisselogimislehte ei õnnestunud avada."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Kooliga ei saa ühendust. Looge ülariba kaudu Wi-Fi-ühendus ja proovige uuesti."
-
-msgid "School email"
-msgstr "Kooli e-post"
 
 msgid "Local manager"
 msgstr "Kohalik administraator"
@@ -118,3 +112,9 @@ msgstr "Veebibrauserit paigaldatakse. Võite sisse logida; see ilmub, kui on val
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Veebibrauserit ei õnnestunud veel paigaldada; proovitakse uuesti. Võite sisse logida."
+
+msgid "Name or school email"
+msgstr "Nimi või kooli e-post"
+
+msgid "Keep typing to narrow down"
+msgstr "Kirjuta edasi, et loendit kitsendada"

@@ -14,9 +14,6 @@ msgstr "Spegni"
 msgid "Browse as Guest"
 msgstr "Naviga come ospite"
 
-msgid "Add person"
-msgstr "Aggiungi persona"
-
 msgid "Apps"
 msgstr "App"
 
@@ -34,9 +31,6 @@ msgstr "Impossibile aprire la pagina di accesso."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Impossibile raggiungere la scuola. Connettiti al Wi-Fi dalla barra in alto, poi riprova."
-
-msgid "School email"
-msgstr "Email della scuola"
 
 msgid "Local manager"
 msgstr "Amministratore locale"
@@ -118,3 +112,9 @@ msgstr "Installazione del browser web in corso. Puoi accedere; comparirà quando
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Non è stato ancora possibile installare il browser web; verrà fatto un nuovo tentativo. Puoi accedere."
+
+msgid "Name or school email"
+msgstr "Nome o email della scuola"
+
+msgid "Keep typing to narrow down"
+msgstr "Continua a digitare per restringere l'elenco"

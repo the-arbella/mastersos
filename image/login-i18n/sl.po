@@ -14,9 +14,6 @@ msgstr "Izklopi"
 msgid "Browse as Guest"
 msgstr "Brskaj kot gost"
 
-msgid "Add person"
-msgstr "Dodaj osebo"
-
 msgid "Apps"
 msgstr "Aplikacije"
 
@@ -34,9 +31,6 @@ msgstr "Strani za prijavo ni bilo mogoče odpreti."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Šole ni mogoče doseči. Povežite se z omrežjem Wi-Fi v zgornji vrstici in poskusite znova."
-
-msgid "School email"
-msgstr "Šolski e-poštni naslov"
 
 msgid "Local manager"
 msgstr "Lokalni skrbnik"
@@ -118,3 +112,9 @@ msgstr "Nameščanje spletnega brskalnika. Lahko se prijavite; prikazal se bo, k
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Spletnega brskalnika še ni bilo mogoče namestiti; poskus bo ponovljen. Lahko se prijavite."
+
+msgid "Name or school email"
+msgstr "Ime ali šolski e-poštni naslov"
+
+msgid "Keep typing to narrow down"
+msgstr "Tipkajte naprej, da zožite seznam"

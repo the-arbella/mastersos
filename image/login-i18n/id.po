@@ -14,9 +14,6 @@ msgstr "Matikan"
 msgid "Browse as Guest"
 msgstr "Jelajahi sebagai Tamu"
 
-msgid "Add person"
-msgstr "Tambah orang"
-
 msgid "Apps"
 msgstr "Aplikasi"
 
@@ -34,9 +31,6 @@ msgstr "Halaman masuk tidak dapat dibuka."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Tidak dapat terhubung ke sekolah. Sambungkan ke Wi-Fi dari bilah atas, lalu coba lagi."
-
-msgid "School email"
-msgstr "Email sekolah"
 
 msgid "Local manager"
 msgstr "Administrator lokal"
@@ -118,3 +112,9 @@ msgstr "Memasang peramban web. Anda dapat masuk; peramban akan muncul saat siap.
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Peramban web belum dapat dipasang; akan dicoba lagi. Anda dapat masuk."
+
+msgid "Name or school email"
+msgstr "Nama atau email sekolah"
+
+msgid "Keep typing to narrow down"
+msgstr "Terus mengetik untuk mempersempit daftar"

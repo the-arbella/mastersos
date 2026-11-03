@@ -14,9 +14,6 @@ msgstr "ပိတ်မည်"
 msgid "Browse as Guest"
 msgstr "ဧည့်သည်အဖြစ် အသုံးပြုမည်"
 
-msgid "Add person"
-msgstr "လူ ထည့်မည်"
-
 msgid "Apps"
 msgstr "အက်ပ်များ"
 
@@ -34,9 +31,6 @@ msgstr "လော့ဂ်အင်စာမျက်နှာကို ဖွ�
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "ကျောင်းနှင့် ဆက်သွယ်၍ မရပါ။ အပေါ်ဘားမှ Wi-Fi ကို ချိတ်ဆက်ပြီး ထပ်ကြိုးစားပါ။"
-
-msgid "School email"
-msgstr "ကျောင်းအီးမေးလ်"
 
 msgid "Local manager"
 msgstr "ဒေသတွင်း စီမံခန့်ခွဲသူ"
@@ -118,3 +112,9 @@ msgstr "ဝဘ်ဘရောက်ဇာကို ထည့်သွင်း�
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "ဝဘ်ဘရောက်ဇာကို မထည့်သွင်းနိုင်သေးပါ၊ ထပ်ကြိုးစားပါမည်။ လော့ဂ်အင်ဝင်နိုင်ပါသည်။"
+
+msgid "Name or school email"
+msgstr "အမည် သို့မဟုတ် ကျောင်းအီးမေးလ်"
+
+msgid "Keep typing to narrow down"
+msgstr "စာရင်းကို ကျဉ်းစေရန် ဆက်ရိုက်ပါ"

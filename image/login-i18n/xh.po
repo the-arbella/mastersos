@@ -15,9 +15,6 @@ msgstr "Cima"
 msgid "Browse as Guest"
 msgstr "Khangela njengendwendwe"
 
-msgid "Add person"
-msgstr "Yongeza umntu"
-
 msgid "Apps"
 msgstr "Ii-app"
 
@@ -35,9 +32,6 @@ msgstr "Iphepha lokungena alikwazanga ukuvulwa."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Akukwazeki ukufikelela isikolo. Qhagamshela kwi-Wi-Fi ukusuka kwibha ephezulu, uze uzame kwakhona."
-
-msgid "School email"
-msgstr "I-imeyile yesikolo"
 
 msgid "Local manager"
 msgstr "Umlawuli wasekhaya"
@@ -119,3 +113,9 @@ msgstr "Ibhrawuza yewebhu iyafakelwa. Ungangena; iya kuvela xa ilungile."
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Ibhrawuza yewebhu ayikakwazi ukufakelwa; kuza kuzanywa kwakhona. Ungangena."
+
+msgid "Name or school email"
+msgstr "Igama okanye i-imeyile yesikolo"
+
+msgid "Keep typing to narrow down"
+msgstr "Qhubeka uchwetheza ukuze unciphise uluhlu"

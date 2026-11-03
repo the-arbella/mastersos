@@ -14,9 +14,6 @@ msgstr "বন্ধ কৰক"
 msgid "Browse as Guest"
 msgstr "অতিথি হিচাপে ব্ৰাউজ কৰক"
 
-msgid "Add person"
-msgstr "ব্যক্তি যোগ কৰক"
-
 msgid "Apps"
 msgstr "এপসমূহ"
 
@@ -34,9 +31,6 @@ msgstr "ছাইন ইনৰ পৃষ্ঠা খুলিব পৰা ন�
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "বিদ্যালয়ৰ লগত সংযোগ কৰিব পৰা নগ'ল। ওপৰৰ বাৰৰ পৰা Wi-Fi-ত সংযোগ কৰক, তাৰ পিছত পুনৰ চেষ্টা কৰক।"
-
-msgid "School email"
-msgstr "বিদ্যালয়ৰ ইমেইল"
 
 msgid "Local manager"
 msgstr "স্থানীয় প্ৰশাসক"
@@ -118,3 +112,9 @@ msgstr "ৱেব ব্ৰাউজাৰ ইনষ্টল কৰি থক�
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "ৱেব ব্ৰাউজাৰ এতিয়াও ইনষ্টল কৰিব পৰা নগ'ল; পুনৰ চেষ্টা কৰা হ'ব। আপুনি ছাইন ইন কৰিব পাৰে।"
+
+msgid "Name or school email"
+msgstr "নাম বা বিদ্যালয়ৰ ইমেইল"
+
+msgid "Keep typing to narrow down"
+msgstr "তালিকা সৰু কৰিবলৈ টাইপ কৰি থাকক"

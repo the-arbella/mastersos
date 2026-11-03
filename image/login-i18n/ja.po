@@ -14,9 +14,6 @@ msgstr "シャットダウン"
 msgid "Browse as Guest"
 msgstr "ゲストとして使う"
 
-msgid "Add person"
-msgstr "ユーザーを追加"
-
 msgid "Apps"
 msgstr "アプリ"
 
@@ -34,9 +31,6 @@ msgstr "ログインページを開けませんでした。"
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "学校に接続できません。上部のバーから Wi-Fi に接続して、もう一度お試しください。"
-
-msgid "School email"
-msgstr "学校のメールアドレス"
 
 msgid "Local manager"
 msgstr "ローカル管理者"
@@ -118,3 +112,9 @@ msgstr "ウェブブラウザーをインストールしています。先にロ
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "ウェブブラウザーをまだインストールできていません。自動的に再試行します。ログインはできます。"
+
+msgid "Name or school email"
+msgstr "名前または学校のメールアドレス"
+
+msgid "Keep typing to narrow down"
+msgstr "入力を続けると候補が絞り込まれます"

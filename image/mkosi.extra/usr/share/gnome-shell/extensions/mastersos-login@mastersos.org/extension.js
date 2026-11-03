@@ -1,5 +1,6 @@
 // MastersOS login-screen extension. Runs only in the GDM greeter session mode (mastersos-gdm).
-//   - bottom shelf: Shut down, Browse as Guest, Add person, Apps (shelf.js), and "Managed by <school_name>"
+//   - one entry, no user list: typing finds the people of this computer below it, a new school email signs someone new in
+//   - bottom shelf: Shut down, Browse as Guest, Apps (shelf.js), and "Managed by <school_name>"
 //   - sign-in card: the school's page in a locked-down Chrome instead of the login code dialog (card.js)
 //   - a school account has no password on this computer: its only way in is that card, online
 //   - hides what a student should not see: kiosk accounts and guest in the user list, Not listed?, the broker and
@@ -464,7 +465,6 @@ export default class MastersosLoginExtension extends Extension {
         this._shelf = new Shelf(this._text, this._managed, {
             shutDown: () => SystemActions.getDefault().activatePowerOff(),
             guest: () => this._signInAs(GUEST),
-            addPerson: () => this._addPerson(),
             openApp: app => this._openApp(app),
         });
 
@@ -552,12 +552,6 @@ export default class MastersosLoginExtension extends Extension {
             return;
         prompt.verificationStatus = AuthPrompt.AuthPromptStatus.VERIFICATION_CANCELLED;
         prompt.reset({beginRequestType: AuthPrompt.BeginRequestType.PROVIDE_USERNAME});
-    }
-
-    _addPerson() {
-        this._clearNotice();
-        this._leaveCurrentSignIn();
-        this._dialog._hideUserListAskForUsernameAndBeginVerification();
     }
 
     // Guest and the locked apps sign in without a password, the same way the user list did.

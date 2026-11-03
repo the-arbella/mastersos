@@ -14,9 +14,6 @@ msgstr "Slå av"
 msgid "Browse as Guest"
 msgstr "Surf som gjest"
 
-msgid "Add person"
-msgstr "Legg til person"
-
 msgid "Apps"
 msgstr "Apper"
 
@@ -34,9 +31,6 @@ msgstr "Kunne ikke åpne påloggingssiden."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Får ikke kontakt med skolen. Koble til Wi-Fi fra linjen øverst og prøv igjen."
-
-msgid "School email"
-msgstr "Skolens e-postadresse"
 
 msgid "Local manager"
 msgstr "Lokal administrator"
@@ -118,3 +112,9 @@ msgstr "Nettleseren installeres. Du kan logge på; den vises når den er klar."
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Nettleseren kunne ikke installeres ennå; det blir prøvd igjen. Du kan logge på."
+
+msgid "Name or school email"
+msgstr "Navn eller skolens e-postadresse"
+
+msgid "Keep typing to narrow down"
+msgstr "Fortsett å skrive for å snevre inn listen"

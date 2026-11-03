@@ -14,9 +14,6 @@ msgstr "تاقا"
 msgid "Browse as Guest"
 msgstr "مېھمان سۈپىتىدە زىيارەت قىل"
 
-msgid "Add person"
-msgstr "ئىشلەتكۈچى قوش"
-
 msgid "Apps"
 msgstr "ئەپلەر"
 
@@ -34,9 +31,6 @@ msgstr "كىرىش بېتىنى ئاچقىلى بولمىدى."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "مەكتەپكە ئۇلانغىلى بولمىدى. ئۈستى بالداقتىن Wi-Fi غا ئۇلاڭ، ئاندىن قايتا سىناڭ."
-
-msgid "School email"
-msgstr "مەكتەپ ئېلخېتى"
 
 msgid "Local manager"
 msgstr "يەرلىك باشقۇرغۇچى"
@@ -118,3 +112,9 @@ msgstr "تور كۆرگۈچ ئورنىتىلىۋاتىدۇ. كىرسىڭىز ب�
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "تور كۆرگۈچ تېخى ئورنىتىلمىدى؛ قايتا سىنىلىدۇ. كىرسىڭىز بولىدۇ."
+
+msgid "Name or school email"
+msgstr "ئىسىم ياكى مەكتەپ ئېلخېتى"
+
+msgid "Keep typing to narrow down"
+msgstr "تىزىملىكنى تارايتىش ئۈچۈن داۋاملىق كىرگۈزۈڭ"

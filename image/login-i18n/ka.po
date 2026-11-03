@@ -14,9 +14,6 @@ msgstr "გამორთვა"
 msgid "Browse as Guest"
 msgstr "დათვალიერება სტუმრად"
 
-msgid "Add person"
-msgstr "პირის დამატება"
-
 msgid "Apps"
 msgstr "აპები"
 
@@ -34,9 +31,6 @@ msgstr "შესვლის გვერდის გახსნა ვერ
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "სკოლასთან დაკავშირება ვერ ხერხდება. ზედა პანელიდან დაუკავშირდით Wi-Fi-ს და სცადეთ ხელახლა."
-
-msgid "School email"
-msgstr "სკოლის ელფოსტა"
 
 msgid "Local manager"
 msgstr "ლოკალური ადმინისტრატორი"
@@ -118,3 +112,9 @@ msgstr "ვებბრაუზერი ინსტალირდება. 
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "ვებბრაუზერის ინსტალაცია ჯერ ვერ მოხერხდა; მცდელობა განმეორდება. შეგიძლიათ შეხვიდეთ."
+
+msgid "Name or school email"
+msgstr "სახელი ან სკოლის ელფოსტა"
+
+msgid "Keep typing to narrow down"
+msgstr "განაგრძეთ აკრეფა სიის შესავიწროებლად"

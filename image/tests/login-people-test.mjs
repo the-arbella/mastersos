@@ -1,11 +1,11 @@
 // Unit tests for the login screen's person search (mastersos-login@mastersos.org/people.js).
-// Run with: node --test image/tests/login-people-test.mjs
+// Run with: bash image/tests/login-people-test.sh
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import {HIDDEN, LIMIT, matchPeople, preselect} from
-    '../mkosi.extra/usr/share/gnome-shell/extensions/mastersos-login@mastersos.org/people.js';
+// login-people-test.sh copies people.js to a .mjs first: node before 22 reads a bare .js as CommonJS.
+const {HIDDEN, LIMIT, matchPeople, preselect} = await import(process.env.MASTERSOS_PEOPLE_MJS);
 
 const person = (userName, realName, loginTime = 0) => ({userName, realName, loginTime});
 const names = r => r.shown.map(p => p.userName);

@@ -14,9 +14,6 @@ msgstr ""
 msgid "Browse as Guest"
 msgstr ""
 
-msgid "Add person"
-msgstr ""
-
 msgid "Apps"
 msgstr ""
 
@@ -33,9 +30,6 @@ msgid "The sign-in page could not be opened."
 msgstr ""
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
-msgstr ""
-
-msgid "School email"
 msgstr ""
 
 msgid "Local manager"
@@ -117,4 +111,10 @@ msgid "Installing the web browser. You can sign in; it will appear when ready."
 msgstr ""
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
+msgstr ""
+
+msgid "Name or school email"
+msgstr ""
+
+msgid "Keep typing to narrow down"
 msgstr ""

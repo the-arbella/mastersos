@@ -14,9 +14,6 @@ msgstr "Išjungti"
 msgid "Browse as Guest"
 msgstr "Naršyti kaip svečiui"
 
-msgid "Add person"
-msgstr "Pridėti asmenį"
-
 msgid "Apps"
 msgstr "Programos"
 
@@ -34,9 +31,6 @@ msgstr "Nepavyko atidaryti prisijungimo puslapio."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Nepavyksta pasiekti mokyklos. Prisijunkite prie Wi-Fi viršutinėje juostoje ir bandykite dar kartą."
-
-msgid "School email"
-msgstr "Mokyklos el. paštas"
 
 msgid "Local manager"
 msgstr "Vietinis administratorius"
@@ -118,3 +112,9 @@ msgstr "Diegiama interneto naršyklė. Galite prisijungti; ji atsiras, kai bus p
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Interneto naršyklės kol kas nepavyko įdiegti; bus bandoma dar kartą. Galite prisijungti."
+
+msgid "Name or school email"
+msgstr "Vardas arba mokyklos el. paštas"
+
+msgid "Keep typing to narrow down"
+msgstr "Rašykite toliau, kad susiaurintumėte sąrašą"

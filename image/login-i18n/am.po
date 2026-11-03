@@ -14,9 +14,6 @@ msgstr "ዝጋ"
 msgid "Browse as Guest"
 msgstr "እንደ እንግዳ አስስ"
 
-msgid "Add person"
-msgstr "ሰው ጨምር"
-
 msgid "Apps"
 msgstr "መተግበሪያዎች"
 
@@ -34,9 +31,6 @@ msgstr "የመግቢያ ገጹን መክፈት አልተቻለም።"
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "ትምህርት ቤቱን ማግኘት አልተቻለም። ከላይኛው አሞሌ ከWi-Fi ጋር ይገናኙ፣ ከዚያ እንደገና ይሞክሩ።"
-
-msgid "School email"
-msgstr "የትምህርት ቤት ኢሜይል"
 
 msgid "Local manager"
 msgstr "አካባቢያዊ አስተዳዳሪ"
@@ -118,3 +112,9 @@ msgstr "የድር አሳሹ በመጫን ላይ ነው። መግባት ይችላ
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "የድር አሳሹ ገና ሊጫን አልቻለም፤ እንደገና ይሞከራል። መግባት ይችላሉ።"
+
+msgid "Name or school email"
+msgstr "ስም ወይም የትምህርት ቤት ኢሜይል"
+
+msgid "Keep typing to narrow down"
+msgstr "ዝርዝሩን ለማጥበብ መተየብዎን ይቀጥሉ"

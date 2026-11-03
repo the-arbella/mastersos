@@ -14,9 +14,6 @@ msgstr "Lazhañ"
 msgid "Browse as Guest"
 msgstr "Merdeiñ evel den pedet"
 
-msgid "Add person"
-msgstr "Ouzhpennañ un den"
-
 msgid "Apps"
 msgstr "Arloadoù"
 
@@ -34,9 +31,6 @@ msgstr "Ne c'haller ket digeriñ ar bajenn gevreañ."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Ne c'haller ket tizhout ar skol. Kevreit ouzh ur rouedad Wi-Fi diwar ar varrenn el laez, hag adklaskit."
-
-msgid "School email"
-msgstr "Postel ar skol"
 
 msgid "Local manager"
 msgstr "Merour lec'hel"
@@ -118,3 +112,9 @@ msgstr "O staliañ ar merdeer web. Gallout a rit kevreañ; dont a raio war wel p
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "N'eus ket bet gallet staliañ ar merdeer web c'hoazh; klasket e vo en-dro. Gallout a rit kevreañ."
+
+msgid "Name or school email"
+msgstr "Anv pe postel ar skol"
+
+msgid "Keep typing to narrow down"
+msgstr "Kendalc'hit da skrivañ evit strishaat ar roll"

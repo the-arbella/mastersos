@@ -14,9 +14,6 @@ msgstr "වසා දමන්න"
 msgid "Browse as Guest"
 msgstr "අමුත්තෙකු ලෙස පිරික්සන්න"
 
-msgid "Add person"
-msgstr "පුද්ගලයෙකු එක් කරන්න"
-
 msgid "Apps"
 msgstr "යෙදුම්"
 
@@ -34,9 +31,6 @@ msgstr "පිවිසුම් පිටුව විවෘත කිරීම
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "පාසලට සම්බන්ධ විය නොහැක. ඉහළ තීරුවෙන් Wi-Fi වෙත සම්බන්ධ වී නැවත උත්සාහ කරන්න."
-
-msgid "School email"
-msgstr "පාසල් විද්‍යුත් තැපෑල"
 
 msgid "Local manager"
 msgstr "දේශීය පරිපාලක"
@@ -118,3 +112,9 @@ msgstr "වෙබ් බ්‍රව්සරය ස්ථාපනය වෙම
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "වෙබ් බ්‍රව්සරය තවමත් ස්ථාපනය කළ නොහැකි විය; නැවත උත්සාහ කරනු ඇත. ඔබට පිවිසිය හැක."
+
+msgid "Name or school email"
+msgstr "නම හෝ පාසල් විද්‍යුත් තැපෑල"
+
+msgid "Keep typing to narrow down"
+msgstr "ලැයිස්තුව අඩු කිරීමට දිගටම ටයිප් කරන්න"

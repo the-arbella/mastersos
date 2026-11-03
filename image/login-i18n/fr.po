@@ -14,9 +14,6 @@ msgstr "Éteindre"
 msgid "Browse as Guest"
 msgstr "Naviguer en invité"
 
-msgid "Add person"
-msgstr "Ajouter une personne"
-
 msgid "Apps"
 msgstr "Applications"
 
@@ -34,9 +31,6 @@ msgstr "Impossible d'ouvrir la page de connexion."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Impossible de joindre l'école. Connectez-vous au Wi-Fi depuis la barre supérieure, puis réessayez."
-
-msgid "School email"
-msgstr "Adresse e-mail de l'école"
 
 msgid "Local manager"
 msgstr "Administrateur local"
@@ -118,3 +112,9 @@ msgstr "Installation du navigateur web. Vous pouvez vous connecter ; il apparaî
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Le navigateur web n'a pas encore pu être installé ; une nouvelle tentative aura lieu. Vous pouvez vous connecter."
+
+msgid "Name or school email"
+msgstr "Nom ou adresse e-mail de l'école"
+
+msgid "Keep typing to narrow down"
+msgstr "Continuez à taper pour affiner la liste"

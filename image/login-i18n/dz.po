@@ -15,9 +15,6 @@ msgstr "སྒོ་བསྡམ།"
 msgid "Browse as Guest"
 msgstr "མགྲོན་པོ་སྦེ་ བརྟག་ཞིབ་འབད།"
 
-msgid "Add person"
-msgstr "མི་ཅིག་ཁ་སྣོན་འབད།"
-
 msgid "Apps"
 msgstr "ཨེཔ་ཚུ།"
 
@@ -35,9 +32,6 @@ msgstr "ནང་འཛུལ་ཤོག་ལེབ་ ཁ་ཕྱེ་མ�
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "སློབ་གྲྭ་དང་ འབྲེལ་མ་ཚུགས། སྟེང་གི་ཕྲ་རིང་ལས་ Wi-Fi ལུ་ མཐུད་ཞིནམ་ལས་ ལོག་ཚོད་ལྟ་འབད།"
-
-msgid "School email"
-msgstr "སློབ་གྲྭའི་ གློག་འཕྲིན།"
 
 msgid "Local manager"
 msgstr "ས་གནས་ཀྱི་ འཛིན་སྐྱོང་པ།"
@@ -119,3 +113,9 @@ msgstr "ཝེབ་བརའུ་ཟར་ གཞི་བཙུགས་འ�
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "ཝེབ་བརའུ་ཟར་ ད་ཚུན་ གཞི་བཙུགས་འབད་མ་ཚུགས། ལོག་ཚོད་ལྟ་འབད་འོང་། ཁྱོད་ཀྱིས་ ནང་འཛུལ་འབད་ཚུགས།"
+
+msgid "Name or school email"
+msgstr "མིང་ ཡང་ན་ སློབ་གྲྭའི་ གློག་འཕྲིན།"
+
+msgid "Keep typing to narrow down"
+msgstr "ཐོ་ཡིག་ ཆུང་སུ་བཟོ་ནིའི་དོན་ལུ་ ཡིག་དཔར་ མུ་མཐུད་དེ་ རྐྱབ།"

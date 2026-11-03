@@ -14,9 +14,6 @@ msgstr "ବନ୍ଦ କରନ୍ତୁ"
 msgid "Browse as Guest"
 msgstr "ଅତିଥି ଭାବରେ ବ୍ରାଉଜ୍ କରନ୍ତୁ"
 
-msgid "Add person"
-msgstr "ବ୍ୟକ୍ତି ଯୋଡ଼ନ୍ତୁ"
-
 msgid "Apps"
 msgstr "ଆପ୍ସ"
 
@@ -34,9 +31,6 @@ msgstr "ସାଇନ୍-ଇନ୍ ପୃଷ୍ଠା ଖୋଲାଯାଇପା
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "ବିଦ୍ୟାଳୟକୁ ସଂଯୋଗ ହୋଇପାରୁନାହିଁ। ଉପର ବାରରୁ Wi-Fi ସହିତ ସଂଯୋଗ କରନ୍ତୁ, ତାପରେ ପୁନଃ ଚେଷ୍ଟା କରନ୍ତୁ।"
-
-msgid "School email"
-msgstr "ବିଦ୍ୟାଳୟ ଇମେଲ୍"
 
 msgid "Local manager"
 msgstr "ସ୍ଥାନୀୟ ପ୍ରଶାସକ"
@@ -118,3 +112,9 @@ msgstr "ୱେବ୍ ବ୍ରାଉଜର୍ ସଂସ୍ଥାପନ ହେଉ
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "ୱେବ୍ ବ୍ରାଉଜର୍ ଏପର୍ଯ୍ୟନ୍ତ ସଂସ୍ଥାପନ ହୋଇପାରିଲା ନାହିଁ; ପୁଣି ଚେଷ୍ଟା କରାଯିବ। ଆପଣ ସାଇନ୍ ଇନ୍ କରିପାରିବେ।"
+
+msgid "Name or school email"
+msgstr "ନାମ କିମ୍ବା ବିଦ୍ୟାଳୟ ଇମେଲ୍"
+
+msgid "Keep typing to narrow down"
+msgstr "ତାଲିକା ଛୋଟ କରିବାକୁ ଟାଇପ୍ କରିଚାଲନ୍ତୁ"

@@ -14,9 +14,6 @@ msgstr "Dùin sìos"
 msgid "Browse as Guest"
 msgstr "Brabhsaich mar aoigh"
 
-msgid "Add person"
-msgstr "Cuir neach ris"
-
 msgid "Apps"
 msgstr "Aplacaidean"
 
@@ -34,9 +31,6 @@ msgstr "Cha b’ urrainn dhuinn duilleag an inntrigidh fhosgladh."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Chan urrainn dhuinn ceangal ris an sgoil. Ceangail ri Wi-Fi on bhàr gu h-àrd agus feuch a-rithist."
-
-msgid "School email"
-msgstr "Post-d na sgoile"
 
 msgid "Local manager"
 msgstr "Rianaire ionadail"
@@ -118,3 +112,9 @@ msgstr "A' stàladh a' bhrabhsair-lìn. 'S urrainn dhut inntrigeadh; nochdaidh e
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Cha b' urrainn dhuinn am brabhsair-lìn a stàladh fhathast; thèid feuchainn a-rithist. 'S urrainn dhut inntrigeadh."
+
+msgid "Name or school email"
+msgstr "Ainm no post-d na sgoile"
+
+msgid "Keep typing to narrow down"
+msgstr "Lean ort a' sgrìobhadh gus an liosta a chumhangachadh"

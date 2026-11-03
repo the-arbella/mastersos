@@ -14,9 +14,6 @@ msgstr "ਬੰਦ ਕਰੋ"
 msgid "Browse as Guest"
 msgstr "ਮਹਿਮਾਨ ਵਜੋਂ ਬ੍ਰਾਊਜ਼ ਕਰੋ"
 
-msgid "Add person"
-msgstr "ਵਿਅਕਤੀ ਸ਼ਾਮਲ ਕਰੋ"
-
 msgid "Apps"
 msgstr "ਐਪਾਂ"
 
@@ -34,9 +31,6 @@ msgstr "ਸਾਈਨ-ਇਨ ਪੰਨਾ ਖੋਲ੍ਹਿਆ ਨਹੀਂ ਜ�
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "ਸਕੂਲ ਨਾਲ ਸੰਪਰਕ ਨਹੀਂ ਹੋ ਸਕਿਆ। ਉੱਪਰਲੀ ਪੱਟੀ ਤੋਂ Wi-Fi ਨਾਲ ਜੁੜੋ, ਫਿਰ ਮੁੜ ਕੋਸ਼ਿਸ਼ ਕਰੋ।"
-
-msgid "School email"
-msgstr "ਸਕੂਲ ਈਮੇਲ"
 
 msgid "Local manager"
 msgstr "ਲੋਕਲ ਪ੍ਰਸ਼ਾਸਕ"
@@ -118,3 +112,9 @@ msgstr "ਵੈੱਬ ਬ੍ਰਾਊਜ਼ਰ ਇੰਸਟਾਲ ਹੋ ਰਿ�
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "ਵੈੱਬ ਬ੍ਰਾਊਜ਼ਰ ਅਜੇ ਇੰਸਟਾਲ ਨਹੀਂ ਹੋ ਸਕਿਆ; ਮੁੜ ਕੋਸ਼ਿਸ਼ ਕੀਤੀ ਜਾਵੇਗੀ। ਤੁਸੀਂ ਸਾਈਨ ਇਨ ਕਰ ਸਕਦੇ ਹੋ।"
+
+msgid "Name or school email"
+msgstr "ਨਾਮ ਜਾਂ ਸਕੂਲ ਈਮੇਲ"
+
+msgid "Keep typing to narrow down"
+msgstr "ਸੂਚੀ ਛੋਟੀ ਕਰਨ ਲਈ ਟਾਈਪ ਕਰਦੇ ਰਹੋ"

@@ -14,9 +14,6 @@ msgstr "Өшіру"
 msgid "Browse as Guest"
 msgstr "Қонақ ретінде шолу"
 
-msgid "Add person"
-msgstr "Адам қосу"
-
 msgid "Apps"
 msgstr "Қолданбалар"
 
@@ -34,9 +31,6 @@ msgstr "Кіру бетін ашу мүмкін болмады."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Мектепке қосылу мүмкін емес. Жоғарғы жолақтан Wi-Fi желісіне қосылып, қайталап көріңіз."
-
-msgid "School email"
-msgstr "Мектеп электрондық поштасы"
 
 msgid "Local manager"
 msgstr "Жергілікті әкімші"
@@ -118,3 +112,9 @@ msgstr "Веб-браузер орнатылуда. Кіре беруіңізг�
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Веб-браузерді әзірге орнату мүмкін болмады; қайта әрекет жасалады. Кіре беруіңізге болады."
+
+msgid "Name or school email"
+msgstr "Аты немесе мектеп электрондық поштасы"
+
+msgid "Keep typing to narrow down"
+msgstr "Тізімді тарылту үшін теруді жалғастырыңыз"

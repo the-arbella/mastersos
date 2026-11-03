@@ -14,9 +14,6 @@ msgstr "Itzali"
 msgid "Browse as Guest"
 msgstr "Arakatu gonbidatu gisa"
 
-msgid "Add person"
-msgstr "Gehitu pertsona"
-
 msgid "Apps"
 msgstr "Aplikazioak"
 
@@ -34,9 +31,6 @@ msgstr "Ezin izan da saioa hasteko orria ireki."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Ezin da ikastetxea atzitu. Konektatu Wi-Fi sarera goiko barratik eta saiatu berriro."
-
-msgid "School email"
-msgstr "Ikastetxeko posta elektronikoa"
 
 msgid "Local manager"
 msgstr "Administratzaile lokala"
@@ -118,3 +112,9 @@ msgstr "Web arakatzailea instalatzen. Saioa has dezakezu; prest dagoenean agertu
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Oraindik ezin izan da web arakatzailea instalatu; berriro saiatuko da. Saioa has dezakezu."
+
+msgid "Name or school email"
+msgstr "Izena edo ikastetxeko posta elektronikoa"
+
+msgid "Keep typing to narrow down"
+msgstr "Jarraitu idazten zerrenda murrizteko"

@@ -14,9 +14,6 @@ msgstr "Malŝalti"
 msgid "Browse as Guest"
 msgstr "Foliumi kiel gasto"
 
-msgid "Add person"
-msgstr "Aldoni personon"
-
 msgid "Apps"
 msgstr "Aplikaĵoj"
 
@@ -34,9 +31,6 @@ msgstr "La saluta paĝo ne povis esti malfermita."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Ne eblas atingi la lernejon. Konektu al Wi-Fi per la supra breto kaj reprovu."
-
-msgid "School email"
-msgstr "Lerneja retpoŝto"
 
 msgid "Local manager"
 msgstr "Loka administranto"
@@ -118,3 +112,9 @@ msgstr "Instalante la retumilon. Vi povas saluti; ĝi aperos, kiam ĝi estos pre
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "La retumilo ankoraŭ ne povis esti instalita; ĝi estos reprovita. Vi povas saluti."
+
+msgid "Name or school email"
+msgstr "Nomo aŭ lerneja retpoŝto"
+
+msgid "Keep typing to narrow down"
+msgstr "Daŭre tajpu por malvastigi la liston"

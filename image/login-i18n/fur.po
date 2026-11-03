@@ -14,9 +14,6 @@ msgstr "Distude"
 msgid "Browse as Guest"
 msgstr "Navighe come ospit"
 
-msgid "Add person"
-msgstr "Zonte une persone"
-
 msgid "Apps"
 msgstr "Aplicazions"
 
@@ -34,9 +31,6 @@ msgstr "No si à rivât a vierzi la pagjine di acès."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "No si rive a contatâ la scuele. Conetiti a une rêt Wi-Fi de sbare parsore e torne prove."
-
-msgid "School email"
-msgstr "Pueste eletroniche de scuele"
 
 msgid "Local manager"
 msgstr "Aministradôr locâl"
@@ -118,3 +112,9 @@ msgstr "Daûr a instalâ il navigadôr web. Tu puedis jentrâ; al comparirà cua
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Nol è stât pussibil instalâ il navigadôr web par cumò; si tornarà a provâ. Tu puedis jentrâ."
+
+msgid "Name or school email"
+msgstr "Non o pueste eletroniche de scuele"
+
+msgid "Keep typing to narrow down"
+msgstr "Continue a scrivi par strenzi la liste"

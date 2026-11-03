@@ -14,9 +14,6 @@ msgstr "បិទ"
 msgid "Browse as Guest"
 msgstr "រុករកជាភ្ញៀវ"
 
-msgid "Add person"
-msgstr "បន្ថែមអ្នកប្រើ"
-
 msgid "Apps"
 msgstr "កម្មវិធី"
 
@@ -34,9 +31,6 @@ msgstr "មិនអាចបើកទំព័រចូលប្រើបាន
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "មិនអាចភ្ជាប់ទៅសាលាបានទេ។ សូមភ្ជាប់ Wi-Fi ពីរបារខាងលើ រួចព្យាយាមម្ដងទៀត។"
-
-msgid "School email"
-msgstr "អ៊ីមែលសាលា"
 
 msgid "Local manager"
 msgstr "អ្នកគ្រប់គ្រងមូលដ្ឋាន"
@@ -118,3 +112,9 @@ msgstr "កំពុងដំឡើងកម្មវិធីរុករកប
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "មិនទាន់អាចដំឡើងកម្មវិធីរុករកបណ្ដាញបានទេ។ វានឹងព្យាយាមម្ដងទៀត។ អ្នកអាចចូលបាន។"
+
+msgid "Name or school email"
+msgstr "ឈ្មោះ ឬអ៊ីមែលសាលា"
+
+msgid "Keep typing to narrow down"
+msgstr "បន្តវាយ ដើម្បីបង្រួមបញ្ជី"

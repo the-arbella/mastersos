@@ -14,9 +14,6 @@ msgstr "बन्द गर्नुहोस्"
 msgid "Browse as Guest"
 msgstr "अतिथिका रूपमा ब्राउज गर्नुहोस्"
 
-msgid "Add person"
-msgstr "व्यक्ति थप्नुहोस्"
-
 msgid "Apps"
 msgstr "एपहरू"
 
@@ -34,9 +31,6 @@ msgstr "साइन इन पृष्ठ खोल्न सकिएन।"
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "विद्यालयसँग सम्पर्क हुन सकेन। माथिको बारबाट Wi-Fi मा जोडिनुहोस् र फेरि प्रयास गर्नुहोस्।"
-
-msgid "School email"
-msgstr "विद्यालयको इमेल"
 
 msgid "Local manager"
 msgstr "स्थानीय प्रशासक"
@@ -118,3 +112,9 @@ msgstr "वेब ब्राउजर स्थापना हुँदैछ
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "वेब ब्राउजर अझै स्थापना गर्न सकिएन; फेरि प्रयास गरिनेछ। तपाईं साइन इन गर्न सक्नुहुन्छ।"
+
+msgid "Name or school email"
+msgstr "नाम वा विद्यालयको इमेल"
+
+msgid "Keep typing to narrow down"
+msgstr "सूची सानो बनाउन टाइप गरिरहनुहोस्"

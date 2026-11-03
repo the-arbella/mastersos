@@ -14,9 +14,6 @@ msgstr "Amortar"
 msgid "Browse as Guest"
 msgstr "Navegar como convidau"
 
-msgid "Add person"
-msgstr "Anyadir persona"
-
 msgid "Apps"
 msgstr "Aplicacions"
 
@@ -34,9 +31,6 @@ msgstr "No s'ha puesto ubrir a pachina d'inicio de sesión."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "No se puede connectar con a escuela. Connecta-te a una Wi-Fi dende a barra superior y torna a intentar-lo."
-
-msgid "School email"
-msgstr "Correu d'a escuela"
 
 msgid "Local manager"
 msgstr "Administrador local"
@@ -118,3 +112,9 @@ msgstr "Se ye instalando o navegador web. Puetz iniciar sesión; amaneixerá qua
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "No s'ha puesto instalar encara o navegador web; se tornará a intentar. Puetz iniciar sesión."
+
+msgid "Name or school email"
+msgstr "Nombre u correu d'a escuela"
+
+msgid "Keep typing to narrow down"
+msgstr "Contina escribindo pa reducir a lista"

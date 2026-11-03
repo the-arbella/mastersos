@@ -14,9 +14,6 @@ msgstr "షట్ డౌన్ చేయండి"
 msgid "Browse as Guest"
 msgstr "అతిథిగా బ్రౌజ్ చేయండి"
 
-msgid "Add person"
-msgstr "వ్యక్తిని జోడించండి"
-
 msgid "Apps"
 msgstr "యాప్‌లు"
 
@@ -34,9 +31,6 @@ msgstr "సైన్ ఇన్ పేజీని తెరవడం సాధ�
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "పాఠశాలను చేరుకోలేకపోయింది. పై బార్ నుండి Wi-Fi కి కనెక్ట్ చేసి, మళ్లీ ప్రయత్నించండి."
-
-msgid "School email"
-msgstr "పాఠశాల ఇమెయిల్"
 
 msgid "Local manager"
 msgstr "స్థానిక నిర్వాహకులు"
@@ -118,3 +112,9 @@ msgstr "వెబ్ బ్రౌజర్ ఇన్‌స్టాల్ అవ
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "వెబ్ బ్రౌజర్‌ను ఇంకా ఇన్‌స్టాల్ చేయలేకపోయింది; మళ్లీ ప్రయత్నించబడుతుంది. మీరు సైన్ ఇన్ చేయవచ్చు."
+
+msgid "Name or school email"
+msgstr "పేరు లేదా పాఠశాల ఇమెయిల్"
+
+msgid "Keep typing to narrow down"
+msgstr "జాబితాను తగ్గించడానికి టైప్ చేస్తూ ఉండండి"

@@ -14,9 +14,6 @@ msgstr "ഷട്ട് ഡൗൺ ചെയ്യുക"
 msgid "Browse as Guest"
 msgstr "അതിഥിയായി ബ്രൗസ് ചെയ്യുക"
 
-msgid "Add person"
-msgstr "വ്യക്തിയെ ചേർക്കുക"
-
 msgid "Apps"
 msgstr "ആപ്പുകൾ"
 
@@ -34,9 +31,6 @@ msgstr "സൈൻ ഇൻ പേജ് തുറക്കാൻ കഴിഞ്�
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "സ്കൂളുമായി ബന്ധപ്പെടാൻ കഴിയുന്നില്ല. മുകളിലെ ബാറിൽ നിന്ന് Wi-Fi-യിൽ കണക്റ്റ് ചെയ്ത ശേഷം വീണ്ടും ശ്രമിക്കുക."
-
-msgid "School email"
-msgstr "സ്കൂൾ ഇമെയിൽ"
 
 msgid "Local manager"
 msgstr "ലോക്കൽ അഡ്മിനിസ്ട്രേറ്റർ"
@@ -118,3 +112,9 @@ msgstr "വെബ് ബ്രൗസർ ഇൻസ്റ്റാൾ ചെയ്
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "വെബ് ബ്രൗസർ ഇതുവരെ ഇൻസ്റ്റാൾ ചെയ്യാനായില്ല; വീണ്ടും ശ്രമിക്കും. നിങ്ങൾക്ക് സൈൻ ഇൻ ചെയ്യാം."
+
+msgid "Name or school email"
+msgstr "പേര് അല്ലെങ്കിൽ സ്കൂൾ ഇമെയിൽ"
+
+msgid "Keep typing to narrow down"
+msgstr "പട്ടിക ചുരുക്കാൻ ടൈപ്പ് ചെയ്യുന്നത് തുടരുക"

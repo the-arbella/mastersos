@@ -14,9 +14,6 @@ msgstr "Apaga"
 msgid "Browse as Guest"
 msgstr "Navega com a convidat"
 
-msgid "Add person"
-msgstr "Afegeix una persona"
-
 msgid "Apps"
 msgstr "Aplicacions"
 
@@ -34,9 +31,6 @@ msgstr "No s'ha pogut obrir la pàgina d'inici de sessió."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "No es pot contactar amb l'escola. Connecteu-vos al Wi-Fi des de la barra superior i torneu-ho a provar."
-
-msgid "School email"
-msgstr "Correu de l'escola"
 
 msgid "Local manager"
 msgstr "Administrador local"
@@ -118,3 +112,9 @@ msgstr "S'està instal·lant el navegador web. Podeu iniciar la sessió; apareix
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Encara no s'ha pogut instal·lar el navegador web; es tornarà a provar. Podeu iniciar la sessió."
+
+msgid "Name or school email"
+msgstr "Nom o correu de l'escola"
+
+msgid "Keep typing to narrow down"
+msgstr "Continueu escrivint per reduir la llista"

@@ -14,9 +14,6 @@ msgstr "Slökkva"
 msgid "Browse as Guest"
 msgstr "Vafra sem gestur"
 
-msgid "Add person"
-msgstr "Bæta við notanda"
-
 msgid "Apps"
 msgstr "Forrit"
 
@@ -34,9 +31,6 @@ msgstr "Ekki tókst að opna innskráningarsíðuna."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Næ ekki sambandi við skólann. Tengstu Wi-Fi úr efri stikunni og reyndu aftur."
-
-msgid "School email"
-msgstr "Skólanetfang"
 
 msgid "Local manager"
 msgstr "Staðbundinn kerfisstjóri"
@@ -118,3 +112,9 @@ msgstr "Verið er að setja upp vafrann. Þú getur skráð þig inn; hann birti
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Ekki tókst enn að setja upp vafrann; reynt verður aftur. Þú getur skráð þig inn."
+
+msgid "Name or school email"
+msgstr "Nafn eða skólanetfang"
+
+msgid "Keep typing to narrow down"
+msgstr "Haltu áfram að skrifa til að þrengja listann"

@@ -14,9 +14,6 @@ msgstr "Izslēgt"
 msgid "Browse as Guest"
 msgstr "Pārlūkot kā viesim"
 
-msgid "Add person"
-msgstr "Pievienot personu"
-
 msgid "Apps"
 msgstr "Lietotnes"
 
@@ -34,9 +31,6 @@ msgstr "Pieteikšanās lapu neizdevās atvērt."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Nevar sazināties ar skolu. Izveidojiet savienojumu ar Wi-Fi augšējā joslā un mēģiniet vēlreiz."
-
-msgid "School email"
-msgstr "Skolas e-pasts"
 
 msgid "Local manager"
 msgstr "Vietējais administrators"
@@ -118,3 +112,9 @@ msgstr "Notiek tīmekļa pārlūka instalēšana. Varat pieteikties; tas parād�
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Tīmekļa pārlūku vēl neizdevās instalēt; tiks mēģināts vēlreiz. Varat pieteikties."
+
+msgid "Name or school email"
+msgstr "Vārds vai skolas e-pasts"
+
+msgid "Keep typing to narrow down"
+msgstr "Turpiniet rakstīt, lai sašaurinātu sarakstu"

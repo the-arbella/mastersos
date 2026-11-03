@@ -14,9 +14,6 @@ msgstr "کوژاندنەوە"
 msgid "Browse as Guest"
 msgstr "وەک میوان بگەڕێ"
 
-msgid "Add person"
-msgstr "زیادکردنی کەس"
-
 msgid "Apps"
 msgstr "ئەپەکان"
 
@@ -34,9 +31,6 @@ msgstr "نەتوانرا پەڕەی چوونەژوورەوە بکرێتەوە."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "نەتوانرا پەیوەندی بە قوتابخانەوە بکرێت. لە شریتی سەرەوە بە Wi-Fi ببەستەرەوە، پاشان دووبارە هەوڵبدەرەوە."
-
-msgid "School email"
-msgstr "ئیمەیڵی قوتابخانە"
 
 msgid "Local manager"
 msgstr "بەڕێوەبەری ناوخۆیی"
@@ -118,3 +112,9 @@ msgstr "وێبگەڕ دادەمەزرێت. دەتوانیت بچیتە ژوور�
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "وێبگەڕ هێشتا نەتوانرا دابمەزرێت؛ دووبارە هەوڵ دەدرێتەوە. دەتوانیت بچیتە ژوورەوە."
+
+msgid "Name or school email"
+msgstr "ناو یان ئیمەیڵی قوتابخانە"
+
+msgid "Keep typing to narrow down"
+msgstr "بەردەوام بە لە نووسین بۆ کەمکردنەوەی لیستەکە"

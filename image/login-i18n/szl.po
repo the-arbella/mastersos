@@ -15,9 +15,6 @@ msgstr "Wyłōncz"
 msgid "Browse as Guest"
 msgstr "Przeglōndej jako gość"
 
-msgid "Add person"
-msgstr "Przidej ôsobã"
-
 msgid "Apps"
 msgstr "Aplikacyje"
 
@@ -35,9 +32,6 @@ msgstr "Niy szło ôtwarcić zajty logowaniŏ."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Niy idzie sie połōnczyć ze szkołōm. Połōncz sie z Wi-Fi z gōrnego posku, a potym sprōbuj zaś."
-
-msgid "School email"
-msgstr "Szkolny e-mejl"
 
 msgid "Local manager"
 msgstr "Lokalny administrator"
@@ -119,3 +113,9 @@ msgstr "Instalowanie przeglōndarki. Możesz sie już zalogować; pokoże sie, j
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Niy szło jeszcze zainstalować przeglōndarki; bydzie prōbowane zaś. Możesz sie zalogować."
+
+msgid "Name or school email"
+msgstr "Miano abo szkolny e-mejl"
+
+msgid "Keep typing to narrow down"
+msgstr "Pisz dalij, coby zawynżić lista"

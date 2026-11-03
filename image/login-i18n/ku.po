@@ -14,9 +14,6 @@ msgstr "Bigire"
 msgid "Browse as Guest"
 msgstr "Wekî mêvan bigere"
 
-msgid "Add person"
-msgstr "Kesek lê zêde bike"
-
 msgid "Apps"
 msgstr "Sepan"
 
@@ -34,9 +31,6 @@ msgstr "Rûpela têketinê nehat vekirin."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Gihîştina dibistanê pêk nehat. Ji darika jorîn bi Wi-Fi ve girêbide, paşê dîsa biceribîne."
-
-msgid "School email"
-msgstr "E-peyama dibistanê"
 
 msgid "Local manager"
 msgstr "Rêveberê herêmî"
@@ -118,3 +112,9 @@ msgstr "Geroka webê tê sazkirin. Tu dikarî têkevî; dema amade bibe dê xuya
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Geroka webê hîn nehat sazkirin; dê dîsa were ceribandin. Tu dikarî têkevî."
+
+msgid "Name or school email"
+msgstr "Nav an e-peyama dibistanê"
+
+msgid "Keep typing to narrow down"
+msgstr "Ji bo teng kirina lîsteyê nivîsandinê bidomînin"

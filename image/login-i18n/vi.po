@@ -14,9 +14,6 @@ msgstr "Tắt máy"
 msgid "Browse as Guest"
 msgstr "Duyệt với tư cách khách"
 
-msgid "Add person"
-msgstr "Thêm người dùng"
-
 msgid "Apps"
 msgstr "Ứng dụng"
 
@@ -34,9 +31,6 @@ msgstr "Không thể mở trang đăng nhập."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Không thể kết nối với nhà trường. Hãy kết nối Wi-Fi từ thanh trên cùng rồi thử lại."
-
-msgid "School email"
-msgstr "Email trường học"
 
 msgid "Local manager"
 msgstr "Quản trị viên cục bộ"
@@ -118,3 +112,9 @@ msgstr "Đang cài đặt trình duyệt web. Bạn có thể đăng nhập; tr�
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Chưa thể cài đặt trình duyệt web; hệ thống sẽ thử lại. Bạn có thể đăng nhập."
+
+msgid "Name or school email"
+msgstr "Tên hoặc email trường học"
+
+msgid "Keep typing to narrow down"
+msgstr "Tiếp tục nhập để thu hẹp danh sách"

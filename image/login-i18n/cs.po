@@ -14,9 +14,6 @@ msgstr "Vypnout"
 msgid "Browse as Guest"
 msgstr "Procházet jako host"
 
-msgid "Add person"
-msgstr "Přidat osobu"
-
 msgid "Apps"
 msgstr "Aplikace"
 
@@ -34,9 +31,6 @@ msgstr "Přihlašovací stránku se nepodařilo otevřít."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Škola není dostupná. Připojte se k Wi-Fi v horní liště a zkuste to znovu."
-
-msgid "School email"
-msgstr "Školní e-mail"
 
 msgid "Local manager"
 msgstr "Místní správce"
@@ -118,3 +112,9 @@ msgstr "Instaluje se webový prohlížeč. Můžete se přihlásit; zobrazí se,
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Webový prohlížeč se zatím nepodařilo nainstalovat; zkusí se to znovu. Můžete se přihlásit."
+
+msgid "Name or school email"
+msgstr "Jméno nebo školní e-mail"
+
+msgid "Keep typing to narrow down"
+msgstr "Pište dál, abyste výběr zúžili"

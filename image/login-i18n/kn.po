@@ -14,9 +14,6 @@ msgstr "ಶಟ್ ಡೌನ್ ಮಾಡಿ"
 msgid "Browse as Guest"
 msgstr "ಅತಿಥಿಯಾಗಿ ಬ್ರೌಸ್ ಮಾಡಿ"
 
-msgid "Add person"
-msgstr "ವ್ಯಕ್ತಿಯನ್ನು ಸೇರಿಸಿ"
-
 msgid "Apps"
 msgstr "ಆ್ಯಪ್‌ಗಳು"
 
@@ -34,9 +31,6 @@ msgstr "ಸೈನ್ ಇನ್ ಪುಟವನ್ನು ತೆರೆಯಲು �
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "ಶಾಲೆಯನ್ನು ತಲುಪಲು ಸಾಧ್ಯವಾಗುತ್ತಿಲ್ಲ. ಮೇಲಿನ ಪಟ್ಟಿಯಿಂದ Wi-Fi ಗೆ ಸಂಪರ್ಕಿಸಿ, ನಂತರ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ."
-
-msgid "School email"
-msgstr "ಶಾಲೆಯ ಇಮೇಲ್"
 
 msgid "Local manager"
 msgstr "ಸ್ಥಳೀಯ ನಿರ್ವಾಹಕ"
@@ -118,3 +112,9 @@ msgstr "ವೆಬ್ ಬ್ರೌಸರ್ ಅನ್ನು ಸ್ಥಾಪಿಸ
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "ವೆಬ್ ಬ್ರೌಸರ್ ಅನ್ನು ಇನ್ನೂ ಸ್ಥಾಪಿಸಲಾಗಲಿಲ್ಲ; ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಲಾಗುತ್ತದೆ. ನೀವು ಸೈನ್ ಇನ್ ಮಾಡಬಹುದು."
+
+msgid "Name or school email"
+msgstr "ಹೆಸರು ಅಥವಾ ಶಾಲೆಯ ಇಮೇಲ್"
+
+msgid "Keep typing to narrow down"
+msgstr "ಪಟ್ಟಿಯನ್ನು ಕಿರಿದಾಗಿಸಲು ಟೈಪ್ ಮಾಡುತ್ತಲೇ ಇರಿ"

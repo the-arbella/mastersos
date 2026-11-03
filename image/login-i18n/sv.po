@@ -14,9 +14,6 @@ msgstr "Stäng av"
 msgid "Browse as Guest"
 msgstr "Surfa som gäst"
 
-msgid "Add person"
-msgstr "Lägg till person"
-
 msgid "Apps"
 msgstr "Appar"
 
@@ -34,9 +31,6 @@ msgstr "Det gick inte att öppna inloggningssidan."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Det går inte att nå skolan. Anslut till Wi-Fi från översta fältet och försök igen."
-
-msgid "School email"
-msgstr "Skolans e-post"
 
 msgid "Local manager"
 msgstr "Lokal administratör"
@@ -118,3 +112,9 @@ msgstr "Webbläsaren installeras. Du kan logga in; den visas när den är klar."
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Webbläsaren kunde inte installeras ännu; ett nytt försök görs. Du kan logga in."
+
+msgid "Name or school email"
+msgstr "Namn eller skolans e-post"
+
+msgid "Keep typing to narrow down"
+msgstr "Fortsätt skriva för att begränsa listan"

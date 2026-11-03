@@ -14,9 +14,6 @@ msgstr "நிறுத்து"
 msgid "Browse as Guest"
 msgstr "விருந்தினராக உலாவு"
 
-msgid "Add person"
-msgstr "நபரைச் சேர்"
-
 msgid "Apps"
 msgstr "பயன்பாடுகள்"
 
@@ -34,9 +31,6 @@ msgstr "உள்நுழைவுப் பக்கத்தைத் தி�
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "பள்ளியுடன் இணைக்க முடியவில்லை. மேல் பட்டியிலிருந்து Wi-Fi உடன் இணைத்து, மீண்டும் முயலவும்."
-
-msgid "School email"
-msgstr "பள்ளி மின்னஞ்சல்"
 
 msgid "Local manager"
 msgstr "உள்ளூர் நிர்வாகி"
@@ -118,3 +112,9 @@ msgstr "இணைய உலாவி நிறுவப்படுகிறத�
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "இணைய உலாவியை இன்னும் நிறுவ முடியவில்லை; மீண்டும் முயற்சிக்கப்படும். நீங்கள் உள்நுழையலாம்."
+
+msgid "Name or school email"
+msgstr "பெயர் அல்லது பள்ளி மின்னஞ்சல்"
+
+msgid "Keep typing to narrow down"
+msgstr "பட்டியலைக் குறைக்கத் தொடர்ந்து தட்டச்சு செய்யுங்கள்"

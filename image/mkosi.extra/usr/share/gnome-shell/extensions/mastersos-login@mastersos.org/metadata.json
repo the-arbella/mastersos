@@ -1,7 +1,7 @@
 {
   "uuid": "mastersos-login@mastersos.org",
   "name": "MastersOS Login",
-  "description": "Login screen: sign-in card around the school's identity provider, shelf (Shut down, Browse as Guest, Add person, Apps) and @domain autocomplete.",
+  "description": "Login screen: sign-in card around the school's identity provider, one entry that finds people as they type, shelf (Shut down, Browse as Guest, Apps) and @domain autocomplete.",
   "shell-version": ["50"],
   "session-modes": ["gdm", "mastersos-gdm"],
   "gettext-domain": "mastersos-login",

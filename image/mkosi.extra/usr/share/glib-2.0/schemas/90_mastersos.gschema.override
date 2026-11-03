@@ -3,3 +3,7 @@
 # firefox-esr、Evolution、Software 等（镜像里没有这些应用）。4b 的设置包可经 dconf 覆盖。
 [org.gnome.shell]
 favorite-apps=['google-chrome.desktop', 'org.gnome.Nautilus.desktop']
+
+# The login screen has one entry and no user list (design 2026-11-03, login single field): people are found by typing.
+[org.gnome.login-screen]
+disable-user-list=true

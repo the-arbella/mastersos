@@ -14,9 +14,6 @@ msgstr "Kapat"
 msgid "Browse as Guest"
 msgstr "Misafir olarak gez"
 
-msgid "Add person"
-msgstr "Kişi ekle"
-
 msgid "Apps"
 msgstr "Uygulamalar"
 
@@ -34,9 +31,6 @@ msgstr "Oturum açma sayfası açılamadı."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Okula ulaşılamıyor. Üst çubuktan Wi-Fi'ye bağlanın ve yeniden deneyin."
-
-msgid "School email"
-msgstr "Okul e-postası"
 
 msgid "Local manager"
 msgstr "Yerel yönetici"
@@ -118,3 +112,9 @@ msgstr "Web tarayıcısı yükleniyor. Oturum açabilirsiniz; hazır olduğunda 
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Web tarayıcısı henüz yüklenemedi; yeniden denenecek. Oturum açabilirsiniz."
+
+msgid "Name or school email"
+msgstr "Ad veya okul e-postası"
+
+msgid "Keep typing to narrow down"
+msgstr "Listeyi daraltmak için yazmaya devam edin"

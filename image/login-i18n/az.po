@@ -14,9 +14,6 @@ msgstr "Söndür"
 msgid "Browse as Guest"
 msgstr "Qonaq kimi gəz"
 
-msgid "Add person"
-msgstr "Şəxs əlavə et"
-
 msgid "Apps"
 msgstr "Tətbiqlər"
 
@@ -34,9 +31,6 @@ msgstr "Giriş səhifəsi açıla bilmədi."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Məktəbə qoşulmaq mümkün olmadı. Yuxarı paneldən Wi-Fi şəbəkəsinə qoşulun, sonra yenidən cəhd edin."
-
-msgid "School email"
-msgstr "Məktəb e-poçtu"
 
 msgid "Local manager"
 msgstr "Lokal administrator"
@@ -118,3 +112,9 @@ msgstr "Veb brauzer quraşdırılır. Daxil ola bilərsiniz; hazır olanda gör�
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Veb brauzer hələ quraşdırıla bilmədi; yenidən cəhd ediləcək. Daxil ola bilərsiniz."
+
+msgid "Name or school email"
+msgstr "Ad və ya məktəb e-poçtu"
+
+msgid "Keep typing to narrow down"
+msgstr "Siyahını daraltmaq üçün yazmağa davam edin"

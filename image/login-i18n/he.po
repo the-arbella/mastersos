@@ -14,9 +14,6 @@ msgstr "כיבוי"
 msgid "Browse as Guest"
 msgstr "גלישה כאורח"
 
-msgid "Add person"
-msgstr "הוספת אדם"
-
 msgid "Apps"
 msgstr "אפליקציות"
 
@@ -34,9 +31,6 @@ msgstr "לא ניתן לפתוח את דף הכניסה."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "אין חיבור לבית הספר. התחברו ל-Wi-Fi מהסרגל העליון ונסו שוב."
-
-msgid "School email"
-msgstr "דוא״ל בית הספר"
 
 msgid "Local manager"
 msgstr "מנהל מערכת מקומי"
@@ -118,3 +112,9 @@ msgstr "דפדפן האינטרנט מותקן כעת. אפשר כבר להיכ�
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "עדיין לא ניתן היה להתקין את דפדפן האינטרנט; יתבצע ניסיון נוסף. אפשר להיכנס."
+
+msgid "Name or school email"
+msgstr "שם או דוא״ל בית הספר"
+
+msgid "Keep typing to narrow down"
+msgstr "המשיכו להקליד כדי לצמצם את הרשימה"

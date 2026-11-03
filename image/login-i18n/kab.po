@@ -15,9 +15,6 @@ msgstr "Sens"
 msgid "Browse as Guest"
 msgstr "Inig am anebgi"
 
-msgid "Add person"
-msgstr "Rnu amdan"
-
 msgid "Apps"
 msgstr "Isnasen"
 
@@ -35,9 +32,6 @@ msgstr "Ur izmir ara ad yettwaldi usebter n unekcum."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Ur izmir ara ad yaweḍ ɣer uɣerbaz. Qqen ɣer Wi-Fi seg ufeggag n ufella, sakin ɛreḍ i tikelt-nniḍen."
-
-msgid "School email"
-msgstr "Imayl n uɣerbaz"
 
 msgid "Local manager"
 msgstr "Anedbal adigan"
@@ -119,3 +113,9 @@ msgstr "Asebded n yiminig web. Tzemreḍ ad tkecmeḍ; ad d-iban mi ara yewjed."
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Ur yezmir ara ad yebded yiminig web akka tura; ad yettwaɛreḍ tikelt-nniḍen. Tzemreḍ ad tkecmeḍ."
+
+msgid "Name or school email"
+msgstr "Isem neɣ imayl n uɣerbaz"
+
+msgid "Keep typing to narrow down"
+msgstr "Kemmel tira akken ad tesmeẓẓiḍ tabdart"

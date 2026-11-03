@@ -14,9 +14,6 @@ msgstr "關機"
 msgid "Browse as Guest"
 msgstr "以訪客身分瀏覽"
 
-msgid "Add person"
-msgstr "新增使用者"
-
 msgid "Apps"
 msgstr "應用程式"
 
@@ -34,9 +31,6 @@ msgstr "無法開啟登入頁面。"
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "無法連線到學校。請從頂端列連接 Wi-Fi，然後重試。"
-
-msgid "School email"
-msgstr "學校電子郵件"
 
 msgid "Local manager"
 msgstr "本機管理員"
@@ -118,3 +112,9 @@ msgstr "正在安裝網頁瀏覽器。可以先登入，安裝完成後會自動
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "網頁瀏覽器暫時無法安裝，稍後會自動重試。可以先登入。"
+
+msgid "Name or school email"
+msgstr "姓名或學校電子郵件"
+
+msgid "Keep typing to narrow down"
+msgstr "繼續輸入以縮小範圍"

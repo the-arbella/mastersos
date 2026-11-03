@@ -14,9 +14,6 @@ msgstr "Skakel af"
 msgid "Browse as Guest"
 msgstr "Blaai as gas"
 
-msgid "Add person"
-msgstr "Voeg persoon by"
-
 msgid "Apps"
 msgstr "Toepassings"
 
@@ -34,9 +31,6 @@ msgstr "Die aanmeldbladsy kon nie oopgemaak word nie."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Kan nie die skool bereik nie. Koppel via die boonste balk aan Wi-Fi en probeer dan weer."
-
-msgid "School email"
-msgstr "Skool-e-pos"
 
 msgid "Local manager"
 msgstr "Plaaslike administrateur"
@@ -118,3 +112,9 @@ msgstr "Die webblaaier word geïnstalleer. Jy kan aanmeld; dit sal verskyn wanne
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Die webblaaier kon nog nie geïnstalleer word nie; dit sal weer probeer. Jy kan aanmeld."
+
+msgid "Name or school email"
+msgstr "Naam of skool-e-pos"
+
+msgid "Keep typing to narrow down"
+msgstr "Hou aan tik om die lys te verklein"

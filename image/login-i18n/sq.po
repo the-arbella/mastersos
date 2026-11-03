@@ -14,9 +14,6 @@ msgstr "Fike"
 msgid "Browse as Guest"
 msgstr "Shfleto si vizitor"
 
-msgid "Add person"
-msgstr "Shto person"
-
 msgid "Apps"
 msgstr "Aplikacione"
 
@@ -34,9 +31,6 @@ msgstr "Faqja e hyrjes nuk u hap dot."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Nuk lidhet dot me shkollën. Lidhu me Wi-Fi nga shiriti lart dhe provo përsëri."
-
-msgid "School email"
-msgstr "Email-i i shkollës"
 
 msgid "Local manager"
 msgstr "Administratori lokal"
@@ -118,3 +112,9 @@ msgstr "Po instalohet shfletuesi i uebit. Mund të hysh; do të shfaqet kur të 
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Shfletuesi i uebit nuk u instalua dot ende; do të provohet përsëri. Mund të hysh."
+
+msgid "Name or school email"
+msgstr "Emri ose email-i i shkollës"
+
+msgid "Keep typing to narrow down"
+msgstr "Vazhdoni të shkruani për të ngushtuar listën"

@@ -14,9 +14,6 @@ msgstr "Исклучи"
 msgid "Browse as Guest"
 msgstr "Прелистувај како гостин"
 
-msgid "Add person"
-msgstr "Додај лице"
-
 msgid "Apps"
 msgstr "Апликации"
 
@@ -34,9 +31,6 @@ msgstr "Страницата за најава не можеше да се от�
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Училиштето не може да се достигне. Поврзете се на Wi-Fi од горната лента, па обидете се повторно."
-
-msgid "School email"
-msgstr "Училишна е-пошта"
 
 msgid "Local manager"
 msgstr "Локален администратор"
@@ -118,3 +112,9 @@ msgstr "Се инсталира веб-прелистувачот. Можете 
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Веб-прелистувачот сè уште не можеше да се инсталира; ќе се обиде повторно. Можете да се најавите."
+
+msgid "Name or school email"
+msgstr "Име или училишна е-пошта"
+
+msgid "Keep typing to narrow down"
+msgstr "Продолжете да пишувате за да го стесните списокот"

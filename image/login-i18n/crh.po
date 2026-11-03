@@ -14,9 +14,6 @@ msgstr "Qapat"
 msgid "Browse as Guest"
 msgstr "Misafir olaraq közden keçir"
 
-msgid "Add person"
-msgstr "Şahıs ekle"
-
 msgid "Apps"
 msgstr "Programmalar"
 
@@ -34,9 +31,6 @@ msgstr "Kirüv saifesini açmaq mümkün olmadı."
 
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Mektepke bağlanmaq mümkün degil. Üst panelden Wi-Fi ağına bağlanıñız, soñra yañıdan sınañız."
-
-msgid "School email"
-msgstr "Mektep e-poçtası"
 
 msgid "Local manager"
 msgstr "Yerli idareci"
@@ -118,3 +112,9 @@ msgstr "Veb-brauzer qurula. Kirip olasıñız; azır olğanda peyda olur."
 
 msgid "The web browser could not be installed yet; it will try again. You can sign in."
 msgstr "Veb-brauzer daa qurulıp olamadı; yañıdan sınalacaq. Kirip olasıñız."
+
+msgid "Name or school email"
+msgstr "Ad ya da mektep e-poçtası"
+
+msgid "Keep typing to narrow down"
+msgstr "Cedvelni tarlatmaq içün yazmağa devam etiñiz"
