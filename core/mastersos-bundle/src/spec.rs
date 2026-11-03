@@ -158,6 +158,9 @@ pub const ISSUE_CODES: &[&str] = &[
     "school_name_invalid",
     "school_wifi_moved",
     "script_timeout_too_long",
+    "secret_rerouted",
+    "secret_unknown",
+    "secret_unused",
     "sso_without_oidc",
     "timezone_invalid",
     "toml_syntax",
@@ -771,6 +774,10 @@ mod tests {
     /// Codes that need the server's state (registered keys, the school's id, the fleet, the
     /// latest version): check_text never reports them, so the spec gives no check= example.
     const SERVER_ONLY: &[&str] = &[
+        // Raised by `secret_ref::lints` against secrets.toml, which check_text never sees.
+        "secret_rerouted",
+        "secret_unknown",
+        "secret_unused",
         "escrow_recipient_unregistered",
         "escrow_recipients_missing",
         "feature_unsupported",

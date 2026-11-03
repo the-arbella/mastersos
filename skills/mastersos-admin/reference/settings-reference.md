@@ -3130,6 +3130,36 @@ config = "standard"
 ```
 <!-- /prompt:omit -->
 
+### `secret_rerouted`
+
+**Level:** warning. **Meaning:** a network that uses a `secret:` reference changed `eap`, `phase2`, `identity`, `anonymous_identity`, `server_domain`, `ca_cert` or `check_server` since the settings were pulled.
+
+<!-- prompt:omit -->
+**Why:** these fields decide where the secret is sent; pointing a saved password at a different server would hand it over.
+<!-- /prompt:omit -->
+
+**How to fix:** make sure the change is intended, or enter the password again for the changed network.
+
+### `secret_unknown`
+
+**Level:** error. **Meaning:** a Wi-Fi or IT account secret field refers to `secret:<name>` but `secrets.toml` has no `<name>`.
+
+<!-- prompt:omit -->
+**Why:** without the value the settings cannot be published.
+<!-- /prompt:omit -->
+
+**How to fix:** add the name to `secrets.toml`, or write the value in place of the reference.
+
+### `secret_unused`
+
+**Level:** warning. **Meaning:** `secrets.toml` has a name that no setting refers to.
+
+<!-- prompt:omit -->
+**Why:** an unused secret is a leftover that is still kept on disk.
+<!-- /prompt:omit -->
+
+**How to fix:** remove the name from `secrets.toml`.
+
 ### `sso_without_oidc`
 
 **Level:** error. **Meaning:** a Config allows `sso` but there is no `[school.oidc]`.

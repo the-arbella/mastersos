@@ -12,6 +12,7 @@ pub mod kit;
 pub mod lint;
 pub mod manifest;
 pub mod push;
+pub mod secret_ref;
 pub mod seed;
 pub mod select;
 pub mod sign;
