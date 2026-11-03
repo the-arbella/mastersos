@@ -171,7 +171,7 @@ pub fn spawn_all(
                     if let Some(tx) = first.take() {
                         let _ = tx.send(());
                     }
-                    log::debug!("后台任务 {} 跑完一轮", job.name());
+                    log::debug!("background job {} finished a round", job.name());
                     let mut next = started + job.every();
                     loop {
                         tokio::select! {

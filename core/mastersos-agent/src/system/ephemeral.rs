@@ -167,7 +167,7 @@ impl Procs for SystemdProcs<'_> {
         match out.stdout.trim() {
             "active" | "activating" | "deactivating" | "reloading" | "refreshing" => Ok(true),
             "inactive" | "failed" => Ok(false),
-            other => bail!("systemctl is-active {slice} 的输出认不出：{other:?}"),
+            other => bail!("unrecognized output from systemctl is-active {slice}: {other:?}"),
         }
     }
 }
@@ -225,7 +225,7 @@ pub fn wait_slice_gone(env: &EphemeralEnv) -> Result<()> {
         }
         env.procs.sleep(POLL);
     }
-    bail!("{slice} 等了 35 秒（中间 SIGKILL 过一次）仍然 active")
+    bail!("{slice} is still active after 35 seconds (with one SIGKILL in between)")
 }
 
 /// `getent passwd <key>` 的一行：`(name, uid, gid)`；查不到（退出码 2）为 `None`。
@@ -242,15 +242,15 @@ fn getent_with(
     match out.code {
         0 => {}
         2 => return Ok(None),
-        c => bail!("getent passwd {key} 退出码 {c}"),
+        c => bail!("getent passwd {key} exited with code {c}"),
     }
     let line = out.stdout.lines().next().unwrap_or_default();
     let f: Vec<&str> = line.split(':').collect();
     if f.len() < 4 || f[0].is_empty() {
-        bail!("getent passwd {key} 的输出认不出");
+        bail!("unrecognized output from getent passwd {key}");
     }
-    let uid = f[2].parse().with_context(|| format!("{key} 的 uid"))?;
-    let gid = f[3].parse().with_context(|| format!("{key} 的 gid"))?;
+    let uid = f[2].parse().with_context(|| format!("uid of {key}"))?;
+    let gid = f[3].parse().with_context(|| format!("gid of {key}"))?;
     Ok(Some((f[0].to_string(), uid, gid)))
 }
 
@@ -263,7 +263,7 @@ fn account_with(runner: &dyn Runner, user: &str, timeout: Duration) -> Result<Op
     match getent_with(runner, user, timeout)? {
         None => Ok(None),
         Some((name, _, _)) if name != user => {
-            bail!("getent passwd {user} 给出的是 {name}")
+            bail!("getent passwd {user} returned {name}")
         }
         Some((_, uid, gid)) => Ok(Some((uid, gid))),
     }
@@ -328,12 +328,12 @@ fn mount_table(env: &EphemeralEnv) -> Result<Vec<MountEntry>> {
         let (Some(id), Some(fstype), Some(options), Some(target)) =
             (f.first(), f.get(1), f.get(2), f.get(3))
         else {
-            bail!("findmnt 的输出认不出：{l:?}");
+            bail!("unrecognized findmnt output: {l:?}");
         };
         v.push(MountEntry {
             id: id
                 .parse()
-                .with_context(|| format!("findmnt 的挂载 id：{l:?}"))?,
+                .with_context(|| format!("findmnt mount id: {l:?}"))?,
             fstype: fstype.to_string(),
             options: options.to_string(),
             target: PathBuf::from(unescape_findmnt(target)),
@@ -358,11 +358,11 @@ impl MountOps for ProcMounts {
     fn mount_id(&self, fd: &std::os::fd::OwnedFd) -> Result<u64> {
         use std::os::fd::AsRawFd;
         let info = std::fs::read_to_string(format!("/proc/self/fdinfo/{}", fd.as_raw_fd()))
-            .context("读取 /proc/self/fdinfo")?;
+            .context("read /proc/self/fdinfo")?;
         info.lines()
             .find_map(|l| l.strip_prefix("mnt_id:"))
             .and_then(|v| v.trim().parse().ok())
-            .ok_or_else(|| anyhow!("fdinfo 里没有 mnt_id"))
+            .ok_or_else(|| anyhow!("no mnt_id in fdinfo"))
     }
 
     #[cfg(target_os = "linux")]
@@ -378,7 +378,7 @@ impl MountOps for ProcMounts {
 
     #[cfg(not(target_os = "linux"))]
     fn detach(&self, _fd: &std::os::fd::OwnedFd) -> Result<()> {
-        bail!("只有 Linux 能按 fd 卸载")
+        bail!("unmounting by fd is only supported on Linux")
     }
 }
 
@@ -390,20 +390,20 @@ fn unmount_verified(env: &EphemeralEnv, m: &MountEntry) -> Result<()> {
     let rel = m
         .target
         .strip_prefix(env.root)
-        .with_context(|| format!("{} 不在系统根下", m.target.display()))?;
+        .with_context(|| format!("{} is not under the system root", m.target.display()))?;
     let fd = safefs::open_mount_target(env.root, rel)
-        .with_context(|| format!("打开 {}（不卸）", m.target.display()))?;
+        .with_context(|| format!("open {} (not unmounting)", m.target.display()))?;
     let id = env.mounts.mount_id(&fd)?;
     if id != m.id {
         bail!(
-            "{}：打开的是挂载 {id}，挂载表里是 {}；路径变过，不卸",
+            "{}: opened mount {id} but the mount table has {}; the path changed, not unmounting",
             m.target.display(),
             m.id
         );
     }
     env.mounts
         .detach(&fd)
-        .with_context(|| format!("卸载 {}", m.target.display()))
+        .with_context(|| format!("unmount {}", m.target.display()))
 }
 
 /// 由深到浅；同一处叠着的几层后挂的先卸（挂载表按挂载的先后列出）。
@@ -430,7 +430,7 @@ fn unmount_home_tree(env: &EphemeralEnv) -> Result<()> {
         unmount_verified(env, &m)?;
     }
     if home_fstype(env, CMD_TIMEOUT)?.is_some() {
-        bail!("{} 卸载之后还是挂载点", home.display());
+        bail!("{} is still a mount point after unmounting", home.display());
     }
     Ok(())
 }
@@ -481,7 +481,7 @@ pub(crate) fn remove_named(env: &EphemeralEnv, dir: &str, name: &str) -> Result<
         Err(e) if crate::apply::is_not_found(&e) => return Ok(()),
         Err(e) => return Err(e),
     };
-    safefs::remove_at(&d, name).with_context(|| format!("删除 /{dir}/{name}"))
+    safefs::remove_at(&d, name).with_context(|| format!("delete /{dir}/{name}"))
 }
 
 /// 删掉 `user-<uid>.journal`、`user-<uid>@….journal(~)`（复审 I1）。
@@ -500,7 +500,7 @@ fn remove_user_journals(env: &EphemeralEnv) -> Result<()> {
             for f in safefs::list_at(&m)? {
                 if prefixes.iter().any(|p| f.starts_with(p.as_str())) {
                     safefs::remove_at(&m, &f)
-                        .with_context(|| format!("删除 /{base}/{machine}/{f}"))?;
+                        .with_context(|| format!("delete /{base}/{machine}/{f}"))?;
                 }
             }
         }
@@ -518,7 +518,7 @@ pub fn cleanup(env: &EphemeralEnv) -> Result<()> {
         if name != user {
             let _ = writeln!(
                 std::io::stderr(),
-                "mastersos-agent ephemeral-cleanup: uid {} 现在是 {name}，不是 {user}；什么都不做",
+                "mastersos-agent ephemeral-cleanup: uid {} is now {name}, not {user}; doing nothing",
                 env.uid
             );
             return Ok(());
@@ -547,7 +547,8 @@ pub fn cleanup(env: &EphemeralEnv) -> Result<()> {
         for m in deepest_first(account_mounts_under(&p, &table, env.uid)) {
             unmount_verified(env, &m)?;
         }
-        safefs::remove_owned_tree_and_sticky(&p, env.uid).with_context(|| format!("清理 /{d}"))?;
+        safefs::remove_owned_tree_and_sticky(&p, env.uid)
+            .with_context(|| format!("clean up /{d}"))?;
     }
     for d in ACCOUNTS_DIRS {
         remove_named(env, d, user)?;
@@ -556,7 +557,7 @@ pub fn cleanup(env: &EphemeralEnv) -> Result<()> {
         return Ok(());
     };
     if uid != env.uid {
-        bail!("{user} 账号的 uid 是 {uid}，不是 {}", env.uid);
+        bail!("the {user} account has uid {uid}, not {}", env.uid);
     }
     // 锁定应用的 AccountsService 记录（会话、是否进用户列表、头像）上面跟着按名字存的一切删了：下面照 kiosk 步骤写下的
     // 模板恢复。模板读不到就不挂、不写标记——没有记录的无口令账号，GDM 会用默认的会话起它
@@ -638,7 +639,7 @@ pub fn cleanup(env: &EphemeralEnv) -> Result<()> {
     if let Some(t) = &template {
         let users = safefs::open_dir(env.root, Path::new(ACCOUNTS_DIRS[0]), true)?;
         safefs::write_at(&users, user, t.as_bytes(), 0o600)
-            .with_context(|| format!("恢复 /{}/{user}", ACCOUNTS_DIRS[0]))?;
+            .with_context(|| format!("restore /{}/{user}", ACCOUNTS_DIRS[0]))?;
     }
     // 这期间 agent 删了账号（复审 M3）：卸掉刚挂的，不写标记
     if account(env.runner, user)?.is_none() {
@@ -656,15 +657,20 @@ fn accounts_template(env: &EphemeralEnv) -> Result<Option<String>> {
     };
     let r = rel(t);
     let (Some(dir), Some(name)) = (r.parent(), r.file_name().and_then(|n| n.to_str())) else {
-        bail!("{} 不规范", t.display());
+        bail!("{} is not a normalized path", t.display());
     };
     let bytes = safefs::open_dir(env.root, dir, false)
         .and_then(|d| safefs::read_at(&d, name))
-        .with_context(|| format!("读取 {}", t.display()))?
-        .ok_or_else(|| anyhow!("没有 {}（kiosk 步骤还没写）", t.display()))?;
+        .with_context(|| format!("read {}", t.display()))?
+        .ok_or_else(|| {
+            anyhow!(
+                "{} is missing (the kiosk step has not written it yet)",
+                t.display()
+            )
+        })?;
     String::from_utf8(bytes)
         .map(Some)
-        .map_err(|_| anyhow!("{} 不是 UTF-8", t.display()))
+        .map_err(|_| anyhow!("{} is not UTF-8", t.display()))
 }
 
 /// 模板里的 `Icon=`（kiosk 步骤写的是不用转义的绝对路径）。
@@ -703,11 +709,11 @@ pub fn ensure_home_dir(env: &EphemeralEnv) -> Result<()> {
     let home_rel = rel(home);
     let parent = home_rel
         .parent()
-        .ok_or_else(|| anyhow!("{} 没有父目录", home.display()))?;
+        .ok_or_else(|| anyhow!("{} has no parent directory", home.display()))?;
     let name = home_rel
         .file_name()
         .and_then(|n| n.to_str())
-        .ok_or_else(|| anyhow!("{} 没有名字", home.display()))?;
+        .ok_or_else(|| anyhow!("{} has no file name", home.display()))?;
     let p = safefs::open_dir(env.root, parent, true)?;
     let (euid, egid) = (
         rustix::process::geteuid().as_raw(),
@@ -716,7 +722,7 @@ pub fn ensure_home_dir(env: &EphemeralEnv) -> Result<()> {
     let st = rustix::fs::fstat(&p).map_err(std::io::Error::from)?;
     if st.st_uid != euid || st.st_mode as u32 & 0o022 != 0 {
         bail!(
-            "/{} 的属主是 {}、权限 {:o}：应是 root 且组与其他人不可写",
+            "/{} is owned by {} with mode {:o}: it must be owned by root and not writable by group or others",
             parent.display(),
             st.st_uid,
             st.st_mode as u32 & 0o7777
@@ -738,24 +744,27 @@ pub fn session_open(env: &EphemeralEnv) -> Result<()> {
     let acct = env.acct;
     let user = acct.user.as_str();
     let opening = acct.opening_mark.as_str();
-    let run = run_dir(env, false).with_context(|| format!("没有 {RUN_DIR}"))?;
+    let run = run_dir(env, false).with_context(|| format!("{RUN_DIR} is missing"))?;
     let active = env.procs.slice_active(&acct.slice)?;
     if active {
-        bail!("{} 还 active（上一位 {user} 的进程还在）", acct.slice);
+        bail!(
+            "{} is still active (processes of the previous {user} are still running)",
+            acct.slice
+        );
     }
     match home_fstype(env, PAM_CMD_TIMEOUT)? {
         Some(t) if t == "tmpfs" => {}
         other => {
             // 家目录不是 tmpfs：不可能有这个账号的会话正在用它，拉起清理
             kick_cleanup(env);
-            bail!("{} 不是 tmpfs（{other:?}）", acct.home.display());
+            bail!("{} is not a tmpfs ({other:?})", acct.home.display());
         }
     }
     // 名字对还不够：它得解析成这个账号的 uid（同名的别的账号不给它的 tmpfs 与标记。提交安全审查：授权逻辑）
     match account_with(env.runner, user, PAM_CMD_TIMEOUT)? {
         Some((uid, _)) if uid == env.uid => {}
-        Some((uid, _)) => bail!("{user} 的 uid 是 {uid}，不是 {}", env.uid),
-        None => bail!("没有 {user} 账号"),
+        Some((uid, _)) => bail!("{user} has uid {uid}, not {}", env.uid),
+        None => bail!("no {user} account"),
     }
     if !safefs::take_at(&run, &acct.ready_mark, opening)? {
         // 另一个会话可能刚拿走标记、还没进 slice：那时不拉起清理（多座席时会撞上）
@@ -767,19 +776,22 @@ pub fn session_open(env: &EphemeralEnv) -> Result<()> {
         if !recent {
             kick_cleanup(env);
         }
-        bail!("没有 {RUN_DIR}/{}（清理还没做完）", acct.ready_mark);
+        bail!(
+            "{RUN_DIR}/{} is missing (cleanup has not finished)",
+            acct.ready_mark
+        );
     }
     // 改名不改修改时间：opening 标记会带着清理写标记时的时间，看着早就「过期」了（复审 T11 N3）
     if let Err(e) = safefs::touch_at(&run, opening) {
         let _ = writeln!(
             std::io::stderr(),
-            "mastersos-agent pam-session: 更新 {opening} 的时间失败：{e:#}"
+            "mastersos-agent pam-session: failed to update the timestamp of {opening}: {e:#}"
         );
     }
     if let Err(e) = copy_skel(env) {
         let _ = writeln!(
             std::io::stderr(),
-            "mastersos-agent pam-session: 复制 /etc/skel 失败：{e:#}"
+            "mastersos-agent pam-session: failed to copy /etc/skel: {e:#}"
         );
     }
     Ok(())
@@ -805,12 +817,12 @@ pub fn copy_skel(env: &EphemeralEnv) -> Result<()> {
         let fs = rustix::fs::fstatfs(&home).map_err(std::io::Error::from)?;
         #[allow(clippy::unnecessary_cast)]
         if fs.f_type as i64 != TMPFS_MAGIC {
-            bail!("{shown} 打开的不是 tmpfs");
+            bail!("{shown} did not open a tmpfs");
         }
     }
     let st = rustix::fs::fstat(&home).map_err(std::io::Error::from)?;
     if st.st_uid != env.uid {
-        bail!("{shown} 的属主是 {}，不是 {}", st.st_uid, env.uid);
+        bail!("{shown} is owned by {}, not {}", st.st_uid, env.uid);
     }
     safefs::copy_tree_into(&env.root.join("etc/skel"), &home, env.uid, st.st_gid)
 }
@@ -830,26 +842,26 @@ pub fn kiosk_account(
     uid: impl FnOnce() -> Option<u32>,
 ) -> Result<Ephemeral, String> {
     let Some(p) = policy else {
-        return Err("读不到登录策略".into());
+        return Err("cannot read the login policy".into());
     };
     let Some(id) = user.strip_prefix(KIOSK_PREFIX) else {
-        return Err("不是锁定应用的账号".into());
+        return Err("not a locked app account".into());
     };
     let Some(entry) = p.kiosk_users.iter().find(|k| k.user == user) else {
-        return Err("不在登录策略的锁定应用名单里".into());
+        return Err("not in the locked app list of the login policy".into());
     };
     // 名单来自 policy_from_bundle（id 已校验）；文件被改过时这里再挡一次：id 进路径、标记与单元名
     if mastersos_bundle::kiosk::check_id(id).is_err() {
-        return Err("账号名里的 id 不合规".into());
+        return Err("invalid id in the account name".into());
     }
     match uid() {
         Some(u) if KIOSK_UIDS.contains(&u) => Ok(kiosk(id, u, &entry.name)),
         Some(u) => Err(format!(
-            "uid {u} 不在 {}–{}",
+            "uid {u} is not in {}-{}",
             KIOSK_UIDS.start(),
             KIOSK_UIDS.end()
         )),
-        None => Err("getent 查不到这个账号".into()),
+        None => Err("getent cannot find this account".into()),
     }
 }
 
@@ -864,7 +876,7 @@ pub fn cleanup_target(
         return Ok(guest());
     }
     if !user.starts_with(KIOSK_PREFIX) {
-        return Err("不是临时账号".into());
+        return Err("not an ephemeral account".into());
     }
     kiosk_account(policy, user, uid)
 }
@@ -876,14 +888,14 @@ pub fn cleanup_main(user: Option<&OsStr>) -> ExitCode {
     if !rustix::process::geteuid().is_root() {
         let _ = writeln!(
             std::io::stderr(),
-            "mastersos-agent ephemeral-cleanup: 只能以 root 运行"
+            "mastersos-agent ephemeral-cleanup: must run as root"
         );
         return ExitCode::FAILURE;
     }
     let Some(user) = user.and_then(OsStr::to_str) else {
         let _ = writeln!(
             std::io::stderr(),
-            "mastersos-agent ephemeral-cleanup: 要给出账号名"
+            "mastersos-agent ephemeral-cleanup: an account name is required"
         );
         return ExitCode::from(2);
     };
@@ -894,7 +906,7 @@ pub fn cleanup_main(user: Option<&OsStr>) -> ExitCode {
         Err(why) => {
             let _ = writeln!(
                 std::io::stderr(),
-                "mastersos-agent ephemeral-cleanup: {user:?} {why}；什么都不做"
+                "mastersos-agent ephemeral-cleanup: {user:?}: {why}; doing nothing"
             );
             return ExitCode::SUCCESS;
         }

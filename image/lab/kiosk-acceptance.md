@@ -68,7 +68,7 @@ in_session = true
 | V1.3 | 用测试学生登录 NWEA、开考、答几题 | 页面能加载、能作答；被拦的资源（页面缺图、脚本报错）记下主机名 | | 缺的主机名补进 `allow`，并把常用平台的完整 `allow` 写进 `README.md`「锁定应用」的例子（设计 §3 说 V1 补齐） |
 | V1.4 | 点「期中考试」：Google 表单登录（学校的 Google 账号若需要）、提交 | 能提交 | | 同上，补 `allow` |
 | V1.6 | 点「NWEA 安全版（PWA）」（照 NWEA 给 Chromebook 的配置：`pwanopopup` + MAP Growth 扩展 `acmpckmfpahllclpjpollppelfoafcmh`），用测试学生开考；同时在宿主 `ls /home/kiosk-nwea-sec/.kiosk-chrome/Default/Extensions/` | 扩展装上了（目录里有 `acmpckmfpahllclpjpollppelfoafcmh`）；它在 Linux 上回答 `inKiosk: false`（没有 `chrome.audio`），记下 NWEA 的反应：照常开考 / 提示要用安全浏览器 / 拒绝。另记 User-Agent 末尾的 ` NWEAChromePWA` 有没有让「不支持的系统」提示出现或消失 | | 只记录：决定 README 里 NWEA 推荐用普通 url 还是 PWA + 扩展；学区若开了强制安全测试，两种都进不去（设计 §1） |
-| V1.5 | 进入、退出各一次后在 VM 上 `journalctl -o verbose MASTERSOS_KIOSK=nwea` | 有「进入」「退出」两条，字段 `MASTERSOS_KIOSK=nwea`；`journalctl --since …` 里没有上报的痕迹 | | Task 6 的 journald 记录 |
+| V1.5 | 进入、退出各一次后在 VM 上 `journalctl -o verbose MASTERSOS_KIOSK=nwea` | 有「entered」「exited」两条，字段 `MASTERSOS_KIOSK=nwea`；`journalctl --since …` 里没有上报的痕迹 | | Task 6 的 journald 记录 |
 
 ### V2 逃逸逐项试（每个按键单独一行；都在「NWEA MAP」会话里）
 
@@ -117,7 +117,7 @@ in_session = true
 | 编号 | 操作 | 预期 | 结果 | 不通过时 |
 |---|---|---|---|---|
 | V3.1 | 60 秒内按 5 次 Alt+F4（每次等 Chrome 重开） | 第 5 次之后不再重开 NWEA，出本机错误页 `kiosk-error.html`：中英两行「这个应用无法启动，请举手找老师」，中文字形正常 | | Task 6 的 `Supervisor`；页面被拦：`ERROR_PAGE` 不在 `URLAllowlist` |
-| V3.2 | 错误页上再按一次 Alt+F4 | 会话结束、回到 GDM；journald 有一条「异常结束」 | | Task 6 |
+| V3.2 | 错误页上再按一次 Alt+F4 | 会话结束、回到 GDM；journald 有一条「ended abnormally」 | | Task 6 |
 | V3.3 | 错误页上有没有「退出」按钮（扩展的内容脚本对 `file://` 默认不生效） | 记下看到的；有没有都不算失败（Alt+F4 能退） | | 只记录，写进 README 的退出一节 |
 | V3.4 | 隔 70 秒按一次 Alt+F4，共 6 次 | 每次都原地重开（窗口外的旧退出不计） | | Task 6 |
 

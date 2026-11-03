@@ -242,7 +242,7 @@ fn exit_host_accepts_only_exit() {
     assert!(ok);
     assert_eq!(out, ok_true);
     assert_eq!(calls, ["loginctl terminate-session c7"]);
-    assert_eq!(lines, [("nwea".to_string(), "退出".to_string())]);
+    assert_eq!(lines, [("nwea".to_string(), "exited".to_string())]);
     // 别的消息：回 {"ok":false}，什么都不结束
     let (ok, out, calls, lines) = host(frame(br#"{"cmd":"run"}"#), &kiosk);
     assert!(!ok);
@@ -365,7 +365,10 @@ fn run_refuses_outside_kiosk_session() {
     assert!(!ok);
     assert!(spawned.borrow().is_empty(), "不起应用");
     assert_eq!(r.calls(), ["loginctl terminate-session c3"]);
-    assert_eq!(j.lines(), [("nwea".to_string(), "异常结束".to_string())]);
+    assert_eq!(
+        j.lines(),
+        [("nwea".to_string(), "ended abnormally".to_string())]
+    );
 
     // 不是 kiosk 账号（在登录界面选了锁定会话）：不起，结束它自己的会话，别留下一个黑屏的 gnome-kiosk
     let r = FakeRunner::new();
@@ -389,7 +392,7 @@ fn run_refuses_outside_kiosk_session() {
     );
     assert!(!ok);
     assert_eq!(r.calls(), ["loginctl terminate-session c3"]);
-    assert_eq!(j.lines(), [(String::new(), "异常结束".to_string())]);
+    assert_eq!(j.lines(), [(String::new(), "ended abnormally".to_string())]);
     // 没有 XDG_SESSION_ID：同样经 Display 找到自己的会话
     let r = FakeRunner::new();
     r.respond(
@@ -550,7 +553,7 @@ fn policy_not_isolated_cases(launch: &Launch) {
         assert_eq!(r.calls(), ["loginctl terminate-session c3"], "{name}");
         assert_eq!(
             j.lines(),
-            [(id.to_string(), "异常结束".to_string())],
+            [(id.to_string(), "ended abnormally".to_string())],
             "{name}"
         );
     }
@@ -604,8 +607,8 @@ fn run_supervises_web_app() {
     assert_eq!(
         j.lines(),
         [
-            ("nwea".to_string(), "进入".to_string()),
-            ("nwea".to_string(), "异常结束".to_string()),
+            ("nwea".to_string(), "entered".to_string()),
+            ("nwea".to_string(), "ended abnormally".to_string()),
         ]
     );
 }
@@ -657,8 +660,8 @@ fn run_exec_app_ends_on_exit() {
     assert_eq!(
         lines,
         [
-            ("calc".to_string(), "进入".to_string()),
-            ("calc".to_string(), "退出".to_string()),
+            ("calc".to_string(), "entered".to_string()),
+            ("calc".to_string(), "exited".to_string()),
         ]
     );
     // 参数里的 id 不是这个账号的
@@ -685,7 +688,10 @@ fn run_exec_app_ends_on_exit() {
     assert!(!ok);
     assert!(sp.is_empty());
     assert_eq!(calls, ["loginctl terminate-session c9"]);
-    assert_eq!(lines, [("calc".to_string(), "异常结束".to_string())]);
+    assert_eq!(
+        lines,
+        [("calc".to_string(), "ended abnormally".to_string())]
+    );
     // 没有 launch.json
     fs::remove_file(&p).unwrap();
     let (ok, sp, _, _) = go(None);
@@ -737,8 +743,8 @@ fn run_exec_spawn_failure_ends_session() {
     assert_eq!(
         j.lines(),
         [
-            ("calc".to_string(), "进入".to_string()),
-            ("calc".to_string(), "异常结束".to_string()),
+            ("calc".to_string(), "entered".to_string()),
+            ("calc".to_string(), "ended abnormally".to_string()),
         ]
     );
 }
@@ -848,18 +854,18 @@ fn enter_confirms_then_ends_session() {
 /// journald 原生协议的一条：字段一行一个，只有已校验的 id 与固定的文字。
 #[test]
 fn journal_record_fields() {
-    let rec = journal_record("nwea", "进入", None);
+    let rec = journal_record("nwea", "entered", None);
     assert_eq!(
         String::from_utf8(rec).unwrap(),
-        "MESSAGE=进入\nMASTERSOS_KIOSK=nwea\nSYSLOG_IDENTIFIER=mastersos-kiosk\nPRIORITY=5\n"
+        "MESSAGE=entered\nMASTERSOS_KIOSK=nwea\nSYSLOG_IDENTIFIER=mastersos-kiosk\nPRIORITY=5\n"
     );
-    let rec = String::from_utf8(journal_record("nwea", "异常结束", Some("a\nb"))).unwrap();
+    let rec = String::from_utf8(journal_record("nwea", "ended abnormally", Some("a\nb"))).unwrap();
     assert!(
         rec.contains("MASTERSOS_KIOSK_DETAIL=a b\n"),
         "换行不能拆出新字段：{rec}"
     );
     // 不是锁定应用的账号：没有 id，不写这个字段
-    let rec = String::from_utf8(journal_record("", "异常结束", None)).unwrap();
+    let rec = String::from_utf8(journal_record("", "ended abnormally", None)).unwrap();
     assert!(!rec.contains("MASTERSOS_KIOSK="), "{rec}");
 }
 

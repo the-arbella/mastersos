@@ -600,7 +600,7 @@ pub fn write_policy(paths: &SysPaths, p: &LoginPolicy) -> Result<bool> {
     let dir = safefs::open_dir_at(&var, Path::new(POLICY_SUBDIR), true)?;
     safefs::set_mode(&dir, 0o755)?;
     safefs::write_at(&dir, POLICY_FILE, &bytes, 0o644)
-        .with_context(|| format!("写入 {POLICY_PATH}"))
+        .with_context(|| format!("write {POLICY_PATH}"))
 }
 
 /// 策略文件的内容；超过 [`MAX_POLICY_BYTES`] 报错（`pam-check` 会把它当作没有）。

@@ -91,7 +91,7 @@ fn legacy_browser_skips_flatpak() {
         "{calls:?}"
     );
     assert!(it.ok, "{it:?}");
-    assert_eq!(it.detail.as_deref(), Some("浏览器模式：不安装"));
+    assert_eq!(it.detail.as_deref(), Some("browser mode: not installing"));
 }
 
 #[test]
@@ -332,7 +332,7 @@ fn save_failure_paths() {
     TEST_SAVE_BUDGET.with(|b| b.set(None));
     let it = find(&out, LO);
     assert!(
-        !it.ok && it.detail.as_deref().unwrap().contains("记录失败"),
+        !it.ok && it.detail.as_deref().unwrap().contains("recording failed"),
         "{it:?}"
     );
     assert_eq!(load_state(&p).unwrap().pending, set(&[LO]));

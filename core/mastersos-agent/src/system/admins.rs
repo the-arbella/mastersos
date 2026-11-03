@@ -273,14 +273,14 @@ fn apply_sudoers(env: &Env, root: &Path, text: &str) -> Result<()> {
     let dir = match safefs::open_dir(root, Path::new(SUDOERS_DIR), !text.is_empty()) {
         Ok(d) => d,
         Err(e) if text.is_empty() && is_not_found(&e) => return Ok(()),
-        Err(e) => return Err(e).with_context(|| format!("打开 /{SUDOERS_DIR}")),
+        Err(e) => return Err(e).with_context(|| format!("open /{SUDOERS_DIR}")),
     };
-    safefs::remove_at(&dir, SUDOERS_CHECK).context("删除残留的检查文件")?;
+    safefs::remove_at(&dir, SUDOERS_CHECK).context("delete the leftover check file")?;
     if text.is_empty() {
         return safefs::remove_at(&dir, SUDOERS_FILE);
     }
     safefs::write_at(&dir, SUDOERS_CHECK, text.as_bytes(), 0o440)
-        .with_context(|| format!("写入 /{SUDOERS_DIR}/{SUDOERS_CHECK}"))?;
+        .with_context(|| format!("write /{SUDOERS_DIR}/{SUDOERS_CHECK}"))?;
     let check = root.join(SUDOERS_DIR).join(SUDOERS_CHECK);
     let out = env
         .runner
@@ -290,14 +290,14 @@ fn apply_sudoers(env: &Env, root: &Path, text: &str) -> Result<()> {
         Ok(o) => {
             // stderr 里可能有名单里的名字：只进本机日志，不进回报。
             log::warn!(
-                "visudo -cf 不通过（退出码 {}）：{}",
+                "visudo -cf failed (exit code {}): {}",
                 o.code,
                 o.stderr.trim()
             );
             false
         }
         Err(e) => {
-            log::warn!("visudo 跑不起来：{e:#}");
+            log::warn!("cannot run visudo: {e:#}");
             false
         }
     };
@@ -305,10 +305,10 @@ fn apply_sudoers(env: &Env, root: &Path, text: &str) -> Result<()> {
         let _ = safefs::remove_at(&dir, SUDOERS_CHECK);
         match out {
             Ok(o) => bail!(
-                "visudo 检查不通过（退出码 {}），没有换上，保留原来的文件",
+                "visudo check failed (exit code {}); not installed, keeping the old file",
                 o.code
             ),
-            Err(e) => bail!("{e:#}；没有换上，保留原来的文件"),
+            Err(e) => bail!("{e:#}; not installed, keeping the old file"),
         }
     }
     safefs::rename_at(&dir, SUDOERS_CHECK, SUDOERS_FILE)
@@ -319,7 +319,7 @@ fn apply_polkit(root: &Path, text: &str) -> Result<()> {
     let dir = match safefs::open_dir(root, Path::new(POLKIT_DIR), !text.is_empty()) {
         Ok(d) => d,
         Err(e) if text.is_empty() && is_not_found(&e) => return Ok(()),
-        Err(e) => return Err(e).with_context(|| format!("打开 /{POLKIT_DIR}")),
+        Err(e) => return Err(e).with_context(|| format!("open /{POLKIT_DIR}")),
     };
     if text.is_empty() {
         safefs::remove_at(&dir, POLKIT_FILE)
@@ -334,13 +334,14 @@ fn apply_groups(env: &Env, root: &Path, local_admin: bool) -> Vec<String> {
     let mut problems = Vec::new();
     let read = |name: &str| -> Result<String> {
         let etc = safefs::open_dir(root, Path::new("etc"), false)?;
-        let bytes = safefs::read_at(&etc, name)?.with_context(|| format!("/etc/{name} 不存在"))?;
-        String::from_utf8(bytes).with_context(|| format!("/etc/{name} 不是 UTF-8"))
+        let bytes =
+            safefs::read_at(&etc, name)?.with_context(|| format!("/etc/{name} does not exist"))?;
+        String::from_utf8(bytes).with_context(|| format!("/etc/{name} is not UTF-8"))
     };
     let (passwd, group) = match (read("passwd"), read("group")) {
         (Ok(p), Ok(g)) => (p, g),
         (Err(e), _) | (_, Err(e)) => {
-            problems.push(format!("读取用户与组失败：{e:#}"));
+            problems.push(format!("failed to read users and groups: {e:#}"));
             return problems;
         }
     };
@@ -352,14 +353,16 @@ fn apply_groups(env: &Env, root: &Path, local_admin: bool) -> Vec<String> {
         Vec::new()
     };
     match group_members(&group, LOCAL_ADMIN_GROUP) {
-        None => problems.push(format!("没有 {LOCAL_ADMIN_GROUP} 组（镜像太旧？）")),
+        None => problems.push(format!("no {LOCAL_ADMIN_GROUP} group (image too old?)")),
         Some(cur) => {
             let same = cur.iter().collect::<BTreeSet<_>>() == want.iter().collect::<BTreeSet<_>>();
             if !same {
                 let list = want.join(",");
                 let cmd = Cmd::new("gpasswd", &["-M", &list, LOCAL_ADMIN_GROUP]);
                 if let Err(e) = run_ok_redacted(env.runner, cmd) {
-                    problems.push(format!("设定 {LOCAL_ADMIN_GROUP} 的成员失败：{e:#}"));
+                    problems.push(format!(
+                        "failed to set the members of {LOCAL_ADMIN_GROUP}: {e:#}"
+                    ));
                 }
             }
         }
@@ -374,7 +377,9 @@ fn apply_groups(env: &Env, root: &Path, local_admin: bool) -> Vec<String> {
         }
     }
     if failures > 0 {
-        problems.push(format!("{failures} 个成员没能移出管理员组"));
+        problems.push(format!(
+            "{failures} member(s) could not be removed from the administrator group"
+        ));
     }
     problems
 }
@@ -823,7 +828,10 @@ mod tests {
         assert!(!out[0].ok);
         let d = out[0].detail.as_deref().unwrap();
         assert!(!d.contains("alice"), "{d}");
-        assert!(d.contains("1 个成员没能移出管理员组"), "{d}");
+        assert!(
+            d.contains("1 member(s) could not be removed from the administrator group"),
+            "{d}"
+        );
     }
 
     #[test]

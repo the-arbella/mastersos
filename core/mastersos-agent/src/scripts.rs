@@ -42,7 +42,7 @@ pub fn run_apply(
                 results.push(ItemResult {
                     item: s.path.clone(),
                     ok: false,
-                    detail: Some("包里没有这个脚本".into()),
+                    detail: Some("this script is not in the bundle".into()),
                 });
                 continue;
             }
@@ -67,11 +67,14 @@ pub fn run_apply(
             Ok(Outcome::TimedOut(tail)) => (
                 false,
                 Some(join(
-                    &format!("timeout：{} 秒内没有结束，已终止", timeout.as_secs()),
+                    &format!(
+                        "timeout: did not finish within {} seconds; killed",
+                        timeout.as_secs()
+                    ),
                     tail,
                 )),
             ),
-            Err(e) => (false, Some(format!("无法运行：{e}"))),
+            Err(e) => (false, Some(format!("cannot run: {e}"))),
         };
         if ok {
             state.script_hashes.insert(s.path.clone(), hash);
@@ -95,9 +98,9 @@ fn join(head: &str, tail: Option<String>) -> String {
 fn describe(st: ExitStatus) -> String {
     use std::os::unix::process::ExitStatusExt;
     match (st.code(), st.signal()) {
-        (Some(c), _) => format!("退出码 {c}"),
-        (None, Some(sig)) => format!("被信号 {sig} 终止"),
-        _ => "异常退出".into(),
+        (Some(c), _) => format!("exit code {c}"),
+        (None, Some(sig)) => format!("killed by signal {sig}"),
+        _ => "exited abnormally".into(),
     }
 }
 
@@ -229,7 +232,7 @@ mod tests {
         let r = run_apply(&g, d.path(), d.path(), &mut st);
         assert!(!r[0].ok);
         let detail = r[0].detail.as_deref().unwrap();
-        assert!(detail.contains("退出码 1"), "{detail}");
+        assert!(detail.contains("exit code 1"), "{detail}");
         assert!(detail.contains("打印机没连上"), "{detail}");
         assert!(st.script_hashes.is_empty());
         run_apply(&g, d.path(), d.path(), &mut st);

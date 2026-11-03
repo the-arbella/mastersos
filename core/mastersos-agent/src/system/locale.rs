@@ -54,11 +54,11 @@ fn run_timezone(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
 
 fn apply_timezone(env: &mut Env, tz: &str) -> Result<()> {
     if let Err(e) = checks::timezone(tz) {
-        bail!("{e}；不设置");
+        bail!("{e}; not setting it");
     }
     let file = env.paths.root.join(ZONEINFO).join(tz);
     if !std::fs::metadata(&file).is_ok_and(|m| m.is_file()) {
-        bail!("镜像里没有时区 {tz}（/{ZONEINFO}/{tz} 不是普通文件）；不设置");
+        bail!("time zone {tz} is not in the image (/{ZONEINFO}/{tz} is not a regular file); not setting it");
     }
     let current = run_ok(
         env.runner,
@@ -108,7 +108,7 @@ pub fn current_lang(status: &str) -> Option<&str> {
 
 fn apply_locale(env: &mut Env, l: &str) -> Result<()> {
     if let Err(e) = checks::locale(l) {
-        bail!("{e}；不设置");
+        bail!("{e}; not setting it");
     }
     let available = run_ok(env.runner, Cmd::new("locale", &["-a"]))?;
     let want = normalize_locale(l);
@@ -116,7 +116,7 @@ fn apply_locale(env: &mut Env, l: &str) -> Result<()> {
         .lines()
         .any(|a| normalize_locale(a.trim()) == want)
     {
-        bail!("镜像里没有这个语言 {l}（语言只能在构建镜像时生成）；不设置");
+        bail!("locale {l} is not in the image (locales can only be generated when building the image); not setting it");
     }
     let status = run_ok(env.runner, Cmd::new("localectl", &["status"]))?;
     if current_lang(&status) == Some(l) {
@@ -249,7 +249,7 @@ mod tests {
                 .detail
                 .as_deref()
                 .unwrap()
-                .contains("镜像里没有这个语言"),
+                .contains("is not in the image"),
             "{out:?}"
         );
         assert!(sets(&r, "localectl set-locale").is_empty());

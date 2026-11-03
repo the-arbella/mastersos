@@ -59,9 +59,9 @@ const LOGINCTL_TIMEOUT: Duration = Duration::from_secs(15);
 const JOURNAL_SOCKET: &str = "/run/systemd/journal/socket";
 
 /// journald 的三种 `MESSAGE`。
-pub const MSG_ENTER: &str = "进入";
-pub const MSG_EXIT: &str = "退出";
-pub const MSG_ABNORMAL: &str = "异常结束";
+pub const MSG_ENTER: &str = "entered";
+pub const MSG_EXIT: &str = "exited";
+pub const MSG_ABNORMAL: &str = "ended abnormally";
 pub const MSG_WRONG_SESSION: &str = "not the locked app session; ending it";
 
 /// 各子命令共用的外部依赖，测试里换掉。
@@ -194,7 +194,7 @@ pub fn error_argv(home: &Path) -> Vec<String> {
 pub fn id_from_user(user: &str) -> Result<String, String> {
     let id = user
         .strip_prefix("kiosk-")
-        .ok_or_else(|| format!("{user:?} 不是锁定应用的账号（kiosk-<id>）"))?;
+        .ok_or_else(|| format!("{user:?} is not a locked app account (kiosk-<id>)"))?;
     kiosk::check_id(id).map_err(|e| e.message)?;
     Ok(id.to_string())
 }
@@ -302,10 +302,10 @@ fn end_session(ctx: &Ctx) {
     match terminate_target(ctx) {
         Some(t) => {
             if let Err(e) = terminate(ctx.runner, &t) {
-                eprintln!("mastersos-kiosk: 结束会话失败：{e:#}");
+                eprintln!("mastersos-kiosk: failed to end the session: {e:#}");
             }
         }
-        None => eprintln!("mastersos-kiosk: 找不到当前会话，也不是锁定应用的账号：不结束会话"),
+        None => eprintln!("mastersos-kiosk: no current session found and not a locked app account: not ending the session"),
     }
 }
 
@@ -318,9 +318,9 @@ fn read_capped(p: &Path) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
     std::fs::File::open(p)
         .and_then(|f| f.take(MAX_POLICY_BYTES + 1).read_to_end(&mut buf))
-        .with_context(|| format!("读 {}", p.display()))?;
+        .with_context(|| format!("read {}", p.display()))?;
     if buf.len() as u64 > MAX_POLICY_BYTES {
-        bail!("{} 超过 {MAX_POLICY_BYTES} 字节", p.display());
+        bail!("{} is over {MAX_POLICY_BYTES} bytes", p.display());
     }
     Ok(buf)
 }
@@ -336,9 +336,9 @@ pub fn check_managed_policy(root: &Path, managed: &Path, id: &str) -> Result<()>
             .join(POLICY_FILE),
     )?;
     let mut names = Vec::new();
-    for e in std::fs::read_dir(managed).with_context(|| format!("列 {}", managed.display()))? {
+    for e in std::fs::read_dir(managed).with_context(|| format!("list {}", managed.display()))? {
         names.push(
-            e.with_context(|| format!("列 {}", managed.display()))?
+            e.with_context(|| format!("list {}", managed.display()))?
                 .file_name()
                 .to_string_lossy()
                 .into_owned(),
@@ -347,17 +347,17 @@ pub fn check_managed_policy(root: &Path, managed: &Path, id: &str) -> Result<()>
     names.sort();
     if names != [POLICY_FILE] {
         bail!(
-            "{} 里是 {names:?}，应恰好是 [{POLICY_FILE:?}]",
+            "{} contains {names:?}; it must be exactly [{POLICY_FILE:?}]",
             managed.display()
         );
     }
     let p = managed.join(POLICY_FILE);
-    let md = std::fs::symlink_metadata(&p).with_context(|| format!("看 {}", p.display()))?;
+    let md = std::fs::symlink_metadata(&p).with_context(|| format!("stat {}", p.display()))?;
     if !md.file_type().is_file() {
-        bail!("{} 不是普通文件", p.display());
+        bail!("{} is not a regular file", p.display());
     }
     if read_capped(&p)? != ours {
-        bail!("{} 与这个应用的策略不同", p.display());
+        bail!("{} differs from the policy of this app", p.display());
     }
     Ok(())
 }
@@ -368,11 +368,11 @@ pub fn read_launch(root: &Path, id: &str) -> Result<Launch> {
     let mut buf = Vec::new();
     std::fs::File::open(&p)
         .and_then(|f| f.take(MAX_LAUNCH_BYTES).read_to_end(&mut buf))
-        .with_context(|| format!("读 {}", p.display()))?;
+        .with_context(|| format!("read {}", p.display()))?;
     let l: Launch =
-        serde_json::from_slice(&buf).with_context(|| format!("解析 {}", p.display()))?;
+        serde_json::from_slice(&buf).with_context(|| format!("parse {}", p.display()))?;
     if l.id != id {
-        bail!("{} 里的 id 是 {:?}，不是 {id:?}", p.display(), l.id);
+        bail!("the id in {} is {:?}, not {id:?}", p.display(), l.id);
     }
     Ok(l)
 }
@@ -395,7 +395,7 @@ pub fn run(
     let id = match id_from_user(&user) {
         Ok(id) => id,
         Err(why) => {
-            let detail = format!("{why}：不起应用，结束这个会话");
+            let detail = format!("{why}: not starting the app; ending this session");
             eprintln!("mastersos-kiosk run: {detail}");
             (ctx.journal)("", MSG_ABNORMAL, Some(&detail));
             end_session(ctx);
@@ -410,13 +410,15 @@ pub fn run(
     };
     if !session_is_kiosk(ctx, &user) {
         return refuse(format!(
-            "不在 {SESSION} 会话里（XDG_SESSION_DESKTOP = {:?}），不起应用",
+            "not in the {SESSION} session (XDG_SESSION_DESKTOP = {:?}); not starting the app",
             (ctx.env)("XDG_SESSION_DESKTOP")
         ));
     }
     if let Some(a) = arg_id {
         if a != id {
-            return refuse(format!("参数里的 id {a:?} 不是这个账号的（{id}）"));
+            return refuse(format!(
+                "the id {a:?} in the arguments does not belong to this account ({id})"
+            ));
         }
     }
     let launch = match read_launch(ctx.root, &id) {
@@ -430,11 +432,11 @@ pub fn run(
     // 多了整机的策略时，Chrome 会照整机（分组）的策略开，没有任何锁定——宁可不起。错误页也不开（同样是这个 Chrome）。
     // 本地程序同样核对（终审 I1）：程序里的链接会在这个命名空间里起 Chrome，它也该拿到这个应用的禁止一切的那份
     if let Err(e) = check_managed_policy(ctx.root, ctx.managed_dir, &id) {
-        let detail = format!("Chrome 的托管策略不是这个应用的（{e:#}），不起应用，结束会话");
+        let detail = format!("the Chrome managed policy is not the one for this app ({e:#}); not starting the app, ending the session");
         eprintln!("mastersos-kiosk run: {detail}");
         (ctx.journal)(&id, MSG_ABNORMAL, Some(&detail));
         if let Err(e) = spawn(&zenity_error_argv(POLICY_NOT_ISOLATED)) {
-            eprintln!("mastersos-kiosk run: 弹不出错误框：{e}");
+            eprintln!("mastersos-kiosk run: cannot show the error dialog: {e}");
         }
         end_session(ctx);
         return false;
@@ -445,7 +447,7 @@ pub fn run(
         // 本地程序没有考试扩展，退出靠它自己的「退出」：退出就结束会话（设计 §4.4）
         match spawn(&argv) {
             Ok(()) => (ctx.journal)(&id, MSG_EXIT, None),
-            Err(e) => (ctx.journal)(&id, MSG_ABNORMAL, Some(&format!("起不来：{e}"))),
+            Err(e) => (ctx.journal)(&id, MSG_ABNORMAL, Some(&format!("failed to start: {e}"))),
         }
     } else {
         let mut sup = Supervisor::new();
@@ -453,7 +455,7 @@ pub fn run(
         let mut current = &argv;
         loop {
             if let Err(e) = spawn(current) {
-                eprintln!("mastersos-kiosk run: {} 起不来：{e}", current[0]);
+                eprintln!("mastersos-kiosk run: {} failed to start: {e}", current[0]);
             }
             match sup.next_action(now()) {
                 Next::Restart => {}
@@ -462,7 +464,7 @@ pub fn run(
                         &id,
                         MSG_ABNORMAL,
                         Some(&format!(
-                            "{} 秒内退出 {} 次，打开错误页",
+                            "exited {1} times within {0} seconds; opening the error page",
                             sup.window.as_secs(),
                             sup.max_exits
                         )),
@@ -544,7 +546,7 @@ pub fn exit_host(input: &mut dyn Read, output: &mut dyn Write, ctx: &Ctx) -> boo
             (ctx.journal)(&id, MSG_EXIT, None);
         }
         if let Err(e) = terminate(ctx.runner, &t) {
-            eprintln!("mastersos-kiosk exit-host: 结束会话失败：{e:#}");
+            eprintln!("mastersos-kiosk exit-host: failed to end the session: {e:#}");
         }
     }
     ok
@@ -598,7 +600,11 @@ pub fn enter(
         return Ok(());
     }
     let r = terminate_target(ctx)
-        .ok_or_else(|| anyhow!("找不到当前会话（没有 XDG_SESSION_ID，logind 也没有图形会话）"))
+        .ok_or_else(|| {
+            anyhow!(
+                "no current session found (no XDG_SESSION_ID and no graphical session in logind)"
+            )
+        })
         .and_then(|t| terminate(ctx.runner, &t));
     if r.is_err() {
         error(ENTER_FAILED);
@@ -610,7 +616,7 @@ pub fn enter(
 fn spawn_status(argv: &[String]) -> std::io::Result<std::process::ExitStatus> {
     let (prog, args) = argv
         .split_first()
-        .ok_or_else(|| std::io::Error::other("空的命令行"))?;
+        .ok_or_else(|| std::io::Error::other("empty command line"))?;
     Command::new(prog).args(args).stdin(Stdio::null()).status()
 }
 
@@ -661,7 +667,7 @@ fn journal_send(id: &str, msg: &str, detail: Option<&str>) {
     if sent.is_err() {
         eprintln!(
             "mastersos-kiosk: MASTERSOS_KIOSK={id} {msg}{}",
-            detail.map(|d| format!("：{d}")).unwrap_or_default()
+            detail.map(|d| format!(": {d}")).unwrap_or_default()
         );
     }
 }
@@ -714,7 +720,7 @@ pub fn parse(args: &[String]) -> Result<Sub, String> {
 pub fn main(args: impl Iterator<Item = OsString>) -> ExitCode {
     let args: Option<Vec<String>> = args.map(|a| a.into_string().ok()).collect();
     let sub = match args
-        .ok_or_else(|| "参数不是 UTF-8".to_string())
+        .ok_or_else(|| "argument is not UTF-8".to_string())
         .and_then(|a| parse(&a))
     {
         Ok(s) => s,

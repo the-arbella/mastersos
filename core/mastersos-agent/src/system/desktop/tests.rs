@@ -350,7 +350,10 @@ async fn https_icon_downloaded_only_in_full_phase() {
     let (out, sys) = run_blocking(rp.clone(), g.clone(), SysState::default(), Phase::Boot).await;
     let w = item(&out, "webapp:LMS");
     assert!(w.ok, "{w:?}");
-    assert!(w.detail.as_deref().unwrap().contains("通用图标"), "{w:?}");
+    assert!(
+        w.detail.as_deref().unwrap().contains("generic icon"),
+        "{w:?}"
+    );
     assert_eq!(icon_line(&launcher(&rp, url)), GENERIC_ICON);
     assert_eq!(
         s.received_requests().await.unwrap().len(),
@@ -416,12 +419,12 @@ async fn oversized_or_non_image_icon_falls_back() {
     let (out, _) = run_blocking(rp.clone(), g, SysState::default(), Phase::Full).await;
     for (n, u, why) in [
         ("Big", "https://big.th/", "512 KiB"),
-        ("Page", "https://page.th/", "不是 PNG 或 SVG"),
+        ("Page", "https://page.th/", "not PNG or SVG"),
     ] {
         let w = item(&out, &format!("webapp:{n}"));
         assert!(w.ok, "{w:?}");
         let d = w.detail.as_deref().unwrap();
-        assert!(d.contains("通用图标") && d.contains(why), "{d}");
+        assert!(d.contains("generic icon") && d.contains(why), "{d}");
         assert_eq!(icon_line(&launcher(&rp, u)), GENERIC_ICON);
     }
     assert!(names(&xdg(&rp).join("icons")).is_empty());
@@ -464,7 +467,7 @@ fn bundle_icon_is_copied_and_missing_one_falls_back() {
     );
     let b = item(&out, "webapp:B");
     assert!(
-        b.ok && b.detail.as_deref().unwrap().contains("通用图标"),
+        b.ok && b.detail.as_deref().unwrap().contains("generic icon"),
         "{b:?}"
     );
 }
@@ -869,11 +872,14 @@ async fn failed_icon_is_not_refetched_until_web_apps_change() {
         .detail
         .as_deref()
         .unwrap()
-        .contains("下载图标失败"));
+        .contains("icon download failed"));
     assert_eq!(s.received_requests().await.unwrap().len(), 1);
     let (out, sys) = run_blocking(rp.clone(), g, sys, Phase::Full).await;
     let d = item(&out, "webapp:A").detail.clone().unwrap();
-    assert!(d.contains("上次下载失败") && d.contains("通用图标"), "{d}");
+    assert!(
+        d.contains("failed last time") && d.contains("generic icon"),
+        "{d}"
+    );
     assert_eq!(s.received_requests().await.unwrap().len(), 1, "不再请求");
     // 清单变了（多一个网页应用）：再试一次
     let g = grp(
@@ -931,7 +937,10 @@ async fn icon_downloads_share_one_budget() {
         "第二个不请求"
     );
     let d = item(&out, "webapp:Two").detail.clone().unwrap();
-    assert!(d.contains("下载时间用完") && d.contains("通用图标"), "{d}");
+    assert!(
+        d.contains("download time for this round is used up") && d.contains("generic icon"),
+        "{d}"
+    );
     // 第一个被这一轮剩下的时间截断（服务端要 3 秒才回），不是等满 60 秒
     let d1 = item(&out, "webapp:One").detail.clone().unwrap();
     assert!(d1.contains("timed out"), "{d1}");
@@ -970,7 +979,7 @@ async fn superseded_apply_downloads_nothing() {
         .detail
         .as_deref()
         .unwrap()
-        .contains("有更新的应用请求"));
+        .contains("a newer apply request is pending"));
 }
 
 /// 复审 T13 R3：一时的失败（5xx、超时、连不上、时间用完）下一轮完整应用再试；只有 4xx、太大、不是图片才记下。

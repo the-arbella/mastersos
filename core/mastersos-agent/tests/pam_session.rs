@@ -81,7 +81,7 @@ fn ephemeral_cleanup_ignores_unknown_user() {
         assert!(!String::from_utf8_lossy(&o.stderr).contains("panicked"));
         if is_root() {
             assert_eq!(o.status.code(), Some(0), "{user}");
-            assert!(String::from_utf8_lossy(&o.stderr).contains("什么都不做"));
+            assert!(String::from_utf8_lossy(&o.stderr).contains("doing nothing"));
         } else {
             assert_eq!(o.status.code(), Some(1), "{user}");
             assert!(String::from_utf8_lossy(&o.stderr).contains("root"));
@@ -100,7 +100,7 @@ fn ephemeral_cleanup_without_user_is_a_usage_error() {
     assert!(!String::from_utf8_lossy(&o.stderr).contains("panicked"));
     if is_root() {
         assert_eq!(o.status.code(), Some(2));
-        assert!(String::from_utf8_lossy(&o.stderr).contains("账号名"));
+        assert!(String::from_utf8_lossy(&o.stderr).contains("account name"));
     } else {
         assert_eq!(o.status.code(), Some(1));
     }

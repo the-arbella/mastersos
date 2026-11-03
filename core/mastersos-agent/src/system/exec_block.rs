@@ -94,12 +94,12 @@ fn present(p: &Path) -> bool {
 pub fn ensure(root: &Path, runner: &dyn Runner, block: bool) -> Result<()> {
     let path = under(root, STUB);
     let stub = if present(&path) {
-        Some(std::fs::read(&path).with_context(|| format!("读取 {STUB}"))?)
+        Some(std::fs::read(&path).with_context(|| format!("read {STUB}"))?)
     } else {
         None
     };
     if block && stub.is_none() {
-        bail!("镜像里没有 {STUB}，堵不了终端、文件管理器与设置");
+        bail!("{STUB} is not in the image; cannot block the terminal, file manager and settings");
     }
     let mut errs = Vec::new();
     for t in TARGETS {
@@ -117,7 +117,7 @@ pub fn ensure(root: &Path, runner: &dyn Runner, block: bool) -> Result<()> {
     if errs.is_empty() {
         Ok(())
     } else {
-        bail!("{}", errs.join("；"))
+        bail!("{}", errs.join("; "))
     }
 }
 
@@ -126,7 +126,7 @@ fn bind(runner: &dyn Runner, p: &Path, abs: &str, stub: &[u8]) -> Result<()> {
         return Ok(());
     }
     run_ok(runner, host_cmd(&["mount", "--bind", STUB, abs]))
-        .with_context(|| format!("把桩挂到 {abs} 上"))?;
+        .with_context(|| format!("mount the stub over {abs}"))?;
     Ok(())
 }
 
@@ -141,10 +141,10 @@ fn unbind(runner: &dyn Runner, p: &Path, abs: &str, stub: &[u8]) -> Result<()> {
             return Ok(());
         }
         run_ok(runner, host_cmd(&["umount", "-l", abs]))
-            .with_context(|| format!("从 {abs} 上卸掉桩"))?;
+            .with_context(|| format!("unmount the stub from {abs}"))?;
     }
     if is_stub(p, stub) {
-        bail!("{abs} 卸了 {MAX_LAYERS} 层还是桩");
+        bail!("{abs} is still the stub after unmounting {MAX_LAYERS} layers");
     }
     Ok(())
 }
@@ -179,7 +179,7 @@ fn lock_file(root: &Path) -> Result<std::os::fd::OwnedFd> {
         Mode::from_raw_mode(0o600),
     )
     .map_err(std::io::Error::from)
-    .with_context(|| format!("打开 /{LOCK_DIR}/{LOCK_FILE}"))?;
+    .with_context(|| format!("open /{LOCK_DIR}/{LOCK_FILE}"))?;
     Ok(fd)
 }
 
@@ -188,7 +188,7 @@ pub(crate) fn lock(root: &Path) -> Result<std::os::fd::OwnedFd> {
     let fd = lock_file(root)?;
     rustix::fs::flock(&fd, rustix::fs::FlockOperation::LockExclusive)
         .map_err(std::io::Error::from)
-        .context("锁 exec-block")?;
+        .context("lock exec-block")?;
     Ok(fd)
 }
 
@@ -203,7 +203,7 @@ fn lock_bounded(root: &Path, wait: std::time::Duration) -> Result<Option<std::os
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
             Err(rustix::io::Errno::WOULDBLOCK) => return Ok(None),
-            Err(e) => return Err(std::io::Error::from(e)).context("锁 exec-block"),
+            Err(e) => return Err(std::io::Error::from(e)).context("lock exec-block"),
         }
     }
 }
@@ -213,7 +213,7 @@ pub(crate) fn write_mode(paths: &SysPaths, block: bool) -> Result<()> {
     // The old vocabulary on purpose: see MODE_FILE.
     let text: &[u8] = if block { b"browser\n" } else { b"desktop\n" };
     crate::safefs::write_at(&dir, MODE_FILE, text, 0o600)
-        .with_context(|| format!("写入 {MODE_FILE}"))?;
+        .with_context(|| format!("write {MODE_FILE}"))?;
     // The session's copy, in the new words: see SESSION_MODE_FILE.
     let public = super::public_dir(paths)?;
     let text: &[u8] = if block { b"learning\n" } else { b"full\n" };
@@ -234,7 +234,7 @@ pub fn read_mode(paths: &SysPaths) -> Result<Option<bool>> {
         Some(b"learning\n" | b"browser\n") => Some(true),
         Some(b"full\n" | b"desktop\n") => Some(false),
         Some(_) => {
-            log::warn!("{MODE_FILE} 的内容读不懂，什么都不做");
+            log::warn!("cannot understand the contents of {MODE_FILE}; doing nothing");
             None
         }
         None => None,
@@ -274,10 +274,10 @@ pub(crate) fn sync_with(
     let _lock = lock_bounded(&paths.root, wait)?;
     if _lock.is_none() {
         log::warn!(
-            "exec-block：{} 秒内没等到锁，不持锁照样按盘上的模式收敛",
+            "exec-block: did not get the lock within {} seconds; converging to the mode on disk without it",
             wait.as_secs_f32()
         );
-        eprintln!("exec-block：没等到锁，不持锁照样收敛");
+        eprintln!("exec-block: did not get the lock; converging without it");
     }
     let Some(block) = read_mode(paths)? else {
         return Ok(None);
@@ -299,7 +299,7 @@ pub fn sync_main() -> ExitCode {
     match sync(&SysPaths::default(), &RealRunner) {
         Ok(_) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("exec-block：{e:#}");
+            eprintln!("exec-block: {e:#}");
             ExitCode::FAILURE
         }
     }

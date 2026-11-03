@@ -42,7 +42,7 @@ fn read_file(dir: &Path, what: &str) -> Option<String> {
         Ok(fd) => fd,
         Err(e) if crate::apply::is_not_found(&e) => return None,
         Err(e) => {
-            log::warn!("打开{what}失败，不读其中的 {TOKEN_FILE}：{e:#}");
+            log::warn!("failed to open the {what}; not reading its {TOKEN_FILE}: {e:#}");
             return None;
         }
     };
@@ -50,7 +50,7 @@ fn read_file(dir: &Path, what: &str) -> Option<String> {
         Ok(Some(b)) => b,
         Ok(None) => return None,
         Err(e) => {
-            log::warn!("读取{what}的 {TOKEN_FILE} 失败：{e:#}");
+            log::warn!("failed to read {TOKEN_FILE} in the {what}: {e:#}");
             return None;
         }
     };
@@ -59,7 +59,7 @@ fn read_file(dir: &Path, what: &str) -> Option<String> {
         Ok(t) if ok && is_valid(&t) => Some(t),
         _ => {
             log::warn!(
-                "{what}的 {TOKEN_FILE} 不合格（空、超过 {MAX_TOKEN_BYTES} 字节或含不可打印字符），当作没有"
+                "{TOKEN_FILE} in the {what} is invalid (empty, over {MAX_TOKEN_BYTES} bytes or has unprintable characters); ignoring it"
             );
             None
         }
@@ -69,12 +69,12 @@ fn read_file(dir: &Path, what: &str) -> Option<String> {
 /// 全部来源，按优先级：state 里的、种子分区里的、`seed.toml` 的（不合格的已去掉）。
 pub fn sources(state_dir: &Path, seed_dir: &Path, seed: &Seed) -> Vec<String> {
     [
-        read_file(state_dir, "状态目录"),
-        read_file(seed_dir, "种子分区"),
+        read_file(state_dir, "state directory"),
+        read_file(seed_dir, "seed partition"),
         seed.fetch_token.clone().filter(|t| {
             let ok = is_valid(t);
             if !ok {
-                log::warn!("seed.toml 的 fetch_token 不合格（空、超过 {MAX_TOKEN_BYTES} 字节或含不可打印字符），当作没有");
+                log::warn!("fetch_token in seed.toml is invalid (empty, over {MAX_TOKEN_BYTES} bytes or has unprintable characters); ignoring it");
             }
             ok
         }),
@@ -110,15 +110,16 @@ pub fn save_with(
     use anyhow::Context;
     if !is_valid(token) {
         anyhow::bail!(
-            "服务端给的新令牌不合格（空、超过 {MAX_TOKEN_BYTES} 字节或含不可打印字符），不保存"
+            "the new token from the server is invalid (empty, over {MAX_TOKEN_BYTES} bytes or has unprintable characters); not saving it"
         );
     }
-    let state = crate::safefs::open_abs_dir(state_dir, false).context("打开状态目录")?;
+    let state =
+        crate::safefs::open_abs_dir(state_dir, false).context("open the state directory")?;
     crate::safefs::write_at(&state, TOKEN_FILE, token.as_bytes(), 0o600)
-        .with_context(|| format!("写状态目录的 {TOKEN_FILE}"))?;
+        .with_context(|| format!("write {TOKEN_FILE} in the state directory"))?;
     let unmounted = || {
         anyhow::Error::new(SeedNotWritten(
-            "种子分区没挂上，恢复出厂之后会退回旧令牌".into(),
+            "seed partition is not mounted; a factory reset will go back to the old token".into(),
         ))
     };
     if require_mount {
@@ -126,7 +127,7 @@ pub fn save_with(
             Ok(true) => {}
             Ok(false) => return Err(unmounted()),
             Err(e) => {
-                log::warn!("检查种子分区失败：{e:#}");
+                log::warn!("checking the seed partition failed: {e:#}");
                 return Err(unmounted());
             }
         }
@@ -135,9 +136,10 @@ pub fn save_with(
         crate::safefs::write_at(&fd, TOKEN_FILE, token.as_bytes(), 0o600).map(|_| ())
     });
     if let Err(e) = written {
-        log::warn!("写种子分区的 {TOKEN_FILE} 失败：{e:#}");
+        log::warn!("failed to write {TOKEN_FILE} on the seed partition: {e:#}");
         return Err(anyhow::Error::new(SeedNotWritten(
-            "种子分区写不进，恢复出厂之后会退回旧令牌".into(),
+            "cannot write to the seed partition; a factory reset will go back to the old token"
+                .into(),
         )));
     }
     Ok(())

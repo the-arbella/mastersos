@@ -180,7 +180,7 @@ impl SysState {
         Ok(match safefs::read_at(&dir, SYS_STATE)? {
             None => SysState::default(),
             Some(b) => serde_json::from_slice(&b).unwrap_or_else(|e| {
-                log::error!("{SYS_STATE} 解析失败（{e}），按默认值重建");
+                log::error!("failed to parse {SYS_STATE} ({e}); rebuilding from defaults");
                 SysState::default()
             }),
         })
@@ -305,7 +305,7 @@ impl SystemApplier {
             Err(e) => {
                 out.push(failed(
                     "system:state",
-                    format!("读取 {SYS_STATE} 失败：{e:#}"),
+                    format!("failed to read {SYS_STATE}: {e:#}"),
                 ));
                 (
                     SysState {
@@ -322,7 +322,10 @@ impl SystemApplier {
                 continue;
             }
             if stop() {
-                log::info!("有更新的应用请求，停在 {} 之前", step.name);
+                log::info!(
+                    "a newer apply request is pending; stopping before {}",
+                    step.name
+                );
                 break;
             }
             let mut env = Env {
@@ -339,7 +342,7 @@ impl SystemApplier {
             if let Err(e) = sys.save(&self.paths) {
                 out.push(failed(
                     "system:state",
-                    format!("保存 {SYS_STATE} 失败：{e:#}"),
+                    format!("failed to save {SYS_STATE}: {e:#}"),
                 ));
             }
         }

@@ -9,10 +9,10 @@ pub const WIFI_ALLOW: &[(u16, u16, &str)] = &[
     (
         0x8086,
         0x9df0,
-        "Intel Wireless-AC 9560（Cannon Point / Whiskey Lake）",
+        "Intel Wireless-AC 9560 (Cannon Point / Whiskey Lake)",
     ),
-    (0x8086, 0x02f0, "Intel Wi-Fi 6 AX201 / 9560（Comet Lake）"),
-    (0x8086, 0xa0f0, "Intel Wi-Fi 6 AX201（Tiger Lake）"),
+    (0x8086, 0x02f0, "Intel Wi-Fi 6 AX201 / 9560 (Comet Lake)"),
+    (0x8086, 0xa0f0, "Intel Wi-Fi 6 AX201 (Tiger Lake)"),
     (0x8086, 0x2723, "Intel Wi-Fi 6 AX200"),
     (0x8086, 0x2725, "Intel Wi-Fi 6E AX210"),
 ];

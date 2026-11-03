@@ -113,7 +113,7 @@ fn sha256_at(dir: &OwnedFd, name: &str) -> Result<Option<String>> {
     let mut h = Sha256::new();
     let mut buf = vec![0u8; 64 * 1024];
     loop {
-        match f.read(&mut buf).with_context(|| format!("读取 {name}"))? {
+        match f.read(&mut buf).with_context(|| format!("read {name}"))? {
             0 => return Ok(Some(hex(&h.finalize()))),
             n => h.update(&buf[..n]),
         }
@@ -142,10 +142,10 @@ async fn download(
         .send()
         .await
         .map_err(reqwest::Error::without_url)
-        .context("下载请求失败")?
+        .context("download request failed")?
         .error_for_status()
         .map_err(reqwest::Error::without_url)
-        .context("下载被服务器拒绝")?;
+        .context("download refused by the server")?;
     let dir = safefs::open_dir(root, parent, true)?;
     // 出错返回时 TmpFile 被丢弃，临时文件随之删掉。
     let mut tmp = safefs::TmpFile::create(&dir, name, 0o644)?;
@@ -154,14 +154,14 @@ async fn download(
         .chunk()
         .await
         .map_err(reqwest::Error::without_url)
-        .context("下载中断")?
+        .context("download interrupted")?
     {
         h.update(&chunk);
         tmp.write_all(&chunk)?;
     }
     let got = hex(&h.finalize());
     if got != want {
-        bail!("sha256 不符：期望 {want}，实际 {got}");
+        bail!("sha256 mismatch: expected {want}, got {got}");
     }
     tmp.commit()
 }
@@ -199,7 +199,7 @@ pub async fn place(
         wanted.insert(f.dest.clone());
         let src = bundle_dir.join(&f.src);
         let r = (|| -> Result<String> {
-            let bytes = fs::read(&src).map_err(|_| anyhow!("包里没有 {}", f.src))?;
+            let bytes = fs::read(&src).map_err(|_| anyhow!("{} is not in the bundle", f.src))?;
             let want = sha256_hex(&bytes);
             let (parent, name) = safefs::split_abs(&f.dest)?;
             let dir = safefs::open_dir(root, &parent, true)?;
