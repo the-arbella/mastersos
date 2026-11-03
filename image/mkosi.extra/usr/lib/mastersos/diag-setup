@@ -1,0 +1,48 @@
+#!/bin/bash
+# ExecStart of mastersos-diag-setup.service: the developer diagnostics switch (docs/specs/2026-11-03-diagnostics-design.md).
+# The switch is the regular file /var/lib/mastersos-seed/debug.conf (the installer creates it when the install stick has a
+# debug.conf next to the seeds; its content is never read). Without it nothing is written. With it, before the services start:
+#   /run/mastersos/diag.env                          read by the 90-mastersos-diag.conf drop-ins (EnvironmentFile=-):
+#       MASTERSOS_LOG_LEVEL=debug                    mastersos-agent
+#       MASTERSOS_DIAG_AUTHD_ARGS=-vv                authd and authd-oidc (cobra -v count: -vv is DEBUG, -vvv only adds the caller)
+#       MASTERSOS_DIAG_WPA_ARGS=-d                   wpa_supplicant debug level; never -K (show keys)
+#   /run/NetworkManager/conf.d/90-mastersos-diag.conf  [logging] level=DEBUG
+#   /etc/gdm3/custom.conf                            Enable=true in [debug] (a copy path, owned by this machine; stays once set,
+#                                                    like the switch, which only a reinstall removes)
+# MASTERSOS_DIAG_ROOT prefixes every path (tests/diag-setup-test.sh only).
+set -euo pipefail
+R=${MASTERSOS_DIAG_ROOT:-}
+switch=$R/var/lib/mastersos-seed/debug.conf
+
+# write $2 to $1 through a temporary file in the same folder
+put() {
+	mkdir -p "$(dirname "$1")"
+	printf '%s\n' "$2" >"$1.tmp"
+	mv -f "$1.tmp" "$1"
+}
+
+# Enable=true in custom.conf's [debug] section: an existing "Enable=..." or "#Enable=true" line there becomes Enable=true,
+# otherwise the line is added (and the section when it is missing). Other lines stay as they are.
+gdm_debug() {
+	local f=$R/etc/gdm3/custom.conf
+	mkdir -p "$(dirname "$f")"
+	[ -f "$f" ] || : >"$f"
+	awk '
+		/^\[/ { if (s == "[debug]" && !done) { print "Enable=true"; done = 1 } s = $0; print; next }
+		s == "[debug]" && /^#?[ \t]*Enable[ \t]*=/ { if (!done) { print "Enable=true"; done = 1 } next }
+		{ print }
+		END { if (!done) { if (s != "[debug]") print "[debug]"; print "Enable=true" } }
+	' "$f" >"$f.tmp"
+	mv -f "$f.tmp" "$f"
+}
+
+if [ ! -f "$switch" ] || [ -L "$switch" ]; then
+	exit 0
+fi
+echo "mastersos-diag-setup: developer diagnostics are on ($switch): debug logging for NetworkManager, wpa_supplicant, GDM, authd and mastersos-agent"
+put "$R/run/mastersos/diag.env" 'MASTERSOS_LOG_LEVEL=debug
+MASTERSOS_DIAG_AUTHD_ARGS=-vv
+MASTERSOS_DIAG_WPA_ARGS=-d'
+put "$R/run/NetworkManager/conf.d/90-mastersos-diag.conf" '[logging]
+level=DEBUG'
+gdm_debug

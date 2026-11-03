@@ -760,7 +760,10 @@ PY
 	bad 17 "$pol 的总线策略不对（见上）"
 	r=1
 fi
-for l in 'Type=dbus' "BusName=$bus" 'ExecStart=/usr/libexec/authd-oidc --config /etc/authd/oidc/broker.conf' \
+# $MASTERSOS_DIAG_AUTHD_ARGS is literal unit text (developer diagnostics: -vv with the switch, empty otherwise)
+# shellcheck disable=SC2016
+for l in 'Type=dbus' "BusName=$bus" 'ExecStart=/usr/libexec/authd-oidc --config /etc/authd/oidc/broker.conf $MASTERSOS_DIAG_AUTHD_ARGS' \
+	'EnvironmentFile=-/run/mastersos/diag.env' \
 	'StateDirectory=authd-oidc' 'ConfigurationDirectory=authd/oidc' 'ProtectSystem=strict' 'ProtectHome=yes' \
 	'PrivateTmp=yes' 'NoNewPrivileges=yes' 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6' \
 	'ReadWritePaths=/var/lib/authd-oidc' 'CapabilityBoundingSet=' \

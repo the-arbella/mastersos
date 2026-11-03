@@ -2504,3 +2504,37 @@ fn all_invalid_seeds_refuse_before_the_tpm_check() {
     );
     assert!(r.calls().iter().all(|c| is_read_only(c)));
 }
+
+#[test]
+fn debug_flag_regular_file_is_present() {
+    let d = tempfile::tempdir().unwrap();
+    fs::write(d.path().join(DEBUG_FLAG), "anything\n").unwrap();
+    assert!(debug_flag_present(d.path()));
+}
+
+#[test]
+fn debug_flag_missing_dir_or_symlink_is_absent() {
+    let d = tempfile::tempdir().unwrap();
+    assert!(!debug_flag_present(&d.path().join("missing")));
+    assert!(!debug_flag_present(d.path()));
+    let link = d.path().join("link");
+    fs::create_dir(&link).unwrap();
+    fs::write(d.path().join("target"), "").unwrap();
+    std::os::unix::fs::symlink(d.path().join("target"), link.join(DEBUG_FLAG)).unwrap();
+    assert!(!debug_flag_present(&link));
+    let dir = d.path().join("dir");
+    fs::create_dir_all(dir.join(DEBUG_FLAG)).unwrap();
+    assert!(!debug_flag_present(&dir));
+}
+
+#[test]
+fn write_debug_flag_writes_empty_file() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().join("seed");
+    write_seed_dir(&dir, &SeedFound::None).unwrap();
+    write_debug_flag(&dir).unwrap();
+    let m = fs::metadata(dir.join(DEBUG_FLAG)).unwrap();
+    assert!(m.is_file());
+    assert_eq!(m.len(), 0);
+    assert_eq!(m.permissions().mode() & 0o777, 0o644);
+}

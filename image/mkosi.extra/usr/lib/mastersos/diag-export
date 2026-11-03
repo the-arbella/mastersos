@@ -1,0 +1,178 @@
+#!/bin/bash
+# ExecStart of mastersos-diag-export@<device>.service (developer diagnostics, docs/specs/2026-11-03-diagnostics-design.md):
+# a vfat or exfat USB stick was plugged in. Only when the switch /var/lib/mastersos-seed/debug.conf is there (a regular file),
+# the stick is mounted (nosuid,nodev,noexec) under /run/mastersos-diag/<device> and gets
+#   mastersos-diag-<first 8 of machine-id>-<UTC YYYYMMDDTHHMMSSZ>[-N].tar.zst
+# written as <name>.partial and renamed once complete, so a file with the final name is always whole. Then sync and unmount;
+# the stick can be pulled. Without the switch nothing is mounted or written (udev also checks it, but a stick present at boot
+# may be seen before the seed partition is mounted).
+# Sensitive data is not filtered out: this is a developer tool, its packages never go into the repository. Home folders are
+# not collected (their logs are in the journal). Each command runs at most DIAG_CMD_TIMEOUT (20) seconds: a wedged
+# NetworkManager must not stop the export. The journal dumps get DIAG_JOURNAL_TIMEOUT (300) seconds: with debug logging a
+# boot is easily a million lines, journalctl prints oldest first, and a cut would lose the newest lines, the incident itself. MASTERSOS_DIAG_ROOT prefixes the files read (tests/diag-export-test.sh only).
+set -euo pipefail
+R=${MASTERSOS_DIAG_ROOT:-}
+switch=$R/var/lib/mastersos-seed/debug.conf
+staging=
+mnt=
+mounted=
+cmd_pid=
+
+say() {
+	echo "mastersos-diag-export: $*"
+	logger -t mastersos-diag-export -- "$*" 2>/dev/null || true
+}
+
+diag_enabled() { [ -f "$switch" ] && [ ! -L "$switch" ]; }
+
+# run_cmd <out-name> <cmd...>: output (stdout and stderr) to $staging/<out-name>, one line "<out-name> <rc|missing|timeout>"
+# in $staging/commands.txt. Runs in the background and waits, so a TERM (stick pulled, unit stopped) is handled at once.
+run_cmd() {
+	local out=$1 rc=0
+	shift
+	mkdir -p "$(dirname "$staging/$out")"
+	if ! command -v "$1" >/dev/null 2>&1; then
+		echo "$out missing" >>"$staging/commands.txt"
+		return 0
+	fi
+	timeout "${DIAG_CMD_TIMEOUT:-20}" "$@" >"$staging/$out" 2>&1 </dev/null &
+	cmd_pid=$!
+	wait "$cmd_pid" || rc=$?
+	cmd_pid=
+	if [ "$rc" = 124 ]; then
+		echo "$out timeout" >>"$staging/commands.txt"
+	else
+		echo "$out $rc" >>"$staging/commands.txt"
+	fi
+}
+
+# copy_tree <source> <path in the package>: a folder or file as it is (no owners: the stick is FAT); missing is recorded
+copy_tree() {
+	if [ -e "$1" ]; then
+		mkdir -p "$staging/$(dirname "$2")"
+		cp -a --no-preserve=ownership "$1" "$staging/$2" 2>>"$staging/copy-errors.txt" || echo "$2 copy-failed" >>"$staging/commands.txt"
+	else
+		echo "$2 missing" >>"$staging/commands.txt"
+	fi
+}
+
+# pick_name <dir> <machine8> <stamp>: the first of <base>.tar.zst, <base>-2.tar.zst, ... that is not in <dir>
+pick_name() {
+	local base="mastersos-diag-$2-$3" name i=1
+	name=$base.tar.zst
+	while [ -e "$1/$name" ] || [ -e "$1/$name.partial" ]; do
+		i=$((i + 1))
+		name=$base-$i.tar.zst
+	done
+	echo "$name"
+}
+
+# pack <staging> <dest-dir> <name>: tar --zstd to <name>.partial, flush, rename; on failure nothing is left
+pack() {
+	local part=$2/$3.partial
+	if tar --zstd -C "$1" -cf "$part" . && sync -f "$part" && mv -f "$part" "$2/$3" && sync -f "$2/$3"; then
+		return 0
+	fi
+	rm -f "$part" 2>/dev/null || true
+	return 1
+}
+
+# column <n> <pattern> <file> [skip]: the values of column n that match, from an output file (none when the command was missing)
+column() {
+	[ -f "$3" ] || return 0
+	awk -v c="$1" -v re="$2" -v skip="${4:-0}" 'NR > skip && $c ~ re {print $c}' "$3"
+}
+
+collect() {
+	local n boots pid sid esp
+	run_cmd boots.txt journalctl --list-boots --no-pager
+	# the last 5 boots, by index (0 = this one)
+	boots=$(column 1 '^-?[0-9]+$' "$staging/boots.txt" | tail -n 5)
+	# this boot even when the list failed or is empty
+	printf '%s\n' "$boots" | grep -qx 0 || boots="$boots 0"
+	for n in $boots; do
+		DIAG_CMD_TIMEOUT=${DIAG_JOURNAL_TIMEOUT:-300} run_cmd "journal/boot-$n.txt" journalctl -b "$n" -o short-precise --no-pager
+	done
+	DIAG_CMD_TIMEOUT=${DIAG_JOURNAL_TIMEOUT:-300} run_cmd journal/kernel-boot-0.txt journalctl -k -b 0 -o short-precise --no-pager
+	run_cmd coredumps.txt coredumpctl list --no-pager
+	for pid in $(column 5 '^[0-9]+$' "$staging/coredumps.txt" | tail -n 20); do
+		run_cmd "coredump/$pid.txt" coredumpctl info --no-pager "$pid"
+	done
+	run_cmd systemctl-failed.txt systemctl --failed --no-pager
+	run_cmd systemctl-units.txt systemctl list-units --all --no-pager
+	run_cmd sessions.txt loginctl list-sessions --no-pager
+	for sid in $(column 1 '^[A-Za-z0-9]+$' "$staging/sessions.txt" 1); do
+		run_cmd "session/$sid.txt" loginctl show-session "$sid"
+	done
+	run_cmd nmcli-general.txt nmcli general
+	run_cmd nmcli-device.txt nmcli device
+	run_cmd nmcli-connection.txt nmcli connection show
+	run_cmd nmcli-wifi-list.txt nmcli device wifi list
+	run_cmd ip-addr.txt ip addr
+	run_cmd ip-route.txt ip route
+	run_cmd resolvectl.txt resolvectl status --no-pager
+	run_cmd rfkill.txt rfkill list
+	run_cmd iw-dev.txt iw dev
+	run_cmd iw-reg.txt iw reg get
+	run_cmd lspci.txt lspci -nnk
+	run_cmd lsusb.txt lsusb
+	run_cmd libinput.txt libinput list-devices
+	run_cmd bootctl.txt bootctl status --no-pager
+	copy_tree /proc/cmdline proc/cmdline
+	copy_tree /proc/bus/input/devices proc/input-devices
+	copy_tree /sys/power/mem_sleep sys/mem_sleep
+	copy_tree "$R/etc/os-release" etc/os-release
+	copy_tree "$R/var/lib/mastersos-seed" seed
+	copy_tree "$R/var/lib/mastersos" var/lib/mastersos
+	copy_tree "$R/etc/NetworkManager" etc/NetworkManager
+	copy_tree "$R/etc/gdm3" etc/gdm3
+	copy_tree "$R/etc/polkit-1" etc/polkit-1
+	copy_tree "$R/etc/authd" etc/authd
+	esp=$(bootctl --print-esp-path 2>/dev/null) || esp=
+	if [ -n "$esp" ]; then
+		copy_tree "$esp/EFI/MastersOS" esp/EFI/MastersOS
+	else
+		echo "esp/EFI/MastersOS missing" >>"$staging/commands.txt"
+	fi
+}
+
+cleanup() {
+	[ -z "$cmd_pid" ] || kill "$cmd_pid" 2>/dev/null || true
+	if [ -n "$mounted" ]; then
+		umount "$mnt" 2>/dev/null || umount -l "$mnt" 2>/dev/null || true
+	fi
+	[ -z "$mnt" ] || rmdir "$mnt" 2>/dev/null || true
+	[ -z "$staging" ] || rm -rf "$staging"
+}
+
+main() {
+	local dev=${1:?usage: diag-export <kernel device name>} machine stamp name rc=0
+	if ! diag_enabled; then
+		say "developer diagnostics are off, /dev/$dev is not touched"
+		return 0
+	fi
+	trap cleanup EXIT
+	trap 'exit 143' TERM INT
+	mnt=$R/run/mastersos-diag/$dev
+	mkdir -p "$mnt"
+	mount -o nosuid,nodev,noexec "/dev/$dev" "$mnt"
+	mounted=1
+	staging=$(mktemp -d "$R/var/tmp/mastersos-diag.XXXXXX")
+	say "collecting for /dev/$dev"
+	collect
+	machine=$(head -c 8 "$R/etc/machine-id" 2>/dev/null) || machine=
+	[ -n "$machine" ] || machine=unknown
+	stamp=$(date -u +%Y%m%dT%H%M%SZ)
+	name=$(pick_name "$mnt" "$machine" "$stamp")
+	pack "$staging" "$mnt" "$name" || rc=$?
+	if [ "$rc" = 0 ]; then
+		say "wrote $name to /dev/$dev; it can be unplugged"
+	else
+		say "writing to /dev/$dev failed (stick full or read-only?); nothing was left on it"
+	fi
+	return "$rc"
+}
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+	main "$@"
+fi
