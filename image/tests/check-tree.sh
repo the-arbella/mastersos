@@ -2233,6 +2233,28 @@ CATALOGUES
 	bad 50 "login-i18n: $why"
 	r=1
 fi
+# The agent's banner sentences are msgids: status.rs, strings.js and the template must list the same ones.
+if ! why=$(python3 -I - "$core/mastersos-agent/src/status.rs" "$rel/mkosi.extra/usr/share/gnome-shell/extensions/mastersos-login@mastersos.org/strings.js" "$rel/login-i18n/mastersos-login.pot" <<'BANNER'
+import re, sys
+
+rs, js, pot = (open(p, encoding="utf-8").read() for p in sys.argv[1:])
+names = re.search(r"BANNER_SENTENCES: \[&str; \d+\] = \[([^\]]*)\]", rs)
+if not names:
+    sys.exit("status.rs has no BANNER_SENTENCES")
+consts = dict(re.findall(r'^const (MSG_[A-Z_]+): &str =\s*"([^"]*)";', rs, re.M))
+want = [consts.get(n.strip(), "?" + n.strip()) for n in names.group(1).split(",") if n.strip()]
+block = re.search(r"export const BANNER = \(\) => \[(.*?)\];", js, re.S)
+got = re.findall(r"_\('([^']*)'\)", block.group(1)) if block else []
+if sorted(want) != sorted(got):
+    sys.exit(f"strings.js BANNER differs from status.rs BANNER_SENTENCES: {sorted(set(want) ^ set(got))}")
+missing = [w for w in want if f'msgid "{w}"' not in pot]
+if missing:
+    sys.exit(f"not in mastersos-login.pot: {missing}")
+BANNER
+); then
+	bad 50 "banner sentences: $why"
+	r=1
+fi
 [ "$r" = 0 ] && ok 50 "language: polkit limited to the two actions, localed can write the keymap, every pack and locale in the image, catalogues present"
 
 exit $fail

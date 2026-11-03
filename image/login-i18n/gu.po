@@ -106,3 +106,15 @@ msgstr "આ એપ ફક્ત સાઇન-ઇન સ્ક્રીન પર
 
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "આ એપને નેટવર્કની જરૂર છે. ઉપરની પટ્ટીમાંથી Wi-Fi સાથે જોડાઓ, પછી ફરી પ્રયાસ કરો."
+
+msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
+msgstr "નેટવર્ક નથી. ઉપર જમણી બાજુના મેનૂમાંથી Wi-Fi નેટવર્ક પસંદ કરો, અથવા નેટવર્ક કેબલ કે USB ટેથરિંગવાળો ફોન જોડો."
+
+msgid "Waiting for school settings."
+msgstr "શાળાના સેટિંગ્સની રાહ જોવાઈ રહી છે."
+
+msgid "Installing the web browser. You can sign in; it will appear when ready."
+msgstr "વેબ બ્રાઉઝર ઇન્સ્ટોલ થઈ રહ્યું છે. તમે સાઇન ઇન કરી શકો છો; તૈયાર થાય ત્યારે તે દેખાશે."
+
+msgid "The web browser could not be installed yet; it will try again. You can sign in."
+msgstr "વેબ બ્રાઉઝર હજી ઇન્સ્ટોલ થઈ શક્યું નથી; ફરી પ્રયાસ કરવામાં આવશે. તમે સાઇન ઇન કરી શકો છો."

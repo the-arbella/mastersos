@@ -31,6 +31,14 @@ const DETAIL_MAX_CHARS: usize = 160;
 const MSG_NETWORK: &str = "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering.";
 const MSG_SETTINGS: &str = "Waiting for school settings.";
 const MSG_CHROME: &str = "Installing the web browser. You can sign in; it will appear when ready.";
+const MSG_CHROME_FAILED: &str =
+    "The web browser could not be installed yet; it will try again. You can sign in.";
+
+/// Every sentence the login-screen banner can start with. The login extension translates the
+/// banner's first line through gettext, so each must be a msgid in
+/// `image/mkosi.extra/usr/share/gnome-shell/extensions/mastersos-login@mastersos.org/strings.js`
+/// (checked by `image/tests/check-tree.sh`).
+pub const BANNER_SENTENCES: [&str; 4] = [MSG_NETWORK, MSG_SETTINGS, MSG_CHROME, MSG_CHROME_FAILED];
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Debug)]
 #[serde(rename_all = "snake_case")]
@@ -102,6 +110,8 @@ impl Status {
             Some((MSG_NETWORK, self.network_detail.as_deref()))
         } else if self.settings != Settings::Ok {
             Some((MSG_SETTINGS, self.settings_detail.as_deref()))
+        } else if self.chrome == Browser::Failed {
+            Some((MSG_CHROME_FAILED, self.chrome_detail.as_deref()))
         } else if self.chrome != Browser::Ok {
             Some((MSG_CHROME, self.chrome_detail.as_deref()))
         } else {

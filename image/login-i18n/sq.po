@@ -106,3 +106,15 @@ msgstr "Ky aplikacion hapet vetëm nga ekrani i hyrjes"
 
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Ky aplikacion ka nevojë për një rrjet. Lidhu me Wi-Fi nga shiriti lart dhe provo përsëri."
+
+msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
+msgstr "Nuk ka rrjet. Zgjidh një rrjet Wi-Fi te menyja lart djathtas, ose lidh një kabllo rrjeti ose një telefon që ndan lidhjen përmes USB."
+
+msgid "Waiting for school settings."
+msgstr "Në pritje të cilësimeve të shkollës."
+
+msgid "Installing the web browser. You can sign in; it will appear when ready."
+msgstr "Po instalohet shfletuesi i uebit. Mund të hysh; do të shfaqet kur të jetë gati."
+
+msgid "The web browser could not be installed yet; it will try again. You can sign in."
+msgstr "Shfletuesi i uebit nuk u instalua dot ende; do të provohet përsëri. Mund të hysh."

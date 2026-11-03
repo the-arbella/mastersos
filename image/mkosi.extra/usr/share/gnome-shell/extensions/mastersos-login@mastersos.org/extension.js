@@ -33,7 +33,7 @@ import {loginArea} from './area.js';
 import {LoginCard} from './card.js';
 import {LanguageScreen, languageChosen, restartGreeter} from './setup.js';
 import {Shelf} from './shelf.js';
-import {agentRefusal, brokerText, cleanText, fmt, strings} from './strings.js';
+import {agentRefusal, bannerText, brokerText, cleanText, fmt, strings} from './strings.js';
 
 const BRANDING = '/var/lib/mastersos-public/branding/branding.json';
 const NM_CONNECTIVITY_NONE = 1;
@@ -191,6 +191,19 @@ export default class MastersosLoginExtension extends Extension {
 
     _patchGreeter() {
         const ext = this;
+
+        // The agent writes the banner in English (dconf has no language): show its sentence in the screen's language.
+        if (typeof LoginDialog.LoginDialog.prototype._updateBanner === 'function') {
+            this._patch(LoginDialog.LoginDialog.prototype, '_updateBanner', original =>
+                function (...args) {
+                    original.apply(this, args);
+                    const text = this._bannerLabel?.get_text?.();
+                    if (text)
+                        this._bannerLabel.set_text(bannerText(text));
+                });
+        } else {
+            log('mastersos-login: LoginDialog._updateBanner is missing; the banner stays in English');
+        }
 
         this._patch(AuthPrompt.AuthPrompt.prototype, '_openWebLoginDialog', original =>
             function (verifier, service, message, url, code, autoAck, customButton) {

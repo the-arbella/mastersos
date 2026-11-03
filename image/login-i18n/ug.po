@@ -106,3 +106,15 @@ msgstr "بۇ ئەپنى پەقەت كىرىش ئېكرانىدىن ئاچقىل�
 
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "بۇ ئەپكە تور لازىم. ئۈستى بالداقتىن Wi-Fi غا ئۇلاڭ، ئاندىن قايتا سىناڭ."
+
+msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
+msgstr "تور يوق. سول ئۈستىدىكى تىزىملىكتىن بىر Wi-Fi تورىنى تاللاڭ، ياكى تور سىمى ياكى USB ئارقىلىق تور ئورتاقلىشىدىغان تېلېفون ئۇلاڭ."
+
+msgid "Waiting for school settings."
+msgstr "مەكتەپ تەڭشەكلىرىنى كۈتۈۋاتىدۇ."
+
+msgid "Installing the web browser. You can sign in; it will appear when ready."
+msgstr "تور كۆرگۈچ ئورنىتىلىۋاتىدۇ. كىرسىڭىز بولىدۇ؛ تەييار بولغاندا كۆرۈنىدۇ."
+
+msgid "The web browser could not be installed yet; it will try again. You can sign in."
+msgstr "تور كۆرگۈچ تېخى ئورنىتىلمىدى؛ قايتا سىنىلىدۇ. كىرسىڭىز بولىدۇ."

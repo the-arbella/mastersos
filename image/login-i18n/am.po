@@ -106,3 +106,15 @@ msgstr "ይህ መተግበሪያ ከመግቢያ ማያ ገጹ ብቻ ነው �
 
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "ይህ መተግበሪያ አውታረ መረብ ይፈልጋል። ከላይኛው አሞሌ ከWi-Fi ጋር ይገናኙ፣ ከዚያ እንደገና ይሞክሩ።"
+
+msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
+msgstr "አውታረ መረብ የለም። ከላይ በስተቀኝ ካለው ምናሌ የWi-Fi አውታረ መረብ ይምረጡ፣ ወይም የአውታረ መረብ ገመድ ወይም በUSB ኢንተርኔት የሚያጋራ ስልክ ይሰኩ።"
+
+msgid "Waiting for school settings."
+msgstr "የትምህርት ቤት ቅንብሮችን በመጠበቅ ላይ።"
+
+msgid "Installing the web browser. You can sign in; it will appear when ready."
+msgstr "የድር አሳሹ በመጫን ላይ ነው። መግባት ይችላሉ፤ ዝግጁ ሲሆን ይታያል።"
+
+msgid "The web browser could not be installed yet; it will try again. You can sign in."
+msgstr "የድር አሳሹ ገና ሊጫን አልቻለም፤ እንደገና ይሞከራል። መግባት ይችላሉ።"

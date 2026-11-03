@@ -106,3 +106,15 @@ msgstr "Aplikazio hau saioa hasteko pantailatik soilik ireki daiteke"
 
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Aplikazio honek sarea behar du. Konektatu Wi-Fi sarera goiko barratik eta saiatu berriro."
+
+msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
+msgstr "Ez dago sarerik. Aukeratu Wi-Fi sare bat goiko eskuineko menuan, edo konektatu sare-kable bat edo USB bidez konexioa partekatzen duen telefono bat."
+
+msgid "Waiting for school settings."
+msgstr "Ikastetxeko ezarpenen zain."
+
+msgid "Installing the web browser. You can sign in; it will appear when ready."
+msgstr "Web arakatzailea instalatzen. Saioa has dezakezu; prest dagoenean agertuko da."
+
+msgid "The web browser could not be installed yet; it will try again. You can sign in."
+msgstr "Oraindik ezin izan da web arakatzailea instalatu; berriro saiatuko da. Saioa has dezakezu."

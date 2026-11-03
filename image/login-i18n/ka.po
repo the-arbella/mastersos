@@ -106,3 +106,15 @@ msgstr "ეს აპი მხოლოდ შესვლის ეკრა�
 
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "ამ აპლიკაციას ქსელი სჭირდება. ზედა პანელიდან დაუკავშირდით Wi-Fi-ს და სცადეთ ხელახლა."
+
+msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
+msgstr "ქსელი არ არის. აირჩიეთ Wi-Fi ქსელი ზედა მარჯვენა მენიუში, ან შეაერთეთ ქსელის კაბელი ან ტელეფონი USB-მოდემის რეჟიმში."
+
+msgid "Waiting for school settings."
+msgstr "სკოლის პარამეტრების მოლოდინი."
+
+msgid "Installing the web browser. You can sign in; it will appear when ready."
+msgstr "ვებბრაუზერი ინსტალირდება. შეგიძლიათ შეხვიდეთ; ის გამოჩნდება, როცა მზად იქნება."
+
+msgid "The web browser could not be installed yet; it will try again. You can sign in."
+msgstr "ვებბრაუზერის ინსტალაცია ჯერ ვერ მოხერხდა; მცდელობა განმეორდება. შეგიძლიათ შეხვიდეთ."

@@ -106,3 +106,15 @@ msgstr "Denne appen kan bare åpnes fra påloggingsskjermen"
 
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Denne appen trenger et nettverk. Koble til Wi-Fi fra linjen øverst og prøv igjen."
+
+msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
+msgstr "Ingen nettverk. Velg et Wi-Fi-nettverk i menyen øverst til høyre, eller koble til en nettverkskabel eller en telefon med USB-deling."
+
+msgid "Waiting for school settings."
+msgstr "Venter på skoleinnstillingene."
+
+msgid "Installing the web browser. You can sign in; it will appear when ready."
+msgstr "Nettleseren installeres. Du kan logge på; den vises når den er klar."
+
+msgid "The web browser could not be installed yet; it will try again. You can sign in."
+msgstr "Nettleseren kunne ikke installeres ennå; det blir prøvd igjen. Du kan logge på."

@@ -305,9 +305,16 @@ fn headline_priority_and_copy() {
     let (sentence, detail) = s.headline().unwrap();
     assert_eq!(
         sentence,
-        "Installing the web browser. You can sign in; it will appear when ready."
+        "The web browser could not be installed yet; it will try again. You can sign in."
     );
     assert_eq!(detail, Some("boom"));
+
+    // Still installing (no failure yet): the reassuring sentence, no detail.
+    let s = Status::new(Net::Ok, None, Settings::Ok, None, Browser::Installing, None);
+    assert_eq!(
+        s.headline().unwrap().0,
+        "Installing the web browser. You can sign in; it will appear when ready."
+    );
 }
 
 #[test]
