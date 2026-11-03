@@ -17,6 +17,7 @@ pub mod seed;
 pub mod select;
 pub mod sign;
 pub mod spec;
+pub mod stamp;
 pub mod status;
 #[cfg(any(test, feature = "test-util"))]
 pub mod testutil;
@@ -34,4 +35,5 @@ pub use push::*;
 pub use seed::*;
 pub use select::*;
 pub use sign::*;
+pub use stamp::*;
 pub use status::*;
