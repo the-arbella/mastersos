@@ -29,7 +29,8 @@ use plan::{
 };
 use precheck::{precheck, Level, PrecheckEnv, Profile};
 use seed::{
-    choose_seed, locate_seeds, refuse_if_all_invalid, write_seed_dir, SeedFile, SeedSource,
+    choose_seed, debug_flag_present, locate_seeds, refuse_if_all_invalid, write_debug_flag,
+    write_seed_dir, SeedFile, SeedSource,
 };
 use tty::Tty;
 
@@ -342,6 +343,10 @@ pub fn run_install_with(r: &dyn Runner, tty: &mut dyn Tty, env: &InstallEnv) -> 
         write_mok_hash(Path::new(MOK_HASH_FILE), &hash)?;
     }
     write_seed_dir(Path::new(SEED_DIR), &seed)?;
+    // Developer diagnostics: repart's CopyFiles= copies the whole folder into the seed partition
+    if debug_flag_present(&source.dir) {
+        write_debug_flag(Path::new(SEED_DIR))?;
+    }
     run_plan(
         r,
         tty,
