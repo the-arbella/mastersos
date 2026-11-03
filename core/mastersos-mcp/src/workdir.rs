@@ -80,23 +80,36 @@ impl Snapshot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UploadInfo {
     pub version: u64,
-    /// The server's content digest of the pending bundle (hex).
-    pub digest: String,
+    /// The server's content digest of the pending bundle (hex); `digest` in older records.
+    #[serde(alias = "digest")]
+    pub digest_hex: String,
 }
 
-fn read_snapshot(dir: &Path) -> Result<Snapshot> {
-    // The state directories are never links (the settings directory itself may be reached by one).
-    if dir
-        .parent()
-        .and_then(Path::file_name)
-        .is_some_and(|n| n == STATE)
-    {
-        refuse_link(dir.parent().unwrap())?;
-        refuse_link(dir)?;
-    }
+/// A snapshot directory's own links: `.mastersos` and `.mastersos/<x>` (when `dir` is one of the
+/// state directories) and its `files`/`scripts` are never symbolic links. The settings directory
+/// itself may be reached by one.
+fn refuse_snapshot_links(dir: &Path) -> Result<()> {
+    refuse_state_links(dir)?;
     for d in MEMBER_DIRS {
         refuse_link(&dir.join(d))?;
     }
+    Ok(())
+}
+
+/// When `dir` is `<root>/.mastersos/<x>`: neither `.mastersos` nor `<x>` may be a link.
+fn refuse_state_links(dir: &Path) -> Result<()> {
+    if let Some(parent) = dir
+        .parent()
+        .filter(|p| p.file_name().is_some_and(|n| n == STATE))
+    {
+        refuse_link(parent)?;
+        refuse_link(dir)?;
+    }
+    Ok(())
+}
+
+fn read_snapshot(dir: &Path) -> Result<Snapshot> {
+    refuse_snapshot_links(dir)?;
     let manifest = read_text(&dir.join(MANIFEST))?;
     let secrets_raw = read_text(&dir.join(SECRETS))?;
     let secrets = parse_secrets(&secrets_raw)
@@ -229,6 +242,9 @@ fn write_snapshot(
     for key in files.keys() {
         check_key(key)?;
     }
+    // Nothing is written or removed through a link.
+    refuse_snapshot_links(dir)?;
+    refuse_link(&dir.join(MANIFEST))?;
     fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
     for d in MEMBER_DIRS {
         remove_if_exists(&dir.join(d))?;
@@ -256,7 +272,11 @@ fn check_key(key: &str) -> Result<()> {
     Ok(())
 }
 
+/// Remove a file or directory; a link (or a state directory reached through one) is refused,
+/// never followed or removed.
 fn remove_if_exists(path: &Path) -> Result<()> {
+    refuse_state_links(path)?;
+    refuse_link(path)?;
     match fs::symlink_metadata(path) {
         Ok(m) if m.is_dir() => fs::remove_dir_all(path)?,
         Ok(_) => fs::remove_file(path)?,
@@ -284,6 +304,7 @@ fn ensure_gitignore(root: &Path) -> Result<()> {
 }
 
 fn write_meta(root: &Path, meta: &Meta) -> Result<()> {
+    refuse_irregular(&root.join(META))?;
     let text = toml::to_string(meta).context("could not write mastersos.toml")?;
     fs::write(root.join(META), text)?;
     Ok(())
@@ -309,6 +330,7 @@ impl Workdir {
         let dir = Workdir::uploaded_dir(&self.root);
         write_snapshot(&dir, &snap.manifest, &snap.secrets_raw, &snap.files)?;
         let text = toml::to_string(info).context("could not write the upload record")?;
+        refuse_irregular(&dir.join(UPLOAD_INFO))?;
         fs::write(dir.join(UPLOAD_INFO), text)?;
         Ok(())
     }
@@ -316,6 +338,8 @@ impl Workdir {
     /// The upload record, when the directory still holds exactly what was uploaded (offline).
     pub fn uploaded_unchanged(root: &Path) -> Result<Option<UploadInfo>> {
         let dir = Workdir::uploaded_dir(root);
+        // The links first: the record is read only from the real `.mastersos/uploaded`.
+        refuse_snapshot_links(&dir)?;
         refuse_irregular(&dir.join(UPLOAD_INFO))?;
         let Ok(text) = fs::read_to_string(dir.join(UPLOAD_INFO)) else {
             return Ok(None);
@@ -329,7 +353,7 @@ impl Workdir {
     /// pull may replace it without `--force`.
     pub fn is_published_upload(root: &Path, version: u64, digest_hex: &str) -> Result<bool> {
         Ok(Workdir::uploaded_unchanged(root)?
-            .is_some_and(|i| i.version == version && i.digest.eq_ignore_ascii_case(digest_hex)))
+            .is_some_and(|i| i.version == version && i.digest_hex.eq_ignore_ascii_case(digest_hex)))
     }
 
     /// Open an existing settings directory.
@@ -352,6 +376,7 @@ impl Workdir {
         if dir_has_entries(root)? {
             bail!("{} is not empty", root.display());
         }
+        refuse_write_links(root)?;
         fs::create_dir_all(root)?;
         ensure_gitignore(root)?;
         write_snapshot(root, manifest_text, "", &BTreeMap::new())?;
@@ -400,6 +425,7 @@ impl Workdir {
         for key in contents.files.keys() {
             check_key(key)?;
         }
+        refuse_write_links(root)?;
         // The ignore file comes before the first secret is written.
         fs::create_dir_all(root)?;
         ensure_gitignore(root)?;
@@ -444,6 +470,12 @@ impl Workdir {
         Ok((s.manifest, s.secrets, s.files))
     }
 
+    /// Whether `snap` is exactly the base (manifest and files byte for byte, secrets by name and
+    /// value): then there is nothing to publish.
+    pub fn equals_base(&self, snap: &Snapshot) -> Result<bool> {
+        Ok(snap.same_content(&read_snapshot(&self.base_dir())?))
+    }
+
     /// Whether the directory differs from its base: manifest and files byte for byte, secrets by
     /// name and value (re-formatting `secrets.toml` is not a change).
     pub fn is_dirty(&self) -> Result<bool> {
@@ -455,6 +487,7 @@ impl Workdir {
     /// as it is now, which may have been edited meanwhile) the base.
     pub fn mark_published(&self, version: u64) -> Result<()> {
         let dir = Workdir::uploaded_dir(&self.root);
+        refuse_snapshot_links(&dir)?;
         let info: UploadInfo = toml::from_str(&read_text(&dir.join(UPLOAD_INFO))?)
             .context("there is no record of an upload to mark as published")?;
         if info.version != version {
@@ -469,6 +502,22 @@ impl Workdir {
     }
 }
 
+/// Before a pull or init writes anything: none of the paths it writes or removes is a link.
+fn refuse_write_links(root: &Path) -> Result<()> {
+    refuse_link(&root.join(STATE))?;
+    for dir in [
+        root.to_path_buf(),
+        root.join(STATE).join("base"),
+        Workdir::uploaded_dir(root),
+    ] {
+        refuse_snapshot_links(&dir)?;
+        refuse_link(&dir.join(MANIFEST))?;
+        refuse_link(&dir.join(SECRETS))?;
+    }
+    refuse_irregular(&root.join(META))?;
+    refuse_link(&root.join(GITIGNORE))
+}
+
 fn dir_has_entries(root: &Path) -> Result<bool> {
     match fs::read_dir(root) {
         Ok(mut it) => Ok(it.next().is_some()),
@@ -481,11 +530,16 @@ fn dir_has_entries(root: &Path) -> Result<bool> {
 /// Secrets are filled in first (some fields have formats a reference cannot satisfy); no message
 /// leaves this function with a secret value in it.
 pub fn check(w: &Workdir) -> Result<Vec<Lint>> {
-    check_at(w, chrono::Utc::now().date_naive())
+    check_snapshot(w, &read_snapshot(&w.root)?)
 }
 
-fn check_at(w: &Workdir, today: chrono::NaiveDate) -> Result<Vec<Lint>> {
-    let cur = read_snapshot(&w.root)?;
+/// [`check`] on a snapshot already read ([`Workdir::freeze`]): what is checked is exactly what
+/// is then uploaded.
+pub fn check_snapshot(w: &Workdir, cur: &Snapshot) -> Result<Vec<Lint>> {
+    check_at(w, cur, chrono::Utc::now().date_naive())
+}
+
+fn check_at(w: &Workdir, cur: &Snapshot, today: chrono::NaiveDate) -> Result<Vec<Lint>> {
     let base = read_snapshot(&w.base_dir())?;
     let base_text = (!base.manifest.is_empty()).then_some(base.manifest.as_str());
     let present: BTreeSet<String> = cur.files.keys().cloned().collect();
@@ -843,7 +897,7 @@ mod tests {
     fn info(v: u64) -> UploadInfo {
         UploadInfo {
             version: v,
-            digest: "ab".repeat(32),
+            digest_hex: "ab".repeat(32),
         }
     }
 
@@ -1011,5 +1065,134 @@ mod tests {
         std::fs::write(w.root.join("manifest.toml"), "# mine\n").unwrap();
         assert!(Workdir::ensure_pullable(&dir, false).is_err());
         Workdir::ensure_pullable(&dir, true).unwrap();
+    }
+
+    #[test]
+    fn check_snapshot_checks_the_frozen_bytes() {
+        let t = tempfile::tempdir().unwrap();
+        let w = pulled(&t.path().join("school"));
+        let snap = w.freeze().unwrap();
+        // Broken on disk after the freeze: the snapshot's check does not see it.
+        let text = w.manifest().unwrap().replace("secret:", "secret:x-");
+        std::fs::write(w.root.join("manifest.toml"), text).unwrap();
+        assert!(!codes(&check_snapshot(&w, &snap).unwrap()).contains(&"secret_unknown"));
+        assert!(codes(&check(&w).unwrap()).contains(&"secret_unknown"));
+    }
+
+    #[test]
+    fn equals_base_after_pull_only() {
+        let t = tempfile::tempdir().unwrap();
+        let w = pulled(&t.path().join("school"));
+        assert!(w.equals_base(&w.freeze().unwrap()).unwrap());
+        std::fs::write(w.root.join("files/a.txt"), "changed").unwrap();
+        assert!(!w.equals_base(&w.freeze().unwrap()).unwrap());
+    }
+
+    #[test]
+    fn upload_record_reads_old_digest_field() {
+        let i: UploadInfo = toml::from_str("version = 3\ndigest = \"ab\"\n").unwrap();
+        assert_eq!(i.digest_hex, "ab");
+        let i: UploadInfo = toml::from_str("version = 3\ndigest_hex = \"cd\"\n").unwrap();
+        assert_eq!(i.digest_hex, "cd");
+    }
+
+    /// A directory outside the settings directory that must not change.
+    #[cfg(unix)]
+    fn outside(t: &Path, name: &str) -> PathBuf {
+        let d = t.join(name);
+        std::fs::create_dir_all(d.join("base/files")).unwrap();
+        std::fs::create_dir_all(d.join("uploaded/files")).unwrap();
+        std::fs::create_dir_all(d.join("files")).unwrap();
+        std::fs::write(d.join("keep.txt"), "keep").unwrap();
+        std::fs::write(d.join("base/files/keep.txt"), "keep").unwrap();
+        std::fs::write(d.join("uploaded/files/keep.txt"), "keep").unwrap();
+        std::fs::write(
+            d.join("uploaded/upload.toml"),
+            "version = 4\ndigest_hex = \"ab\"\n",
+        )
+        .unwrap();
+        std::fs::write(d.join("files/keep.txt"), "keep").unwrap();
+        d
+    }
+
+    #[cfg(unix)]
+    fn untouched(d: &Path) {
+        for p in [
+            "keep.txt",
+            "base/files/keep.txt",
+            "uploaded/files/keep.txt",
+            "files/keep.txt",
+        ] {
+            assert_eq!(std::fs::read_to_string(d.join(p)).unwrap(), "keep", "{p}");
+        }
+        assert!(d.join("uploaded/upload.toml").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writes_never_go_through_links() {
+        use std::os::unix::fs::symlink;
+        let t = tempfile::tempdir().unwrap();
+        let dir = t.path().join("school");
+
+        // `.mastersos` is a link: pull --force, mark_published and the upload record are refused.
+        let w = pulled(&dir);
+        w.save_uploaded(&w.freeze().unwrap(), &info(4)).unwrap();
+        let out = outside(t.path(), "state");
+        std::fs::remove_dir_all(dir.join(".mastersos")).unwrap();
+        symlink(&out, dir.join(".mastersos")).unwrap();
+        assert!(Workdir::write_pulled(&dir, meta(4), &contents(), true).is_err());
+        assert!(w.mark_published(4).is_err());
+        assert!(Workdir::uploaded_unchanged(&dir).is_err());
+        assert!(w.save_uploaded(&w.freeze().unwrap(), &info(4)).is_err());
+        untouched(&out);
+        std::fs::remove_file(dir.join(".mastersos")).unwrap();
+
+        // `.mastersos/base` and `.mastersos/uploaded` are links.
+        let w = pulled(&t.path().join("school2"));
+        let dir = w.root.clone();
+        w.save_uploaded(&w.freeze().unwrap(), &info(4)).unwrap();
+        for (sub, name) in [("base", "b"), ("uploaded", "u")] {
+            let out = outside(t.path(), name);
+            let real = t.path().join(format!("real-{name}"));
+            std::fs::rename(dir.join(".mastersos").join(sub), &real).unwrap();
+            symlink(out.join(sub), dir.join(".mastersos").join(sub)).unwrap();
+            assert!(
+                Workdir::write_pulled(&dir, meta(4), &contents(), true).is_err(),
+                "{sub}"
+            );
+            assert!(w.mark_published(4).is_err(), "{sub}");
+            if sub == "uploaded" {
+                // The record is not read from behind the link.
+                assert!(Workdir::uploaded_unchanged(&dir).is_err());
+            }
+            untouched(&out);
+            std::fs::remove_file(dir.join(".mastersos").join(sub)).unwrap();
+            std::fs::rename(&real, dir.join(".mastersos").join(sub)).unwrap();
+        }
+
+        // `files` is a link: a pull does not remove or write through it.
+        let out = outside(t.path(), "f");
+        std::fs::remove_dir_all(dir.join("files")).unwrap();
+        symlink(out.join("files"), dir.join("files")).unwrap();
+        assert!(Workdir::write_pulled(&dir, meta(4), &contents(), true).is_err());
+        untouched(&out);
+        assert!(std::fs::symlink_metadata(dir.join("files"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+
+        // `scripts` and mastersos.toml as links.
+        std::fs::remove_file(dir.join("files")).unwrap();
+        symlink(out.join("files"), dir.join("scripts")).unwrap();
+        assert!(Workdir::write_pulled(&dir, meta(4), &contents(), true).is_err());
+        untouched(&out);
+        std::fs::remove_file(dir.join("scripts")).unwrap();
+        let target = t.path().join("meta-target");
+        std::fs::write(&target, "keep").unwrap();
+        std::fs::remove_file(dir.join("mastersos.toml")).unwrap();
+        symlink(&target, dir.join("mastersos.toml")).unwrap();
+        assert!(Workdir::write_pulled(&dir, meta(4), &contents(), true).is_err());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep");
     }
 }

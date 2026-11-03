@@ -18,11 +18,18 @@ your own file tools, run `mastersos check` and `mastersos diff`, and hand the re
 ## Setup (once)
 
 1. Install the command and this skill: `curl -fsSL https://os.khundavid.com/downloads/mastersos/install.sh | sh`
-2. A school admin creates an AI token: the school's admin page, **AI tools**, create a token. It has read
-   access only and expires in 30, 90 or 180 days. It reads Devices and status; it cannot download the Settings bundle.
-3. The person saves it to `~/.config/mastersos/token` and runs `chmod 600 ~/.config/mastersos/token`.
-4. `mastersos setup --server https://<school>.os.khundavid.com` (the school's own host).
-5. IT makes the directory: `mastersos pull <dir>` for a school that has published, `mastersos init <dir>` for a new one.
+2. Two tokens, in two files:
+   - **IT's own token**, for the command line (`init`, `pull`, `publish`, `logo upload`, `devices`, `keys list`): an API
+     token with read and draft scopes from your operator / the admin web page. IT saves it to
+     `~/.config/mastersos/token` and runs `chmod 600` on it. `init`, `pull` and `publish` refuse an AI token.
+   - **The AI token**, only for `mastersos mcp`: a school admin creates it on the school's admin page, **AI tools**. It
+     expires in 30, 90 or 180 days, reads Devices and status, and cannot download the Settings bundle or sign. It is
+     saved to `~/.config/mastersos/ai-token` (`chmod 600`). `mastersos mcp` refuses any other token.
+   You (the AI) are never given IT's token file: you use the MCP tools, or pass
+   `--token-file ~/.config/mastersos/ai-token` to `mastersos devices`, `keys list` and `spec`.
+3. `mastersos setup --server https://<school>.os.khundavid.com` (the school's own host) saves both file paths
+   (`--token-file`, `--ai-token-file` to change them) and tests each token that is there.
+4. IT makes the directory: `mastersos pull <dir>` for a school that has published, `mastersos init <dir>` for a new one.
    You work inside it (`cd <dir>`, or pass `<dir>` to each command).
 
 If `mastersos` is not found, `~/.local/bin` is not on the PATH.
@@ -53,7 +60,8 @@ If `mastersos` is not found, `~/.local/bin` is not on the PATH.
 ## Commands
 
 Add `--json` before the subcommand whenever you read the output yourself. Without it you get tables for people.
-Commands that take `[<dir>]` default to the current directory.
+Commands that take `[<dir>]` default to the current directory. The commands that talk to the server
+(`devices`, `keys list`, `spec`) need `--token-file ~/.config/mastersos/ai-token` when you run them: never use IT's token file.
 
 | Task | Command |
 | --- | --- |

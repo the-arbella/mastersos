@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::workdir::{self, Meta, Workdir};
-use crate::{call, check_server, connect, serve_stdio, Api, OpError, Req};
+use crate::{call, check_server, connect, serve_stdio, Api, OpError, Req, TokenUse};
 
 const EXIT_CODES: &str = "Exit codes: 0 success; 1 failure (network, token, the server refused); \
 2 `check` or `publish` found errors in the local settings.";
@@ -28,10 +28,14 @@ pub struct Cli {
     /// Admin server address, for example https://school.os.khundavid.com (default: `server` in ~/.config/mastersos/config.toml)
     #[arg(long, global = true)]
     server: Option<String>,
-    /// File holding the token, which is never accepted on the command line; it may only have read and draft scopes
-    /// (default: `token_file` in the config file, else ~/.config/mastersos/token)
+    /// File holding IT's own token (read and draft scopes, not an AI token), never accepted on the
+    /// command line (default: `token_file` in the config file, else ~/.config/mastersos/token)
     #[arg(long, global = true)]
     token_file: Option<PathBuf>,
+    /// File holding the AI token that only `mastersos mcp` uses (default: `ai_token_file` in the
+    /// config file, else ~/.config/mastersos/ai-token)
+    #[arg(long, global = true)]
+    ai_token_file: Option<PathBuf>,
     /// Print the server's JSON instead of tables: for scripts and AI
     #[arg(long, global = true)]
     json: bool,
@@ -41,7 +45,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Save --server (and --token-file) to ~/.config/mastersos/config.toml, then test the connection
+    /// Save --server, --token-file and --ai-token-file to ~/.config/mastersos/config.toml, then test the connection
     Setup,
     /// Start a local settings directory for a school that has published nothing yet
     Init {
@@ -139,6 +143,7 @@ enum DevicesCmd {
 struct ConfigFile {
     server: Option<String>,
     token_file: Option<PathBuf>,
+    ai_token_file: Option<PathBuf>,
 }
 
 fn config_dir() -> Result<PathBuf, OpError> {
@@ -191,12 +196,13 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
     let Cli {
         server,
         token_file,
+        ai_token_file,
         json,
         cmd,
     } = cli;
     if let Cmd::Setup = cmd {
         // Before the config file is read: setup is how a broken one gets rewritten.
-        return setup(server, token_file).await;
+        return setup(server, token_file, ai_token_file).await;
     }
     // Offline commands: no server address, no token.
     match &cmd {
@@ -221,16 +227,17 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
                 .into(),
         )
     })?;
-    let token_file = match token_file.or(cfg.token_file) {
-        Some(p) => p,
-        None => config_dir()?.join("token"),
-    };
-    check_private(&token_file)?;
     if let Cmd::Mcp { dir } = &cmd {
+        // The AI gets its own token, never IT's.
+        let ai_token_file = match ai_token_file.or(cfg.ai_token_file) {
+            Some(p) => p,
+            None => config_dir()?.join("ai-token"),
+        };
+        check_private(&ai_token_file)?;
         let dir = dir.clone().unwrap_or_else(|| PathBuf::from("."));
         Workdir::open(&dir).map_err(fail)?;
         // The MCP server keeps its own exit codes: 2 for a token that must not be given to an AI.
-        let api = match connect(&server, &token_file).await {
+        let api = match connect(&server, &ai_token_file, TokenUse::Ai).await {
             Ok(api) => api,
             Err(e) => {
                 eprintln!("mastersos: {e}");
@@ -242,7 +249,18 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
             .map_err(|e| OpError::Failed(format!("{e:#}")))?;
         return Ok(ExitCode::SUCCESS);
     }
-    let api = connect(&server, &token_file)
+    let token_file = match token_file.or(cfg.token_file) {
+        Some(p) => p,
+        None => config_dir()?.join("token"),
+    };
+    check_private(&token_file)?;
+    // The commands that write settings (or upload them) refuse an AI token: it reads secrets as
+    // "<kept>" and must not be able to publish.
+    let wanted = match &cmd {
+        Cmd::Init { .. } | Cmd::Pull { .. } | Cmd::Publish { .. } | Cmd::Logo(_) => TokenUse::It,
+        _ => TokenUse::Any,
+    };
+    let api = connect(&server, &token_file, wanted)
         .await
         .map_err(|e| OpError::Failed(e.to_string()))?;
     let out = Out { json };
@@ -291,20 +309,34 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
     }
 }
 
-async fn setup(server: Option<String>, token_file: Option<PathBuf>) -> Result<ExitCode, OpError> {
+async fn setup(
+    server: Option<String>,
+    token_file: Option<PathBuf>,
+    ai_token_file: Option<PathBuf>,
+) -> Result<ExitCode, OpError> {
     let server = server.ok_or_else(|| {
         OpError::Failed("setup needs --server https://<school>.os.khundavid.com".into())
     })?;
     check_server(&server).map_err(|e| OpError::Failed(e.to_string()))?;
     let dir = config_dir()?;
-    let token_file = match token_file {
-        Some(p) => std::path::absolute(&p)
-            .map_err(|e| OpError::Failed(format!("Bad token file path {}: {e}", p.display())))?,
-        None => dir.join("token"),
+    let absolute = |p: Option<PathBuf>, default: &str| -> Result<PathBuf, OpError> {
+        match p {
+            Some(p) => std::path::absolute(&p)
+                .map_err(|e| OpError::Failed(format!("Bad token file path {}: {e}", p.display()))),
+            None => Ok(dir.join(default)),
+        }
     };
-    let have_token = token_file.exists();
-    if have_token {
-        check_private(&token_file)?;
+    let token_file = absolute(token_file, "token")?;
+    let ai_token_file = absolute(ai_token_file, "ai-token")?;
+    if token_file == ai_token_file {
+        return Err(OpError::Failed(
+            "IT's token file and the AI token file must be different files".into(),
+        ));
+    }
+    for f in [&token_file, &ai_token_file] {
+        if f.exists() {
+            check_private(f)?;
+        }
     }
     std::fs::create_dir_all(&dir)
         .map_err(|e| OpError::Failed(format!("Could not create {}: {e}", dir.display())))?;
@@ -312,28 +344,45 @@ async fn setup(server: Option<String>, token_file: Option<PathBuf>) -> Result<Ex
     let text = toml::to_string(&ConfigFile {
         server: Some(server.clone()),
         token_file: Some(token_file.clone()),
+        ai_token_file: Some(ai_token_file.clone()),
     })
     .map_err(|e| OpError::Failed(format!("Could not write the config: {e}")))?;
     std::fs::write(&path, text)
         .map_err(|e| OpError::Failed(format!("Could not write {}: {e}", path.display())))?;
     println!("Saved {}", path.display());
-    if !have_token {
+    for (file, wanted, what) in [
+        (
+            &token_file,
+            TokenUse::It,
+            "IT's own token for the command line: an API token with read and draft scopes from your operator or the admin web page",
+        ),
+        (
+            &ai_token_file,
+            TokenUse::Ai,
+            "the AI token, used only by `mastersos mcp`: create it under AI tools on the school's admin page",
+        ),
+    ] {
+        if !file.exists() {
+            println!(
+                "Next: save {what} to {} and run `chmod 600` on that file.",
+                file.display()
+            );
+            continue;
+        }
+        let api = connect(&server, file, wanted)
+            .await
+            .map_err(|e| OpError::Failed(e.to_string()))?;
+        let who = crate::whoami(&api)
+            .await
+            .map_err(|e| OpError::Failed(e.to_string()))?;
         println!(
-            "Next: create a token on the school's admin page (AI tools), save it to {} and run `chmod 600` on that file. Then try `mastersos devices list`.",
-            token_file.display()
+            "{}: connected to {server} as {} (scopes: {})",
+            file.display(),
+            cell(&who["label"]),
+            cell(&who["scopes"])
         );
-        return Ok(ExitCode::SUCCESS);
     }
-    let api = connect(&server, &token_file)
-        .await
-        .map_err(|e| OpError::Failed(e.to_string()))?;
-    let who: Value = serde_json::from_str(&api.send(Req::get(&["v1", "admin", "whoami"])).await?)
-        .unwrap_or(Value::Null);
-    println!(
-        "Connected to {server} as {} (scopes: {})",
-        cell(&who["label"]),
-        cell(&who["scopes"])
-    );
+    println!("Never give an AI the token file {}.", token_file.display());
     Ok(ExitCode::SUCCESS)
 }
 
@@ -449,16 +498,8 @@ impl Out {
     }
 }
 
-/// The server's JSON inside a `{"rev", "data"}` wrapper, or the value itself.
-fn data(v: &Value) -> &Value {
-    match v.get("data") {
-        Some(d) if v.get("rev").is_some() => d,
-        _ => v,
-    }
-}
-
 fn items(v: &Value) -> &[Value] {
-    data(v).as_array().map_or(&[], Vec::as_slice)
+    v.as_array().map_or(&[], Vec::as_slice)
 }
 
 fn rows(v: &Value, keys: &[&str]) -> Vec<Vec<String>> {
@@ -552,6 +593,24 @@ fn sign_api(server: &str, token_file: &Path) -> Result<mastersos_sign::Api, OpEr
     mastersos_sign::Api::from_token_file(server, token_file).map_err(fail)
 }
 
+/// Whether two server addresses name the same server: compared as URLs (scheme, host in lower
+/// case, port, path without a trailing `/`), not as text.
+fn same_server(a: &str, b: &str) -> bool {
+    fn norm(s: &str) -> Option<(String, String, Option<u16>, String)> {
+        let u = reqwest::Url::parse(s.trim()).ok()?;
+        Some((
+            u.scheme().to_owned(),
+            u.host_str()?.to_ascii_lowercase(),
+            u.port_or_known_default(),
+            u.path().trim_end_matches('/').to_owned(),
+        ))
+    }
+    match (norm(a), norm(b)) {
+        (Some(x), Some(y)) => x == y,
+        _ => a == b,
+    }
+}
+
 /// `mastersos init <dir>`.
 async fn init_dir(
     api: &Api,
@@ -599,7 +658,7 @@ async fn pull_dir(
     if let Ok(w) = Workdir::open(dir) {
         let m = w.meta().map_err(fail)?;
         anchor = m.school_id.clone();
-        if m.school_id != id || m.server != server {
+        if m.school_id != id || !same_server(&m.server, server) {
             return Err(OpError::Failed(format!(
                 "{} belongs to school {} on {}, not to {id} on {server}",
                 dir.display(),
@@ -765,10 +824,10 @@ async fn publish_dir(
     dir: Option<&Path>,
     key: Option<&Path>,
 ) -> Result<ExitCode, OpError> {
-    use crate::publish::{publish, CheckFailed, PublishOutcome, SignOpts};
+    use crate::publish::{publish, CheckFailed, PublishOutcome, ServerRefused, SignOpts};
     let w = open_dir(dir)?;
     let m = w.meta().map_err(fail)?;
-    if m.server != server {
+    if !same_server(&m.server, server) {
         return Err(OpError::Failed(format!(
             "{} belongs to {}, not to {server}",
             w.root.display(),
@@ -814,7 +873,42 @@ async fn publish_dir(
                     issues: Some(issues),
                 })
             }
-            Err(e) => Err(fail(e)),
+            Err(e) => match e.downcast::<ServerRefused>() {
+                Ok(r) => Err(OpError::Refused {
+                    message: r.message,
+                    issues: Some(r.issues),
+                }),
+                Err(e) => Err(fail(e)),
+            },
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_addresses_compare_as_urls() {
+        assert!(same_server(
+            "https://School.Example/",
+            "https://school.example"
+        ));
+        assert!(same_server(
+            "https://school.example:443",
+            "https://school.example/"
+        ));
+        assert!(!same_server(
+            "https://school.example",
+            "https://other.example"
+        ));
+        assert!(!same_server(
+            "http://localhost:8080",
+            "http://localhost:8081"
+        ));
+        assert!(!same_server(
+            "https://school.example/a",
+            "https://school.example/b"
+        ));
     }
 }

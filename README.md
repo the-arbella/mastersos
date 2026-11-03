@@ -50,16 +50,22 @@ mastersos publish ./school [--key rk.key]   # 有恢复钥匙文件就本机验�
 `mastersos mcp --dir <目录>` 是 stdio 的 MCP 服务，只读：`read_manifest`、`list_files`、`read_file`、`check`、`diff`、`devices_list`、
 `device_show`、`keys_list`、`spec`。没有写工具，也不碰 `secrets.toml`、合成出的包和签名；AI 用自己的文件工具改 `manifest.toml` 与 `files/`。
 
-`setup` 与服务端 token：联网的命令（`pull`、`publish`、`devices`、`keys`、`logo`）要一个 token，由学校管理员在管理页「AI tools」建：
+`setup` 与服务端 token：两个 token 文件，分开放。
+
+- **IT 自己的 token**（`token_file`，默认 `~/.config/mastersos/token`）：命令行的 `init`、`pull`、`publish`、`logo upload`、
+  `keys list`、`devices` 用它。它是 read + draft 范围的 API token，向运营者要，或在管理页建。`init`、`pull`、`publish`、
+  `logo upload` 拒绝 AI token（`whoami` 的 label 以 `ai:` 开头的）：AI token 读到的秘密是 `"<kept>"`，也不能签名。
+- **AI token**（`ai_token_file`，默认 `~/.config/mastersos/ai-token`，`--ai-token-file` 可改）：只给 `mastersos mcp` 用，
+  学校管理员在管理页「AI tools」建。`mastersos mcp` 拒绝不是 AI token 的 token（退出码 2）。**绝不要把 IT 的 token 文件交给 AI。**
 
 ```bash
-mastersos setup --server https://mastersos.school.ac.th --token-file /path/to/ai.token
+mastersos setup --server https://mastersos.school.ac.th --token-file /path/to/it.token --ai-token-file /path/to/ai.token
 ```
 
-`setup` 把两者存进 `~/.config/mastersos/config.toml`（token 文件默认 `~/.config/mastersos/token`，权限必须是 0600）。
+`setup` 把地址与两个文件的路径存进 `~/.config/mastersos/config.toml`（两个文件权限都必须是 0600），已有的文件逐个试连。
 
 - token 只从文件读，不接受命令行明文。AI 用的 token 只能读机器与状态，不能下载包，不能读待签名包。
-- token 带 `publish` 或 `keys` 范围时：`mastersos mcp` 以退出码 2 结束，其他子命令以 1 结束。
+- token 带 read、draft 以外的范围（`publish`、`keys` ……）时：`mastersos mcp` 以退出码 2 结束，其他子命令以 1 结束。
 - 退出码：0 成功；1 失败（网络、认证、服务端拒绝）；2 `check` 有 error。
 - 秘密（Wi-Fi 的 `psk`、`password`、`client_key`、`client_key_password`，IT 账号的 `password_hash`）在 `manifest.toml` 里是 `secret:<名字>` 引用。
   `check`：引用了不存在的秘密是错误（`secret_unknown`）；没人用的秘密是警告；引用秘密的网络改了 `eap`、`phase2`、`identity`、
@@ -71,8 +77,9 @@ mastersos setup --server https://mastersos.school.ac.th --token-file /path/to/ai
 运营者命令行（`cloud school …`）看不到也撤销不了 AI token（运营者角色只有 SELECT）。出了泄漏时的杠杆有两个：
 把建 token 的人从该校 `admins` 里删掉（他建的所有 token 随之失效，加回来又生效），或者让管理员在管理页 `/ai` 撤销。
 
-学校管理员在管理页「AI tools」建 token（30/90/180 天过期，建它的人不再是管理员就失效；管理页会把这样的 token 标成「未生效」，但它仍占 10 个名额直到撤销或过期），存进
-`~/.config/mastersos/token`（权限 0600）。然后：
+IT 把自己的 read + draft token 存进 `~/.config/mastersos/token`（权限 0600）。学校管理员在管理页「AI tools」建 AI token
+（30/90/180 天过期，建它的人不再是管理员就失效；管理页会把这样的 token 标成「未生效」，但它仍占 10 个名额直到撤销或过期），存进
+`~/.config/mastersos/ai-token`（权限 0600），只给 `mastersos mcp` 用。然后：
 
 ```bash
 curl -fsSL https://os.khundavid.com/downloads/mastersos/install.sh | sh     # 装 mastersos 与 skill（删掉旧的 mastersos-mcp）
