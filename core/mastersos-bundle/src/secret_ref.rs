@@ -371,9 +371,10 @@ fn occurrences(doc: &mut DocumentMut) -> BTreeMap<String, Vec<Occurrence>> {
 /// an entry nothing refers to. `secret_rerouted` (warning): a referenced secret's network changed
 /// its layer, `ssid`, field or a routing field (`eap`, `server_domain`, ...) since `base_text`,
 /// or a name the base never referenced is referenced now (whether or not `secrets.toml` already
-/// held a value for it). Without a base (the first version) nothing is rerouted. It stays a warning (the settings are valid), but `mastersos publish` refuses while one exists
-/// unless IT approves that secret by name ([`unapproved_reroutes`]). Text that does not parse
-/// gives no lints here; the syntax check reports it.
+/// held a value for it). Without a base (the first version) nothing is rerouted. It stays a
+/// warning (the settings are valid), but `mastersos publish` refuses while one exists unless IT
+/// approves that secret by name ([`unapproved_reroutes`]). Text that does not parse gives no
+/// lints here; the syntax check reports it.
 pub fn lints(
     manifest_text: &str,
     secrets: &BTreeMap<String, String>,

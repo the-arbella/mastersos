@@ -78,6 +78,26 @@ impl std::fmt::Debug for Api {
     }
 }
 
+/// `host[:port]` of a server URL (an explicit non-default port only), as pins record it.
+fn host_of(url: &reqwest::Url) -> String {
+    let host = url.host_str().unwrap_or_default();
+    match url.port() {
+        Some(p) => format!("{host}:{p}"),
+        None => host.to_owned(),
+    }
+}
+
+/// The pin file name (without `.toml`) for a server address, the same as [`Api::pin_name`]; no
+/// token is needed, so offline commands can find the pin.
+pub fn pin_name_for(server: &str) -> Result<String> {
+    let url = reqwest::Url::parse(server)
+        .with_context(|| format!("the server address is not a valid URL: {server}"))?;
+    if url.host_str().is_none() {
+        bail!("the server address has no host: {server}");
+    }
+    Ok(host_of(&url).replace(':', "_"))
+}
+
 impl Api {
     pub fn new(server: &str, token: String) -> Result<Api> {
         let base = reqwest::Url::parse(server)
@@ -116,11 +136,7 @@ impl Api {
 
     /// `主机[:端口]`，记在 pin 里。
     pub fn host(&self) -> String {
-        let host = self.base.host_str().unwrap_or_default();
-        match self.base.port() {
-            Some(p) => format!("{host}:{p}"),
-            None => host.to_owned(),
-        }
+        host_of(&self.base)
     }
 
     /// pin 的文件名（不含 `.toml`）：主机名，带端口时是 `主机_端口`。
@@ -1345,6 +1361,19 @@ mod tests {
             latest: 1,
             history: Vec::new(),
         }
+    }
+
+    #[test]
+    fn pin_name_for_matches_the_api() {
+        for server in [
+            "https://School.Example/",
+            "https://school.example:8443/x",
+            "http://127.0.0.1:9000",
+        ] {
+            let api = Api::new(server, "tok".into()).unwrap();
+            assert_eq!(pin_name_for(server).unwrap(), api.pin_name(), "{server}");
+        }
+        assert!(pin_name_for("not a url").is_err());
     }
 
     #[test]

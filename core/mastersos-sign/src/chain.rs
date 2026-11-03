@@ -126,6 +126,19 @@ pub fn pin_path(pin_dir: &Path, api: &Api) -> PathBuf {
     pin_dir.join(format!("{}.toml", api.pin_name()))
 }
 
+/// The content digest (lower-case hex) this computer recorded for `version` of `server` in its
+/// pin under `pin_dir`: `None` when there is no pin or the version was never verified here. Read
+/// offline, so a local copy of a version can be checked against what was verified.
+pub fn recorded_digest(pin_dir: &Path, server: &str, version: u64) -> Result<Option<String>> {
+    let path = pin_dir.join(format!("{}.toml", crate::pin_name_for(server)?));
+    Ok(load_pin(&path)?.and_then(|p| {
+        p.verified
+            .into_iter()
+            .find(|e| e.version == version)
+            .map(|e| e.digest_hex)
+    }))
+}
+
 pub(crate) fn load_pin(path: &Path) -> Result<Option<Pin>> {
     match std::fs::read_to_string(path) {
         Ok(text) => {

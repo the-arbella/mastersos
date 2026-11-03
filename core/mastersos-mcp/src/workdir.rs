@@ -8,6 +8,11 @@
 //! <dir>/.mastersos/base/   the same four, as of the last pull / publish (what `diff` compares to)
 //! ```
 //!
+//! The base is a plain file in the directory, so anyone who can write there (an AI assistant
+//! included) could change it and so change what `check` and `publish` compare against. Before it
+//! is used it is checked against the pin outside the directory ([`Workdir::verify_base`]): its
+//! content digest must be the one this computer recorded when it verified `base_version`.
+//!
 //! This module holds all the file logic and works offline; the network parts live in [`crate::cli`].
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -15,7 +20,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use mastersos_bundle::{secret_ref, Contents, Lint};
+use mastersos_bundle::{content_digest, secret_ref, Contents, Lint};
 use serde::{Deserialize, Serialize};
 
 const META: &str = "mastersos.toml";
@@ -43,6 +48,9 @@ pub struct Meta {
 #[derive(Debug, Clone)]
 pub struct Workdir {
     pub root: PathBuf,
+    /// Where the pins live (`~/.config/mastersos/pins`); [`Workdir::verify_base`] needs it once
+    /// something was published.
+    pins: Option<PathBuf>,
 }
 
 /// The settings text of a new school.
@@ -106,6 +114,19 @@ fn refuse_state_links(dir: &Path) -> Result<()> {
         refuse_link(dir)?;
     }
     Ok(())
+}
+
+/// The content digest (lower-case hex) of a snapshot as a bundle: secrets filled back in.
+fn digest_of(snap: &Snapshot) -> Result<String> {
+    let manifest_text = secret_ref::fill(&snap.manifest, &snap.secrets)
+        .map_err(|_| anyhow::anyhow!("the manifest refers to secrets that are missing"))?;
+    Ok(content_digest(&Contents {
+        manifest_text,
+        files: snap.files.clone(),
+    })
+    .iter()
+    .map(|b| format!("{b:02x}"))
+    .collect())
 }
 
 fn read_snapshot(dir: &Path) -> Result<Snapshot> {
@@ -315,6 +336,51 @@ impl Workdir {
         self.root.join(STATE).join("base")
     }
 
+    /// Check the base against the pins in `pins` from now on.
+    pub fn with_pins(mut self, pins: impl Into<PathBuf>) -> Workdir {
+        self.pins = Some(pins.into());
+        self
+    }
+
+    /// The base must be what this computer verified: with `base_version` 0 it is empty; otherwise
+    /// it is not empty and its content digest (secrets filled back in, files included, exactly as
+    /// the bundle's) equals the digest the pin recorded for `base_version`. A base edited, emptied
+    /// or replaced in the directory is refused.
+    pub fn verify_base(&self) -> Result<()> {
+        let meta = self.meta()?;
+        let v = meta.base_version;
+        let base = read_snapshot(&self.base_dir())?;
+        let empty =
+            base.manifest.trim().is_empty() && base.secrets.is_empty() && base.files.is_empty();
+        let fix = "the base in .mastersos/base was changed; run `mastersos pull --force` to restore it (this throws away local edits: copy them aside first)";
+        if v == 0 {
+            if !empty {
+                bail!("Nothing was published from this directory (base_version 0), but its base holds settings: {fix}");
+            }
+            return Ok(());
+        }
+        if empty {
+            bail!("The base of version {v} is empty: {fix}");
+        }
+        let pins = self
+            .pins
+            .as_deref()
+            .context("no pin directory to check the base against")?;
+        let digest = digest_of(&base).map_err(|_| {
+            anyhow::anyhow!("The base of version {v} refers to secrets it does not hold: {fix}")
+        })?;
+        match mastersos_sign::chain::recorded_digest(pins, &meta.server, v)? {
+            Some(d) if d.eq_ignore_ascii_case(&digest) => Ok(()),
+            Some(_) => bail!(
+                "The base differs from version {v} as this computer verified it (digest {digest}): {fix}"
+            ),
+            None => bail!(
+                "Version {v} was never verified on this computer (no record in the pins under {}), so the base cannot be trusted: {fix}",
+                pins.display()
+            ),
+        }
+    }
+
     fn uploaded_dir(root: &Path) -> PathBuf {
         root.join(STATE).join("uploaded")
     }
@@ -367,6 +433,7 @@ impl Workdir {
         }
         Ok(Workdir {
             root: root.to_path_buf(),
+            pins: None,
         })
     }
 
@@ -384,6 +451,7 @@ impl Workdir {
         write_meta(root, &meta)?;
         Ok(Workdir {
             root: root.to_path_buf(),
+            pins: None,
         })
     }
 
@@ -440,6 +508,7 @@ impl Workdir {
         remove_if_exists(&Workdir::uploaded_dir(root))?;
         Ok(Workdir {
             root: root.to_path_buf(),
+            pins: None,
         })
     }
 
@@ -484,8 +553,11 @@ impl Workdir {
     }
 
     /// What was uploaded is now version `version`: make the uploaded snapshot (not the directory
-    /// as it is now, which may have been edited meanwhile) the base.
-    pub fn mark_published(&self, version: u64) -> Result<()> {
+    /// as it is now, which may have been edited meanwhile) the base, with `published_manifest`
+    /// (the uploaded manifest as stamped, secrets still as references) as its manifest, so that
+    /// the base has the published version's digest. The directory's own manifest becomes the
+    /// stamped one too when nothing was edited since the upload.
+    pub fn mark_published(&self, version: u64, published_manifest: &str) -> Result<()> {
         let dir = Workdir::uploaded_dir(&self.root);
         refuse_snapshot_links(&dir)?;
         let info: UploadInfo = toml::from_str(&read_text(&dir.join(UPLOAD_INFO))?)
@@ -494,7 +566,17 @@ impl Workdir {
             bail!("the upload was for version {}, not {version}", info.version);
         }
         let up = read_snapshot(&dir)?;
-        write_snapshot(&self.base_dir(), &up.manifest, &up.secrets_raw, &up.files)?;
+        let unchanged = read_snapshot(&self.root)?.same_content(&up);
+        write_snapshot(
+            &self.base_dir(),
+            published_manifest,
+            &up.secrets_raw,
+            &up.files,
+        )?;
+        if unchanged {
+            refuse_link(&self.root.join(MANIFEST))?;
+            fs::write(self.root.join(MANIFEST), published_manifest)?;
+        }
         let mut meta = self.meta()?;
         meta.base_version = version;
         write_meta(&self.root, &meta)?;
@@ -540,6 +622,7 @@ pub fn check_snapshot(w: &Workdir, cur: &Snapshot) -> Result<Vec<Lint>> {
 }
 
 fn check_at(w: &Workdir, cur: &Snapshot, today: chrono::NaiveDate) -> Result<Vec<Lint>> {
+    w.verify_base()?;
     let base = read_snapshot(&w.base_dir())?;
     let base_text = (!base.manifest.is_empty()).then_some(base.manifest.as_str());
     let present: BTreeSet<String> = cur.files.keys().cloned().collect();
@@ -622,6 +705,7 @@ fn scrub(mut lints: Vec<Lint>, secrets: &BTreeMap<String, String>) -> Vec<Lint> 
 /// then one line per changed secret (name and `added`/`removed`/`changed`, never the value) and
 /// per changed file.
 pub fn diff(w: &Workdir) -> Result<String> {
+    w.verify_base()?;
     let cur = read_snapshot(&w.root)?;
     let base = read_snapshot(&w.base_dir())?;
     let mut out = String::new();
@@ -665,6 +749,42 @@ fn changes<V: PartialEq>(
 }
 
 #[cfg(test)]
+impl Workdir {
+    /// A pin directory for tests, next to the settings directory.
+    pub(crate) fn test_pins(&self) -> PathBuf {
+        let name = self.root.file_name().unwrap().to_string_lossy();
+        self.root.with_file_name(format!("{name}.pins"))
+    }
+
+    /// Record the base's digest for `base_version` in [`Workdir::test_pins`] (as a pull that
+    /// verified it would) and check the base against it.
+    pub(crate) fn pinned(self) -> Workdir {
+        use mastersos_sign::chain::{Pin, VerifiedVersion};
+        let meta = self.meta().unwrap();
+        let digest = digest_of(&read_snapshot(&self.base_dir()).unwrap()).unwrap();
+        let pins = self.test_pins();
+        fs::create_dir_all(&pins).unwrap();
+        let name = mastersos_sign::pin_name_for(&meta.server).unwrap();
+        let pin = Pin {
+            host: name.replace('_', ":"),
+            version: meta.base_version,
+            digest_hex: digest.clone(),
+            trust: Vec::new(),
+            verified: vec![VerifiedVersion {
+                version: meta.base_version,
+                digest_hex: digest,
+            }],
+        };
+        fs::write(
+            pins.join(format!("{name}.toml")),
+            toml::to_string(&pin).unwrap(),
+        )
+        .unwrap();
+        self.with_pins(pins)
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use mastersos_bundle::LintLevel;
@@ -689,7 +809,9 @@ mod tests {
     }
 
     fn pulled(dir: &Path) -> Workdir {
-        Workdir::write_pulled(dir, meta(3), &contents(), false).unwrap()
+        Workdir::write_pulled(dir, meta(3), &contents(), false)
+            .unwrap()
+            .pinned()
     }
 
     fn codes(l: &[Lint]) -> Vec<&'static str> {
@@ -711,8 +833,13 @@ mod tests {
             "{e}"
         );
         assert!(check(&w).is_err() && diff(&w).is_err() && w.freeze().is_err());
-        let e =
-            crate::tools::call_local(&w.root, "read_manifest", serde_json::json!({})).unwrap_err();
+        let e = crate::tools::call_local(
+            &w.root,
+            &w.test_pins(),
+            "read_manifest",
+            serde_json::json!({}),
+        )
+        .unwrap_err();
         assert!(!e.contains("TOPSECRET"), "{e}");
     }
 
@@ -730,8 +857,13 @@ mod tests {
             e.contains("secrets.toml") && !e.contains("TOPSECRET"),
             "{e}"
         );
-        let e =
-            crate::tools::call_local(&w.root, "read_manifest", serde_json::json!({})).unwrap_err();
+        let e = crate::tools::call_local(
+            &w.root,
+            &w.test_pins(),
+            "read_manifest",
+            serde_json::json!({}),
+        )
+        .unwrap_err();
         assert!(!e.contains("TOPSECRET"), "{e}");
     }
 
@@ -883,15 +1015,89 @@ mod tests {
     }
 
     #[test]
+    fn untouched_base_matches_the_pin() {
+        let t = tempfile::tempdir().unwrap();
+        let w = pulled(&t.path().join("school"));
+        w.verify_base().unwrap();
+        check(&w).unwrap();
+        assert_eq!(diff(&w).unwrap(), "No changes.\n");
+    }
+
+    fn base_refused(w: &Workdir) {
+        for e in [
+            format!("{:#}", w.verify_base().unwrap_err()),
+            format!("{:#}", check(w).unwrap_err()),
+            format!("{:#}", diff(w).unwrap_err()),
+        ] {
+            assert!(e.contains("mastersos pull --force"), "{e}");
+        }
+    }
+
+    #[test]
+    fn tampered_base_is_refused() {
+        let t = tempfile::tempdir().unwrap();
+        let w = pulled(&t.path().join("school"));
+        let base = w.base_dir().join(MANIFEST);
+        let text = fs::read_to_string(&base).unwrap();
+        fs::write(&base, format!("{text}# hidden reroute\n")).unwrap();
+        base_refused(&w);
+        // A base file changed the same way.
+        let t = tempfile::tempdir().unwrap();
+        let w = pulled(&t.path().join("school"));
+        fs::write(w.base_dir().join("files/a.txt"), "other").unwrap();
+        base_refused(&w);
+    }
+
+    #[test]
+    fn emptied_base_is_refused() {
+        let t = tempfile::tempdir().unwrap();
+        let w = pulled(&t.path().join("school"));
+        fs::remove_dir_all(w.base_dir()).unwrap();
+        write_snapshot(&w.base_dir(), "", "", &BTreeMap::new()).unwrap();
+        let e = format!("{:#}", w.verify_base().unwrap_err());
+        assert!(e.contains("The base of version 3 is empty"), "{e}");
+        base_refused(&w);
+    }
+
+    #[test]
+    fn base_without_a_pin_record_is_refused() {
+        let t = tempfile::tempdir().unwrap();
+        let w = Workdir::write_pulled(&t.path().join("school"), meta(3), &contents(), false)
+            .unwrap()
+            .with_pins(t.path().join("no-pins"));
+        let e = format!("{:#}", w.verify_base().unwrap_err());
+        assert!(e.contains("never verified on this computer"), "{e}");
+        // Without a pin directory at all, nothing is trusted either.
+        let w = Workdir::open(&w.root).unwrap();
+        assert!(w.verify_base().is_err());
+    }
+
+    #[test]
+    fn base_for_version_0_must_be_empty() {
+        let t = tempfile::tempdir().unwrap();
+        let w = Workdir::init(&t.path().join("school"), meta(0), SAMPLE).unwrap();
+        w.verify_base().unwrap();
+        check(&w).unwrap();
+        // A pulled base dressed up as "nothing published" to drop the comparison.
+        let t = tempfile::tempdir().unwrap();
+        let w = pulled(&t.path().join("school"));
+        let mut m = w.meta().unwrap();
+        m.base_version = 0;
+        write_meta(&w.root, &m).unwrap();
+        let e = format!("{:#}", w.verify_base().unwrap_err());
+        assert!(e.contains("base_version 0"), "{e}");
+    }
+
+    #[test]
     fn mark_published_moves_base() {
         let t = tempfile::tempdir().unwrap();
         let w = Workdir::init(&t.path().join("school"), meta(0), SAMPLE).unwrap();
         assert!(w.is_dirty().unwrap());
         w.save_uploaded(&w.freeze().unwrap(), &info(4)).unwrap();
-        w.mark_published(4).unwrap();
+        w.mark_published(4, &w.freeze().unwrap().manifest).unwrap();
         assert_eq!(w.meta().unwrap().base_version, 4);
         assert!(!w.is_dirty().unwrap());
-        assert!(w.mark_published(4).is_err(), "the record is consumed");
+        assert!(w.mark_published(4, "").is_err(), "the record is consumed");
     }
 
     fn info(v: u64) -> UploadInfo {
@@ -909,8 +1115,8 @@ mod tests {
         w.save_uploaded(&w.freeze().unwrap(), &info(4)).unwrap();
         // Edited while the signing prompt was open.
         std::fs::write(w.root.join("files/a.txt"), "edited later").unwrap();
-        assert!(w.mark_published(5).is_err(), "wrong version");
-        w.mark_published(4).unwrap();
+        assert!(w.mark_published(5, "").is_err(), "wrong version");
+        w.mark_published(4, &w.freeze().unwrap().manifest).unwrap();
         let (_, _, files) = w.base().unwrap();
         assert_eq!(files["files/a.txt"], b"uploaded");
         assert!(w.is_dirty().unwrap(), "the later edit is still unpublished");
@@ -1142,7 +1348,7 @@ mod tests {
         std::fs::remove_dir_all(dir.join(".mastersos")).unwrap();
         symlink(&out, dir.join(".mastersos")).unwrap();
         assert!(Workdir::write_pulled(&dir, meta(4), &contents(), true).is_err());
-        assert!(w.mark_published(4).is_err());
+        assert!(w.mark_published(4, "").is_err());
         assert!(Workdir::uploaded_unchanged(&dir).is_err());
         assert!(w.save_uploaded(&w.freeze().unwrap(), &info(4)).is_err());
         untouched(&out);
@@ -1161,7 +1367,7 @@ mod tests {
                 Workdir::write_pulled(&dir, meta(4), &contents(), true).is_err(),
                 "{sub}"
             );
-            assert!(w.mark_published(4).is_err(), "{sub}");
+            assert!(w.mark_published(4, "").is_err(), "{sub}");
             if sub == "uploaded" {
                 // The record is not read from behind the link.
                 assert!(Workdir::uploaded_unchanged(&dir).is_err());

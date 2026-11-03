@@ -387,12 +387,16 @@ pub async fn publish(
 
     let version = meta.base_version + 1;
     let issued_at = now.to_rfc3339_opts(SecondsFormat::Secs, true);
-    let stamped = stamp(
-        &filled,
+    // Stamped with the secrets still as references, then filled: the stamped reference text is
+    // what becomes the base once this version is published, and filling it gives exactly what
+    // is uploaded, so the base keeps the published digest ([`Workdir::verify_base`]).
+    let stamped_refs = stamp(
+        &snap.manifest,
         version,
         &issued_at,
         school_name_to_write(&filled, &cfg.name),
     )?;
+    let stamped = secret_ref::fill(&stamped_refs, &snap.secrets).map_err(CheckFailed)?;
     // A kit or key that cannot sign this version stops here, before a pending bundle is left on
     // the server. Signing checks all of it again against the verified chain.
     let sign_api = match &sign {
@@ -496,7 +500,7 @@ pub async fn publish(
                 out,
             )
             .await?;
-            w.mark_published(v)?;
+            w.mark_published(v, &stamped_refs)?;
             Ok(PublishOutcome::Published(v))
         }
         _ => Ok(PublishOutcome::NeedsSigning {
@@ -543,7 +547,9 @@ mod tests {
             manifest_text: manifest_text(),
             files,
         };
-        let w = Workdir::write_pulled(dir, meta, &c, false).unwrap();
+        let w = Workdir::write_pulled(dir, meta, &c, false)
+            .unwrap()
+            .pinned();
         // An edit, so that there is something to publish.
         let text = format!("{}# edited\n", w.manifest().unwrap());
         std::fs::write(w.root.join("manifest.toml"), text).unwrap();
@@ -988,7 +994,9 @@ mod tests {
             manifest_text: manifest_trusting(&tk.id, &tk.public_key),
             files,
         };
-        let w = Workdir::write_pulled(&t.path().join("school"), meta, &c, false).unwrap();
+        let w = Workdir::write_pulled(&t.path().join("school"), meta, &c, false)
+            .unwrap()
+            .pinned();
         let text = format!("{}# edited\n", w.manifest().unwrap());
         std::fs::write(w.root.join("manifest.toml"), text).unwrap();
         let key = SignWith::key_file(&key).unwrap();
@@ -1263,6 +1271,13 @@ mod tests {
         let (r, out) = publish_with_kit(&s, &w, kit, t.path(), "1\ntrust\n").await;
         assert_eq!(r.unwrap(), PublishOutcome::Published(1), "{out}");
         assert_eq!(w.meta().unwrap().base_version, 1);
+        // The new base is the published version as signed: it matches the pin the signing just
+        // recorded, and the directory (unchanged since the upload) carries the stamp too.
+        let w = w.with_pins(t.path().join("pins"));
+        w.verify_base().unwrap();
+        assert!(!w.is_dirty().unwrap());
+        assert!(w.manifest().unwrap().contains("version = 1"));
+        workdir::check(&w).unwrap();
         // The commit carries the kit's signature over the digest of what was uploaded.
         let reqs = s.received_requests().await.unwrap();
         let commit = reqs

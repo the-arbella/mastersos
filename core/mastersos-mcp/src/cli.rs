@@ -256,7 +256,7 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
                 return Ok(ExitCode::from(e.exit_code()));
             }
         };
-        serve_stdio(api, dir)
+        serve_stdio(api, dir, config_dir()?.join("pins"))
             .await
             .map_err(|e| OpError::Failed(format!("{e:#}")))?;
         return Ok(ExitCode::SUCCESS);
@@ -572,8 +572,11 @@ fn fail(e: impl std::fmt::Display) -> OpError {
     OpError::Failed(format!("{e:#}"))
 }
 
+/// The settings directory, its base checked against this computer's pins.
 fn open_dir(dir: Option<&Path>) -> Result<Workdir, OpError> {
-    Workdir::open(dir.unwrap_or_else(|| Path::new("."))).map_err(fail)
+    Ok(Workdir::open(dir.unwrap_or_else(|| Path::new(".")))
+        .map_err(fail)?
+        .with_pins(config_dir()?.join("pins")))
 }
 
 fn lint_values(lints: &[mastersos_bundle::Lint]) -> Vec<Value> {

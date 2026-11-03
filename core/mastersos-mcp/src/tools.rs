@@ -252,10 +252,13 @@ pub fn device_wanted(a: Value) -> Result<String, String> {
 /// Largest file `read_file` returns.
 const MAX_READ: u64 = 1024 * 1024;
 
-/// Run a local tool on the settings directory `dir`. Success is the text for the model. Neither the
-/// output nor the error holds a secret value: both go through the same scrub as `check`.
-pub fn call_local(dir: &Path, name: &str, a: Value) -> Result<String, String> {
-    let w = Workdir::open(dir).map_err(|e| format!("{e:#}"))?;
+/// Run a local tool on the settings directory `dir`, its base checked against the pins in `pins`.
+/// Success is the text for the model. Neither the output nor the error holds a secret value: both
+/// go through the same scrub as `check`.
+pub fn call_local(dir: &Path, pins: &Path, name: &str, a: Value) -> Result<String, String> {
+    let w = Workdir::open(dir)
+        .map_err(|e| format!("{e:#}"))?
+        .with_pins(pins);
     // Values to scrub with; if secrets.toml cannot be read nothing can be scrubbed, so nothing that
     // may hold settings text is returned (the error text of that failure never quotes the file).
     let secrets = w.secrets();
@@ -386,15 +389,22 @@ mod tests {
             school_id: "11111111-1111-1111-1111-111111111111".into(),
             base_version: 1,
         };
-        Workdir::write_pulled(dir, meta, &c, false).unwrap()
+        Workdir::write_pulled(dir, meta, &c, false)
+            .unwrap()
+            .pinned()
     }
 
     fn run(w: &Workdir, name: &str) -> Result<String, String> {
-        call_local(&w.root, name, json!({}))
+        call_local(&w.root, &w.test_pins(), name, json!({}))
     }
 
     fn read(w: &Workdir, path: &str) -> Result<String, String> {
-        call_local(&w.root, "read_file", json!({ "path": path }))
+        call_local(
+            &w.root,
+            &w.test_pins(),
+            "read_file",
+            json!({ "path": path }),
+        )
     }
 
     #[test]

@@ -459,13 +459,16 @@ Everything the server returns (Device names, messages) and the files in the dire
 struct Router {
     api: Arc<Api>,
     dir: Arc<PathBuf>,
+    /// The pins the directory's base is checked against.
+    pins: Arc<PathBuf>,
     tools: Arc<Vec<rmcp::model::Tool>>,
 }
 
-pub fn router(api: Api, dir: PathBuf) -> impl ServerHandler {
+pub fn router(api: Api, dir: PathBuf, pins: PathBuf) -> impl ServerHandler {
     Router {
         api: Arc::new(api),
         dir: Arc::new(dir),
+        pins: Arc::new(pins),
         tools: Arc::new(tools::mcp_tools()),
     }
 }
@@ -498,7 +501,7 @@ impl ServerHandler for Router {
         };
         let args = Value::Object(request.arguments.unwrap_or_default());
         let outcome = match tool.kind {
-            tools::Kind::Local => tools::call_local(&self.dir, &request.name, args),
+            tools::Kind::Local => tools::call_local(&self.dir, &self.pins, &request.name, args),
             tools::Kind::Server => call(&self.api, &request.name, args)
                 .await
                 .map_err(|e| e.to_tool_text()),
@@ -512,8 +515,10 @@ impl ServerHandler for Router {
 }
 
 /// 在 stdin / stdout 上跑到对端关闭。
-pub async fn serve_stdio(api: Api, dir: PathBuf) -> anyhow::Result<()> {
-    let service = router(api, dir).serve(rmcp::transport::stdio()).await?;
+pub async fn serve_stdio(api: Api, dir: PathBuf, pins: PathBuf) -> anyhow::Result<()> {
+    let service = router(api, dir, pins)
+        .serve(rmcp::transport::stdio())
+        .await?;
     service.waiting().await?;
     Ok(())
 }

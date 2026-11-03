@@ -40,7 +40,10 @@ mastersos publish ./school                    # 不带 --kit/--key：只上传�
 ```
 
 目录里：`mastersos.toml`（学校主机与 `base_version`）、`manifest.toml`（秘密只写引用）、`secrets.toml`（0600，git 忽略，秘密的值）、
-`files/`、`.mastersos/base/`（pull 下来的原样，`diff` 用）。`pull` 在目录有未发布改动时拒绝覆盖，除非 `--force`；
+`files/`、`.mastersos/base/`（pull 下来的原样，`diff` 用）。base 是目录里的普通文件，谁都改得动，所以 `check`、`diff`、`publish`
+用它之前先核对：`base_version > 0` 时 base（秘密填回、连同文件）的内容摘要必须等于本机 pin（`~/.config/mastersos/pins/<主机>.toml`，
+在目录之外）为这一版记下的摘要；`base_version = 0` 时 base 必须是空的。对不上就拒绝，提示用 `mastersos pull --force` 恢复。
+本机签名发布后 base 换成盖了 `version`、`issued_at` 的那份，目录里没改过的 `manifest.toml` 也一起更新。`pull` 在目录有未发布改动时拒绝覆盖，除非 `--force`；
 `--version N` 只取本机验证过的旧版本。`publish` 先 `check`，在本地合成（引用换成值，写 `version`、`issued_at`、学校名），
 上传成待签名包；服务端拒收（base 之后已有人发布、阻断检查不过）就停并显示原因。
 
