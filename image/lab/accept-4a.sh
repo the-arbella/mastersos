@@ -398,7 +398,7 @@ c_factory_reset() {
 	o=$(device_json "$id")
 	log "联网后：服务端 $id last_seen $(jq -r .last_seen <<<"$o")，恢复密钥 $rows0 → $rows1 行；luks:escrow $(jq -c '.results[]? | select(.item=="luks:escrow")' <<<"$o")"
 	[ "$rows1" -eq $((rows0 + 1)) ] || bad="${bad}服务端恢复密钥没有多一行（$rows0 → ${rows1}）；"
-	gx 'journalctl -b -u mastersos-agent --no-pager -o cat | grep -E "403|托管" | tail -3' | sed 's/^/  /'
+	gx 'journalctl -b -u mastersos-agent --no-pager -o cat | grep -E "403|托管|escrow" | tail -3' | sed 's/^/  /'
 	o=$(gxm 'journalctl -b -u mastersos-agent --no-pager -o cat | grep -c " 403"') || o=""
 	[ "$o" = 0 ] || bad="${bad}托管被 403，或 journal 没查成（${o:-无输出}）；"
 	local t2=$SECONDS

@@ -87,7 +87,7 @@ pub fn http_client(o: HttpOpts) -> Client {
         b = b.timeout(t);
     }
     b.build()
-        .expect("构造 HTTP 客户端失败（TLS 后端无法初始化）")
+        .expect("building the HTTP client failed (the TLS backend could not initialize)")
 }
 
 /// 托管与换领令牌用的客户端：不跟随任何重定向（307/308 会带着恢复密钥、托管凭据重发到 Location）。
@@ -96,7 +96,7 @@ fn no_redirect_client(total: Duration) -> Client {
         .timeout(total)
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .expect("构造 HTTP 客户端失败（TLS 后端无法初始化）")
+        .expect("building the HTTP client failed (the TLS backend could not initialize)")
 }
 
 /// 机器侧接口回了 401：当前令牌被拒（主循环据此换用别的来源的令牌）。
@@ -105,7 +105,7 @@ pub struct Unauthorized;
 
 impl std::fmt::Display for Unauthorized {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("服务器返回 401 Unauthorized（拉取令牌被拒）")
+        f.write_str("the server returned 401 Unauthorized (fetch token rejected)")
     }
 }
 
@@ -304,7 +304,7 @@ impl Fetcher {
             .auth_as(req, &used)
             .send()
             .await
-            .context("请求 /v1/bundle 失败")?;
+            .context("request to /v1/bundle failed")?;
         self.observe(&resp, &used);
         match resp.status() {
             StatusCode::UNAUTHORIZED => Err(anyhow::Error::new(Unauthorized)),
@@ -313,27 +313,27 @@ impl Fetcher {
                 let version = resp
                     .headers()
                     .get("x-mastersos-version")
-                    .ok_or_else(|| anyhow!("响应缺少 X-Mastersos-Version"))?
+                    .ok_or_else(|| anyhow!("the response has no X-Mastersos-Version"))?
                     .to_str()
                     .ok()
                     .and_then(|v| v.trim().parse::<u64>().ok())
-                    .ok_or_else(|| anyhow!("X-Mastersos-Version 不是整数"))?;
+                    .ok_or_else(|| anyhow!("X-Mastersos-Version is not an integer"))?;
                 if resp
                     .content_length()
                     .is_some_and(|n| n > MAX_BUNDLE_BYTES as u64)
                 {
-                    bail!("设置包超过大小上限");
+                    bail!("the bundle exceeds the size limit");
                 }
                 let mut archive = Vec::new();
-                while let Some(chunk) = resp.chunk().await.context("读取设置包失败")? {
+                while let Some(chunk) = resp.chunk().await.context("reading the bundle failed")? {
                     if archive.len() + chunk.len() > MAX_BUNDLE_BYTES {
-                        bail!("设置包超过大小上限");
+                        bail!("the bundle exceeds the size limit");
                     }
                     archive.extend_from_slice(&chunk);
                 }
                 Ok(FetchOutcome::New { archive, version })
             }
-            other => bail!("服务器返回 {other}"),
+            other => bail!("the server returned {other}"),
         }
     }
 
@@ -348,21 +348,25 @@ impl Fetcher {
             )
             .send()
             .await
-            .context("请求 /v1/heartbeat 失败")?;
+            .context("request to /v1/heartbeat failed")?;
         self.observe(&resp, &used);
         match resp.status() {
             StatusCode::NO_CONTENT => Ok(None),
             StatusCode::OK => {
                 let mut body = Vec::new();
-                while let Some(chunk) = resp.chunk().await.context("读取心跳失败")? {
+                while let Some(chunk) =
+                    resp.chunk().await.context("reading the heartbeat failed")?
+                {
                     if body.len() + chunk.len() > MAX_HEARTBEAT_BYTES {
-                        bail!("心跳超过大小上限");
+                        bail!("the heartbeat exceeds the size limit");
                     }
                     body.extend_from_slice(&chunk);
                 }
-                Ok(Some(String::from_utf8(body).context("心跳不是 UTF-8")?))
+                Ok(Some(
+                    String::from_utf8(body).context("the heartbeat is not UTF-8")?,
+                ))
             }
-            other => bail!("服务器返回 {other}"),
+            other => bail!("the server returned {other}"),
         }
     }
 
@@ -374,7 +378,7 @@ impl Fetcher {
     /// 请求体里有恢复密钥与托管凭据。不跟随重定向（3xx 当被拒）。地址不是 https 时不发（[`escrow_transport_ok`]；`lab` 是镜像的 profile）。
     pub async fn escrow(&self, r: &mastersos_bundle::EscrowRequest, lab: bool) -> Result<()> {
         if let Err(why) = escrow_transport_ok(&self.base, lab) {
-            bail!("托管被拒（本机）：{why}");
+            bail!("escrow refused (locally): {why}");
         }
         let used = self.current_token();
         let resp = self
@@ -387,7 +391,7 @@ impl Fetcher {
             .send()
             .await
             .map_err(reqwest::Error::without_url)
-            .context("请求 /v1/escrow 失败")?;
+            .context("request to /v1/escrow failed")?;
         self.observe(&resp, &used);
         let status = resp.status();
         if status.is_success() {
@@ -395,8 +399,8 @@ impl Fetcher {
         }
         let message = read_error_message(resp).await;
         match message {
-            Some(m) => bail!("托管被拒（{}）：{m}", status.as_u16()),
-            None => bail!("托管被拒（{}）", status.as_u16()),
+            Some(m) => bail!("escrow refused ({}): {m}", status.as_u16()),
+            None => bail!("escrow refused ({})", status.as_u16()),
         }
     }
 
@@ -407,7 +411,7 @@ impl Fetcher {
     pub async fn renew_token(&self, id: &Identity, lab: bool) -> Result<RenewOutcome> {
         if escrow_transport_ok(&self.base, lab).is_err() {
             bail!(
-                "换领被拒（本机）：种子里的 server_url 不是 https://，托管凭据与令牌只经 https 发送（只有 lab 镜像放行 http）"
+                "token renewal refused (locally): the seed's server_url is not https://; escrow credentials and tokens are only sent over https (only lab images allow http)"
             );
         }
         let req = FetchTokenRequest {
@@ -423,7 +427,7 @@ impl Fetcher {
             .send()
             .await
             .map_err(reqwest::Error::without_url)
-            .context("请求 /v1/fetch-token 失败")?;
+            .context("request to /v1/fetch-token failed")?;
         let status = resp.status();
         match status {
             StatusCode::OK => {
@@ -432,26 +436,26 @@ impl Fetcher {
                     .chunk()
                     .await
                     .map_err(reqwest::Error::without_url)
-                    .context("读取换领响应失败")?
+                    .context("reading the renewal response failed")?
                 {
                     if body.len() + chunk.len() > MAX_RENEW_BODY_BYTES {
-                        bail!("换领响应超过大小上限");
+                        bail!("the renewal response exceeds the size limit");
                     }
                     body.extend_from_slice(&chunk);
                 }
                 let r: FetchTokenResponse = serde_json::from_slice(&body)
-                    .map_err(|_| anyhow!("换领响应不是合法的 JSON"))?;
+                    .map_err(|_| anyhow!("the renewal response is not valid JSON"))?;
                 if !crate::token::is_valid(&r.fetch_token) {
-                    bail!("服务端给的新令牌不合格（空、过长或含不可打印字符）");
+                    bail!("the new token from the server is invalid (empty, too long, or has unprintable characters)");
                 }
                 Ok(RenewOutcome::New(r.fetch_token))
             }
             StatusCode::FORBIDDEN => Ok(RenewOutcome::Refused(
                 read_error_message(resp)
                     .await
-                    .unwrap_or_else(|| "服务端拒绝换领（403）".into()),
+                    .unwrap_or_else(|| "the server refused token renewal (403)".into()),
             )),
-            other => bail!("换领失败（{}）", other.as_u16()),
+            other => bail!("token renewal failed ({})", other.as_u16()),
         }
     }
 
@@ -587,10 +591,10 @@ impl Fetcher {
                 &used,
             ),
         };
-        let resp = req.send().await.context("请求 /v1/status 失败")?;
+        let resp = req.send().await.context("request to /v1/status failed")?;
         self.observe(&resp, &used);
         if !resp.status().is_success() {
-            bail!("回报状态被拒：{}", resp.status());
+            bail!("status report refused: {}", resp.status());
         }
         Ok(())
     }
@@ -602,17 +606,17 @@ impl Fetcher {
 /// 拒绝时的说明里不带地址本身（回报里不出现 URL，与 [`Fetcher::escrow`] 的其他错误一致）。
 pub fn escrow_transport_ok(base: &str, lab: bool) -> std::result::Result<(), String> {
     let Ok(url) = reqwest::Url::parse(base) else {
-        return Err("种子里的 server_url 不是合法的 URL，恢复密钥只经 https 托管".into());
+        return Err("the seed's server_url is not a valid URL; the recovery key is only escrowed over https".into());
     };
     match url.scheme() {
         "https" => Ok(()),
         "http" if lab => Ok(()),
         "http" => Err(
-            "种子里的 server_url 是明文的 http://：恢复密钥与托管凭据只经 https 发送（只有 lab 镜像放行 http），\
-             恢复密钥留在本机，改用 https 的种子后再托管"
+            "the seed's server_url is plaintext http://: the recovery key and escrow credentials are only sent over https \
+             (only lab images allow http); the recovery key stays on this device until an https seed is used"
                 .into(),
         ),
-        _ => Err("种子里的 server_url 不是 https://，恢复密钥只经 https 托管".into()),
+        _ => Err("the seed's server_url is not https://; the recovery key is only escrowed over https".into()),
     }
 }
 
@@ -626,7 +630,7 @@ pub fn no_downgrade_redirects() -> reqwest::redirect::Policy {
         if redirect_allowed(a.previous(), a.url()) {
             a.follow()
         } else {
-            a.error("重定向被拒（从 https 降级，或次数过多）")
+            a.error("redirect refused (downgrade from https, or too many redirects)")
         }
     })
 }

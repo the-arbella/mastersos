@@ -151,25 +151,25 @@ impl State {
 fn fsync_dir(dir: &Path) -> Result<()> {
     File::open(dir)
         .and_then(|d| d.sync_all())
-        .with_context(|| format!("fsync 目录 {}", dir.display()))
+        .with_context(|| format!("fsync of directory {}", dir.display()))
 }
 
 /// 经 [`safefs`] 写：同目录临时文件 → fchmod(mode) → fsync → `renameat` 到 `name` → fsync 目录。
 fn write_in(dir: &OwnedFd, name: &str, bytes: &[u8], mode: u32) -> Result<()> {
     let mut t = safefs::TmpFile::create(dir, name, mode)?;
     t.write_all(bytes)
-        .with_context(|| format!("写入 {name} 的临时文件"))?;
+        .with_context(|| format!("writing the temporary file for {name}"))?;
     t.commit()
 }
 
 /// 写 `path`（父目录必须已存在）：见 [`write_in`]。测试里模拟断电用。
 #[cfg(test)]
 fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
-    let parent = path.parent().context("路径没有父目录")?;
+    let parent = path.parent().context("the path has no parent directory")?;
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
-        .context("文件名不是 UTF-8")?;
+        .context("the file name is not UTF-8")?;
     let dir = safefs::open_dir(parent, Path::new(""), false)?;
     write_in(&dir, name, bytes, mode)
 }
@@ -187,23 +187,23 @@ pub fn ensure_state_dir(dir: &Path) -> Result<OwnedFd> {
 /// （改名为 `state.json.corrupt` 留证后从种子重建），或其中 `trust` 为空，都退回种子的钥匙。
 pub fn load(dir: &Path) -> Result<(Seed, State)> {
     let seed_text = fs::read_to_string(dir.join(SEED_FILE))
-        .with_context(|| format!("读取 {}", dir.join(SEED_FILE).display()))?;
-    let seed = Seed::parse(&seed_text).context("种子解析失败")?;
+        .with_context(|| format!("reading {}", dir.join(SEED_FILE).display()))?;
+    let seed = Seed::parse(&seed_text).context("parsing the seed failed")?;
     if seed.trust.is_empty() {
-        anyhow::bail!("种子里没有信任的公钥");
+        anyhow::bail!("the seed has no trusted public keys");
     }
     let path = dir.join(STATE_FILE);
     let mut state = match fs::read(&path) {
         Ok(bytes) => match serde_json::from_slice::<State>(&bytes) {
             Ok(s) => s,
             Err(e) => {
-                log::error!("state.json 解析失败（{e}），改名留证后按种子重建");
+                log::error!("parsing state.json failed ({e}); renaming it as evidence and rebuilding from the seed");
                 let _ = fs::rename(&path, dir.join(STATE_CORRUPT));
                 State::default()
             }
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => State::default(),
-        Err(e) => return Err(e).context("读取 state.json"),
+        Err(e) => return Err(e).context("reading state.json"),
     };
     if state.trust.is_empty() {
         state.trust = seed.trust.clone();
@@ -252,7 +252,9 @@ pub fn run_dir(dir: &Path) -> Result<PathBuf> {
 pub fn gc_keep_current(dir: &Path, extra: Option<String>) {
     let Some(cur) = current_version_name(dir) else {
         if dir.join(VERSIONS).exists() {
-            log::warn!("读不出 current 指向哪个包目录，这次不清理");
+            log::warn!(
+                "cannot tell which bundle directory current points to; not cleaning up this time"
+            );
         }
         return;
     };
@@ -272,7 +274,7 @@ pub fn gc_versions(dir: &Path, keep: &[String]) {
             continue;
         }
         if let Err(e) = fs::remove_dir_all(e.path()) {
-            log::warn!("删除旧的包目录 {name} 失败：{e}");
+            log::warn!("removing the old bundle directory {name} failed: {e}");
         }
     }
 }
@@ -336,7 +338,7 @@ fn unpack_current(dir: &Path, bundle: &Bundle) -> Result<()> {
         let p = dir.join(leftover);
         if fs::symlink_metadata(&p).is_ok() {
             if let Err(e) = fs::remove_dir_all(&p) {
-                log::warn!("清理 {leftover} 失败：{e}");
+                log::warn!("cleaning up {leftover} failed: {e}");
             }
         }
     }
@@ -406,7 +408,7 @@ pub fn load_current_with(
         Ok(b) => b,
         Err(e) => {
             if e.kind() != std::io::ErrorKind::NotFound {
-                log::warn!("读取 current.bundle 失败：{:?}", e.kind());
+                log::warn!("reading current.bundle failed: {:?}", e.kind());
             }
             return None;
         }
@@ -418,7 +420,7 @@ pub fn load_current_with(
                 return match unpack_current(dir, &b) {
                     Ok(()) => Some((b, trust.to_vec())),
                     Err(e) => {
-                        log::warn!("按本地设置包重建 current/ 失败：{:#}", e);
+                        log::warn!("rebuilding current/ from the local bundle failed: {:#}", e);
                         None
                     }
                 };
@@ -428,7 +430,7 @@ pub fn load_current_with(
     }
     // 只记错误种类，不带包内容。
     if let Some(e) = last_err {
-        log::warn!("本地设置包未通过验证：{}", e);
+        log::warn!("the local bundle failed verification: {}", e);
     }
     None
 }
@@ -550,7 +552,7 @@ mod tests {
         assert_eq!(st.version, None);
         assert!(
             d.path().join("state.json.corrupt").exists(),
-            "损坏的文件留证"
+            "the damaged file is kept as evidence"
         );
         assert!(!d.path().join("state.json").exists());
 

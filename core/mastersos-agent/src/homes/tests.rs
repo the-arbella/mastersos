@@ -65,8 +65,11 @@ fn unseen_users_get_now_not_epoch() {
     ]);
     let changed = fill_unseen(&mut map, &BTreeSet::from([10001, 10002]), now);
     assert!(changed);
-    assert_eq!(map.get(&10002), Some(&now), "第一次见到：补记 now");
-    assert!(!map.contains_key(&42), "家目录没了的记录去掉");
+    assert_eq!(map.get(&10002), Some(&now), "first seen: recorded as now");
+    assert!(
+        !map.contains_key(&42),
+        "records of removed home directories are dropped"
+    );
     // VM 实测（修复轮 1）：登录叫醒的那一轮可能在 pam_mkhomedir 建出家目录之前跑；刚记下的登录不能因为
     // 「还没有家目录」被删掉（之后又被补记成更晚的时刻）
     let fresh = now - chrono::TimeDelta::hours(1);
@@ -75,7 +78,7 @@ fn unseen_users_get_now_not_epoch() {
     assert_eq!(
         map.get(&43),
         Some(&fresh),
-        "没有家目录、但一周内登录过的记录留着"
+        "a record with no home directory but a login within a week is kept"
     );
     let entries: Vec<HomeEntry> = [("new@school.ac.th", 10002), ("old@school.ac.th", 10001)]
         .iter()
@@ -88,7 +91,7 @@ fn unseen_users_get_now_not_epoch() {
     assert_eq!(
         uids(&candidates(&entries, &[], &BTreeSet::new())),
         vec![10001, 10002],
-        "补记 now 的排在有旧记录的人后面"
+        "users recorded as now sort after those with older records"
     );
     assert!(!fill_unseen(&mut map, &BTreeSet::from([10001, 10002]), now));
 }
@@ -122,13 +125,13 @@ fn corrupt_or_huge_record_is_kept_as_bad() {
     assert_eq!(
         std::fs::read(d.path().join("homes").join(LAST_LOGIN_BAD)).unwrap(),
         b"{garbage",
-        "坏掉的那份留着"
+        "the corrupt copy is kept"
     );
     assert_eq!(load(&p).len(), 1);
     // 超过上限的也当作坏了
     std::fs::write(&p, vec![b' '; MAX_LAST_LOGIN_BYTES as usize + 1]).unwrap();
     assert!(load(&p).is_empty());
-    assert!(!p.exists(), "改了名");
+    assert!(!p.exists(), "renamed");
 }
 
 #[test]
@@ -144,7 +147,7 @@ fn thresholds() {
     assert!(!enough(25 * GIB - 1, total));
     assert!(
         enough(15 * GIB, 40 * GIB),
-        "40 GiB 的盘：15 GiB 才够（25% 只有 10 GiB）"
+        "40 GiB disk: 15 GiB is enough (25% would be only 10 GiB)"
     );
     assert!(!enough(15 * GIB - 1, 40 * GIB));
     // 够了之后一定不再需要清理（小盘也不会每小时再删一个）
@@ -235,7 +238,7 @@ impl HomeFs for FakeFs {
     }
     fn to_trash(&self, _name: &str, uid: u32) -> Result<bool> {
         if self.refuse.contains(&uid) {
-            anyhow::bail!("挪不走");
+            anyhow::bail!("cannot be moved");
         }
         self.events.lock().unwrap().push(format!("trash:{uid}"));
         Ok(!self.unsealed.contains(&uid))
@@ -373,7 +376,11 @@ async fn stops_when_enough_space() {
     }
     let fs = FakeFs::new(&[LOW, PLENTY], &[0, 1001, 10001, 10002, 10003]);
     let res = run_job(fs.clone(), r, paths).await;
-    assert_eq!(fs.removed(), vec![10001], "删了最旧的一个就够了");
+    assert_eq!(
+        fs.removed(),
+        vec![10001],
+        "removing the oldest one is enough"
+    );
     assert!(res.ok, "{res:?}");
     assert_eq!(res.item, ITEM);
 }
@@ -408,7 +415,7 @@ async fn plenty_of_space_touches_nothing() {
     assert!(fs.removed().is_empty());
     assert!(
         r.calls().is_empty(),
-        "空间够时不跑任何命令：{:?}",
+        "no commands run when there is enough space: {:?}",
         r.calls()
     );
 }
@@ -424,9 +431,9 @@ async fn admin_and_logged_in_users_are_kept_and_shortage_is_reported() {
     let res = run_job(fs.clone(), r.clone(), paths).await;
     assert!(
         fs.removed().is_empty(),
-        "管理员、登录着的、slice active 的都不删"
+        "administrators, signed-in users and active slices are not removed"
     );
-    assert!(!res.ok, "空间仍不足要回报失败：{res:?}");
+    assert!(!res.ok, "still low on space must report failure: {res:?}");
 }
 
 #[tokio::test]
@@ -442,7 +449,11 @@ async fn rechecks_slice_before_delete() {
     inactive(&r, 10003, 2);
     let fs = FakeFs::new(&[LOW, PLENTY], &[10001, 10002, 10003]);
     let res = run_job(fs.clone(), r, paths).await;
-    assert_eq!(fs.removed(), vec![10002], "刚开始用的跳过，删下一个");
+    assert_eq!(
+        fs.removed(),
+        vec![10002],
+        "a home just put in use is skipped; the next one is removed"
+    );
     assert!(res.ok, "{res:?}");
 }
 
@@ -539,9 +550,9 @@ async fn failures_continue_and_are_counted() {
     assert_eq!(fs.removed(), vec![10002, 10003]);
     assert!(!res.ok);
     let d = res.detail.unwrap();
-    assert!(d.contains("删了 2 个家目录"), "{d}");
-    assert!(d.contains("1 个只删了一部分（1 处"), "{d}");
-    assert!(d.contains("1 个删除失败"), "{d}");
+    assert!(d.contains("home directories removed: 2"), "{d}");
+    assert!(d.contains("partly removed: 1 (1 mount"), "{d}");
+    assert!(d.contains("failed removals: 1"), "{d}");
 }
 
 /// 上一轮留下的回收目录删不干净：空间够也回报出来。
@@ -559,7 +570,7 @@ async fn leftover_trash_problems_are_reported() {
     );
     let res = run_job(fs.clone(), r, paths).await;
     assert!(!res.ok);
-    assert!(res.detail.unwrap().contains("回收目录里仍有 2 处"));
+    assert!(res.detail.unwrap().contains("still cannot be removed: 2"));
 }
 
 #[tokio::test]
@@ -577,10 +588,10 @@ async fn report_has_no_names() {
     let detail = res.detail.unwrap_or_default();
     assert!(detail.contains('3'), "{detail}");
     for (uid, name) in USERS {
-        assert!(!detail.contains(name), "detail 含名字：{detail}");
+        assert!(!detail.contains(name), "detail contains the name: {detail}");
         assert!(
             !detail.contains(&uid.to_string()) || *uid == 0,
-            "detail 含 uid：{detail}"
+            "detail contains the uid: {detail}"
         );
     }
     assert!(!detail.contains("school"), "{detail}");
@@ -604,7 +615,7 @@ async fn unreadable_policy_deletes_nothing() {
         assert!(!res.ok);
         assert_eq!(
             res.detail.as_deref(),
-            Some("读不到管理员名单，这一轮不清理")
+            Some("cannot read the administrator list; not cleaning up this round")
         );
     }
 }
@@ -621,7 +632,7 @@ async fn seed_policy_deletes_nothing() {
     let res = run_job(fs.clone(), r, paths).await;
     assert!(fs.removed().is_empty());
     assert!(!res.ok);
-    assert!(res.detail.unwrap().contains("管理员名单未知"));
+    assert!(res.detail.unwrap().contains("administrator list unknown"));
 }
 
 /// 没有登录记录的 uid：每轮都补记 now（空间够时也补），排在有旧记录的人后面。
@@ -632,8 +643,14 @@ async fn unseen_uid_is_backfilled_by_the_job() {
     let fs = FakeFs::new(&[PLENTY], &[10009, 10001]);
     run_job(fs, r.clone(), paths.clone()).await;
     let m = load(&last_login_path(&paths));
-    assert!(m.contains_key(&10009), "空间够时也补记");
-    assert!(!m.contains_key(&10002), "家目录没了的记录去掉");
+    assert!(
+        m.contains_key(&10009),
+        "recorded even when there is enough space"
+    );
+    assert!(
+        !m.contains_key(&10002),
+        "records of removed home directories are dropped"
+    );
     inactive(&r, 10001, 2);
     inactive(&r, 10009, 2);
     r.respond(
@@ -720,8 +737,14 @@ fn rename_happens_before_any_deletion() {
         std::fs::metadata(&moved[0]).unwrap().permissions().mode() & 0o777,
         0o700
     );
-    assert!(moved[0].join("docs/sub/f").exists(), "挪的时候什么都没删");
-    assert!(fs.homes().unwrap().is_empty(), "回收目录不算谁的家目录");
+    assert!(
+        moved[0].join("docs/sub/f").exists(),
+        "nothing removed while moving"
+    );
+    assert!(
+        fs.homes().unwrap().is_empty(),
+        "the trash directory is nobody's home directory"
+    );
     // 删
     let r = fs.empty_trash().unwrap();
     assert_eq!(r.left(), 0, "{r:?}");
@@ -743,7 +766,7 @@ fn crash_mid_delete_leaves_only_trash_and_next_round_cleans_it() {
     assert_eq!(
         names,
         vec![std::ffi::OsString::from(trash::TRASH)],
-        "只剩回收目录"
+        "only the trash directory is left"
     );
     // 下一轮
     let (_d2, paths, r) = setup(&[]);
@@ -796,11 +819,18 @@ fn links_are_never_followed() {
     std::fs::write(outside.join("keep"), b"x").unwrap();
     symlink(&outside, home.join("me@school.ac.th/docs/link")).unwrap();
     symlink(&outside, home.join("toplink@school.ac.th")).unwrap();
-    assert_eq!(fs.homes().unwrap().len(), 1, "顶层的链接不是家目录");
+    assert_eq!(
+        fs.homes().unwrap().len(),
+        1,
+        "a top-level link is not a home directory"
+    );
     assert!(fs.to_trash("toplink@school.ac.th", me()).is_err());
     fs.to_trash("me@school.ac.th", me()).unwrap();
     assert_eq!(fs.empty_trash().unwrap().left(), 0);
-    assert!(outside.join("keep").exists(), "链接指向的东西不动");
+    assert!(
+        outside.join("keep").exists(),
+        "the link target is untouched"
+    );
     assert!(home.join("toplink@school.ac.th").exists());
 }
 
@@ -827,7 +857,7 @@ fn errors_are_skipped_and_counted() {
     let root = rustix::process::geteuid().is_root();
     if !root {
         assert!(r.errors >= 1, "{r:?}");
-        assert!(!moved.join("docs").exists(), "别的照删");
+        assert!(!moved.join("docs").exists(), "the others are still removed");
         assert!(!moved.join(".bashrc").exists());
         std::fs::set_permissions(moved.join("locked"), std::fs::Permissions::from_mode(0o700))
             .unwrap();
@@ -965,8 +995,8 @@ async fn stale_leftover_is_not_recounted_per_home() {
     let res = run_job(fs.clone(), r, paths).await;
     assert_eq!(fs.removed(), vec![10001, 10002]);
     let d = res.detail.unwrap();
-    assert!(!d.contains("只删了一部分"), "{d}");
-    assert!(d.contains("回收目录里仍有 1 处"), "{d}");
+    assert!(!d.contains("partly removed"), "{d}");
+    assert!(d.contains("still cannot be removed: 1"), "{d}");
 }
 
 /// 复审 N3：挪走了但没收好：照样删、算空间、看够不够（不去动下一个人），记一个错误。
@@ -981,11 +1011,15 @@ async fn moved_but_unsealed_still_counts_and_stops() {
         ..Arc::into_inner(FakeFs::new(&[LOW, PLENTY], &[10001, 10002])).unwrap()
     });
     let res = run_job(fs.clone(), r, paths).await;
-    assert_eq!(fs.removed(), vec![10001], "够了就停，不动下一个");
+    assert_eq!(
+        fs.removed(),
+        vec![10001],
+        "stops once there is enough; the next one is untouched"
+    );
     assert_eq!(fs.events(), vec!["empty", "trash:10001", "empty"]);
     let d = res.detail.unwrap();
-    assert!(d.contains("删了 1 个家目录"), "{d}");
-    assert!(d.contains("1 个删除失败"), "{d}");
+    assert!(d.contains("home directories removed: 1"), "{d}");
+    assert!(d.contains("failed removals: 1"), "{d}");
 }
 
 /// 复审 N1：取走登录队列的那一步返回时，登录记录已经在盘上（主循环之后才叫醒后台任务）。
@@ -1025,16 +1059,22 @@ fn record_is_written_before_the_queue_marker_goes() {
     let now = Utc::now();
     let uids = crate::login_queue::drain_with(&q, |uids| {
         assert_eq!(uids, &[10001]);
-        assert!(queued(&paths).unwrap().contains(&10001), "写记录时记号还在");
+        assert!(
+            queued(&paths).unwrap().contains(&10001),
+            "the marker is still there while the record is written"
+        );
         record_logins(&p, uids, now).unwrap();
         assert!(
             queued(&paths).unwrap().contains(&10001),
-            "记录写好、删记号之前：队列与记录都看得到"
+            "after the record is written and before the marker is removed: both are visible"
         );
         true
     });
     assert_eq!(uids, vec![10001]);
-    assert!(queued(&paths).unwrap().is_empty(), "写好之后删掉记号");
+    assert!(
+        queued(&paths).unwrap().is_empty(),
+        "the marker is removed after writing"
+    );
     assert_eq!(load(&p).get(&10001), Some(&now));
 }
 
@@ -1049,7 +1089,10 @@ fn failed_record_keeps_the_queue_marker() {
     std::fs::write(bad_var.join("homes"), b"x").unwrap();
     let p = bad_var.join("homes/last-login.json");
     assert_eq!(drain_and_record(&q, &p, Utc::now()), vec![10001]);
-    assert!(queued(&paths).unwrap().contains(&10001), "记号留着");
+    assert!(
+        queued(&paths).unwrap().contains(&10001),
+        "the marker is kept"
+    );
     // 第二次（例如下次叫醒）写得进去：这回删掉
     let good = last_login_path(&paths);
     assert_eq!(drain_and_record(&q, &good, Utc::now()), vec![10001]);

@@ -543,7 +543,7 @@ c_shim_update_predict_fail_falls_back() {
 	o=$(gx 'journalctl -u mastersos-agent -b -o cat --no-pager | grep -E "PIN" | tail -2; test -e /var/lib/mastersos-system/shim-prepare.json && echo STATE-LEFT; true')
 	echo "$o" | sed 's/^/  /'
 	grep -q STATE-LEFT <<<"$o" && bad="${bad}shim-prepare.json is still there after the reboot; "
-	grep -q '已用 PIN 改写策略' <<<"$o" || bad="${bad}the agent did not re-seal with its PIN; "
+	grep -q 'rewritten with the PIN' <<<"$o" || bad="${bad}the agent did not re-seal with its PIN; "
 	# (the PIN repair's detail is reported only by the round that did it — 4b behaviour — so the server may show null)
 	o=$(pcrlock_report "$id")
 	log "server, after the recovery key: luks:pcrlock = $o"

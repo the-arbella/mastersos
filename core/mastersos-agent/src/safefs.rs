@@ -25,14 +25,14 @@ fn mode_of(mode: u32) -> Mode {
 /// 单个目录项的名字：非空、不是 `.` / `..`、不含 `/` 与 NUL。
 fn check_name(name: &str) -> Result<()> {
     if name.is_empty() || name == "." || name == ".." || name.contains('/') || name.contains('\0') {
-        bail!("名字不规范：{name:?}");
+        bail!("malformed name: {name:?}");
     }
     Ok(())
 }
 
 fn symlink_error(name: &OsStr) -> anyhow::Error {
     anyhow!(
-        "{} 是符号链接（symlink），拒绝跟随",
+        "{} is a symlink; refusing to follow it",
         Path::new(name).display()
     )
 }
@@ -62,13 +62,13 @@ fn open_subdir(dir: impl AsFd, name: &OsStr, create: bool) -> Result<OwnedFd> {
                 Ok(()) | Err(Errno::EXIST) => {}
                 Err(e) => {
                     return Err(anyhow::Error::from(std::io::Error::from(e))
-                        .context(format!("创建目录 {}", Path::new(name).display())))
+                        .context(format!("creating directory {}", Path::new(name).display())))
                 }
             }
             rustix::fs::openat(dir, name, flags, Mode::empty())
-                .map_err(|e| classify(dir, name, e, "打开目录"))
+                .map_err(|e| classify(dir, name, e, "opening directory"))
         }
-        Err(e) => Err(classify(dir, name, e, "打开目录")),
+        Err(e) => Err(classify(dir, name, e, "opening directory")),
     }
 }
 
@@ -83,7 +83,7 @@ pub fn open_dir(root: &Path, rel: &Path, create: bool) -> Result<OwnedFd> {
         Mode::empty(),
     )
     .map_err(std::io::Error::from)
-    .with_context(|| format!("打开根目录 {}", root.display()))?;
+    .with_context(|| format!("opening root directory {}", root.display()))?;
     for p in parts {
         fd = open_subdir(&fd, OsStr::from_bytes(p), create)?;
     }
@@ -94,14 +94,17 @@ pub fn open_dir(root: &Path, rel: &Path, create: bool) -> Result<OwnedFd> {
 fn rel_parts(rel: &Path) -> Result<Vec<&[u8]>> {
     let bytes = rel.as_os_str().as_bytes();
     if bytes.first() == Some(&b'/') {
-        bail!("相对路径不能以 / 开头：{}", rel.display());
+        bail!("a relative path must not start with /: {}", rel.display());
     }
     let parts: Vec<&[u8]> = bytes
         .split(|b| *b == b'/')
         .filter(|p| !p.is_empty())
         .collect();
     if parts.iter().any(|p| *p == b"." || *p == b"..") {
-        bail!("相对路径不规范（含 . 或 ..）：{}", rel.display());
+        bail!(
+            "malformed relative path (contains . or ..): {}",
+            rel.display()
+        );
     }
     Ok(parts)
 }
@@ -117,7 +120,7 @@ pub fn open_dir_at(dir: &OwnedFd, rel: &Path, create: bool) -> Result<OwnedFd> {
         Mode::empty(),
     )
     .map_err(std::io::Error::from)
-    .context("打开目录")?;
+    .context("opening directory")?;
     for p in parts {
         fd = open_subdir(&fd, OsStr::from_bytes(p), create)?;
     }
@@ -129,7 +132,9 @@ pub fn open_child_dir(dir: &OwnedFd, name: &str) -> Result<Option<OwnedFd>> {
     check_name(name)?;
     match rustix::fs::statat(dir, name, AtFlags::SYMLINK_NOFOLLOW) {
         Err(Errno::NOENT) => Ok(None),
-        Err(e) => Err(anyhow::Error::from(std::io::Error::from(e)).context(format!("检查 {name}"))),
+        Err(e) => {
+            Err(anyhow::Error::from(std::io::Error::from(e)).context(format!("checking {name}")))
+        }
         Ok(_) => open_subdir(dir, OsStr::new(name), false).map(Some),
     }
 }
@@ -149,7 +154,7 @@ fn remove_tree_os(dir: &OwnedFd, name: &OsStr) -> Result<()> {
         Err(Errno::NOENT) => return Ok(()),
         Err(e) => {
             return Err(
-                anyhow::Error::from(std::io::Error::from(e)).context(format!("检查 {shown}"))
+                anyhow::Error::from(std::io::Error::from(e)).context(format!("checking {shown}"))
             )
         }
     };
@@ -164,7 +169,7 @@ fn remove_tree_os(dir: &OwnedFd, name: &OsStr) -> Result<()> {
     match rustix::fs::unlinkat(dir, name, flags) {
         Ok(()) | Err(Errno::NOENT) => Ok(()),
         Err(e) => {
-            Err(anyhow::Error::from(std::io::Error::from(e)).context(format!("删除 {shown}")))
+            Err(anyhow::Error::from(std::io::Error::from(e)).context(format!("removing {shown}")))
         }
     }
 }
@@ -191,7 +196,7 @@ fn remove_children(dir: &OwnedFd, name: &OsStr) -> Result<()> {
             Ok(()) | Err(Errno::NOENT) => {}
             Err(e) => {
                 return Err(anyhow::Error::from(std::io::Error::from(e))
-                    .context(format!("删除 {}", Path::new(&child).display())))
+                    .context(format!("removing {}", Path::new(&child).display())))
             }
         }
     }
@@ -204,10 +209,10 @@ pub fn rename_at(dir: &OwnedFd, from: &str, to: &str) -> Result<()> {
     check_name(to)?;
     rustix::fs::renameat(dir, from, dir, to)
         .map_err(std::io::Error::from)
-        .with_context(|| format!("改名 {from} 为 {to}"))?;
+        .with_context(|| format!("renaming {from} to {to}"))?;
     rustix::fs::fsync(dir)
         .map_err(std::io::Error::from)
-        .context("fsync 目录")
+        .context("fsync of the directory")
 }
 
 /// 打开绝对路径 `path` 这个目录本身：父目录用普通的 `open`（由调用方保证可信，例如
@@ -228,11 +233,11 @@ pub fn open_file_at(dir: &OwnedFd, name: &str) -> Result<Option<File>> {
     let fd = match rustix::fs::openat(dir, name, flags, Mode::empty()) {
         Ok(fd) => fd,
         Err(Errno::NOENT) => return Ok(None),
-        Err(e) => return Err(classify(dir, OsStr::new(name), e, "打开")),
+        Err(e) => return Err(classify(dir, OsStr::new(name), e, "opening")),
     };
     let st = rustix::fs::fstat(&fd).map_err(std::io::Error::from)?;
     if FileType::from_raw_mode(st.st_mode) != FileType::RegularFile {
-        bail!("{name} 不是普通文件");
+        bail!("{name} is not a regular file");
     }
     Ok(Some(File::from(fd)))
 }
@@ -244,7 +249,7 @@ pub fn read_at(dir: &OwnedFd, name: &str) -> Result<Option<Vec<u8>>> {
     };
     let mut buf = Vec::new();
     f.read_to_end(&mut buf)
-        .with_context(|| format!("读取 {name}"))?;
+        .with_context(|| format!("reading {name}"))?;
     Ok(Some(buf))
 }
 
@@ -270,14 +275,14 @@ impl<'a> TmpFile<'a> {
             Ok(()) | Err(Errno::NOENT) => {}
             Err(e) => {
                 return Err(anyhow::Error::from(std::io::Error::from(e))
-                    .context(format!("删除残留的 {tmp}")))
+                    .context(format!("removing leftover {tmp}")))
             }
         }
         let flags =
             OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
         let fd = rustix::fs::openat(dir, tmp.as_str(), flags, mode_of(0o600))
             .map_err(std::io::Error::from)
-            .with_context(|| format!("创建 {tmp}"))?;
+            .with_context(|| format!("creating {tmp}"))?;
         let mut t = TmpFile {
             dir,
             tmp,
@@ -286,28 +291,33 @@ impl<'a> TmpFile<'a> {
         };
         rustix::fs::fchmod(t.file()?, mode_of(mode))
             .map_err(std::io::Error::from)
-            .with_context(|| format!("设置 {} 的权限", t.tmp))?;
+            .with_context(|| format!("setting permissions of {}", t.tmp))?;
         Ok(t)
     }
 
     fn file(&mut self) -> Result<&mut File> {
-        self.file.as_mut().ok_or_else(|| anyhow!("临时文件已提交"))
+        self.file
+            .as_mut()
+            .ok_or_else(|| anyhow!("temporary file already committed"))
     }
 
     /// `fsync` → `renameat` 到目标名 → `fsync` 目录。
     pub fn commit(mut self) -> Result<()> {
-        let f = self.file.take().ok_or_else(|| anyhow!("临时文件已提交"))?;
+        let f = self
+            .file
+            .take()
+            .ok_or_else(|| anyhow!("temporary file already committed"))?;
         f.sync_all()
             .with_context(|| format!("fsync {}", self.tmp))?;
         drop(f);
         rustix::fs::renameat(self.dir, self.tmp.as_str(), self.dir, self.name.as_str())
             .map_err(std::io::Error::from)
-            .with_context(|| format!("rename 到 {}", self.name))?;
+            .with_context(|| format!("renaming to {}", self.name))?;
         // 改名已生效：之后的失败不能再删「临时文件」（那个名字已经不存在）。
         self.tmp.clear();
         rustix::fs::fsync(self.dir)
             .map_err(std::io::Error::from)
-            .context("fsync 目录")?;
+            .context("fsync of the directory")?;
         Ok(())
     }
 }
@@ -316,7 +326,7 @@ impl Write for TmpFile<'_> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self.file.as_mut() {
             Some(f) => f.write(buf),
-            None => Err(std::io::Error::other("临时文件已提交")),
+            None => Err(std::io::Error::other("temporary file already committed")),
         }
     }
 
@@ -351,7 +361,7 @@ pub fn write_at(dir: &OwnedFd, name: &str, bytes: &[u8], mode: u32) -> Result<bo
         if owned && same_size && Mode::from_raw_mode(st.st_mode) == mode_of(mode) {
             let mut cur = Vec::new();
             f.read_to_end(&mut cur)
-                .with_context(|| format!("读取 {name}"))?;
+                .with_context(|| format!("reading {name}"))?;
             if cur == bytes {
                 return Ok(false);
             }
@@ -359,7 +369,7 @@ pub fn write_at(dir: &OwnedFd, name: &str, bytes: &[u8], mode: u32) -> Result<bo
     }
     let mut t = TmpFile::create(dir, name, mode)?;
     t.write_all(bytes)
-        .with_context(|| format!("写入 {name} 的临时文件"))?;
+        .with_context(|| format!("writing the temporary file for {name}"))?;
     t.commit()?;
     Ok(true)
 }
@@ -375,12 +385,16 @@ pub fn remove_at(dir: &OwnedFd, name: &str) -> Result<()> {
         Ok(_) => {}
         Err(Errno::NOENT) => return Ok(()),
         Err(e) => {
-            return Err(anyhow::Error::from(std::io::Error::from(e)).context(format!("检查 {name}")))
+            return Err(
+                anyhow::Error::from(std::io::Error::from(e)).context(format!("checking {name}"))
+            )
         }
     }
     match rustix::fs::unlinkat(dir, name, AtFlags::empty()) {
         Ok(()) | Err(Errno::NOENT) => Ok(()),
-        Err(e) => Err(anyhow::Error::from(std::io::Error::from(e)).context(format!("删除 {name}"))),
+        Err(e) => {
+            Err(anyhow::Error::from(std::io::Error::from(e)).context(format!("removing {name}")))
+        }
     }
 }
 
@@ -392,10 +406,8 @@ pub fn take_at(dir: &OwnedFd, name: &str, to: &str) -> Result<bool> {
     match rustix::fs::renameat(dir, name, dir, to) {
         Ok(()) => Ok(true),
         Err(Errno::NOENT) => Ok(false),
-        Err(e) => {
-            Err(anyhow::Error::from(std::io::Error::from(e))
-                .context(format!("改名 {name} 为 {to}")))
-        }
+        Err(e) => Err(anyhow::Error::from(std::io::Error::from(e))
+            .context(format!("renaming {name} to {to}"))),
     }
 }
 
@@ -416,7 +428,7 @@ pub fn touch_at(dir: &OwnedFd, name: &str) -> Result<()> {
         AtFlags::SYMLINK_NOFOLLOW,
     )
     .map_err(std::io::Error::from)
-    .with_context(|| format!("更新 {name} 的时间"))
+    .with_context(|| format!("updating the timestamps of {name}"))
 }
 
 /// 打开挂载点 `root/rel`（`rel` 是相对路径），**路径上任何一级都不许是符号链接**：从 `root` 的 fd 起逐级
@@ -435,7 +447,7 @@ pub fn open_mount_target(root: &Path, rel: &Path) -> Result<OwnedFd> {
         Mode::empty(),
     )
     .map_err(std::io::Error::from)
-    .with_context(|| format!("打开根目录 {}", root.display()))?;
+    .with_context(|| format!("opening root directory {}", root.display()))?;
     let n = parts.len();
     for (i, p) in parts.into_iter().enumerate() {
         let name = OsStr::from_bytes(p);
@@ -445,7 +457,7 @@ pub fn open_mount_target(root: &Path, rel: &Path) -> Result<OwnedFd> {
             base
         };
         fd = rustix::fs::openat(&fd, name, flags, Mode::empty())
-            .map_err(|e| classify(&fd, name, e, "打开挂载点路径"))?;
+            .map_err(|e| classify(&fd, name, e, "opening the mount point path"))?;
     }
     // 死掉的 FUSE 上 fstat 会报 ENOTCONN：那时不在这里拦（调用方还要核对挂载 id，链接所在的挂载对不上）
     if let Ok(st) = rustix::fs::fstat(&fd) {
@@ -467,7 +479,9 @@ pub fn mtime_at(dir: &OwnedFd, name: &str) -> Result<Option<std::time::SystemTim
             ))
         }
         Err(Errno::NOENT) => Ok(None),
-        Err(e) => Err(anyhow::Error::from(std::io::Error::from(e)).context(format!("检查 {name}"))),
+        Err(e) => {
+            Err(anyhow::Error::from(std::io::Error::from(e)).context(format!("checking {name}")))
+        }
     }
 }
 
@@ -480,7 +494,8 @@ pub fn list_at(dir: &OwnedFd) -> Result<Vec<String>> {
         if name == b"." || name == b".." {
             continue;
         }
-        let name = std::str::from_utf8(name).map_err(|_| anyhow!("目录里有不是 UTF-8 的名字"))?;
+        let name =
+            std::str::from_utf8(name).map_err(|_| anyhow!("the directory has a non-UTF-8 name"))?;
         out.push(name.to_owned());
     }
     out.sort();
@@ -492,22 +507,22 @@ pub fn list_at(dir: &OwnedFd) -> Result<Vec<String>> {
 pub fn split_abs(dest: &str) -> Result<(PathBuf, String)> {
     let p = Path::new(dest);
     if !p.is_absolute() {
-        bail!("目标路径必须是绝对路径");
+        bail!("the target path must be absolute");
     }
     let mut parts = Vec::new();
     for c in p.components() {
         match c {
             Component::RootDir => {}
             Component::Normal(n) => parts.push(n),
-            _ => bail!("目标路径不规范"),
+            _ => bail!("malformed target path"),
         }
     }
     let Some(name) = parts.pop() else {
-        bail!("目标路径不能是根目录");
+        bail!("the target path must not be the root directory");
     };
     let name = name
         .to_str()
-        .ok_or_else(|| anyhow!("目标路径不是 UTF-8"))?
+        .ok_or_else(|| anyhow!("the target path is not UTF-8"))?
         .to_owned();
     Ok((parts.iter().collect(), name))
 }
@@ -520,14 +535,14 @@ pub fn set_owner(fd: &OwnedFd, uid: u32, gid: u32) -> Result<()> {
         Some(rustix::fs::Gid::from_raw(gid)),
     )
     .map_err(std::io::Error::from)
-    .context("设置属主")
+    .context("setting the owner")
 }
 
 /// 对已打开的目录 `fchmod`。
 pub fn set_mode(dir: &OwnedFd, mode: u32) -> Result<()> {
     rustix::fs::fchmod(dir, mode_of(mode))
         .map_err(std::io::Error::from)
-        .context("设置目录权限")
+        .context("setting directory permissions")
 }
 
 /// 让 `dir` 里的 `name` 成为指向 `target` 的符号链接，原子地替换已有的链接或文件
@@ -537,18 +552,18 @@ pub fn replace_symlink_at(dir: &OwnedFd, name: &str, target: &str) -> Result<()>
     let tmp = format!(".{name}.mastersos-tmp");
     match rustix::fs::unlinkat(dir, tmp.as_str(), AtFlags::empty()) {
         Ok(()) | Err(Errno::NOENT) => {}
-        Err(e) => return Err(std::io::Error::from(e)).with_context(|| format!("删除 {tmp}")),
+        Err(e) => return Err(std::io::Error::from(e)).with_context(|| format!("removing {tmp}")),
     }
     rustix::fs::symlinkat(target, dir, tmp.as_str())
         .map_err(std::io::Error::from)
-        .with_context(|| format!("创建链接 {tmp}"))?;
+        .with_context(|| format!("creating link {tmp}"))?;
     if let Err(e) = rustix::fs::renameat(dir, tmp.as_str(), dir, name) {
         let _ = rustix::fs::unlinkat(dir, tmp.as_str(), AtFlags::empty());
-        return Err(std::io::Error::from(e)).with_context(|| format!("替换 {name}"));
+        return Err(std::io::Error::from(e)).with_context(|| format!("replacing {name}"));
     }
     rustix::fs::fsync(dir)
         .map_err(std::io::Error::from)
-        .context("fsync 目录")
+        .context("fsync of the directory")
 }
 
 /// 读 `dir` 里的符号链接 `name` 指向哪里；不存在或不是链接为 None。
@@ -565,16 +580,16 @@ pub fn exchange_at(dir: &OwnedFd, a: &str, b: &str) -> Result<()> {
     check_name(b)?;
     rustix::fs::renameat_with(dir, a, dir, b, rustix::fs::RenameFlags::EXCHANGE)
         .map_err(std::io::Error::from)
-        .with_context(|| format!("互换 {a} 与 {b}"))?;
+        .with_context(|| format!("swapping {a} and {b}"))?;
     rustix::fs::fsync(dir)
         .map_err(std::io::Error::from)
-        .context("fsync 目录")
+        .context("fsync of the directory")
 }
 
 /// 开发机（macOS）没有 `RENAME_EXCHANGE`：一律报错。
 #[cfg(not(target_os = "linux"))]
 pub fn exchange_at(_dir: &OwnedFd, a: &str, b: &str) -> Result<()> {
-    bail!("互换 {a} 与 {b}：只有 Linux 支持原子互换")
+    bail!("swapping {a} and {b}: atomic swap is only supported on Linux")
 }
 
 /// `dir` 的直接子项里属主是 `uid` 的（`fstatat(AT_SYMLINK_NOFOLLOW)` 取属主）整个删掉：目录用
@@ -606,54 +621,54 @@ pub fn copy_tree_into(src: &Path, dst: &OwnedFd, uid: u32, gid: u32) -> Result<(
         Some(rustix::fs::Uid::from_raw(uid)),
         Some(rustix::fs::Gid::from_raw(gid)),
     );
-    for e in std::fs::read_dir(src).with_context(|| format!("读取 {}", src.display()))? {
-        let e = e.with_context(|| format!("读取 {}", src.display()))?;
+    for e in std::fs::read_dir(src).with_context(|| format!("reading {}", src.display()))? {
+        let e = e.with_context(|| format!("reading {}", src.display()))?;
         let name = e.file_name();
         let from = e.path();
-        let meta =
-            std::fs::symlink_metadata(&from).with_context(|| format!("检查 {}", from.display()))?;
+        let meta = std::fs::symlink_metadata(&from)
+            .with_context(|| format!("checking {}", from.display()))?;
         let mode = mode_of(meta.permissions().mode() & 0o7777);
         let ft = meta.file_type();
         let what = |verb: &str| format!("{verb} {}", Path::new(&name).display());
         if ft.is_dir() {
             rustix::fs::mkdirat(dst, name.as_os_str(), mode_of(0o700))
                 .map_err(std::io::Error::from)
-                .with_context(|| what("创建目录"))?;
+                .with_context(|| what("creating directory"))?;
             let sub = open_subdir(dst, name.as_os_str(), false)?;
             rustix::fs::fchown(&sub, owner, group)
                 .map_err(std::io::Error::from)
-                .with_context(|| what("设置属主"))?;
+                .with_context(|| what("setting the owner"))?;
             copy_tree_into(&from, &sub, uid, gid)?;
             rustix::fs::fchmod(&sub, mode)
                 .map_err(std::io::Error::from)
-                .with_context(|| what("设置权限"))?;
+                .with_context(|| what("setting permissions"))?;
         } else if ft.is_file() {
             let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK;
             let mut input = File::from(
                 rustix::fs::open(&from, flags, Mode::empty())
                     .map_err(std::io::Error::from)
-                    .with_context(|| format!("打开 {}", from.display()))?,
+                    .with_context(|| format!("opening {}", from.display()))?,
             );
             let flags =
                 OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
             let mut out = File::from(
                 rustix::fs::openat(dst, name.as_os_str(), flags, mode_of(0o600))
                     .map_err(std::io::Error::from)
-                    .with_context(|| what("创建"))?,
+                    .with_context(|| what("creating"))?,
             );
-            std::io::copy(&mut input, &mut out).with_context(|| what("写入"))?;
+            std::io::copy(&mut input, &mut out).with_context(|| what("writing"))?;
             rustix::fs::fchown(&out, owner, group)
                 .map_err(std::io::Error::from)
-                .with_context(|| what("设置属主"))?;
+                .with_context(|| what("setting the owner"))?;
             rustix::fs::fchmod(&out, mode)
                 .map_err(std::io::Error::from)
-                .with_context(|| what("设置权限"))?;
+                .with_context(|| what("setting permissions"))?;
         } else if ft.is_symlink() {
             let target = std::fs::read_link(&from)
-                .with_context(|| format!("读取链接 {}", from.display()))?;
+                .with_context(|| format!("reading link {}", from.display()))?;
             rustix::fs::symlinkat(&target, dst, name.as_os_str())
                 .map_err(std::io::Error::from)
-                .with_context(|| what("创建链接"))?;
+                .with_context(|| what("creating link"))?;
             rustix::fs::chownat(
                 dst,
                 name.as_os_str(),
@@ -662,7 +677,7 @@ pub fn copy_tree_into(src: &Path, dst: &OwnedFd, uid: u32, gid: u32) -> Result<(
                 AtFlags::SYMLINK_NOFOLLOW,
             )
             .map_err(std::io::Error::from)
-            .with_context(|| what("设置属主"))?;
+            .with_context(|| what("setting the owner"))?;
         } else if ft.is_fifo() || ft.is_socket() || ft.is_block_device() || ft.is_char_device() {
             continue;
         }
@@ -700,10 +715,10 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("a/b")).unwrap();
         let e = open_dir(root.path(), Path::new("/a"), true).unwrap_err();
-        assert!(format!("{e:#}").contains("不能以 / 开头"), "{e:#}");
+        assert!(format!("{e:#}").contains("must not start with /"), "{e:#}");
         for bad in ["a/../a", "..", "a/./b", "./a"] {
             let e = open_dir(root.path(), Path::new(bad), true).unwrap_err();
-            assert!(format!("{e:#}").contains("不规范"), "{bad}: {e:#}");
+            assert!(format!("{e:#}").contains("malformed"), "{bad}: {e:#}");
         }
     }
 
@@ -761,7 +776,11 @@ mod tests {
         // 内容不同则替换。
         assert!(write_at(&dir, "a", b"other", 0o644).unwrap());
         assert_eq!(fs::read(&p).unwrap(), b"other");
-        assert_eq!(list_at(&dir).unwrap(), vec!["a"], "不留临时文件");
+        assert_eq!(
+            list_at(&dir).unwrap(),
+            vec!["a"],
+            "no temporary file left behind"
+        );
     }
 
     #[test]
@@ -791,7 +810,7 @@ mod tests {
         let _restore = Restore(&ro);
         // root 不受目录权限限制，这个场景测不出来。
         if fs::write(ro.join("probe"), b"").is_ok() {
-            eprintln!("以 root 运行，跳过");
+            eprintln!("running as root, skipping");
             return;
         }
         let dir = open_dir(root.path(), Path::new("ro"), false).unwrap();
@@ -907,7 +926,10 @@ mod tests {
         let dir = open_dir(root.path(), Path::new(""), false).unwrap();
         remove_tree_at(&dir, "t").unwrap();
         assert!(!t.exists());
-        assert!(outside.path().join("keep").exists(), "不跟随里面的链接");
+        assert!(
+            outside.path().join("keep").exists(),
+            "does not follow links inside"
+        );
         // 不存在算成功；普通文件也删
         remove_tree_at(&dir, "t").unwrap();
         fs::write(root.path().join("f"), b"x").unwrap();
@@ -973,7 +995,7 @@ mod tests {
         fs::write(tmp.join("f"), b"x").unwrap();
         let me = rustix::process::geteuid().as_raw();
         assert_eq!(remove_owned_tree(&tmp, me).unwrap(), 3);
-        assert!(tmp.exists(), "目录本身留着");
+        assert!(tmp.exists(), "the directory itself stays");
         assert_eq!(fs::read_dir(&tmp).unwrap().count(), 0);
         assert!(outside.path().join("keep").exists());
         assert!(outside.path().join("keepdir/inner").exists());
@@ -1006,7 +1028,11 @@ mod tests {
         drop(cur);
         let me = rustix::process::geteuid().as_raw();
         assert_eq!(remove_owned_tree_and_sticky(&tmp, me).unwrap(), 1);
-        assert_eq!(fs::read_dir(&tmp).unwrap().count(), 0, "暂存目录也删掉了");
+        assert_eq!(
+            fs::read_dir(&tmp).unwrap().count(),
+            0,
+            "the staging directory is removed too"
+        );
     }
 
     /// 复审 T19 F1：别人抢先放的同前缀的东西（链接、不是 0700 的目录）不当作暂存目录；链接不跟随。
@@ -1109,7 +1135,10 @@ mod tests {
         fs::write(root.path().join("m"), b"").unwrap();
         let d = open_dir(root.path(), Path::new(""), false).unwrap();
         assert!(take_at(&d, "m", "taken").unwrap());
-        assert!(!take_at(&d, "m", "taken").unwrap(), "第二次拿：已经没了");
+        assert!(
+            !take_at(&d, "m", "taken").unwrap(),
+            "second take: already gone"
+        );
         assert!(!root.path().join("m").exists());
         assert!(root.path().join("taken").exists());
         assert!(mtime_at(&d, "taken").unwrap().is_some());
@@ -1121,13 +1150,13 @@ mod tests {
         assert!(sticky_foreign(true, 0, 0o41777, 1999));
         assert!(
             !sticky_foreign(true, 0, 0o40755, 1999),
-            "没有 sticky 位：访客放不进东西"
+            "no sticky bit: the guest cannot put anything there"
         );
         assert!(
             !sticky_foreign(true, 1999, 0o41777, 1999),
-            "访客自己的：整棵已经删了"
+            "owned by the guest: the whole tree is already removed"
         );
-        assert!(!sticky_foreign(false, 0, 0o101777, 1999), "不是目录");
+        assert!(!sticky_foreign(false, 0, 0o101777, 1999), "not a directory");
     }
 
     /// 带 sticky 位的子目录：属主是 `uid` 自己的整棵删（第一层就删了）；链接不跟随。

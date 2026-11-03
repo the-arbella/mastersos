@@ -89,7 +89,7 @@ fn load(path: &Path) -> BTreeMap<u32, DateTime<Utc>> {
         Ok(d) => d,
         Err(e) => {
             if !is_missing(&e) {
-                log::warn!("homes：打不开登录记录的目录：{e:#}");
+                log::warn!("homes: cannot open the login record directory: {e:#}");
             }
             return BTreeMap::new();
         }
@@ -101,13 +101,13 @@ fn load(path: &Path) -> BTreeMap<u32, DateTime<Utc>> {
             match f.take(MAX_LAST_LOGIN_BYTES + 1).read_to_end(&mut buf) {
                 Ok(_) => buf,
                 Err(e) => {
-                    log::warn!("homes：读登录记录失败：{e}");
+                    log::warn!("homes: reading the login record failed: {e}");
                     return BTreeMap::new();
                 }
             }
         }
         Err(e) => {
-            log::warn!("homes：读登录记录失败：{e:#}");
+            log::warn!("homes: reading the login record failed: {e:#}");
             return BTreeMap::new();
         }
     };
@@ -119,9 +119,9 @@ fn load(path: &Path) -> BTreeMap<u32, DateTime<Utc>> {
     match parsed {
         Some(m) => m,
         None => {
-            log::warn!("homes：登录记录坏了，改名为 {LAST_LOGIN_BAD}，所有人按现在第一次见到");
+            log::warn!("homes: the login record is corrupt; renamed to {LAST_LOGIN_BAD}, everyone counts as first seen now");
             if let Err(e) = safefs::rename_at(&dir, name, LAST_LOGIN_BAD) {
-                log::warn!("homes：给坏掉的登录记录改名失败：{e:#}");
+                log::warn!("homes: renaming the corrupt login record failed: {e:#}");
             }
             BTreeMap::new()
         }
@@ -141,11 +141,11 @@ fn save(path: &Path, map: &BTreeMap<u32, DateTime<Utc>>) -> Result<()> {
 }
 
 fn split(path: &Path) -> Result<(&Path, &str)> {
-    let parent = path.parent().context("路径没有上级目录")?;
+    let parent = path.parent().context("the path has no parent directory")?;
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
-        .context("路径的最后一级不规范")?;
+        .context("the last path component is malformed")?;
     Ok((parent, name))
 }
 
@@ -171,7 +171,7 @@ pub fn drain_and_record(queue: &Path, last_login: &Path, now: DateTime<Utc>) -> 
     crate::login_queue::drain_with(queue, |uids| match record_logins(last_login, uids, now) {
         Ok(()) => true,
         Err(e) => {
-            log::warn!("记录最近登录失败，登录队列里的记号留着：{e:#}");
+            log::warn!("recording the last login failed; the login queue marker is kept: {e:#}");
             false
         }
     })
@@ -314,7 +314,8 @@ impl HomeFs for RealHomeFs {
 
     fn to_trash(&self, name: &str, uid: u32) -> Result<bool> {
         let home = self.open()?;
-        let t = trash::open_trash(&home, true)?.context("回收目录建不出来")?;
+        let t =
+            trash::open_trash(&home, true)?.context("the trash directory could not be created")?;
         trash::to_trash(&home, &t, name, uid)
     }
 
@@ -410,17 +411,20 @@ enum AdminsUnknown {
 fn read_admins(paths: &SysPaths) -> std::result::Result<Vec<String>, AdminsUnknown> {
     let read = || -> Result<LoginPolicy> {
         let dir = safefs::open_abs_dir(&paths.var_dir.join(POLICY_SUBDIR), false)?;
-        let f = safefs::open_file_at(&dir, POLICY_FILE)?.context("没有登录策略文件")?;
+        let f = safefs::open_file_at(&dir, POLICY_FILE)?.context("no login policy file")?;
         let mut buf = Vec::new();
         f.take(MAX_POLICY_BYTES as u64 + 1).read_to_end(&mut buf)?;
-        anyhow::ensure!(buf.len() <= MAX_POLICY_BYTES, "登录策略太大");
-        serde_json::from_slice(&buf).context("解析登录策略")
+        anyhow::ensure!(
+            buf.len() <= MAX_POLICY_BYTES,
+            "the login policy is too large"
+        );
+        serde_json::from_slice(&buf).context("parsing the login policy")
     };
     match read() {
         Ok(p) if p.from_bundle => Ok(p.admin_users),
         Ok(_) => Err(AdminsUnknown::NotFromBundle),
         Err(e) => {
-            log::warn!("homes：读不到管理员名单：{e:#}");
+            log::warn!("homes: cannot read the administrator list: {e:#}");
             Err(AdminsUnknown::Unreadable)
         }
     }
@@ -482,11 +486,14 @@ pub fn cleanup(
         Ok(r) => {
             if r.left() > 0 {
                 notes.push(format!(
-                    "回收目录里仍有 {} 处删不掉（挂载点或出错），下一轮再试",
+                    "entries in the trash directory that still cannot be removed: {} (mount points or errors); retrying next round",
                     r.left()
                 ));
             } else if r.removed > 0 {
-                log::info!("homes：删掉了回收目录里留下的 {} 项", r.removed);
+                log::info!(
+                    "homes: removed {} entries left in the trash directory",
+                    r.removed
+                );
             }
             r.left()
         }
@@ -494,7 +501,7 @@ pub fn cleanup(
     };
     let homes = match fs.homes() {
         Ok(h) => h,
-        Err(e) => return failed(format!("列不出家目录：{e:#}")),
+        Err(e) => return failed(format!("cannot list home directories: {e:#}")),
     };
     // 2. 每轮都补记第一次见到的
     let owners: BTreeSet<u32> = homes.iter().map(|(_, u)| *u).collect();
@@ -504,7 +511,7 @@ pub fn cleanup(
         let mut map = load(&path);
         if fill_unseen(&mut map, &owners, now) {
             if let Err(e) = save(&path, &map) {
-                log::warn!("homes：写登录记录失败：{e:#}");
+                log::warn!("homes: writing the login record failed: {e:#}");
             }
         }
         map
@@ -514,28 +521,32 @@ pub fn cleanup(
         if *g != Some(m) {
             *g = Some(m);
             notes.push(format!(
-                "登录记录坏了，已改名为 {LAST_LOGIN_BAD}，所有人按现在第一次见到"
+                "the login record was corrupt and was renamed to {LAST_LOGIN_BAD}; everyone counts as first seen now"
             ));
         }
     }
     // 3. 空间
     let (free0, total) = match fs.space() {
         Ok(s) => s,
-        Err(e) => return failed(format!("读不到家目录所在分区的空间：{e:#}")),
+        Err(e) => {
+            return failed(format!(
+                "cannot read the free space of the home partition: {e:#}"
+            ))
+        }
     };
     if !needs_cleanup(free0, total) {
-        return with_notes(true, "空间充足，不用清理".into(), &notes);
+        return with_notes(true, "enough free space; no cleanup needed".into(), &notes);
     }
     // 4. 管理员名单
     let admins = match read_admins(paths) {
         Ok(a) => a,
         Err(AdminsUnknown::Unreadable) => {
-            return with_notes(false, "读不到管理员名单，这一轮不清理".into(), &notes)
+            return with_notes(false, "cannot read the administrator list; not cleaning up this round".into(), &notes)
         }
         Err(AdminsUnknown::NotFromBundle) => {
             return with_notes(
                 false,
-                "还没有从设置包写过登录策略（管理员名单未知），这一轮不清理".into(),
+                "no login policy has been written from a bundle yet (administrator list unknown); not cleaning up this round".into(),
                 &notes,
             )
         }
@@ -556,8 +567,12 @@ pub fn cleanup(
     let mut active = match logged_in(runner) {
         Ok(a) => a,
         Err(e) => {
-            log::warn!("homes：列不出登录着的用户：{e:#}");
-            return with_notes(false, "列不出登录着的用户，这一轮不清理".into(), &notes);
+            log::warn!("homes: cannot list signed-in users: {e:#}");
+            return with_notes(
+                false,
+                "cannot list signed-in users; not cleaning up this round".into(),
+                &notes,
+            );
         }
     };
     // 刚登录的（登录记录在 RECENT_LOGIN 之内）与登录队列里还没取走的，都当作正在用（复审 N1：PAM 会话阶段里
@@ -566,8 +581,12 @@ pub fn cleanup(
     match queued(paths) {
         Ok(q) => active.extend(q),
         Err(e) => {
-            log::warn!("homes：读不到登录队列：{e:#}");
-            return with_notes(false, "读不到登录队列，这一轮不清理".into(), &notes);
+            log::warn!("homes: cannot read the login queue: {e:#}");
+            return with_notes(
+                false,
+                "cannot read the login queue; not cleaning up this round".into(),
+                &notes,
+            );
         }
     }
     for e in &entries {
@@ -580,7 +599,7 @@ pub fn cleanup(
     let mut free = free0;
     for c in candidates(&entries, &admins, &active) {
         if in_use_now(c.uid, runner, paths) {
-            log::info!("homes：一个候选在删除前开始了会话，跳过");
+            log::info!("homes: a candidate started a session before removal; skipping it");
             continue;
         }
         match fs.to_trash(&c.name, c.uid) {
@@ -589,7 +608,7 @@ pub fn cleanup(
             Ok(false) => errors += 1,
             Err(e) => {
                 errors += 1;
-                log::warn!("homes：挪走一个家目录失败：{e:#}");
+                log::warn!("homes: moving a home directory away failed: {e:#}");
                 continue;
             }
         }
@@ -599,7 +618,7 @@ pub fn cleanup(
                 let new_left = r.left().saturating_sub(stale_left);
                 stale_left = r.left();
                 log::info!(
-                    "homes：删了一个家目录（{} 项，留下 {} 处）",
+                    "homes: removed a home directory ({} entries, {} left)",
                     r.removed,
                     new_left
                 );
@@ -610,13 +629,13 @@ pub fn cleanup(
             }
             Err(e) => {
                 errors += 1;
-                log::warn!("homes：删回收目录失败：{e:#}");
+                log::warn!("homes: removing the trash directory failed: {e:#}");
             }
         }
         match fs.space() {
             Ok((f, _)) => free = f,
             Err(e) => {
-                log::warn!("homes：删除后读不到空间，停下：{e:#}");
+                log::warn!("homes: cannot read free space after removal; stopping: {e:#}");
                 errors += 1;
                 break;
             }
@@ -626,20 +645,20 @@ pub fn cleanup(
         }
     }
     let mut body = format!(
-        "删了 {removed} 个家目录，腾出 {}",
+        "home directories removed: {removed}, freed {}",
         human(free.saturating_sub(free0))
     );
     if partial > 0 {
         body.push_str(&format!(
-            "；其中 {partial} 个只删了一部分（{left} 处挂载点或删不掉的项留在回收目录里）"
+            "; partly removed: {partial} ({left} mount points or unremovable entries left in the trash directory)"
         ));
     }
     if errors > 0 {
-        body.push_str(&format!("；{errors} 个删除失败"));
+        body.push_str(&format!("; failed removals: {errors}"));
     }
     let low = needs_cleanup(free, total);
     if low {
-        body.push_str("；空间仍不足");
+        body.push_str("; still low on space");
     }
     with_notes(errors == 0 && partial == 0 && !low, body, &notes)
 }
@@ -706,7 +725,7 @@ impl Job for HomeCleanupJob {
             .await
             {
                 Ok(r) => vec![r],
-                Err(e) => vec![failed(format!("异常退出：{e}"))],
+                Err(e) => vec![failed(format!("exited abnormally: {e}"))],
             }
         })
     }

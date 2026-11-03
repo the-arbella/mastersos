@@ -109,24 +109,26 @@ const CRED_NAME: &str = "pcrlock.recovery-pin";
 /// luksDump JSON 里 TPM2 token 的字面 PCR 字段（拆开写：`check-tree.sh` 第 2 条查的就是这个词后面跟的值）。
 const LITERAL_PCRS_KEY: &str = concat!("tpm2", "-pcrs");
 
-const NO_SB_BIND: &str = "Secure Boot 没有开启：不绑 pcrlock（按现在的 PCR 7 生成策略等于把「Secure Boot 关着」授权进去，\
-关着 Secure Boot 改内核命令行也能用 TPM 解开数据分区）；数据分区现在只有签名的 PCR 11 保护，开启 Secure Boot 后自动补上";
+const NO_SB_BIND: &str = "Secure Boot is off: not binding pcrlock (a policy built from the current PCR 7 would authorize \"Secure Boot off\", \
+and with Secure Boot off an edited kernel command line could unlock the data partition through the TPM); \
+the data partition is protected only by the signed PCR 11 for now, and pcrlock is added once Secure Boot is on";
 /// 分区没有 TPM2 槽时 `luks:tpm` 的说明；另三项用 [`NO_TPM_SLOT_SHORT`]。
 const NO_TPM_SLOT: &str = "数据分区没有 TPM2 槽：这台不是按现在的安装器装的（没有 TPM 已不再支持），请重装 / The data partition has no TPM2 slot; reinstall";
 const NO_TPM_SLOT_SHORT: &str = "数据分区没有 TPM2 槽，请重装 / No TPM2 slot; reinstall";
 const NO_SB_REPAIR: &str =
-    "Secure Boot 没有开启：不改写 pcrlock 策略（否则「Secure Boot 关着」会被授权）；\
-开启 Secure Boot 之前每次开机都要恢复密钥";
+    "Secure Boot is off: not rewriting the pcrlock policy (it would authorize \"Secure Boot off\"); \
+every boot needs the recovery key until Secure Boot is on";
 /// 本机没有能解开数据分区的钥匙：首次开机的临时钥匙丢了，或这台在这项修正之前装好。用户态不再用 TPM 解锁。
 const NO_LOCAL_KEY: &str = "本机没有能解开数据分区的钥匙（首次开机的临时钥匙丢了，或这台在这项修正之前装好）；\
 用户态不再用 TPM 解锁，请恢复出厂或重装 / No local key to unlock the data partition; factory reset or reinstall";
 /// TPM 槽绑的不是这个镜像的 PCR 公钥（换过签名钥匙，slot 绑着退役的那把）：这次开机多半用了恢复密钥。
 const WRONG_PUBKEY: &str =
-    "TPM 槽绑的是别的 PCR 公钥（换过签名钥匙），这次开机多半用了恢复密钥；托管好了会换槽";
+    "the TPM slot is bound to a different PCR public key (the signing key was rotated); this boot most likely used the recovery key; the slot is replaced once escrow succeeds";
 /// 已托管、但本机没有 HeldKey（这项修正之前托管的）：`luks:escrow` 的 detail 后面接这句。
-const NO_HELD_KEY: &str = "；没有本机保管的恢复密钥，下次换 PCR 钥匙时要恢复出厂";
+const NO_HELD_KEY: &str =
+    "; no recovery key held on this device, so the next PCR key rotation needs a factory reset";
 /// 多余的槽只有首次开机的临时钥匙那一个（本机还留着那把钥匙文件）：无害，托管与 pcrlock 都好了之后去掉。
-const BOOTSTRAP_SLOT_LEFT: &str = "首次开机的临时钥匙槽还在，托管与 pcrlock 好了之后去掉";
+const BOOTSTRAP_SLOT_LEFT: &str = "the first-boot temporary key slot is still present; it is removed once escrow and pcrlock are done";
 
 /// 用经 stdin 送进来的钥匙解锁（`cryptsetup` 的 `--key-file=-` 在 cryptenroll 里写作 /dev/stdin）。
 const KEY_STDIN_UNLOCK: &str = "--unlock-key-file=/dev/stdin";
@@ -183,12 +185,12 @@ impl Tpm2Token {
 fn pcr_list(v: Option<&Value>) -> Result<Vec<u32>> {
     let Some(v) = v else { return Ok(vec![]) };
     v.as_array()
-        .ok_or_else(|| anyhow!("PCR 列表不是数组"))?
+        .ok_or_else(|| anyhow!("the PCR list is not an array"))?
         .iter()
         .map(|p| {
             p.as_u64()
                 .and_then(|n| u32::try_from(n).ok())
-                .ok_or_else(|| anyhow!("PCR 不是整数"))
+                .ok_or_else(|| anyhow!("a PCR is not an integer"))
         })
         .collect()
 }
@@ -206,23 +208,23 @@ fn pcr_list(v: Option<&Value>) -> Result<Vec<u32>> {
 pub fn parse_luks_dump(json: &str, uuid: &str, image_pubkey: Option<&str>) -> Result<LuksInfo> {
     let uuid = uuid.trim().to_ascii_lowercase();
     if !is_luks_uuid(&uuid) {
-        bail!("LUKS UUID 格式不对");
+        bail!("malformed LUKS UUID");
     }
-    let v: Value = serde_json::from_str(json).context("luksDump 的 JSON 解析失败")?;
+    let v: Value = serde_json::from_str(json).context("parsing the luksDump JSON failed")?;
     let tokens = v
         .get("tokens")
         .and_then(Value::as_object)
-        .ok_or_else(|| anyhow!("luksDump 的 JSON 里没有 tokens"))?;
+        .ok_or_else(|| anyhow!("the luksDump JSON has no tokens"))?;
     let keyslots = v
         .get("keyslots")
         .and_then(Value::as_object)
-        .ok_or_else(|| anyhow!("luksDump 的 JSON 里没有 keyslots"))?;
+        .ok_or_else(|| anyhow!("the luksDump JSON has no keyslots"))?;
     let mut tpm2: Vec<Tpm2Token> = vec![];
     let mut has_recovery = false;
     let mut recovery_slots: Vec<u32> = vec![];
     let mut referenced: Vec<u32> = vec![];
     for t in tokens.values() {
-        let slots = slot_list(t.get("keyslots")).context("token 的 keyslots")?;
+        let slots = slot_list(t.get("keyslots")).context("keyslots of a token")?;
         referenced.extend(&slots);
         if t.get("type").and_then(Value::as_str) == Some("systemd-recovery") {
             recovery_slots.extend(&slots);
@@ -241,7 +243,7 @@ pub fn parse_luks_dump(json: &str, uuid: &str, image_pubkey: Option<&str>) -> Re
                         .get("tpm2_pcrlock")
                         .and_then(Value::as_bool)
                         .unwrap_or(false),
-                    literal_pcrs: pcr_list(t.get(LITERAL_PCRS_KEY)).context("字面 PCR")?,
+                    literal_pcrs: pcr_list(t.get(LITERAL_PCRS_KEY)).context("literal PCRs")?,
                     pubkey,
                     pubkey_is_image,
                 });
@@ -256,7 +258,7 @@ pub fn parse_luks_dump(json: &str, uuid: &str, image_pubkey: Option<&str>) -> Re
         .keys()
         .map(|k| {
             k.parse::<u32>()
-                .map_err(|_| anyhow!("keyslot 编号不是整数"))
+                .map_err(|_| anyhow!("a keyslot number is not an integer"))
         })
         .collect::<Result<Vec<u32>>>()?;
     stray_slots.retain(|k| !referenced.contains(k));
@@ -276,12 +278,12 @@ pub fn parse_luks_dump(json: &str, uuid: &str, image_pubkey: Option<&str>) -> Re
 fn slot_list(v: Option<&Value>) -> Result<Vec<u32>> {
     let Some(v) = v else { return Ok(vec![]) };
     v.as_array()
-        .ok_or_else(|| anyhow!("keyslots 不是数组"))?
+        .ok_or_else(|| anyhow!("keyslots is not an array"))?
         .iter()
         .map(|s| {
             s.as_str()
                 .and_then(|s| s.parse::<u32>().ok())
-                .ok_or_else(|| anyhow!("keyslot 编号不对"))
+                .ok_or_else(|| anyhow!("bad keyslot number"))
         })
         .collect()
 }
@@ -676,7 +678,7 @@ impl<'a> Round<'a> {
         let program = cmd.program.clone();
         tokio::task::spawn_blocking(move || r.run(&cmd))
             .await
-            .map_err(|e| anyhow!("{program} 异常退出：{e}"))?
+            .map_err(|e| anyhow!("{program} exited abnormally: {e}"))?
     }
 
     async fn exec_ok(&self, cmd: Cmd) -> Result<String> {
@@ -684,7 +686,7 @@ impl<'a> Round<'a> {
         let program = cmd.program.clone();
         tokio::task::spawn_blocking(move || run_ok(r.as_ref(), cmd))
             .await
-            .map_err(|e| anyhow!("{program} 异常退出：{e}"))?
+            .map_err(|e| anyhow!("{program} exited abnormally: {e}"))?
     }
 
     /// 输出可能带恢复密钥的命令：错误里只有退出码。
@@ -693,7 +695,7 @@ impl<'a> Round<'a> {
         let program = cmd.program.clone();
         tokio::task::spawn_blocking(move || run_ok_redacted(r.as_ref(), cmd))
             .await
-            .map_err(|e| anyhow!("{program} 异常退出：{e}"))?
+            .map_err(|e| anyhow!("{program} exited abnormally: {e}"))?
     }
 
     async fn run(mut self) -> Vec<ItemResult> {
@@ -716,7 +718,10 @@ impl<'a> Round<'a> {
             let cur = match self.read_info().await {
                 Ok(i) => i,
                 Err(e) => {
-                    err = Some(step_err("luks:tpm", e.context("读不出数据分区的 LUKS 头")));
+                    err = Some(step_err(
+                        "luks:tpm",
+                        e.context("cannot read the LUKS header of the data partition"),
+                    ));
                     break;
                 }
             };
@@ -743,7 +748,7 @@ impl<'a> Round<'a> {
                     info = Some(cur);
                     err = Some(step_err(
                         "luks:escrow",
-                        e.context("读本机的托管状态失败，这一轮不动数据分区"),
+                        e.context("reading the local escrow state failed; not touching the data partition this round"),
                     ));
                     break;
                 }
@@ -761,7 +766,7 @@ impl<'a> Round<'a> {
                     info = Some(cur);
                     err = Some(StepError {
                         item: "luks:escrow",
-                        detail: format!("托管被拒（本机）：{why}"),
+                        detail: format!("escrow refused (locally): {why}"),
                     });
                     break;
                 }
@@ -792,7 +797,7 @@ impl<'a> Round<'a> {
                     Some(p) => self.escrow(&cur, p).await,
                     None => Err(StepError {
                         item: "luks:escrow",
-                        detail: "待托管的密钥不见了".into(),
+                        detail: "the key waiting for escrow is missing".into(),
                     }),
                 },
                 Need::AddPcrlock if !self.secure_boot => Err(StepError {
@@ -890,11 +895,11 @@ impl<'a> Round<'a> {
         });
         match state {
             Some(s) if s.starts_with("enabled") => ok(ITEM, Some(s)),
-            Some(s) => fail(ITEM, format!("Secure Boot 没有开：{s}")),
+            Some(s) => fail(ITEM, format!("Secure Boot is off: {s}")),
             None => fail(
                 ITEM,
                 format!(
-                    "bootctl status 里没有 Secure Boot 一行（退出码 {}）",
+                    "bootctl status has no Secure Boot line (exit code {})",
                     out.code
                 ),
             ),
@@ -915,7 +920,7 @@ impl<'a> Round<'a> {
             return Err(StepError {
                 item: "luks:recovery",
                 detail: format!(
-                    "盘上已有 {} 个恢复槽（本机记不清哪把已托管），不再登记新的（以免占满 keyslot）；请 IT 检查",
+                    "the disk already has {} recovery slots (this device cannot tell which one is escrowed); not enrolling another (to avoid filling the keyslots); IT should check",
                     info.recovery_slots.len()
                 ),
             });
@@ -925,7 +930,12 @@ impl<'a> Round<'a> {
         self.seal(PROBE_KEY)?;
         // 用首次开机的临时钥匙（或已保管的恢复密钥）解锁来登记新的恢复密钥；都没有就什么都不动。
         let key = unlock_key(&self.cx.paths, info, pending)
-            .map_err(|e| step_err("luks:recovery", e.context("读本机的解锁钥匙失败")))?
+            .map_err(|e| {
+                step_err(
+                    "luks:recovery",
+                    e.context("reading the local unlock key failed"),
+                )
+            })?
             .ok_or_else(|| StepError {
                 item: "luks:recovery",
                 detail: NO_LOCAL_KEY.into(),
@@ -940,11 +950,16 @@ impl<'a> Round<'a> {
                 .stdin(key),
             )
             .await
-            .map_err(|e| step_err("luks:recovery", e.context("登记恢复密钥失败")))?;
+            .map_err(|e| {
+                step_err(
+                    "luks:recovery",
+                    e.context("enrolling the recovery key failed"),
+                )
+            })?;
         let key = extract_recovery_key(&out).ok_or_else(|| StepError {
             item: "luks:recovery",
             detail:
-                "登记了恢复密钥，但输出里取不出它（下一轮再登记一把；这个槽在之后的托管成功时去掉）"
+                "enrolled a recovery key but could not extract it from the output (another is enrolled next round; this slot is removed after a later successful escrow)"
                     .into(),
         })?;
         drop(out);
@@ -966,7 +981,7 @@ impl<'a> Round<'a> {
         .map_err(|e| {
             step_err(
                 "luks:recovery",
-                e.context("取出的恢复密钥解不开数据分区（不托管；下一轮再登记一把）"),
+                e.context("the extracted recovery key does not unlock the data partition (not escrowing; another is enrolled next round)"),
             )
         })?;
         // Sealed once here and kept with the key: every attempt sends this same ciphertext. The
@@ -982,7 +997,12 @@ impl<'a> Round<'a> {
                 sealed: sealed.as_ref().ok().cloned(),
             },
         )
-        .map_err(|e| step_err("luks:recovery", e.context("写待托管文件失败")))?;
+        .map_err(|e| {
+            step_err(
+                "luks:recovery",
+                e.context("writing the pending escrow file failed"),
+            )
+        })?;
         sealed.map(|_| ())
     }
 
@@ -1011,11 +1031,13 @@ impl<'a> Round<'a> {
         };
         let Some(id) = &self.cx.identity else {
             return Err(escrow_err(
-                "种子分区上没有 identity.json（托管凭据），不能托管；恢复密钥留在本机等待".into(),
+                "the seed partition has no identity.json (escrow credentials), so escrow is not possible; the recovery key waits on this device".into(),
             ));
         };
         if !is_recovery_key(&p.recovery_key) {
-            return Err(escrow_err("托管请求不合格：恢复密钥的格式不对".into()));
+            return Err(escrow_err(
+                "invalid escrow request: malformed recovery key".into(),
+            ));
         }
         let current_fp = match &self.mode {
             EscrowMode::Sealed { fp, .. } => fp,
@@ -1038,8 +1060,12 @@ impl<'a> Round<'a> {
                 let s = self.seal(&p.recovery_key)?;
                 let mut q = p.clone();
                 q.sealed = Some(s.clone());
-                save_pending(&self.cx.paths, &q)
-                    .map_err(|e| step_err("luks:escrow", e.context("写待托管文件失败")))?;
+                save_pending(&self.cx.paths, &q).map_err(|e| {
+                    step_err(
+                        "luks:escrow",
+                        e.context("writing the pending escrow file failed"),
+                    )
+                })?;
                 s
             }
         };
@@ -1053,7 +1079,7 @@ impl<'a> Round<'a> {
         };
         // The bundle's errors name the field, never its value.
         if let Err(e) = req.validate() {
-            return Err(escrow_err(format!("托管请求不合格：{e}")));
+            return Err(escrow_err(format!("invalid escrow request: {e}")));
         }
         if let Err(e) = self
             .cx
@@ -1074,7 +1100,7 @@ impl<'a> Round<'a> {
         .map_err(|e| {
             step_err(
                 "luks:escrow",
-                e.context("托管成功，但写 luks-state.json 失败"),
+                e.context("escrow succeeded, but writing luks-state.json failed"),
             )
         })?;
         save_done(
@@ -1101,7 +1127,7 @@ impl<'a> Round<'a> {
         .map_err(|e| {
             step_err(
                 "luks:escrow",
-                e.context("托管成功，但写 luks-recovery-key.json 失败"),
+                e.context("escrow succeeded, but writing luks-recovery-key.json failed"),
             )
         })?;
         // 新的这把已在服务端、也已保管：现在才去掉它要替换的旧恢复槽（只去掉还在、且仍是恢复槽的编号）。
@@ -1126,14 +1152,18 @@ impl<'a> Round<'a> {
             .map_err(|e| {
                 step_err(
                     "luks:recovery",
-                    e.context("新恢复密钥已托管，但去掉旧的恢复槽失败（下一轮再试）"),
+                    e.context("the new recovery key is escrowed, but removing the old recovery slot failed (retrying next round)"),
                 )
             })?;
         }
-        remove_pending(&self.cx.paths)
-            .map_err(|e| step_err("luks:escrow", e.context("托管成功，但删待托管文件失败")))?;
+        remove_pending(&self.cx.paths).map_err(|e| {
+            step_err(
+                "luks:escrow",
+                e.context("escrow succeeded, but removing the pending escrow file failed"),
+            )
+        })?;
         log::info!(
-            "数据分区 {} 的恢复密钥已托管（sealed to recipients {}）",
+            "the recovery key of data partition {} is escrowed (sealed to recipients {})",
             info.uuid,
             sealed.recipients_fp
         );
@@ -1163,7 +1193,7 @@ impl<'a> Round<'a> {
             // db/dbx 变了就解不出来）不影响解锁；换成我们掌握 PIN 的策略。新槽配新 PIN。
             let pin = new_pin().map_err(|e| step_err(item, e))?;
             write_pin(&self.cx.paths, &pin)
-                .map_err(|e| step_err(item, e.context("写 PIN 失败")))?;
+                .map_err(|e| step_err(item, e.context("writing the PIN failed")))?;
             self.exec_ok(Cmd::new(PCRLOCK_BIN, &["remove-policy"]))
                 .await
                 .map_err(|e| step_err(item, e))?;
@@ -1174,7 +1204,7 @@ impl<'a> Round<'a> {
         // 已经带 pcrlock、只是签名 PCR 不对（或绑的是退役的公钥）：不动策略（删了它，现在的槽就解不开）。
         // 解锁用 agent 保管 / 首次开机的钥匙（经 stdin），不靠 TPM——数据盘离开 initrd 后 TPM 不放行。
         let key = unlock_key(&self.cx.paths, info, pending)
-            .map_err(|e| step_err(item, e.context("读本机的解锁钥匙失败")))?
+            .map_err(|e| step_err(item, e.context("reading the local unlock key failed")))?
             .ok_or_else(|| StepError {
                 item,
                 detail: NO_LOCAL_KEY.into(),
@@ -1199,9 +1229,9 @@ impl<'a> Round<'a> {
             .stdin(key),
         )
         .await
-        .map_err(|e| step_err(item, e.context("换 TPM 槽失败")))?;
+        .map_err(|e| step_err(item, e.context("replacing the TPM slot failed")))?;
         log::info!(
-            "数据分区 {} 的 TPM 槽已换成签名 PCR 11 + pcrlock",
+            "the TPM slot of data partition {} is now signed PCR 11 + pcrlock",
             info.uuid
         );
         Ok(())
@@ -1219,7 +1249,7 @@ impl<'a> Round<'a> {
         let slots: Vec<String> = info.stray_slots.iter().map(u32::to_string).collect();
         let wipe = format!("--wipe-slot={}", slots.join(","));
         let key = unlock_key(&self.cx.paths, info, pending)
-            .map_err(|e| step_err("luks:tpm", e.context("读本机的解锁钥匙失败")))?
+            .map_err(|e| step_err("luks:tpm", e.context("reading the local unlock key failed")))?
             .ok_or_else(|| StepError {
                 item: "luks:tpm",
                 detail: NO_LOCAL_KEY.into(),
@@ -1230,14 +1260,21 @@ impl<'a> Round<'a> {
             &[KEY_STDIN_UNLOCK, &wipe, ROOT_LUKS_DEV],
         )
         .stdin(key);
-        self.exec_redacted(cmd)
-            .await
-            .map_err(|e| step_err("luks:tpm", e.context("去掉多余的口令槽失败")))?;
+        self.exec_redacted(cmd).await.map_err(|e| {
+            step_err(
+                "luks:tpm",
+                e.context("removing the extra passphrase slot failed"),
+            )
+        })?;
         // 多余的槽（含首次开机的临时钥匙槽）已去掉：临时钥匙文件不再需要，删掉它（之后不再用临时钥匙解锁）。
-        remove_bootstrap_key(&self.cx.paths)
-            .map_err(|e| step_err("luks:tpm", e.context("删首次开机的临时钥匙文件失败")))?;
+        remove_bootstrap_key(&self.cx.paths).map_err(|e| {
+            step_err(
+                "luks:tpm",
+                e.context("removing the first-boot temporary key file failed"),
+            )
+        })?;
         log::info!(
-            "数据分区 {} 去掉了多余的口令槽 {}",
+            "data partition {}: removed the extra passphrase slot {}",
             info.uuid,
             slots.join(",")
         );
@@ -1302,21 +1339,21 @@ impl<'a> Round<'a> {
             .map_err(|e| step_err(item, e))?
             .ok_or_else(|| StepError {
                 item,
-                detail: "pcrlock 策略服务失败，本机没有 PIN，改写不了；下次开机要恢复密钥".into(),
+                detail: "the pcrlock policy service failed and this device has no PIN, so the policy cannot be rewritten; the next boot needs the recovery key".into(),
             })?;
         self.make_policy_with_pin(&pin).await.map_err(|e| {
             step_err(
                 item,
-                e.context("pcrlock 策略服务失败（这次开机多半用了恢复密钥）"),
+                e.context("the pcrlock policy service failed (this boot most likely used the recovery key)"),
             )
         })?;
         if let Err(e) = self
             .exec_ok(Cmd::new("systemctl", &["reset-failed", PCRLOCK_UNIT]))
             .await
         {
-            log::warn!("reset-failed {PCRLOCK_UNIT} 失败：{e:#}");
+            log::warn!("reset-failed {PCRLOCK_UNIT} failed: {e:#}");
         }
-        log::info!("pcrlock 策略服务失败过，已用 PIN 改写策略");
+        log::info!("the pcrlock policy service had failed; the policy was rewritten with the PIN");
         Ok(Some(()))
     }
 
@@ -1329,7 +1366,7 @@ impl<'a> Round<'a> {
             if let Err(e) = remove_bootstrap_key(&self.cx.paths) {
                 errs.push(step_err(
                     "luks:tpm",
-                    e.context("删首次开机的临时钥匙文件失败"),
+                    e.context("removing the first-boot temporary key file failed"),
                 ));
             }
             return;
@@ -1341,7 +1378,10 @@ impl<'a> Round<'a> {
             Ok(Some(k)) => k,
             Ok(None) => return,
             Err(e) => {
-                errs.push(step_err("luks:tpm", e.context("读首次开机的临时钥匙失败")));
+                errs.push(step_err(
+                    "luks:tpm",
+                    e.context("reading the first-boot temporary key failed"),
+                ));
                 return;
             }
         };
@@ -1379,7 +1419,7 @@ impl<'a> Round<'a> {
         let mut items: Vec<ItemResult> = match info {
             None => ["luks:recovery", "luks:escrow", "luks:pcrlock"]
                 .iter()
-                .map(|i| fail(i, "读不出数据分区的状态"))
+                .map(|i| fail(i, "cannot read the state of the data partition"))
                 .collect(),
             Some(info) => {
                 let is_escrowed = escrowed.as_deref() == Some(info.uuid.as_str());
@@ -1394,7 +1434,7 @@ impl<'a> Round<'a> {
                     Some(_) if !info.stray_slots.is_empty() => fail(
                         "luks:tpm",
                         format!(
-                            "有不属于任何 token 的口令槽（{}）：有它的口令就能解开数据分区，托管与 pcrlock 都好了之后去掉",
+                            "there are passphrase slots not bound to any token ({}): their passphrase unlocks the data partition; they are removed once escrow and pcrlock are done",
                             info.stray_slots
                                 .iter()
                                 .map(u32::to_string)
@@ -1411,7 +1451,7 @@ impl<'a> Round<'a> {
                 } else if info.has_recovery {
                     ok("luks:recovery", None)
                 } else {
-                    fail("luks:recovery", "还没有恢复密钥槽")
+                    fail("luks:recovery", "no recovery key slot yet")
                 };
                 let escrow = if no_tpm {
                     fail("luks:escrow", NO_TPM_SLOT_SHORT)
@@ -1435,7 +1475,7 @@ impl<'a> Round<'a> {
                     }
                     ok("luks:escrow", Some(d))
                 } else {
-                    fail("luks:escrow", "恢复密钥还没托管成功")
+                    fail("luks:escrow", "the recovery key is not escrowed yet")
                 };
                 let pcrlock = match &info.tpm2 {
                     Some(t) if t.sealed() && !self.secure_boot => {
@@ -1455,20 +1495,20 @@ impl<'a> Round<'a> {
                         ),
                         _ => ok(
                             "luks:pcrlock",
-                            repaired.map(|()| "策略服务失败过，已用 PIN 改写策略".to_string()),
+                            repaired.map(|()| "the policy service had failed; the policy was rewritten with the PIN".to_string()),
                         ),
                     },
                     None => fail("luks:pcrlock", NO_TPM_SLOT_SHORT),
                     _ if self.waiting_policy => fail(
                         "luks:pcrlock",
-                        format!("等 pcrlock 策略：{PCRLOCK_POLICY} 还没有（开机时生成）"),
+                        format!("waiting for the pcrlock policy: {PCRLOCK_POLICY} does not exist yet (generated at boot)"),
                     ),
                     Some(_) if is_escrowed && !self.secure_boot => fail("luks:pcrlock", NO_SB_BIND),
                     Some(_) if !is_escrowed => fail(
                         "luks:pcrlock",
-                        "恢复密钥托管确认之前不绑 pcrlock：数据分区现在只有签名的 PCR 11 保护",
+                        "pcrlock is not bound until escrow of the recovery key is confirmed: the data partition is protected only by the signed PCR 11 for now",
                     ),
-                    Some(_) => fail("luks:pcrlock", "TPM 槽还不是签名 PCR 11 + pcrlock"),
+                    Some(_) => fail("luks:pcrlock", "the TPM slot is not signed PCR 11 + pcrlock yet"),
                 };
                 vec![tpm, recovery, escrow, pcrlock]
             }
@@ -1503,14 +1543,14 @@ fn state_dir(paths: &crate::system::SysPaths) -> Result<std::os::fd::OwnedFd> {
 /// 只有「不存在」是 None；目录打不开、读不了、解析不了都报错（调用方整轮不动分区）。
 fn load_pending(paths: &crate::system::SysPaths) -> Result<Option<Pending>> {
     let Some(bytes) = safefs::read_at(&var_dir(paths)?, PENDING_FILE)
-        .with_context(|| format!("读 {PENDING_FILE}"))?
+        .with_context(|| format!("reading {PENDING_FILE}"))?
     else {
         return Ok(None);
     };
     // serde 的错误信息可能带字段的值（恢复密钥），只报行号。
     serde_json::from_slice(&bytes)
         .map(Some)
-        .map_err(|e| anyhow!("{PENDING_FILE} 解析失败（第 {} 行）", e.line()))
+        .map_err(|e| anyhow!("parsing {PENDING_FILE} failed (line {})", e.line()))
 }
 
 fn save_pending(paths: &crate::system::SysPaths, p: &Pending) -> Result<()> {
@@ -1523,13 +1563,13 @@ fn save_pending(paths: &crate::system::SysPaths, p: &Pending) -> Result<()> {
 /// round leaves the partition alone, as with the other state files).
 fn load_done(paths: &crate::system::SysPaths) -> Result<Option<EscrowDone>> {
     let Some(bytes) = safefs::read_at(&var_dir(paths)?, ESCROW_DONE_FILE)
-        .with_context(|| format!("读 {ESCROW_DONE_FILE}"))?
+        .with_context(|| format!("reading {ESCROW_DONE_FILE}"))?
     else {
         return Ok(None);
     };
     serde_json::from_slice(&bytes)
         .map(Some)
-        .with_context(|| format!("{ESCROW_DONE_FILE} 解析失败"))
+        .with_context(|| format!("parsing {ESCROW_DONE_FILE} failed"))
 }
 
 fn save_done(paths: &crate::system::SysPaths, d: &EscrowDone) -> Result<()> {
@@ -1546,13 +1586,13 @@ fn remove_pending(paths: &crate::system::SysPaths) -> Result<()> {
 /// （调用方整轮不动分区，同 `load_pending`）。serde 的错误可能带密钥，只报行号。
 fn load_held(paths: &crate::system::SysPaths) -> Result<Option<HeldKey>> {
     let Some(bytes) = safefs::read_at(&var_dir(paths)?, HELD_KEY_FILE)
-        .with_context(|| format!("读 {HELD_KEY_FILE}"))?
+        .with_context(|| format!("reading {HELD_KEY_FILE}"))?
     else {
         return Ok(None);
     };
     serde_json::from_slice(&bytes)
         .map(Some)
-        .map_err(|e| anyhow!("{HELD_KEY_FILE} 解析失败（第 {} 行）", e.line()))
+        .map_err(|e| anyhow!("parsing {HELD_KEY_FILE} failed (line {})", e.line()))
 }
 
 fn save_held(paths: &crate::system::SysPaths, h: &HeldKey) -> Result<()> {
@@ -1565,7 +1605,7 @@ fn save_held(paths: &crate::system::SysPaths, h: &HeldKey) -> Result<()> {
 /// （不报错）；读不出（不是「不存在」）报错——整轮不动分区。
 fn load_bootstrap_key(paths: &crate::system::SysPaths) -> Result<Option<Vec<u8>>> {
     let Some(b) = safefs::read_at(&var_dir(paths)?, BOOTSTRAP_KEY_FILE)
-        .with_context(|| format!("读 {BOOTSTRAP_KEY_FILE}"))?
+        .with_context(|| format!("reading {BOOTSTRAP_KEY_FILE}"))?
     else {
         return Ok(None);
     };
@@ -1588,11 +1628,11 @@ fn remove_run_bootstrap_copy(paths: &crate::system::SysPaths) {
     match safefs::open_dir(&paths.root, std::path::Path::new(RUN_BOOTSTRAP_DIR), false) {
         Ok(d) => {
             if let Err(e) = safefs::remove_at(&d, BOOTSTRAP_KEY_FILE) {
-                log::error!("删除 /run 里残留的临时钥匙失败：{e:#}");
+                log::error!("removing the leftover temporary key in /run failed: {e:#}");
             }
         }
         Err(e) if crate::apply::is_not_found(&e) => {}
-        Err(e) => log::error!("打开 /run/mastersos 失败：{e:#}"),
+        Err(e) => log::error!("opening /run/mastersos failed: {e:#}"),
     }
 }
 
@@ -1607,11 +1647,11 @@ fn image_pubkey_b64(root: &std::path::Path) -> Option<String> {
 /// 「没托管过」会让下一步重新登记、动已托管的恢复槽。
 pub fn load_luks_state(paths: &crate::system::SysPaths) -> Result<LuksState> {
     match safefs::read_at(&var_dir(paths)?, LUKS_STATE_FILE)
-        .with_context(|| format!("读 {LUKS_STATE_FILE}"))?
+        .with_context(|| format!("reading {LUKS_STATE_FILE}"))?
     {
         None => Ok(LuksState::default()),
         Some(b) => {
-            serde_json::from_slice(&b).with_context(|| format!("{LUKS_STATE_FILE} 解析失败"))
+            serde_json::from_slice(&b).with_context(|| format!("parsing {LUKS_STATE_FILE} failed"))
         }
     }
 }
@@ -1621,11 +1661,11 @@ fn remove_stale_credential(paths: &crate::system::SysPaths) {
     match safefs::open_dir(&paths.root, std::path::Path::new(CRED_DIR), false) {
         Ok(d) => {
             if let Err(e) = safefs::remove_at(&d, CRED_NAME) {
-                log::error!("删除残留的 PIN 凭据失败：{e:#}");
+                log::error!("removing the leftover PIN credential failed: {e:#}");
             }
         }
         Err(e) if crate::apply::is_not_found(&e) => {}
-        Err(e) => log::error!("打开凭据目录失败：{e:#}"),
+        Err(e) => log::error!("opening the credential directory failed: {e:#}"),
     }
 }
 
@@ -1640,7 +1680,7 @@ fn new_pin() -> Result<String> {
     let mut b = [0u8; 32];
     SystemRandom::new()
         .fill(&mut b)
-        .map_err(|_| anyhow!("取随机数失败"))?;
+        .map_err(|_| anyhow!("getting random bytes failed"))?;
     Ok(crate::apply::hex(&b))
 }
 
@@ -1653,7 +1693,7 @@ pub(crate) fn read_pin(paths: &crate::system::SysPaths) -> Result<Option<String>
     let Some(b) = safefs::read_at(&state_dir(paths)?, PCRLOCK_PIN)? else {
         return Ok(None);
     };
-    let pin = String::from_utf8(b).map_err(|_| anyhow!("PIN 文件不是文本"))?;
+    let pin = String::from_utf8(b).map_err(|_| anyhow!("the PIN file is not text"))?;
     let pin = pin.trim().to_string();
     if pin.is_empty() {
         return Ok(None);

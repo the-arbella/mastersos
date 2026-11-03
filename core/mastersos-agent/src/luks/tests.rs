@@ -744,7 +744,11 @@ async fn retired_pubkey_reports_wrong_pubkey() {
     let r = l.round().await;
     let t = item(&r, "luks:tpm");
     assert!(
-        !t.ok && t.detail.as_deref().unwrap().contains("别的 PCR 公钥"),
+        !t.ok
+            && t.detail
+                .as_deref()
+                .unwrap()
+                .contains("different PCR public key"),
         "{t:?}"
     );
 }
@@ -763,7 +767,11 @@ async fn bootstrap_slot_reports_tpm_ok() {
     let r = l.round().await;
     let t = item(&r, "luks:tpm");
     assert!(
-        t.ok && t.detail.as_deref().unwrap().contains("临时钥匙槽还在"),
+        t.ok && t
+            .detail
+            .as_deref()
+            .unwrap()
+            .contains("temporary key slot is still present"),
         "{t:?}"
     );
     assert!(!item(&r, "luks:escrow").ok);
@@ -900,7 +908,7 @@ async fn cryptenroll_stderr_never_in_results() {
     assert!(!rec.ok);
     assert_eq!(
         rec.detail.as_deref(),
-        Some("登记恢复密钥失败: systemd-cryptenroll exited with 1")
+        Some("enrolling the recovery key failed: systemd-cryptenroll exited with 1")
     );
     for i in &r {
         assert!(!i.detail.as_deref().unwrap_or("").contains(KEY), "{i:?}");
@@ -944,7 +952,7 @@ async fn escrow_rejections_are_reported_with_status() {
         let e = item(&r, "luks:escrow");
         let d = e.detail.as_deref().unwrap();
         assert!(
-            !e.ok && d.contains(&format!("托管被拒（{code}）")) && d.contains(says),
+            !e.ok && d.contains(&format!("escrow refused ({code})")) && d.contains(says),
             "{d}"
         );
         assert!(!d.contains(&l.srv.uri()), "错误里不带 URL：{d}");
@@ -1065,7 +1073,7 @@ async fn failed_policy_service_without_pin_is_reported() {
     let r = l.round().await;
     let p = item(&r, "luks:pcrlock");
     assert!(
-        !p.ok && p.detail.as_deref().unwrap().contains("没有 PIN"),
+        !p.ok && p.detail.as_deref().unwrap().contains("has no PIN"),
         "{p:?}"
     );
 }
@@ -1174,7 +1182,11 @@ async fn unreadable_state_files_abort_the_round() {
         );
         let e = item(&r, "luks:escrow");
         assert!(
-            !e.ok && e.detail.as_deref().unwrap().contains("这一轮不动"),
+            !e.ok
+                && e.detail
+                    .as_deref()
+                    .unwrap()
+                    .contains("not touching the data partition this round"),
             "case {case}: {e:?}"
         );
     }
@@ -1192,7 +1204,11 @@ async fn unreadable_held_key_aborts() {
     assert!(l.calls_with("systemd-cryptenroll").is_empty());
     let e = item(&r, "luks:escrow");
     assert!(
-        !e.ok && e.detail.as_deref().unwrap().contains("这一轮不动"),
+        !e.ok
+            && e.detail
+                .as_deref()
+                .unwrap()
+                .contains("not touching the data partition this round"),
         "{e:?}"
     );
 }
@@ -1234,7 +1250,7 @@ async fn bootstrap_slot_must_actually_open_to_count() {
     let r = l.round().await;
     let t = item(&r, "luks:tpm");
     assert!(
-        !t.ok && t.detail.as_deref().unwrap().contains("口令槽"),
+        !t.ok && t.detail.as_deref().unwrap().contains("passphrase slot"),
         "{t:?}"
     );
     // 试的是那个槽号、钥匙经 stdin
@@ -1296,11 +1312,7 @@ async fn no_pcrlock_bind_or_repair_without_secure_boot() {
     assert!(l.calls_with("systemd-cryptenroll").is_empty());
     let p = item(&r, "luks:pcrlock");
     assert!(
-        !p.ok
-            && p.detail
-                .as_deref()
-                .unwrap()
-                .contains("Secure Boot 没有开启"),
+        !p.ok && p.detail.as_deref().unwrap().contains("Secure Boot is off"),
         "{p:?}"
     );
     assert!(item(&r, "luks:escrow").ok);
@@ -1359,7 +1371,7 @@ async fn enrollment_stops_at_max_recovery_slots() {
     assert!(l.calls_with("--recovery-key").is_empty());
     let rec = item(&r, "luks:recovery");
     assert!(
-        !rec.ok && rec.detail.as_deref().unwrap().contains("4 个恢复槽"),
+        !rec.ok && rec.detail.as_deref().unwrap().contains("4 recovery slots"),
         "{rec:?}"
     );
 }
@@ -1426,7 +1438,7 @@ async fn escrowed_without_held_key_says_so() {
             .detail
             .as_deref()
             .unwrap()
-            .contains("没有本机保管的恢复密钥"),
+            .contains("no recovery key held on this device"),
         "{e:?}"
     );
     let l = lab().await;

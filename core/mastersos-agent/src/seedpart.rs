@@ -58,7 +58,7 @@ fn exists(p: &Path) -> Result<bool> {
     match std::fs::symlink_metadata(p) {
         Ok(_) => Ok(true),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(e) => Err(e).with_context(|| format!("检查 {}", p.display())),
+        Err(e) => Err(e).with_context(|| format!("checking {}", p.display())),
     }
 }
 
@@ -66,12 +66,13 @@ fn exists(p: &Path) -> Result<bool> {
 /// `/var/lib/mastersos-seed` 只是根分区上的空目录：往里写 identity.json 或缓存，下次恢复出厂就丢了。
 pub fn is_mount_point(dir: &Path) -> Result<bool> {
     use std::os::unix::fs::MetadataExt;
-    let me = std::fs::symlink_metadata(dir).with_context(|| format!("检查 {}", dir.display()))?;
+    let me =
+        std::fs::symlink_metadata(dir).with_context(|| format!("checking {}", dir.display()))?;
     if !me.is_dir() {
-        bail!("{} 不是目录", dir.display());
+        bail!("{} is not a directory", dir.display());
     }
     let parent = std::fs::metadata(dir.join(".."))
-        .with_context(|| format!("检查 {} 的父目录", dir.display()))?;
+        .with_context(|| format!("checking the parent directory of {}", dir.display()))?;
     Ok(me.dev() != parent.dev())
 }
 
@@ -86,20 +87,21 @@ pub fn import_if_fresh(state_dir: &Path, seed_dir: &Path) -> Result<Imported> {
     let seed_fd = match safefs::open_abs_dir(seed_dir, false) {
         Ok(fd) => fd,
         Err(e) if crate::apply::is_not_found(&e) => return Ok(Imported::Unmanaged),
-        Err(e) => return Err(e.context("打开种子分区")),
+        Err(e) => return Err(e.context("opening the seed partition")),
     };
     let Some(seed_bytes) = safefs::read_at(&seed_fd, SEED_FILE)? else {
         return Ok(Imported::Unmanaged);
     };
-    let text = std::str::from_utf8(&seed_bytes).context("种子分区的 seed.toml 不是 UTF-8")?;
-    Seed::parse(text).context("种子分区的 seed.toml 解析失败")?;
+    let text =
+        std::str::from_utf8(&seed_bytes).context("seed.toml on the seed partition is not UTF-8")?;
+    Seed::parse(text).context("parsing seed.toml on the seed partition failed")?;
 
     let cached = match safefs::open_dir(seed_dir, Path::new(CACHE_DIR), false) {
         Ok(cache) => safefs::read_at(&cache, CACHE_FILE)?,
         Err(e) if crate::apply::is_not_found(&e) => None,
         Err(e) => {
             // 缓存读不了不挡导入：没有缓存的包照样能连上网去拉。
-            log::warn!("读取种子分区的缓存包失败：{e:#}");
+            log::warn!("reading the cached bundle on the seed partition failed: {e:#}");
             None
         }
     };
@@ -110,9 +112,9 @@ pub fn import_if_fresh(state_dir: &Path, seed_dir: &Path) -> Result<Imported> {
     }
     safefs::write_at(&state, SEED_FILE, &seed_bytes, 0o600)?;
     log::info!(
-        "从种子分区导入了种子{}",
+        "imported the seed{} from the seed partition",
         if cached.is_some() {
-            "与缓存的设置包"
+            " and the cached bundle"
         } else {
             ""
         }
@@ -130,18 +132,18 @@ pub fn load_or_create_identity(
     seed_dir: &Path,
     existing_device_id: Option<&str>,
 ) -> Result<Identity> {
-    let dir = safefs::open_abs_dir(seed_dir, false).context("打开种子分区")?;
+    let dir = safefs::open_abs_dir(seed_dir, false).context("opening the seed partition")?;
     if let Some(b) = safefs::read_at(&dir, IDENTITY)? {
-        let id: Identity = serde_json::from_slice(&b).context("identity.json 解析失败")?;
+        let id: Identity = serde_json::from_slice(&b).context("parsing identity.json failed")?;
         if id.device_id.is_empty() {
-            bail!("identity.json 里的 device_id 是空的");
+            bail!("device_id in identity.json is empty");
         }
         return Ok(id);
     }
     let mut secret = [0u8; 32];
     SystemRandom::new()
         .fill(&mut secret)
-        .map_err(|_| anyhow::anyhow!("取随机数失败"))?;
+        .map_err(|_| anyhow::anyhow!("getting random bytes failed"))?;
     let id = Identity {
         device_id: existing_device_id
             .filter(|d| !d.is_empty())
@@ -149,14 +151,14 @@ pub fn load_or_create_identity(
         escrow_secret: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret),
     };
     safefs::write_at(&dir, IDENTITY, &serde_json::to_vec_pretty(&id)?, 0o600)?;
-    log::debug!("生成了 identity.json（device_id {}）", id.device_id);
+    log::debug!("generated identity.json (device_id {})", id.device_id);
     Ok(id)
 }
 
 /// 接受新包之后写 `cache/current.bundle`（同目录临时文件 + `renameat`，0600；`cache/` 0700）。
 pub fn store_cache(seed_dir: &Path, bundle: &[u8]) -> Result<()> {
     // 种子分区本身不建：它是挂载点，不在就是没挂上。
-    safefs::open_abs_dir(seed_dir, false).context("打开种子分区")?;
+    safefs::open_abs_dir(seed_dir, false).context("opening the seed partition")?;
     let cache = safefs::open_dir(seed_dir, Path::new(CACHE_DIR), true)?;
     safefs::set_mode(&cache, 0o700)?;
     safefs::write_at(&cache, CACHE_FILE, bundle, 0o600)?;
@@ -250,7 +252,10 @@ mod tests {
         );
         fs::write(seed.join("seed.toml"), b"server_url = 12").unwrap();
         assert!(import_if_fresh(&state, &seed).is_err());
-        assert!(!state.join("seed.toml").exists(), "坏种子不复制");
+        assert!(
+            !state.join("seed.toml").exists(),
+            "a bad seed is not copied"
+        );
     }
 
     #[test]
@@ -305,7 +310,10 @@ mod tests {
         let r = import_if_fresh(&state, &seed);
         fs::set_permissions(&state, fs::Permissions::from_mode(0o700)).unwrap();
         if matches!(probe, Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied) {
-            assert!(r.is_err(), "读不了状态目录时不导入：{r:?}");
+            assert!(
+                r.is_err(),
+                "no import when the state directory cannot be read: {r:?}"
+            );
             assert!(!state.join("seed.toml").exists());
         }
     }
@@ -313,7 +321,10 @@ mod tests {
     #[test]
     fn mount_point_detection() {
         let d = tempfile::tempdir().unwrap();
-        assert!(!is_mount_point(d.path()).unwrap(), "临时目录不是挂载点");
+        assert!(
+            !is_mount_point(d.path()).unwrap(),
+            "the temporary directory is not a mount point"
+        );
         // /dev 在 Linux 与 macOS 上都是单独挂载的 devfs / devtmpfs。
         assert!(is_mount_point(Path::new("/dev")).unwrap());
         assert!(is_mount_point(&d.path().join("absent")).is_err());

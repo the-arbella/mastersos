@@ -31,16 +31,16 @@ pub fn open_trash(home: &OwnedFd, create: bool) -> Result<Option<OwnedFd>> {
         Err(Errno::NOENT) if !create => return Ok(None),
         Err(Errno::NOENT) => match rustix::fs::mkdirat(home, TRASH, Mode::from_raw_mode(0o700)) {
             Ok(()) | Err(Errno::EXIST) => {}
-            Err(e) => return Err(io(e).context("建回收目录")),
+            Err(e) => return Err(io(e).context("creating the trash directory")),
         },
-        Err(e) => return Err(io(e).context("检查回收目录")),
+        Err(e) => return Err(io(e).context("checking the trash directory")),
         Ok(st) if FileType::from_raw_mode(st.st_mode) != FileType::Directory => {
-            bail!("回收目录不是真实目录，这一轮不删")
+            bail!("the trash directory is not a real directory; not removing this round")
         }
         Ok(_) => {}
     }
     let fd = rustix::fs::openat(home, TRASH, dir_flags(), Mode::empty())
-        .map_err(|e| io(e).context("打开回收目录"))?;
+        .map_err(|e| io(e).context("opening the trash directory"))?;
     check_private_dir(&fd)?;
     Ok(Some(fd))
 }
@@ -50,20 +50,20 @@ pub fn open_trash(home: &OwnedFd, create: bool) -> Result<Option<OwnedFd>> {
 /// 仍由 [`empty_trash`] 删；复审 T19 N3）。
 pub fn to_trash(home: &OwnedFd, trash: &OwnedFd, name: &str, uid: u32) -> Result<bool> {
     if name.is_empty() || name.contains('/') || name.starts_with('.') {
-        bail!("家目录的名字不规范");
+        bail!("malformed home directory name");
     }
     let st = rustix::fs::statat(home, name, AtFlags::SYMLINK_NOFOLLOW)
-        .map_err(|e| io(e).context("检查家目录"))?;
+        .map_err(|e| io(e).context("checking the home directory"))?;
     if FileType::from_raw_mode(st.st_mode) != FileType::Directory || st.st_uid != uid {
-        bail!("家目录不是这个用户的真实目录，不删");
+        bail!("the home directory is not this user's real directory; not removing it");
     }
     let to = fresh_name(FLAT_PREFIX);
     rustix::fs::renameat(home, name, trash, to.as_str())
-        .map_err(|e| io(e).context("挪进回收目录"))?;
+        .map_err(|e| io(e).context("moving into the trash directory"))?;
     match seal(trash, &to, &st) {
         Ok(()) => Ok(true),
         Err(e) => {
-            log::warn!("homes：挪走的家目录没能收成 root 0700：{e:#}");
+            log::warn!("homes: the moved home directory could not be set to root 0700: {e:#}");
             Ok(false)
         }
     }
@@ -72,10 +72,10 @@ pub fn to_trash(home: &OwnedFd, trash: &OwnedFd, name: &str, uid: u32) -> Result
 /// 打开挪过去的目录，核对还是原来那个（ino 与 dev），改成 root:root 0700。
 fn seal(trash: &OwnedFd, to: &str, before: &rustix::fs::Stat) -> Result<()> {
     let fd = rustix::fs::openat(trash, to, dir_flags(), Mode::empty())
-        .map_err(|e| io(e).context("打开挪过去的家目录"))?;
+        .map_err(|e| io(e).context("opening the moved home directory"))?;
     let moved = rustix::fs::fstat(&fd).map_err(io)?;
     if moved.st_ino != before.st_ino || moved.st_dev != before.st_dev {
-        bail!("挪过去的不是原来那个目录");
+        bail!("what was moved is not the original directory");
     }
     if rustix::process::geteuid().is_root() {
         rustix::fs::fchown(
@@ -83,8 +83,9 @@ fn seal(trash: &OwnedFd, to: &str, before: &rustix::fs::Stat) -> Result<()> {
             Some(rustix::fs::Uid::ROOT),
             Some(rustix::fs::Gid::ROOT),
         )
-        .map_err(|e| io(e).context("改属主"))?;
+        .map_err(|e| io(e).context("changing the owner"))?;
     }
-    rustix::fs::fchmod(&fd, Mode::from_raw_mode(0o700)).map_err(|e| io(e).context("改权限"))?;
+    rustix::fs::fchmod(&fd, Mode::from_raw_mode(0o700))
+        .map_err(|e| io(e).context("changing permissions"))?;
     Ok(())
 }
