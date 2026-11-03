@@ -75,3 +75,10 @@ test('preselect', () => {
     assert.equal(preselect('d@', [x]), -1);
     assert.equal(preselect('d', []), -1);
 });
+
+test('an exact user name or full name comes first', () => {
+    const r = matchPeople([person('bobby', 'Bobby Lee', 9), person('bob', 'Bob Stone', 1)], 'bob');
+    assert.deepEqual(names(r), ['bob', 'bobby']);
+    const n = matchPeople([person('u1', 'Ann Lim Two', 9), person('u2', 'Ann Lim', 1)], 'ann lim');
+    assert.deepEqual(names(n), ['u2', 'u1']);
+});

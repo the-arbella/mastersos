@@ -470,9 +470,10 @@ export default class MastersosLoginExtension extends Extension {
         this._dialogIds = [
             prompt.connect('reset', () => {
                 // Coming back to this VT resets the prompt too. The card's sign-in ended with it, so its page could only fail.
+                // GNOME's _onReset ran first (it connected earlier) and, with disable-user-list, is back on the username
+                // step that shows "Local manager": leave it shown. Leaving that step hides it (_beginVerification).
                 this._card?.close();
                 this._hideMatches();
-                this._setAddPerson(false);
                 this._shelf?.refreshApps();
             }),
         ];
@@ -581,6 +582,8 @@ export default class MastersosLoginExtension extends Extension {
             dlg._nextSignalId = 0;
         }
         this._hideMatches();
+        // What was typed must not become the start of the password (AuthPrompt copies the text entry into it).
+        dlg._authPrompt.clear();
         const user = dlg._userManager.get_user(userName);
         dlg._user = user;
         dlg._hideUserList();
@@ -653,7 +656,7 @@ export default class MastersosLoginExtension extends Extension {
             return;
         this._unhookEntry();
         this._hookedText = ct;
-        this._textChangedId = ct.connect('text-changed', () => {
+        const onText = () => {
             try {
                 // Left the username stage (password / code prompt now uses this entry): do nothing and read nothing.
                 if (this._isSecret(entry) || !entry.visible) {
@@ -678,7 +681,11 @@ export default class MastersosLoginExtension extends Extension {
             } catch (e) {
                 log(`mastersos-login: ${e.message ?? e}`);
             }
-        });
+        };
+        this._textChangedId = ct.connect('text-changed', onText);
+        // Letters typed before this poll found the entry count too.
+        if (ct.get_text())
+            onText();
         this._keyPressId = ct.connect('key-press-event', (actor, event) => {
             if (!this._matchBox?.visible)
                 return Clutter.EVENT_PROPAGATE;
@@ -717,7 +724,7 @@ export default class MastersosLoginExtension extends Extension {
             dlg._nextSignalId = 0;
             prompt.updateSensitivity(false);
             const typed = prompt.getAnswer();
-            const answer = this._picked ?? typed;
+            const answer = this._picked ?? this._defaultPick(typed) ?? typed;
             this._hideMatches();
             dlg._user = dlg._userManager.get_user(answer);
             if (answer !== typed)
@@ -725,6 +732,15 @@ export default class MastersosLoginExtension extends Extension {
             prompt.clear();
             dlg._beginVerification({userName: answer});
         });
+    }
+
+    // The person Enter takes when none was chosen with the arrow keys or the mouse, worked out from the text itself.
+    _defaultPick(typed) {
+        if (this._sel >= 0 || this._matchBox?.visible)
+            return null; // the list was shown and nobody is chosen in it: Enter means what was typed
+        const found = matchPeople(this._people(), typed);
+        const i = preselect(typed, found.shown);
+        return i >= 0 ? found.shown[i].userName : null;
     }
 
     _people() {
