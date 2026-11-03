@@ -20,7 +20,7 @@
 - `secrets.toml` 权限 0600；`pull`/`init` 写 `.gitignore`，含 `secrets.toml` 与 `.mastersos/`。
 - `mastersos` 的 token 仍只许 `read`、`draft` 范围。
 - 签名页链接：`<signing_origin>/#school=<slug>&sid=<school id>&op=commit&pending=<id>`（`signing_origin`、`slug`、`school_id` 来自 `GET /v1/auth/config`）。
-- 上传体（与云端计划约定）：`POST /v1/admin/publish/pending`，JSON `{"manifest_text": String, "files": {"<path>": "<标准 base64>"}}`；成功 200 返回与今天 `GET /v1/admin/publish/pending/{id}` 相同的 `Prepared` JSON（含 `pending_id`、`version`、`digest`、`lints`）；版本冲突 409 `version_conflict`；检查不过 422 `lint_failed`（`lints` 数组）或 `draft_invalid`。
+- 上传体（与云端计划约定）：`POST /v1/admin/publish/pending`，JSON `{"manifest_text": String, "files": {"<path>": "<标准 base64>"}}`；成功 200 返回与今天 `GET /v1/admin/publish/pending/{id}` 相同的 `Prepared` JSON（含 `pending_id`、`version`、`digest_hex`、`lints`）；版本冲突 409 `version_conflict`；检查不过 422 `lint_failed`（`error.details.lints` 数组）或 `draft_invalid`。
 
 ## Review Focus
 

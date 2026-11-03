@@ -287,7 +287,7 @@ fn unknown(name: &str, layer: &str, field: &str) -> Lint {
         LintLevel::Error,
         "secret_unknown",
         format!(
-            "{layer}: {field} refers to secret \"{name}\", which is not in secrets.toml; add it or enter the value."
+            "{layer}: {field} refers to secret \"{name}\", which is not in secrets.toml; ask IT to add `{name}` to secrets.toml."
         ),
     )
     .at(format!("{layer}.{field}"))

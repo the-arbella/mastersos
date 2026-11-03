@@ -3147,7 +3147,7 @@ config = "standard"
 **Why:** without the value the settings cannot be published.
 <!-- /prompt:omit -->
 
-**How to fix:** add the name to `secrets.toml`, or write the value in place of the reference.
+**How to fix:** ask IT to add `<name>` to `secrets.toml`. Do not write the value into `manifest.toml`.
 
 ### `secret_unused`
 

@@ -29,7 +29,7 @@
 
 **目标**
 
-- 命令行只多四个动作：`pull`、`check`、`diff`、`publish`；加两个列表 `device list`、`keys list`。不移植任何表单编辑器：
+- 命令行只多四个动作：`pull`、`check`、`diff`、`publish`；加两个列表 `devices list`、`keys list`。不移植任何表单编辑器：
   IT 与 AI 直接编辑 TOML，`check` 把关。
 - 服务端只存待签名的包与已签名的版本（加上现有的机器、钥匙、种子等非设置数据）。
 - 收包时服务端强制 agent 的检查与需要机器数据的阻断检查（第 5 节）。
@@ -83,14 +83,14 @@
      重做改动。
   4. 本机配了恢复钥匙就用 `mastersos-sign` 签并 commit；否则打印签名页链接（带 pending id），IT 用 passkey 签。
   5. 成功后把 `base_version` 与 `.mastersos/base/` 更新为新版本。
-- **`mastersos device list`、`mastersos keys list`**：从服务端取机器、已登记的钥匙，供手写 `[[device]]` 与 `trust`。
+- **`mastersos devices list`、`mastersos keys list`**：从服务端取机器、已登记的钥匙，供手写 `[[device]]` 与 `trust`。
 - **IT 账号口令**：`mastersos hash-password`（不回显）输出哈希，IT 写进 `secrets.toml`。
 - **新学校**：`mastersos init` 用模板（今天服务端的草稿模板）建目录，`base_version = 0`；第一版用恢复钥匙签（R1g 不变）。
 - **logo**：`mastersos logo upload <登录页 png> <图标 png>` 只核对尺寸并上传，打印两个 sha256，IT 写进 `[school]`。
 
 ### AI 与 MCP
 
-- MCP 工具：读 `manifest.toml` 与 `files/`、`check`、`diff`、`device list`、`keys list`。不提供读写 `secrets.toml`、合成、
+- MCP 工具：读 `manifest.toml` 与 `files/`、`check`、`diff`、`devices list`、`keys list`。不提供读写 `secrets.toml`、合成、
   上传、签名的工具；任何输出里秘密只以名字出现。AI 改文件用它自己的编辑工具。
 - 规则（`mastersos-admin` 技能）：不读 `secrets.toml`，不读合成出的包；改完交给 IT 看 `diff` 并 `publish`。
 - 服务端的 AI token 只能读机器与状态：不能下载包，不能读待签名包与摘要（摘要可被用来离线猜弱口令）。
