@@ -30,8 +30,9 @@ paths that are not in this repository.
 
 ## Trust model in brief
 
-A device applies only a bundle signed by the school's keys: a passkey for daily publishing, an offline recovery key
-for changes to trust. The cloud stores and delivers bundles but cannot forge one, and an AI assistant can prepare a
+A device applies only a bundle signed by the school's keys. The recovery kit is the one required key: IT signs with
+it from any computer that has the kit file (`mastersos publish --kit <file>`) or on the signing page, and only it can
+change trust. A passkey on the signing page is optional for everyday publishing. The cloud stores and delivers bundles but cannot forge one, and an AI assistant can prepare a
 change but a person has to sign it.
 
 ## Build and test

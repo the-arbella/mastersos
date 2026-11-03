@@ -11,6 +11,7 @@ use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
+use crate::publish::SignWith;
 use crate::workdir::{self, Meta, Workdir};
 use crate::{call, check_server, connect, serve_stdio, Api, OpError, Req, TokenUse};
 
@@ -85,12 +86,15 @@ enum Cmd {
         #[arg(long, conflicts_with = "section")]
         full: bool,
     },
-    /// Publish the local settings directory: check, fill in secrets, stamp, upload, then sign with --key or print the signing page link
+    /// Publish the local settings directory: check, fill in secrets, stamp, upload, then sign with --kit (or --key) or print the signing page link
     Publish {
         /// The settings directory (default: the current directory)
         dir: Option<PathBuf>,
-        /// A recovery key file: verify and sign on this computer (without it, IT signs on the signing page with a Passkey, or the first version with the recovery kit)
-        #[arg(long)]
+        /// The recovery kit file (MASTERSKIT1…, mode 0600): verify and sign on this computer. Without --kit or --key, IT signs on the signing page with the recovery kit (a registered Passkey is optional there)
+        #[arg(long, value_name = "FILE")]
+        kit: Option<PathBuf>,
+        /// A PKCS#8 recovery key file (mode 0600) instead of the kit
+        #[arg(long, value_name = "FILE", conflicts_with = "kit")]
         key: Option<PathBuf>,
         /// IT approves that secret NAME may go to its changed network (`secret_rerouted`); give it once per rerouted secret. Without it publish refuses. Never passed by an AI
         #[arg(long = "allow-reroute", value_name = "NAME")]
@@ -223,6 +227,11 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         }
         _ => {}
     }
+    // A kit or key file that is not private or does not parse stops before the network.
+    let sign_with = match &cmd {
+        Cmd::Publish { kit, key, .. } => signer(kit.as_deref(), key.as_deref())?,
+        _ => None,
+    };
     let cfg = load_config()?;
     let server = server.or(cfg.server).ok_or_else(|| {
         OpError::Failed(
@@ -283,16 +292,14 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         Cmd::Devices(c) => devices(&api, &out, c).await,
         Cmd::Spec { section, full } => spec(&api, section, full).await,
         Cmd::Publish {
-            dir,
-            key,
-            allow_reroute,
+            dir, allow_reroute, ..
         } => {
             publish_dir(
                 &api,
                 &server,
                 &token_file,
                 dir.as_deref(),
-                key.as_deref(),
+                sign_with,
                 &allow_reroute,
             )
             .await
@@ -861,13 +868,24 @@ fn prompt_secret(text: &str) -> Result<String, OpError> {
     Ok(line.trim_end_matches(['\n', '\r']).to_owned())
 }
 
+/// `publish --kit` / `--key`, read and checked (owner, mode 0600, contents) before anything is
+/// uploaded. Clap already refuses both at once.
+fn signer(kit: Option<&Path>, key: Option<&Path>) -> Result<Option<SignWith>, OpError> {
+    match (kit, key) {
+        (Some(_), Some(_)) => Err(OpError::Failed("give --kit or --key, not both".into())),
+        (Some(p), None) => SignWith::kit_file(p).map(Some).map_err(fail),
+        (None, Some(p)) => SignWith::key_file(p).map(Some).map_err(fail),
+        (None, None) => Ok(None),
+    }
+}
+
 /// `mastersos publish`.
 async fn publish_dir(
     api: &Api,
     server: &str,
     token_file: &Path,
     dir: Option<&Path>,
-    key: Option<&Path>,
+    key: Option<SignWith>,
     allow_reroute: &[String],
 ) -> Result<ExitCode, OpError> {
     use crate::publish::{
@@ -883,7 +901,7 @@ async fn publish_dir(
         )));
     }
     let pins = config_dir()?.join("pins");
-    let sign = key.map(|key| SignOpts {
+    let sign = key.as_ref().map(|key| SignOpts {
         key,
         token_file,
         pin_dir: &pins,
@@ -906,7 +924,7 @@ async fn publish_dir(
             );
             Ok(ExitCode::SUCCESS)
         }
-        Ok(PublishOutcome::NeedsPasskey {
+        Ok(PublishOutcome::NeedsSigning {
             url,
             pending_id,
             version,
@@ -943,6 +961,39 @@ async fn publish_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn publish_takes_kit_or_key_and_repeated_reroute_approvals() {
+        let both = Cli::try_parse_from(["mastersos", "publish", "--kit", "a", "--key", "b"]);
+        assert!(both.is_err());
+        let cli = Cli::try_parse_from([
+            "mastersos",
+            "publish",
+            "dir",
+            "--kit",
+            "school.kit",
+            "--allow-reroute",
+            "x-psk",
+            "--allow-reroute",
+            "y-psk",
+        ])
+        .unwrap();
+        let Cmd::Publish {
+            kit,
+            key,
+            allow_reroute,
+            ..
+        } = cli.cmd
+        else {
+            panic!("not publish");
+        };
+        assert_eq!(kit, Some(PathBuf::from("school.kit")));
+        assert_eq!(key, None);
+        assert_eq!(allow_reroute, ["x-psk", "y-psk"]);
+        assert!(signer(None, None).unwrap().is_none());
+        let missing = signer(Some(Path::new("/nonexistent/school.kit")), None);
+        assert!(missing.is_err());
+    }
 
     #[test]
     fn check_names_every_rerouted_secret_and_the_flag() {

@@ -71,7 +71,7 @@ Commands that take `[<dir>]` default to the current directory. The commands that
 | Keys the server knows | `mastersos keys list` |
 | Reference | `mastersos spec --section <id>` |
 | Newest published version | `mastersos pull [<dir>] [--force]` (IT; refuses to overwrite unpublished changes without `--force`) |
-| Publish | `mastersos publish [<dir>] [--key <recovery key file>]` (IT) |
+| Publish | `mastersos publish [<dir>] [--kit <recovery kit file>]` (IT only; `--allow-reroute <name>` is IT's decision, never yours) |
 | Other IT tasks | `mastersos init <dir>`, `mastersos hash-password`, `mastersos logo upload <login.png> <icon.png>` |
 
 Exit codes: 0 ok; 1 failed (network, token, the server refused); 2 `check` found errors.
@@ -95,8 +95,10 @@ The tools never show secret values, only their names.
    `chrome_paused`, `flatpak_now_installed`, `secret_rerouted`).
 5. **Show the diff**: `mastersos diff`, explained in plain words: what changes for which Group or Device.
 6. **Hand over**: when they agree, tell IT the directory is ready and what it does ("Added Khan Academy to the
-   Grade 3 Config for the maths unit"), and ask IT to run `mastersos publish`. IT signs with a recovery key on
-   that computer or on the signing page in the browser, then runs `mastersos pull` to take the published version as the new base.
+   Grade 3 Config for the maths unit"), and ask IT to run `mastersos publish --kit <recovery kit file>`. IT signs with
+   the recovery kit, on that computer or on the signing page in the browser (a Passkey there is optional); after
+   signing in the browser IT runs `mastersos pull` to take the published version as the new base. If `check`
+   reported `secret_rerouted`, say which secret moved where: `publish` refuses until IT approves it.
 
 If the publish is refused because someone else published first (the version is taken), IT runs `mastersos pull`
 again (add `--force` only if they accept losing the unpublished edits; otherwise copy your changes aside first)

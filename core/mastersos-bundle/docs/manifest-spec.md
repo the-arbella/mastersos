@@ -34,11 +34,11 @@ The settings file can also carry files (`files/…`, such as wallpapers or icons
    assistant) edit `manifest.toml` there, and add files under `files/`. The server holds no draft.
 2. `mastersos check` **checks** the directory on your computer and lists its **Issues**. An Issue has a level:
    - **error**: blocks Publish;
-   - **warning**: shown, does not block;
+   - **warning**: shown, does not block (`secret_rerouted` blocks until IT approves it);
    - **info**: reports the current state (for example a Chrome update pause), not a problem.
 3. When there are no errors, `mastersos publish` builds the next **Version** from the directory (it puts the
-   secrets in) and uploads it; someone signs it with a **Passkey** on the signing page, or with a
-   **Recovery kit** key on the computer (`--key`). Devices accept only Versions signed by a key in
+   secrets in) and uploads it; IT signs it with the **Recovery kit**, on the computer
+   (`--kit <file>`) or on the signing page (a **Passkey** there is optional). Devices accept only Versions signed by a key in
    **trust**, and only Versions newer than the one they have. Afterwards `mastersos pull` takes the published
    Version as the new base.
 
@@ -3287,8 +3287,8 @@ config = "standard"
 **Why:** Devices would accept no signature, and the first Version needs a Recovery kit key.
 <!-- /prompt:omit -->
 
-**How to fix:** add the school's keys from the Keys page (at least one Recovery kit key, and the IT
-Passkey for everyday Publish).
+**How to fix:** add the school's keys from the Keys page (at least one Recovery kit key; an IT Passkey
+is optional).
 
 <!-- prompt:omit -->
 ```toml check=trust_empty

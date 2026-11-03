@@ -1,20 +1,23 @@
 //! `mastersos publish`: the local directory is checked, its secrets are filled back in, version
-//! and time are stamped, and the result is uploaded as a pending bundle. With a recovery key the
-//! bundle is then verified and signed on this computer ([`mastersos_sign::sign_pending_expecting`]);
-//! without one, the signing page link is returned for IT to open and sign with a Passkey (or, for
-//! the first version, the recovery kit). Either way the content digest is computed here from what
-//! was uploaded and must equal the server's, and only that digest is signed.
+//! and time are stamped, and the result is uploaded as a pending bundle. With the recovery kit
+//! (`--kit`) or a recovery key file (`--key`) the bundle is then verified and signed on this
+//! computer ([`mastersos_sign::sign_pending_expecting`]); without one, the signing page link is
+//! returned for IT to open and sign with the recovery kit (or a Passkey, where one is registered).
+//! Either way the content digest is computed here from what was uploaded and must equal the
+//! server's, and only that digest is signed.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{DateTime, SecondsFormat, Utc};
+use mastersos_bundle::kit::Kit;
 use mastersos_bundle::secret_ref;
 use mastersos_bundle::stamp::{school_name_to_write, stamp};
-use mastersos_bundle::{content_digest, has_errors, Contents, Lint, LintLevel};
+use mastersos_bundle::{content_digest, has_errors, Contents, Lint, LintLevel, Manifest, TrustKey};
+use mastersos_sign::SigningKey;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -22,10 +25,47 @@ use crate::tools::Req;
 use crate::workdir::{self, UploadInfo, Workdir};
 use crate::{api_error, Api};
 
+/// The key that signs on this computer, read before anything is uploaded.
+pub enum SignWith {
+    /// A recovery kit (`--kit`): the one signing key every school has.
+    Kit(Kit),
+    /// A PKCS#8 recovery key file (`--key`).
+    KeyFile(PathBuf),
+}
+
+impl SignWith {
+    /// Read a kit file the way `mastersos-sign --kit` does ([`mastersos_sign::kit::load_kit`]):
+    /// it must belong to the current user and be readable by no one else (0600).
+    pub fn kit_file(path: &Path) -> Result<SignWith> {
+        Ok(SignWith::Kit(mastersos_sign::kit::load_kit(path)?))
+    }
+
+    /// Check a key file now (owner, mode, PKCS#8), so that a bad one stops before the upload; it
+    /// is read again when signing.
+    pub fn key_file(path: &Path) -> Result<SignWith> {
+        mastersos_sign::load_key(path)?;
+        Ok(SignWith::KeyFile(path.to_owned()))
+    }
+
+    fn signing(&self) -> SigningKey<'_> {
+        match self {
+            SignWith::Kit(k) => SigningKey::Kit(k),
+            SignWith::KeyFile(p) => SigningKey::File(p),
+        }
+    }
+
+    fn trust_key(&self) -> Result<TrustKey> {
+        Ok(match self {
+            SignWith::Kit(k) => k.trust_key(),
+            SignWith::KeyFile(p) => mastersos_sign::load_key(p)?.1,
+        })
+    }
+}
+
 /// What signing needs on this computer.
 pub struct SignOpts<'a> {
-    /// The recovery key file.
-    pub key: &'a Path,
+    /// The recovery kit or key file.
+    pub key: &'a SignWith,
     /// The token file (the signing client talks to the same server with it).
     pub token_file: &'a Path,
     /// Where the pins (the keys this computer verified) are kept.
@@ -36,9 +76,9 @@ pub struct SignOpts<'a> {
 pub enum PublishOutcome {
     /// Signed here and accepted: this is the new version, and the directory's base now is it.
     Published(u64),
-    /// Uploaded, not signed: IT opens `url` and signs with a Passkey (the first version: with the
-    /// recovery kit), then runs `mastersos pull`.
-    NeedsPasskey {
+    /// Uploaded, not signed: IT opens `url` and signs with the recovery kit (or a registered
+    /// Passkey, except for the first version), then runs `mastersos pull`.
+    NeedsSigning {
         url: String,
         pending_id: String,
         /// The version uploaded (1: the first, which only the recovery kit may sign).
@@ -58,7 +98,7 @@ pub fn needs_signing_text(url: &str, pending_id: &str, version: u64, digest_hex:
     let how = if version == 1 {
         format!("Uploaded pending bundle {pending_id} (version 1, the first). Nothing is published yet: sign it with your recovery kit on this page:\n{url}")
     } else {
-        format!("Uploaded pending bundle {pending_id} (version {version}). Nothing is published yet: IT signs it with a Passkey at\n{url}")
+        format!("Uploaded pending bundle {pending_id} (version {version}). Nothing is published yet: IT signs it with the recovery kit on this page (a Passkey is optional, if one is registered):\n{url}")
     };
     format!(
         "{how}\nDigest, first {DIGEST_SHOWN} characters: {short}\nCheck that the signing page shows the same digest before you sign; if it differs, do not sign.\nAfter signing in the browser, run `mastersos pull` to update your base."
@@ -257,6 +297,36 @@ fn sign_link(c: &AuthConfig, server: &str, pending_id: &str) -> String {
     )
 }
 
+/// Before the upload: the signing key must be in the new version's trust (Devices accept no
+/// other signature, and a signer cannot remove itself, R5), and a kit must be a recovery key
+/// registered on the server ([`mastersos_sign::kit::ensure_registered`]). Returns the signing
+/// client.
+async fn precheck_signer(
+    s: &SignOpts<'_>,
+    server: &str,
+    manifest_text: &str,
+    root: &Path,
+) -> Result<mastersos_sign::Api> {
+    let tk = s.key.trust_key()?;
+    // A manifest that does not parse was refused by the check already; signing re-checks anyway.
+    if let Ok(m) = Manifest::parse(manifest_text) {
+        if !m.trust.contains(&tk) {
+            bail!(
+                "Not uploaded: the signing key {} is not in [[trust]] of {}. Devices accept only keys in trust, and a version cannot remove the key that signs it",
+                tk.id,
+                root.display()
+            );
+        }
+    }
+    let api = mastersos_sign::Api::from_token_file(server, s.token_file)?;
+    if let SignWith::Kit(_) = s.key {
+        mastersos_sign::kit::ensure_registered(&api, &tk)
+            .await
+            .context("Not uploaded: the recovery kit cannot sign for this school")?;
+    }
+    Ok(api)
+}
+
 /// `allow_reroute` holds the secret names IT approved with `--allow-reroute`: every secret a
 /// `secret_rerouted` warning names must be among them, or nothing is uploaded.
 pub async fn publish(
@@ -323,6 +393,12 @@ pub async fn publish(
         &issued_at,
         school_name_to_write(&filled, &cfg.name),
     )?;
+    // A kit or key that cannot sign this version stops here, before a pending bundle is left on
+    // the server. Signing checks all of it again against the verified chain.
+    let sign_api = match &sign {
+        Some(s) => Some(precheck_signer(s, &meta.server, &stamped, &w.root).await?),
+        None => None,
+    };
     // The digest is computed here over exactly what is uploaded: the server's must equal it, and
     // only this digest is signed (here) or shown to compare (on the signing page).
     let local_digest = hex(&content_digest(&Contents {
@@ -408,12 +484,11 @@ pub async fn publish(
         .map(|l| clean_lint(l, &snap.secrets))
         .collect();
     print_server_lints(out, &warnings)?;
-    match sign {
-        Some(s) => {
-            let sign_api = mastersos_sign::Api::from_token_file(&meta.server, s.token_file)?;
+    match (sign, sign_api) {
+        (Some(s), Some(sign_api)) => {
             let v = mastersos_sign::sign_pending_expecting(
                 &sign_api,
-                s.key,
+                s.key.signing(),
                 s.pin_dir,
                 &prepared.pending_id,
                 Some(&local_digest),
@@ -424,7 +499,7 @@ pub async fn publish(
             w.mark_published(v)?;
             Ok(PublishOutcome::Published(v))
         }
-        None => Ok(PublishOutcome::NeedsPasskey {
+        _ => Ok(PublishOutcome::NeedsSigning {
             url: sign_link(&cfg, &meta.server, &prepared.pending_id),
             pending_id: prepared.pending_id,
             version,
@@ -437,6 +512,7 @@ pub async fn publish(
 mod tests {
     use super::*;
     use crate::workdir::Meta;
+    use mastersos_bundle::kit::Kit;
     use mastersos_bundle::Contents;
     use std::collections::BTreeMap;
     use wiremock::matchers::{method, path};
@@ -445,9 +521,13 @@ mod tests {
     const SID: &str = "11111111-1111-1111-1111-111111111111";
 
     fn manifest_text() -> String {
-        let key = STANDARD.encode([7u8; 32]);
+        manifest_trusting("rk", &STANDARD.encode([7u8; 32]))
+    }
+
+    /// The test manifest with one ed25519 key in trust.
+    fn manifest_trusting(id: &str, key: &str) -> String {
         format!(
-            "format = 2\n[school]\nid = \"{SID}\"\n\n[[trust]]\nid = \"rk\"\nalg = \"ed25519\"\npublic_key = \"{key}\"\n\n[defaults]\nwifi = [{{ ssid = \"Guest\", psk = \"guestpass1\" }}]\n\n[[config]]\nid = \"default\"\nname = \"Default\"\ninterface = \"learning\"\nlogin_methods = [\"local\"]\n\n[[group]]\nid = \"default\"\nname = \"Ungrouped\"\nconfig = \"default\"\n"
+            "format = 2\n[school]\nid = \"{SID}\"\n\n[[trust]]\nid = \"{id}\"\nalg = \"ed25519\"\npublic_key = \"{key}\"\n\n[defaults]\nwifi = [{{ ssid = \"Guest\", psk = \"guestpass1\" }}]\n\n[[config]]\nid = \"default\"\nname = \"Default\"\ninterface = \"learning\"\nlogin_methods = [\"local\"]\n\n[[group]]\nid = \"default\"\nname = \"Ungrouped\"\nconfig = \"default\"\n"
         )
     }
 
@@ -581,7 +661,7 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let w = rerouted_workdir(&t.path().join("school"));
         let (r, out) = run_allow(&s, &w, &[GUEST, "unused-name"]).await;
-        assert!(matches!(r.unwrap(), PublishOutcome::NeedsPasskey { .. }));
+        assert!(matches!(r.unwrap(), PublishOutcome::NeedsSigning { .. }));
         assert_eq!(uploads(&s).await.len(), 1);
         // Every local warning is printed, before the server's answer.
         let local = out.find("The local check:").expect(&out);
@@ -728,7 +808,7 @@ mod tests {
         let digest = digest_of(&uploads(&s).await[0]);
         assert_eq!(
             got,
-            PublishOutcome::NeedsPasskey {
+            PublishOutcome::NeedsSigning {
                 url: format!("https://sign.example/#school=demo&sid={SID}&op=commit&pending=p-1"),
                 pending_id: "p-1".into(),
                 version: 5,
@@ -777,7 +857,7 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("version = 1"));
-        let PublishOutcome::NeedsPasskey {
+        let PublishOutcome::NeedsSigning {
             url,
             pending_id,
             version,
@@ -800,10 +880,16 @@ mod tests {
     }
 
     #[test]
-    fn later_versions_name_the_passkey_and_the_digest() {
+    fn later_versions_name_the_kit_first_and_the_digest() {
         let text = needs_signing_text("https://sign.example/#x", "p-1", 5, "0123456789abcdef");
         assert!(
-            text.contains("signs it with a Passkey at\nhttps://sign.example/#x"),
+            text.contains("IT signs it with the recovery kit on this page"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "(a Passkey is optional, if one is registered):\nhttps://sign.example/#x"
+            ),
             "{text}"
         );
         assert!(
@@ -815,7 +901,6 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("mastersos pull"), "{text}");
-        assert!(!text.contains("recovery kit"), "{text}");
     }
 
     #[tokio::test]
@@ -870,15 +955,16 @@ mod tests {
             school_id: SID.into(),
             base_version: 4,
         };
+        let key = t.path().join("rk.pem");
+        let tk = mastersos_sign::keygen(&key).unwrap().trust_key;
         let c = Contents {
-            manifest_text: manifest_text(),
+            manifest_text: manifest_trusting(&tk.id, &tk.public_key),
             files,
         };
         let w = Workdir::write_pulled(&t.path().join("school"), meta, &c, false).unwrap();
         let text = format!("{}# edited\n", w.manifest().unwrap());
         std::fs::write(w.root.join("manifest.toml"), text).unwrap();
-        let key = t.path().join("rk.pem");
-        mastersos_sign::keygen(&key).unwrap();
+        let key = SignWith::key_file(&key).unwrap();
         let token = t.path().join("token");
         std::fs::write(&token, "tok").unwrap();
         let pins = t.path().join("pins");
@@ -1024,5 +1110,212 @@ mod tests {
             .unwrap()
             .iter()
             .all(|l| l.level != mastersos_bundle::LintLevel::Error));
+    }
+
+    /// A kit written the way `mastersos-sign kit new` writes it (0600).
+    fn kit_file(dir: &Path) -> (std::path::PathBuf, Kit) {
+        let path = dir.join("school.kit");
+        mastersos_sign::kit::kit_new(&path).unwrap();
+        let SignWith::Kit(kit) = SignWith::kit_file(&path).unwrap() else {
+            unreachable!()
+        };
+        (path, kit)
+    }
+
+    /// The server's signing key list, with `kit` registered as a recovery key.
+    fn registered(kit: &Kit) -> Value {
+        let tk = kit.trust_key();
+        json!([{
+            "key_id": tk.id, "kind": "recovery", "alg": "ed25519", "label": "kit",
+            "fingerprint": mastersos_bundle::trust_fingerprint(&tk), "in_published_trust": false
+        }])
+    }
+
+    /// A directory for a school that has published nothing, whose trust is `kit`'s key, on `s`.
+    fn first_version_dir(dir: &Path, s: &MockServer, kit: &Kit) -> Workdir {
+        let tk = kit.trust_key();
+        let meta = Meta {
+            server: s.uri(),
+            school_id: SID.into(),
+            base_version: 0,
+        };
+        Workdir::init(dir, meta, &manifest_trusting(&tk.id, &tk.public_key)).unwrap()
+    }
+
+    async fn publish_with_kit(
+        s: &MockServer,
+        w: &Workdir,
+        kit: SignWith,
+        dir: &Path,
+        confirm: &str,
+    ) -> (Result<PublishOutcome>, String) {
+        let token = dir.join("token");
+        std::fs::write(&token, "tok").unwrap();
+        let pins = dir.join("pins");
+        let api = Api::new(&s.uri(), "tok").unwrap();
+        let mut out = Vec::new();
+        let r = publish(
+            &api,
+            w,
+            Some(SignOpts {
+                key: &kit,
+                token_file: &token,
+                pin_dir: &pins,
+            }),
+            &[],
+            now(),
+            &mut confirm.as_bytes(),
+            &mut out,
+        )
+        .await;
+        (r, String::from_utf8_lossy(&out).into_owned())
+    }
+
+    /// The server keeps the uploaded bundle and serves it back as the pending bundle.
+    #[derive(Clone, Default)]
+    struct Pending(std::sync::Arc<std::sync::Mutex<Option<Value>>>);
+
+    impl Respond for Pending {
+        fn respond(&self, r: &Request) -> ResponseTemplate {
+            if r.method.as_str() == "POST" {
+                let up: Value = serde_json::from_slice(&r.body).unwrap();
+                let digest = digest_of(&up);
+                *self.0.lock().unwrap() = Some(up);
+                return ResponseTemplate::new(200).set_body_json(json!({
+                    "pending_id": "p-1", "version": 1, "digest_hex": digest, "lints": []
+                }));
+            }
+            let up = self.0.lock().unwrap().clone().expect("uploaded first");
+            let files: Vec<Value> = up["files"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(|p| json!({ "path": p }))
+                .collect();
+            ResponseTemplate::new(200).set_body_json(json!({
+                "pending_id": "p-1", "version": 1, "digest_hex": digest_of(&up),
+                "manifest_text": up["manifest_text"], "files": files
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn kit_signs_and_publishes_the_first_version() {
+        let s = server().await;
+        let t = tempfile::tempdir().unwrap();
+        let (kit_path, kit) = kit_file(t.path());
+        Mock::given(method("GET"))
+            .and(path("/v1/admin/signing-keys"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(registered(&kit)))
+            .mount(&s)
+            .await;
+        let pending = Pending::default();
+        for (m, p) in [
+            ("POST", "/v1/admin/publish/pending"),
+            ("GET", "/v1/admin/publish/pending/p-1"),
+        ] {
+            Mock::given(method(m))
+                .and(path(p))
+                .respond_with(pending.clone())
+                .mount(&s)
+                .await;
+        }
+        Mock::given(method("GET"))
+            .and(path("/v1/admin/versions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .mount(&s)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/admin/publish/pending/p-1/commit"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "version": 1 })))
+            .mount(&s)
+            .await;
+        let w = first_version_dir(&t.path().join("school"), &s, &kit);
+        let kit = SignWith::kit_file(&kit_path).unwrap();
+        // The version number, then `trust`: the first version adds every key of its trust.
+        let (r, out) = publish_with_kit(&s, &w, kit, t.path(), "1\ntrust\n").await;
+        assert_eq!(r.unwrap(), PublishOutcome::Published(1), "{out}");
+        assert_eq!(w.meta().unwrap().base_version, 1);
+        // The commit carries the kit's signature over the digest of what was uploaded.
+        let reqs = s.received_requests().await.unwrap();
+        let commit = reqs
+            .iter()
+            .find(|r| r.url.path().ends_with("/commit"))
+            .expect("committed");
+        let body: Value = serde_json::from_slice(&commit.body).unwrap();
+        let up = pending.0.lock().unwrap().clone().unwrap();
+        assert_eq!(body["confirm_digest"], digest_of(&up));
+        let SignWith::Kit(kit) = SignWith::kit_file(&kit_path).unwrap() else {
+            unreachable!()
+        };
+        assert_eq!(body["signature"]["key_id"], kit.key_id());
+        // The kit text never reaches the output.
+        assert!(!out.contains(kit.to_display().as_str()), "{out}");
+    }
+
+    #[tokio::test]
+    async fn unregistered_kit_uploads_nothing() {
+        let s = server().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/admin/signing-keys"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .mount(&s)
+            .await;
+        let t = tempfile::tempdir().unwrap();
+        let (kit_path, kit) = kit_file(t.path());
+        let w = first_version_dir(&t.path().join("school"), &s, &kit);
+        let kit = SignWith::kit_file(&kit_path).unwrap();
+        let (r, _) = publish_with_kit(&s, &w, kit, t.path(), "").await;
+        let err = format!("{:#}", r.unwrap_err());
+        assert!(err.starts_with("Not uploaded"), "{err}");
+        assert!(err.contains("not a registered recovery key"), "{err}");
+        assert!(uploads(&s).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn kit_not_in_trust_uploads_nothing() {
+        let s = server().await;
+        let t = tempfile::tempdir().unwrap();
+        let (kit_path, kit) = kit_file(t.path());
+        Mock::given(method("GET"))
+            .and(path("/v1/admin/signing-keys"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(registered(&kit)))
+            .mount(&s)
+            .await;
+        // Registered, but the directory trusts another key.
+        let meta = Meta {
+            server: s.uri(),
+            school_id: SID.into(),
+            base_version: 0,
+        };
+        let w = Workdir::init(&t.path().join("school"), meta, &manifest_text()).unwrap();
+        let kit = SignWith::kit_file(&kit_path).unwrap();
+        let (r, _) = publish_with_kit(&s, &w, kit, t.path(), "").await;
+        let err = r.unwrap_err().to_string();
+        assert!(err.contains("is not in [[trust]]"), "{err}");
+        assert!(uploads(&s).await.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn loose_kit_file_is_refused_like_a_key_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let t = tempfile::tempdir().unwrap();
+        let (kit, _) = kit_file(t.path());
+        let key = t.path().join("rk.pem");
+        mastersos_sign::keygen(&key).unwrap();
+        for p in [&kit, &key] {
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        let kit_err = format!("{:#}", SignWith::kit_file(&kit).err().unwrap());
+        let key_err = format!("{:#}", SignWith::key_file(&key).err().unwrap());
+        for e in [&kit_err, &key_err] {
+            assert!(e.contains("has mode 644") && e.contains("chmod 600"), "{e}");
+        }
+        // Not a kit at all.
+        let junk = t.path().join("junk");
+        std::fs::write(&junk, "hello").unwrap();
+        std::fs::set_permissions(&junk, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(SignWith::kit_file(&junk).is_err());
     }
 }

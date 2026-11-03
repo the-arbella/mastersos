@@ -34,14 +34,24 @@ mastersos init ./school          # 新学校：用模板建目录（已发布过
 mastersos pull ./school          # 下载最新已发布版本，沿版本链验签，拆成目录
 $EDITOR ./school/manifest.toml   # 或让 AI 改；新密码网络写 psk = "secret:<名字>"，值由 IT 填进 secrets.toml
 mastersos check ./school && mastersos diff ./school     # 本地，不联网；check 有错误退出码 2
-mastersos publish ./school [--key rk.key]   # 有恢复钥匙文件就本机验证、签名并 commit；没有就打印签名页链接，
-                                            # IT 在浏览器里用 passkey 签完后再跑 mastersos pull
+mastersos publish ./school --kit school.kit   # 用恢复钥匙包在本机验链、签名并 commit（任何一台电脑，有 kit 文件就行）
+mastersos publish ./school                    # 不带 --kit/--key：只上传并打印签名页链接，IT 在页上载入恢复钥匙包签
+                                              # （登记过 passkey 的也可以用 passkey，可选），签完再跑 mastersos pull
 ```
 
 目录里：`mastersos.toml`（学校主机与 `base_version`）、`manifest.toml`（秘密只写引用）、`secrets.toml`（0600，git 忽略，秘密的值）、
 `files/`、`.mastersos/base/`（pull 下来的原样，`diff` 用）。`pull` 在目录有未发布改动时拒绝覆盖，除非 `--force`；
 `--version N` 只取本机验证过的旧版本。`publish` 先 `check`，在本地合成（引用换成值，写 `version`、`issued_at`、学校名），
 上传成待签名包；服务端拒收（base 之后已有人发布、阻断检查不过）就停并显示原因。
+
+`publish` 的签名钥匙：
+
+- `--kit <文件>`：恢复钥匙包（`MASTERSKIT1…`，`mastersos-sign kit new` 生成）。文件必须属于当前用户、权限 0600，否则拒绝
+  （与 `--key` 同样的检查）。上传之前先确认这把钥匙在目录的 `[[trust]]` 里、并且是服务端登记过的恢复钥匙，不满足就什么都不上传。
+  之后走 `mastersos-sign` 同一条签名路径（`SigningKey::Kit`）：本地验链、对照上传时本地算的摘要、键入版本号确认、签名并 commit。
+  第一版（R1g）也用它签。
+- `--key <文件>`：PKCS#8 恢复钥匙文件，与 `--kit` 二选一。
+- `--allow-reroute <秘密名>`（可重复）：见下面的 `secret_rerouted`，只由 IT 给。
 
 其他子命令：`mastersos devices list|show`、`keys list`（服务端的机器与已登记钥匙，供手写 `[[device]]` 与 `trust`）、
 `hash-password`（不回显读口令，输出 IT 账号的哈希，写进 `secrets.toml`）、`logo upload <登录页.png> <图标.png>`、`spec`、`setup`。
@@ -71,7 +81,8 @@ mastersos setup --server https://mastersos.school.ac.th --token-file /path/to/it
   `check`：引用了不存在的秘密是错误（`secret_unknown`）；没人用的秘密是警告；引用秘密的网络换了层、换了 `ssid`、秘密换了字段，
   或改了 `eap`、`phase2`、`identity`、`anonymous_identity`、`server_domain`、`ca_cert`、`check_server` 任一，警告 `secret_rerouted`
   （密码会被发到新的地方），`check` 末尾醒目列出这些秘密。`publish` 遇到它就拒绝、什么都不上传，除非 IT 对每个改道的秘密都给
-  `--allow-reroute <名字>`（可重复；给错名字不算）。只有 IT 能下这个决定：MCP 没有发布工具，也没有任何参数能传它，AI 从不替 IT 传。
+  `--allow-reroute <名字>`（可重复；给错名字不算），例如 `mastersos publish ./school --kit school.kit --allow-reroute lab-corp-password`。
+  只有 IT 能下这个决定：MCP 没有发布工具，也没有任何参数能传它，AI 从不替 IT 传。
 - `publish` 上传前先打印本地检查的全部警告。
 - AI 不改 trust：`trust` 照 `manifest.toml` 写的，发布不自动填；trust 的变化只能由 IT 用恢复钥匙经 `mastersos-sign` 签。
 
@@ -188,9 +199,12 @@ kiosk PWA），同时联系厂商取得长期支持（设计 `docs/superpowers/s
 `publish.sh <版本> beta` 之后要在同一次操作里接着发 `chrome` 并同步到 S3——否则 beta 机器重启进新镜像时更新源上还没有扩展，锁定会话没有
 「退出」按钮（第一次正式发布尤其如此，见 `image/docs/update-channels.md`「第一次正式发布的顺序」）。
 
-## 签名：passkey 与恢复钥匙
+## 签名：恢复钥匙包与 passkey
 
 服务端没有签名钥匙（云端设计裁定 8）：每一版都由学校的钥匙签，trust 也由学校自己列，服务端从不替草稿填 trust。
+
+**恢复钥匙包是唯一必需的签名钥匙，passkey 可选**（2026-11-03 裁定）：IT 在任何一台电脑上有 kit 文件就能签，
+命令行 `mastersos publish --kit <文件>`，或在签名页载入恢复钥匙包。
 
 学校钥匙有两种，都写进 trust：
 
@@ -277,9 +291,9 @@ $S escrow-read --server https://<slug>.os.khundavid.com --token-file recovery.to
 ### 第一版与 trust 的变化
 
 1. 在网页登记 passkey，建议在不同设备上登记两把。用临时 `keys` token 经 `mastersos-sign register` 登记恢复钥匙，登记完删掉这个 token。
-2. 在本地目录的 `manifest.toml` 里把 `[[trust]]` 写成登记过的钥匙（`mastersos keys list` 可查），`mastersos init <目录>` → 编辑（`[[trust]]` 列出这把恢复钥匙）→ `mastersos publish --key rk.key`：`base_version = 0` 时 `publish` 走 `mastersos_sign::sign_pending` 的第一版（R1g）分支，打印整份 trust，要 IT 对照指纹、键入版本号 `1` 与 `trust`，用恢复钥匙签并 commit（也可以单独用 `mastersos-sign sign --pending <id>`）。
+2. 在本地目录的 `manifest.toml` 里把 `[[trust]]` 写成登记过的钥匙（`mastersos keys list` 可查），`mastersos init <目录>` → 编辑（`[[trust]]` 列出这把恢复钥匙）→ `mastersos publish --kit school.kit`（或 `--key rk.key`）：`base_version = 0` 时 `publish` 走 `mastersos_sign::sign_pending` 的第一版（R1g）分支，打印整份 trust，要 IT 对照指纹、键入版本号 `1` 与 `trust`，用恢复钥匙签并 commit（也可以单独用 `mastersos-sign sign --pending <id>`）。
    发布第一版之前没有种子可下载（`GET /v1/admin/seed` 回 409 `no_published_version`）。
-3. 之后的日常发布可以用网页 passkey 签。每次发布之后续签一次心跳。trust 的变化只能用恢复钥匙经 `mastersos-sign` 签。
+3. 之后的日常发布照样用恢复钥匙包签（`mastersos publish --kit`，或签名页载入 kit）；登记过 passkey 的，也可以在签名页用它签。每次发布之后续签一次心跳。trust 的变化只能用恢复钥匙经 `mastersos-sign` 签。
 
 服务端守着这几条规则：
 
