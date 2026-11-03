@@ -766,30 +766,26 @@ fn print_server_notes(out: &mut dyn Write, p: &Pending) -> Result<()> {
     Ok(())
 }
 
-/// 取待发布内容（`pending` 为 `None` 时先 prepare），本地验链、算差异、打印完整 trust，
+/// 取待发布内容（`pending` 是上传得到的待签名包 id），本地验链、算差异、打印完整 trust，
 /// 人键入版本号（trust 有变化时再键入 `trust`）后用恢复钥匙签名提交，pin 前进到新版本。
 /// 返回新版本号。
 pub async fn sign_pending(
     api: &Api,
     key: impl Into<SigningKey<'_>>,
     pin_dir: &Path,
-    pending: Option<&str>,
+    pending: &str,
     confirm: &mut dyn BufRead,
     out: &mut dyn Write,
 ) -> Result<u64> {
     let mut out = safe::SafeWriter::new(out);
     let out: &mut dyn Write = &mut out;
     let (signer, me) = load_signer(api, key.into(), false).await?;
-    let p: Pending = match pending {
-        None => {
-            api.post_json(&["v1", "admin", "publish", "prepare"], None, "prepare")
-                .await?
-        }
-        Some(id) => {
-            api.get_json(&["v1", "admin", "publish", "pending", id], "取待发布内容")
-                .await?
-        }
-    };
+    let p: Pending = api
+        .get_json(
+            &["v1", "admin", "publish", "pending", pending],
+            "取待发布内容",
+        )
+        .await?;
 
     // 1. 逐个下载文件，本地重算摘要。
     let mut files = BTreeMap::new();

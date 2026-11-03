@@ -205,7 +205,7 @@ rm rk.key                               # 平时离线：电脑上不留私钥
 
 # 要签名时从纸面备份临时还原，签完再删。sign / heartbeat / seed-check / verify 只要 read + draft 范围的 token
 $S restore-from-paper --paper paper.txt --out rk.key
-$S sign --server https://mastersos.school.ac.th --token-file draft.token --key rk.key   # 不带 --pending 就先 prepare 当前草稿
+$S sign --server https://mastersos.school.ac.th --token-file draft.token --key rk.key --pending <id>   # <id>: printed by `mastersos publish`
 rm rk.key
 
 # 只验链，不签名

@@ -172,9 +172,9 @@ enum Cmd {
         pin_dir: PinDir,
         #[command(flatten)]
         key: KeyArg,
-        /// 已有的待发布内容 id；不给就先 prepare 当前草稿
+        /// The pending bundle's id (printed by `mastersos publish`)
         #[arg(long)]
-        pending: Option<String>,
+        pending: String,
     },
     /// 本地验链后为最新版续签心跳（学校钥匙模式下每次发布之后、以及每个月）
     Heartbeat {
@@ -313,7 +313,7 @@ async fn run(cli: Cli) -> Result<()> {
                 &server.api()?,
                 key.signing(),
                 &pin_dir.get()?,
-                pending.as_deref(),
+                &pending,
                 &mut stdin.lock(),
                 &mut out,
             )
