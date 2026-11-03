@@ -262,6 +262,7 @@ impl Workdir {
             bail!("{} is not empty", root.display());
         }
         fs::create_dir_all(root)?;
+        ensure_gitignore(root)?;
         write_snapshot(root, manifest_text, "", &BTreeMap::new())?;
         write_snapshot(&root.join(STATE).join("base"), "", "", &BTreeMap::new())?;
         write_meta(root, &meta)?;
@@ -269,6 +270,25 @@ impl Workdir {
         Ok(Workdir {
             root: root.to_path_buf(),
         })
+    }
+
+    /// Fail unless `root` may be written by a pull: empty or missing, or a settings directory
+    /// without unpublished changes; `force` allows anything. Call it before any network use.
+    pub fn ensure_pullable(root: &Path, force: bool) -> Result<()> {
+        if force || !dir_has_entries(root)? {
+            return Ok(());
+        }
+        match Workdir::open(root) {
+            Ok(w) if w.is_dirty()? => bail!(
+                "{} has changes that are not published (see `mastersos diff`); pull again with --force to throw them away",
+                root.display()
+            ),
+            Ok(_) => Ok(()),
+            Err(_) => bail!(
+                "{} is not empty and is not a settings directory; use an empty directory or --force",
+                root.display()
+            ),
+        }
     }
 
     /// Write a pulled version: secrets are split out of the manifest into `secrets.toml`, and the
@@ -280,22 +300,7 @@ impl Workdir {
         contents: &Contents,
         force: bool,
     ) -> Result<Workdir> {
-        if dir_has_entries(root)? && !force {
-            match Workdir::open(root) {
-                Ok(w) => {
-                    if w.is_dirty()? {
-                        bail!(
-                            "{} has changes that are not published (see `mastersos diff`); pull again with --force to throw them away",
-                            root.display()
-                        );
-                    }
-                }
-                Err(_) => bail!(
-                    "{} is not empty and is not a settings directory; use an empty directory or --force",
-                    root.display()
-                ),
-            }
-        }
+        Workdir::ensure_pullable(root, force)?;
         // Everything that can fail on the content fails before a file changes.
         let (manifest, secrets) = secret_ref::split(&contents.manifest_text)
             .map_err(|e| anyhow::anyhow!("the manifest cannot be split: {e}"))?;
@@ -413,12 +418,24 @@ fn scrub(mut lints: Vec<Lint>, secrets: &BTreeMap<String, String>) -> Vec<Lint> 
     let mut pairs: Vec<(&String, &String)> =
         secrets.iter().filter(|(_, v)| !v.is_empty()).collect();
     pairs.sort_by_key(|(_, v)| std::cmp::Reverse(v.len()));
+    // One pass: at each position the longest value that starts there is replaced, and the
+    // inserted reference is never scanned again.
     let clean = |s: &str| {
-        let mut s = s.to_owned();
-        for (name, value) in &pairs {
-            s = s.replace(value.as_str(), &format!("secret:{name}"));
+        let mut out = String::with_capacity(s.len());
+        let mut i = 0;
+        while i < s.len() {
+            if let Some((name, value)) = pairs.iter().find(|(_, v)| s[i..].starts_with(v.as_str()))
+            {
+                out.push_str("secret:");
+                out.push_str(name);
+                i += value.len();
+            } else {
+                let c = s[i..].chars().next().unwrap_or_default();
+                out.push(c);
+                i += c.len_utf8().max(1);
+            }
         }
-        s
+        out
     };
     for l in &mut lints {
         l.message = clean(&l.message);
@@ -681,5 +698,64 @@ mod tests {
         assert!(template("x\"; evil").is_err());
         let lints = check(&w).unwrap();
         assert!(!codes(&lints).contains(&"toml_syntax"), "{lints:?}");
+    }
+
+    #[test]
+    fn scrub_is_one_pass() {
+        let mut s = BTreeMap::new();
+        s.insert("a".to_string(), "x".to_string());
+        s.insert("b".to_string(), "secret:a".to_string());
+        // The reference inserted for "x" is not scanned again, and the longer value wins.
+        let l = Lint::new(LintLevel::Error, "c", "x secret:a x");
+        assert_eq!(scrub(vec![l], &s)[0].message, "secret:a secret:b secret:a");
+        // Short values are still scrubbed.
+        let l = Lint::new(LintLevel::Error, "c", "ü x ü");
+        assert_eq!(scrub(vec![l], &s)[0].message, "ü secret:a ü");
+    }
+
+    #[test]
+    fn write_pulled_rejects_unsafe_paths() {
+        let t = tempfile::tempdir().unwrap();
+        for bad in ["files/../x", "/etc/x", "other/x", "files/a\\b"] {
+            let dir = t.path().join("school");
+            let mut c = contents();
+            c.files.insert(bad.to_string(), b"x".to_vec());
+            assert!(
+                Workdir::write_pulled(&dir, meta(1), &c, false).is_err(),
+                "{bad}"
+            );
+            assert!(
+                !dir.exists() || std::fs::read_dir(&dir).unwrap().next().is_none(),
+                "{bad}"
+            );
+            assert!(!t.path().join("x").exists());
+        }
+    }
+
+    #[test]
+    fn gitignore_exists_before_secrets() {
+        let t = tempfile::tempdir().unwrap();
+        let dir = t.path().join("school");
+        // Pre-existing user ignore file keeps its lines.
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join(".gitignore"), "target\n").unwrap();
+        let w = Workdir::write_pulled(&dir, meta(3), &contents(), true).unwrap();
+        let gi = std::fs::read_to_string(w.root.join(".gitignore")).unwrap();
+        assert!(
+            gi.starts_with("target\n") && gi.contains("secrets.toml"),
+            "{gi}"
+        );
+    }
+
+    #[test]
+    fn ensure_pullable_is_offline_dirty_check() {
+        let t = tempfile::tempdir().unwrap();
+        let dir = t.path().join("school");
+        Workdir::ensure_pullable(&dir, false).unwrap();
+        let w = pulled(&dir);
+        Workdir::ensure_pullable(&dir, false).unwrap();
+        std::fs::write(w.root.join("manifest.toml"), "# mine\n").unwrap();
+        assert!(Workdir::ensure_pullable(&dir, false).is_err());
+        Workdir::ensure_pullable(&dir, true).unwrap();
     }
 }

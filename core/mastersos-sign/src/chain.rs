@@ -361,6 +361,74 @@ pub async fn verify_chain(
     Ok(cur)
 }
 
+/// The contents of version `want` (`1 <= want <= pin_version`), after the whole chain up to the
+/// pinned version is verified from the start: version 1 against its own trust (genesis), every
+/// later version under the trust of the version machines run before it (the same acceptance,
+/// R7/R8 included, as [`verify_chain`]); the version at `pin_version` must have the pinned
+/// digest. `archives[i]` is version `i + 1`, for `i < pin_version`. A version that machines
+/// refuse (R7/R8) is skipped as machines skip it, and cannot be `want`. Any failure is an error.
+pub fn verify_history(
+    archives: &[Vec<u8>],
+    pin_version: u64,
+    pin_digest_hex: &str,
+    want: u64,
+) -> Result<Contents> {
+    if want == 0 || want > pin_version || archives.len() as u64 != pin_version {
+        bail!("version {want} is not in the verified history (1..={pin_version})");
+    }
+    let mut cur: Option<(u64, Vec<TrustKey>, Contents)> = None;
+    let mut found = None;
+    for (i, archive) in archives.iter().enumerate() {
+        let v = i as u64 + 1;
+        let (b, refused) = match &cur {
+            None => {
+                let first = read_archive(archive).map_err(|e| tampered(v, e))?;
+                let m =
+                    Manifest::parse(&first.contents.manifest_text).map_err(|e| tampered(v, e))?;
+                (
+                    accept(archive, &m.trust, None).map_err(|e| tampered(v, e))?,
+                    false,
+                )
+            }
+            Some((cv, trust, contents)) => {
+                let (b, signer) =
+                    accept_signed(archive, trust, Some(*cv)).map_err(|e| tampered(v, e))?;
+                let old = Manifest::parse(&contents.manifest_text)
+                    .map_err(|e| tampered(*cv, e))?
+                    .school
+                    .escrow_recipients;
+                let refused = match check_recovery_signed(trust, &old, &b.manifest, &signer) {
+                    Ok(()) => false,
+                    Err(BundleError::KitRequired(_)) => true,
+                    Err(e) => return Err(tampered(v, e)),
+                };
+                (b, refused)
+            }
+        };
+        if b.manifest.version != v {
+            return Err(tampered(
+                v,
+                format!("的包里写的是第 {} 版", b.manifest.version),
+            ));
+        }
+        if refused {
+            if v == want {
+                bail!("version {v} was refused by machines (trust or recipients changed without a recovery kit)");
+            }
+            continue;
+        }
+        if v == want {
+            found = Some(b.contents.clone());
+        }
+        cur = Some((v, b.manifest.trust, b.contents));
+    }
+    let (last, _, contents) = cur.context("no versions")?;
+    if last != pin_version || hex(&content_digest(&contents)) != pin_digest_hex {
+        bail!("the history up to version {pin_version} does not end in the pinned version: the server may have been tampered with");
+    }
+    found.context("version not found in the verified history")
+}
+
 pub(crate) fn pin_of(api: &Api, v: &Verified) -> Pin {
     Pin {
         host: api.host(),
@@ -503,5 +571,70 @@ mod tests {
         // A pin that vanished while verifying.
         let gone = dir.path().join("gone.toml");
         assert!(save_pin(&gone, Some(&pin("h", 1, "aa")), &pin("h", 2, "bb")).is_err());
+    }
+
+    mod history {
+        use super::super::*;
+        use mastersos_bundle::{pack, Ed25519Signer};
+
+        fn signer(n: u8) -> Ed25519Signer {
+            Ed25519Signer::from_seed(&format!("key-{n}"), &[n; 32])
+        }
+
+        fn archive(
+            v: u64,
+            trust: &Ed25519Signer,
+            signed_by: &Ed25519Signer,
+            note: &str,
+        ) -> Vec<u8> {
+            let k = trust.trust_key();
+            let text = format!(
+                "version = {v}\nissued_at = \"2026-11-03T00:00:00Z\"\n\n[[trust]]\nid = \"{}\"\nalg = \"ed25519\"\npublic_key = \"{}\"\n\n[school]\nid = \"11111111-1111-1111-1111-111111111111\"\n\n[[config]]\nid = \"default\"\nname = \"Default {note}\"\ninterface = \"learning\"\nlogin_methods = [\"local\"]\n\n[[group]]\nid = \"default\"\nname = \"Ungrouped\"\nconfig = \"default\"\n",
+                k.id, k.public_key
+            );
+            let c = Contents {
+                manifest_text: text,
+                files: Default::default(),
+            };
+            pack(&c, signed_by).unwrap()
+        }
+
+        fn digest(a: &[u8]) -> String {
+            hex(&content_digest(&read_archive(a).unwrap().contents))
+        }
+
+        #[test]
+        fn old_version_chain_walks_to_the_pin() {
+            let k = signer(1);
+            let a: Vec<Vec<u8>> = (1..=3)
+                .map(|v| archive(v, &k, &k, &format!("v{v}")))
+                .collect();
+            let c = verify_history(&a, 3, &digest(&a[2]), 2).unwrap();
+            assert!(c.manifest_text.contains("Default v2"));
+        }
+
+        #[test]
+        fn old_version_with_foreign_trust_is_refused() {
+            let (good, evil) = (signer(1), signer(2));
+            let mut a: Vec<Vec<u8>> = (1..=3).map(|v| archive(v, &good, &good, "")).collect();
+            // Version 2 lists and is signed by a key version 1 never trusted.
+            a[1] = archive(2, &evil, &evil, "forged");
+            let pin = digest(&a[2]);
+            assert!(verify_history(&a, 3, &pin, 2).is_err());
+            assert!(verify_history(&a, 3, &pin, 1).is_err());
+        }
+
+        #[test]
+        fn old_version_chain_must_reach_pin() {
+            let k = signer(1);
+            let a: Vec<Vec<u8>> = (1..=3)
+                .map(|v| archive(v, &k, &k, &format!("v{v}")))
+                .collect();
+            assert!(verify_history(&a, 3, "00ff", 2).is_err());
+            // Wrong count of archives, and a version outside the history.
+            assert!(verify_history(&a[..2], 3, &digest(&a[2]), 2).is_err());
+            assert!(verify_history(&a, 3, &digest(&a[2]), 4).is_err());
+            assert!(verify_history(&a, 3, &digest(&a[2]), 0).is_err());
+        }
     }
 }

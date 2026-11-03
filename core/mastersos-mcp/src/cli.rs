@@ -1359,8 +1359,8 @@ async fn init_dir(
     Ok(ExitCode::SUCCESS)
 }
 
-/// `mastersos pull`: the chain is verified from the pin first; a given `--version` is then read
-/// from its own archive and must have been signed with the keys it lists itself.
+/// `mastersos pull`: the chain is verified from the pin first; an older `--version` is taken only
+/// after the whole history up to the pinned version verifies (`verify_history`).
 async fn pull_dir(
     api: &Api,
     server: &str,
@@ -1369,6 +1369,8 @@ async fn pull_dir(
     version: Option<u64>,
     force: bool,
 ) -> Result<ExitCode, OpError> {
+    // Before any network use: a dirty directory is refused without touching the server.
+    Workdir::ensure_pullable(dir, force).map_err(fail)?;
     let id = school_id(api).await?;
     if let Ok(w) = Workdir::open(dir) {
         let m = w.meta().map_err(fail)?;
@@ -1394,17 +1396,36 @@ async fn pull_dir(
     let (n, contents) = match version {
         None => (verified.version, verified.contents),
         Some(n) if n == verified.version => (n, verified.contents),
+        // Newer than what machines run: refused versions (or none), not something to pull.
+        Some(n) if n == 0 || n > verified.version => {
+            return Err(OpError::Failed(format!(
+            "version {n} cannot be pulled: machines run version {} (the newest published is {})",
+            verified.version, verified.latest
+        )))
+        }
         Some(n) => {
-            if n == 0 || n > verified.latest {
-                return Err(OpError::Failed(format!(
-                    "version {n} does not exist: the newest published version is {}",
-                    verified.latest
-                )));
+            // The whole chain up to the pinned version is verified before version n is taken.
+            let mut archives = Vec::new();
+            for v in 1..=verified.version {
+                archives.push(sign.version_archive(v).await.map_err(fail)?);
             }
-            let archive = sign.version_archive(n).await.map_err(fail)?;
-            (n, open_version(&archive, n).map_err(fail)?)
+            let contents = mastersos_sign::chain::verify_history(
+                &archives,
+                verified.version,
+                &verified.digest_hex,
+                n,
+            )
+            .map_err(fail)?;
+            (n, contents)
         }
     };
+    let manifest = mastersos_bundle::Manifest::parse(&contents.manifest_text)
+        .map_err(|e| OpError::Failed(format!("version {n}: the manifest cannot be read: {e}")))?;
+    if mastersos_bundle::school_id_mismatch(&manifest, &id).is_some() {
+        return Err(OpError::Failed(format!(
+            "version {n} belongs to a different school than {id}"
+        )));
+    }
     let meta = Meta {
         server: server.to_owned(),
         school_id: id,
@@ -1413,28 +1434,6 @@ async fn pull_dir(
     Workdir::write_pulled(dir, meta, &contents, force).map_err(fail)?;
     println!("Pulled version {n} into {}.", dir.display());
     Ok(ExitCode::SUCCESS)
-}
-
-/// An old version's contents, after its signature is checked against the keys the version lists.
-fn open_version(archive: &[u8], n: u64) -> anyhow::Result<mastersos_bundle::Contents> {
-    use anyhow::Context as _;
-    let unpacked = mastersos_bundle::read_archive(archive).context("the archive cannot be read")?;
-    let sig: mastersos_bundle::SignatureFile =
-        toml::from_str(&unpacked.signature_toml).context("the signature file is not valid")?;
-    let manifest = mastersos_bundle::Manifest::parse(&unpacked.contents.manifest_text)
-        .context("the manifest cannot be read")?;
-    mastersos_bundle::verify_signature(
-        &mastersos_bundle::signed_message(&unpacked.contents),
-        &sig,
-        &manifest.trust,
-    )
-    .context("the signature does not match the keys the version lists")?;
-    anyhow::ensure!(
-        manifest.version == n,
-        "the archive holds version {}, not {n}",
-        manifest.version
-    );
-    Ok(unpacked.contents)
 }
 
 /// Issues for people: one per line (level, code, where, message), then a count.
