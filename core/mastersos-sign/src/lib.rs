@@ -669,12 +669,21 @@ struct Pending {
     lints: Value,
 }
 
+/// The secret values of both sides, longest first, for hiding them in the server's notes; `None`
+/// when a side's secrets could not be separated (then nothing the server says about the manifest
+/// is printed).
+type SecretValues = Option<Vec<String>>;
+
+/// The local diff. Secret values are never printed: both manifests are split into references
+/// first ([`mastersos_bundle::secret_ref::split`]), the split texts are diffed, and each secret
+/// whose value differs gets one line with its name only.
 fn print_local_diff(
     out: &mut dyn Write,
     old: &Verified,
     new_version: u64,
     new: &Contents,
-) -> Result<()> {
+) -> Result<SecretValues> {
+    use mastersos_bundle::secret_ref::split;
     let old_v = format!("v{}", old.version);
     let new_v = format!("v{new_version}（待签）");
     writeln!(
@@ -682,19 +691,52 @@ fn print_local_diff(
         "\n== 本地算出的差异（第 {} 版 → 第 {new_version} 版）==",
         old.version
     )?;
-    let (old_text, new_text) = (
-        safe::escape_lines(&old.contents.manifest_text),
-        safe::escape_lines(&new.manifest_text),
-    );
-    let text = similar::TextDiff::from_lines(&old_text, &new_text)
-        .unified_diff()
-        .header(&old_v, &new_v)
-        .to_string();
-    if text.is_empty() {
-        writeln!(out, "manifest.toml：没有变化")?;
-    } else {
-        writeln!(out, "manifest.toml：")?;
-        write!(out, "{}", safe::cap_lines(&text))?;
+    let mut values = None;
+    match (
+        split(&old.contents.manifest_text),
+        split(&new.manifest_text),
+    ) {
+        (Ok((old_split, old_secrets)), Ok((new_split, new_secrets))) => {
+            let (old_text, new_text) = (
+                safe::escape_lines(&old_split),
+                safe::escape_lines(&new_split),
+            );
+            let text = similar::TextDiff::from_lines(&old_text, &new_text)
+                .unified_diff()
+                .header(&old_v, &new_v)
+                .to_string();
+            if text.is_empty() {
+                writeln!(out, "manifest.toml：没有变化")?;
+            } else {
+                writeln!(out, "manifest.toml：")?;
+                write!(out, "{}", safe::cap_lines(&text))?;
+            }
+            let names: BTreeSet<&String> = old_secrets.keys().chain(new_secrets.keys()).collect();
+            for name in names {
+                let what = match (old_secrets.get(name), new_secrets.get(name)) {
+                    (None, Some(_)) => "added",
+                    (Some(_), None) => "removed",
+                    (Some(a), Some(b)) if a != b => "changed",
+                    _ => continue,
+                };
+                writeln!(out, "secret {}: {what}", safe::field(name))?;
+            }
+            let mut v: Vec<String> = old_secrets
+                .into_values()
+                .chain(new_secrets.into_values())
+                .filter(|v| !v.is_empty())
+                .collect();
+            v.sort_by_key(|s| std::cmp::Reverse(s.len()));
+            v.dedup();
+            values = Some(v);
+        }
+        _ if old.contents.manifest_text == new.manifest_text => {
+            writeln!(out, "manifest.toml：没有变化")?;
+        }
+        _ => writeln!(
+            out,
+            "manifest changed (diff hidden: could not separate secrets)"
+        )?,
     }
     let short = |b: &[u8]| hex(&<sha2::Sha256 as sha2::Digest>::digest(b))[..16].to_owned();
     let (of, nf) = (&old.contents.files, &new.files);
@@ -734,19 +776,35 @@ fn print_local_diff(
     if !any {
         writeln!(out, "文件：没有变化")?;
     }
-    Ok(())
+    Ok(values)
 }
 
-fn print_server_notes(out: &mut dyn Write, p: &Pending) -> Result<()> {
+/// Every secret value in `s` replaced with `<secret>`.
+fn hide_values(s: &str, values: &[String]) -> String {
+    values
+        .iter()
+        .fold(s.to_owned(), |acc, v| acc.replace(v.as_str(), "<secret>"))
+}
+
+fn print_server_notes(out: &mut dyn Write, p: &Pending, secrets: &SecretValues) -> Result<()> {
     writeln!(
         out,
         "\n== 服务端说明（仅供参考：不是将要签名的内容，以上面本地算出的为准）=="
     )?;
+    let hide = |s: &str| secrets.as_deref().map(|v| hide_values(s, v));
     if let Some(d) = p.diff["manifest_diff"].as_str().filter(|d| !d.is_empty()) {
-        writeln!(out, "服务端给的清单差异：")?;
-        write!(out, "{}", safe::text(d))?;
-        if !d.ends_with('\n') {
-            writeln!(out)?;
+        match hide(d) {
+            Some(d) => {
+                writeln!(out, "服务端给的清单差异：")?;
+                write!(out, "{}", safe::text(&d))?;
+                if !d.ends_with('\n') {
+                    writeln!(out)?;
+                }
+            }
+            None => writeln!(
+                out,
+                "The server's manifest diff is hidden: secrets could not be separated"
+            )?,
         }
     }
     match p.lints.as_array() {
@@ -757,7 +815,10 @@ fn print_server_notes(out: &mut dyn Write, p: &Pending) -> Result<()> {
                     "  [{}] {}：{}",
                     safe::field(l["level"].as_str().unwrap_or("?")),
                     safe::field(l["code"].as_str().unwrap_or("?")),
-                    safe::field(l["message"].as_str().unwrap_or(""))
+                    safe::field(
+                        &hide(l["message"].as_str().unwrap_or(""))
+                            .unwrap_or_else(|| "(message hidden)".into())
+                    )
                 )?;
             }
         }
@@ -882,7 +943,7 @@ pub async fn sign_pending(
     }
 
     // 4. 本地差异。
-    print_local_diff(out, &verified, next, &contents)?;
+    let secret_values = print_local_diff(out, &verified, next, &contents)?;
 
     // 5. 完整 trust 与增删改。
     writeln!(
@@ -951,7 +1012,7 @@ pub async fn sign_pending(
         )?;
     }
 
-    print_server_notes(out, &p)?;
+    print_server_notes(out, &p, &secret_values)?;
 
     // 6. 人工确认。
     writeln!(out, "\n本地算出的摘要：{digest}")?;
@@ -1262,6 +1323,87 @@ pub async fn seed_check(
 mod tests {
     use super::*;
 
+    fn verified(text: &str) -> Verified {
+        Verified {
+            version: 1,
+            digest_hex: String::new(),
+            trust: Vec::new(),
+            contents: Contents {
+                manifest_text: text.into(),
+                files: BTreeMap::new(),
+            },
+            latest: 1,
+            history: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn sign_diff_never_prints_secret_values() {
+        let old = verified(
+            "version = 1\n[defaults]\nwifi = [{ ssid = \"Staff\", psk = \"oldpass-111\" }, { ssid = \"Lab\", psk = \"labpass-333\" }]\n",
+        );
+        let new = Contents {
+            manifest_text: "version = 2\n[defaults]\nwifi = [{ ssid = \"Staff\", psk = \"newpass-222\" }, { ssid = \"Guest\", psk = \"guestpass-444\" }]\n".into(),
+            files: BTreeMap::new(),
+        };
+        let mut out = Vec::new();
+        let values = print_local_diff(&mut out, &old, 2, &new).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        for v in ["oldpass-111", "newpass-222", "labpass-333", "guestpass-444"] {
+            assert!(!text.contains(v), "{text}");
+        }
+        assert!(
+            text.contains("secret defaults-staff-psk: changed"),
+            "{text}"
+        );
+        assert!(text.contains("secret defaults-guest-psk: added"), "{text}");
+        assert!(text.contains("secret defaults-lab-psk: removed"), "{text}");
+        assert!(text.contains("+version = 2"), "{text}");
+
+        // The server's notes are cleaned with the same values.
+        let p = Pending {
+            pending_id: "p".into(),
+            version: 2,
+            digest_hex: String::new(),
+            manifest_text: String::new(),
+            files: Vec::new(),
+            diff: json!({ "manifest_diff": "-psk = \"oldpass-111\"\n+psk = \"newpass-222\"\n" }),
+            lints: json!([{ "level": "warning", "code": "x", "message": "psk newpass-222 is weak" }]),
+        };
+        let mut out = Vec::new();
+        print_server_notes(&mut out, &p, &values).unwrap();
+        let notes = String::from_utf8(out).unwrap();
+        assert!(
+            !notes.contains("oldpass-111") && !notes.contains("newpass-222"),
+            "{notes}"
+        );
+
+        // A side whose secrets cannot be separated: no text diff at all.
+        let bad = Contents {
+            manifest_text: "version = 2\n[defaults]\nwifi = [{ ssid = \"Staff\", psk = 12345678 }]\n# newpass-222\n".into(),
+            files: BTreeMap::new(),
+        };
+        let mut out = Vec::new();
+        let values = print_local_diff(&mut out, &old, 2, &bad).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(values.is_none());
+        assert!(
+            text.contains("manifest changed (diff hidden: could not separate secrets)"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("oldpass-111") && !text.contains("newpass-222"),
+            "{text}"
+        );
+        let mut out = Vec::new();
+        print_server_notes(&mut out, &p, &values).unwrap();
+        let notes = String::from_utf8(out).unwrap();
+        assert!(
+            !notes.contains("oldpass-111") && !notes.contains("newpass-222"),
+            "{notes}"
+        );
+    }
+
     #[test]
     fn local_diff_escapes_control_chars() {
         let old = Verified {
@@ -1278,7 +1420,9 @@ mod tests {
         let mut files = BTreeMap::new();
         files.insert("files/a\u{1b}[2K\r.txt".to_owned(), b"x".to_vec());
         let new = Contents {
-            manifest_text: "version = 2\n# \u{1b}[1A\u{1b}[2K\r伪造的一行\u{202e}\u{7f}\n".into(),
+            // TOML refuses raw control characters even in comments (such a manifest never reaches
+            // the diff: it is parsed first), so the manifest side carries only a bidi override.
+            manifest_text: "version = 2\n# 伪造的一行\u{202e}\n".into(),
             files,
         };
         let mut out = Vec::new();
@@ -1289,10 +1433,7 @@ mod tests {
                 .any(|c| (c.is_control() && c != '\n') || c == '\u{202e}'),
             "{out:?}"
         );
-        assert!(
-            out.contains("+# \\x1b[1A\\x1b[2K\\r伪造的一行\\u{202e}\\x7f"),
-            "{out}"
-        );
+        assert!(out.contains("+# 伪造的一行\\u{202e}"), "{out}");
         assert!(out.contains("files/a\\x1b[2K\\r.txt"), "{out}");
     }
 }
