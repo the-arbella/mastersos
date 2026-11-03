@@ -1,0 +1,14 @@
+[school]
+id = "{school_id}"
+
+[[config]]
+id = "default"
+name = "Default"
+interface = "learning"
+# Add "sso" once [school].oidc is configured
+login_methods = ["local"]
+
+[[group]]
+id = "default"
+name = "Ungrouped"
+config = "default"

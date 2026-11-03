@@ -13,6 +13,7 @@ use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
+use crate::workdir::{self, Meta, Workdir};
 use crate::{
     call, check_server, connect, draft_rev, serve_stdio, write_manifest, Api, OpError, Req,
 };
@@ -46,6 +47,32 @@ pub struct Cli {
 enum Cmd {
     /// Save --server (and --token-file) to ~/.config/mastersos/config.toml, then test the connection
     Setup,
+    /// Start a local settings directory for a school that has published nothing yet
+    Init {
+        /// The directory to create (it must be empty or not exist)
+        dir: PathBuf,
+    },
+    /// Download the latest published settings (verified against the pinned keys) into a local directory
+    Pull {
+        /// The settings directory (default: the current directory)
+        dir: Option<PathBuf>,
+        /// Pull this published version instead of the latest
+        #[arg(long)]
+        version: Option<u64>,
+        /// Overwrite local changes that are not published
+        #[arg(long)]
+        force: bool,
+    },
+    /// Check the local settings directory the way publishing would (no network)
+    Check {
+        /// The settings directory (default: the current directory)
+        dir: Option<PathBuf>,
+    },
+    /// Show what changed in the local settings directory since the last pull (no network; secrets by name only)
+    Diff {
+        /// The settings directory (default: the current directory)
+        dir: Option<PathBuf>,
+    },
     /// Devices and their latest reports
     #[command(subcommand)]
     Devices(DevicesCmd),
@@ -361,6 +388,12 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         // Before the config file is read: setup is how a broken one gets rewritten.
         return setup(server, token_file).await;
     }
+    // Offline commands: no server address, no token.
+    match &cmd {
+        Cmd::Check { dir } => return local_check(dir.as_deref(), json),
+        Cmd::Diff { dir } => return local_diff(dir.as_deref()),
+        _ => {}
+    }
     // Refuse a Wi-Fi secret flag before the config, the token or the network is touched.
     if let Cmd::School(SchoolCmd::Wifi { .. }) = &cmd {
         return Err(OpError::Failed(
@@ -401,7 +434,18 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         .map_err(|e| OpError::Failed(e.to_string()))?;
     let out = Out { json };
     match cmd {
-        Cmd::Setup | Cmd::Mcp => unreachable!("handled above"),
+        Cmd::Setup | Cmd::Mcp | Cmd::Check { .. } | Cmd::Diff { .. } => {
+            unreachable!("handled above")
+        }
+        Cmd::Init { dir } => init_dir(&api, &server, &token_file, &dir).await,
+        Cmd::Pull {
+            dir,
+            version,
+            force,
+        } => {
+            let dir = dir.unwrap_or_else(|| PathBuf::from("."));
+            pull_dir(&api, &server, &token_file, &dir, version, force).await
+        }
         Cmd::Devices(c) => devices(&api, &out, c).await,
         Cmd::Draft(c) => draft(&api, &out, c).await,
         Cmd::Config(c) => config(&api, &out, c).await,
@@ -1235,6 +1279,162 @@ fn table(headers: &[&str], rows: Vec<Vec<String>>) -> String {
             .map(|r| line(r.iter().map(String::as_str).collect())),
     );
     out.join("\n")
+}
+
+fn fail(e: impl std::fmt::Display) -> OpError {
+    OpError::Failed(format!("{e:#}"))
+}
+
+fn open_dir(dir: Option<&Path>) -> Result<Workdir, OpError> {
+    Workdir::open(dir.unwrap_or_else(|| Path::new("."))).map_err(fail)
+}
+
+/// `mastersos check`: the lints of the local directory; exit code 2 when any is an error.
+fn local_check(dir: Option<&Path>, json: bool) -> Result<ExitCode, OpError> {
+    let lints = workdir::check(&open_dir(dir)?).map_err(fail)?;
+    let issues: Vec<Value> = lints
+        .iter()
+        .map(|l| serde_json::to_value(l).unwrap_or(Value::Null))
+        .collect();
+    if json {
+        println!("{}", Value::Array(issues));
+    } else {
+        print_issues(&issues);
+    }
+    Ok(if mastersos_bundle::has_errors(&lints) {
+        ExitCode::from(2)
+    } else {
+        ExitCode::SUCCESS
+    })
+}
+
+/// `mastersos diff`.
+fn local_diff(dir: Option<&Path>) -> Result<ExitCode, OpError> {
+    print!("{}", workdir::diff(&open_dir(dir)?).map_err(fail)?);
+    Ok(ExitCode::SUCCESS)
+}
+
+/// The school id the server says this token belongs to.
+async fn school_id(api: &Api) -> Result<String, OpError> {
+    let text = api.send(Req::get(&["v1", "auth", "config"])).await?;
+    let v: Value = serde_json::from_str(&text).map_err(fail)?;
+    v["school_id"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| OpError::Failed("the server did not say which school this is".into()))
+}
+
+fn sign_api(server: &str, token_file: &Path) -> Result<mastersos_sign::Api, OpError> {
+    mastersos_sign::Api::from_token_file(server, token_file).map_err(fail)
+}
+
+/// `mastersos init <dir>`.
+async fn init_dir(
+    api: &Api,
+    server: &str,
+    token_file: &Path,
+    dir: &Path,
+) -> Result<ExitCode, OpError> {
+    let id = school_id(api).await?;
+    let latest = sign_api(server, token_file)?
+        .latest_version()
+        .await
+        .map_err(fail)?;
+    if latest > 0 {
+        return Err(OpError::Failed(format!(
+            "the school already has published settings (version {latest}): use `mastersos pull {}`",
+            dir.display()
+        )));
+    }
+    let meta = Meta {
+        server: server.to_owned(),
+        school_id: id.clone(),
+        base_version: 0,
+    };
+    Workdir::init(dir, meta, &workdir::template(&id).map_err(fail)?).map_err(fail)?;
+    println!(
+        "Created {} for school {id}. Edit manifest.toml, then run `mastersos check`.",
+        dir.display()
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `mastersos pull`: the chain is verified from the pin first; a given `--version` is then read
+/// from its own archive and must have been signed with the keys it lists itself.
+async fn pull_dir(
+    api: &Api,
+    server: &str,
+    token_file: &Path,
+    dir: &Path,
+    version: Option<u64>,
+    force: bool,
+) -> Result<ExitCode, OpError> {
+    let id = school_id(api).await?;
+    if let Ok(w) = Workdir::open(dir) {
+        let m = w.meta().map_err(fail)?;
+        if m.school_id != id || m.server != server {
+            return Err(OpError::Failed(format!(
+                "{} belongs to school {} on {}, not to {id} on {server}",
+                dir.display(),
+                m.school_id,
+                m.server
+            )));
+        }
+    }
+    let sign = sign_api(server, token_file)?;
+    let pins = config_dir()?.join("pins");
+    let verified = mastersos_sign::chain::verify_chain(
+        &sign,
+        &pins,
+        &mut std::io::stdin().lock(),
+        &mut std::io::stdout(),
+    )
+    .await
+    .map_err(fail)?;
+    let (n, contents) = match version {
+        None => (verified.version, verified.contents),
+        Some(n) if n == verified.version => (n, verified.contents),
+        Some(n) => {
+            if n == 0 || n > verified.latest {
+                return Err(OpError::Failed(format!(
+                    "version {n} does not exist: the newest published version is {}",
+                    verified.latest
+                )));
+            }
+            let archive = sign.version_archive(n).await.map_err(fail)?;
+            (n, open_version(&archive, n).map_err(fail)?)
+        }
+    };
+    let meta = Meta {
+        server: server.to_owned(),
+        school_id: id,
+        base_version: n,
+    };
+    Workdir::write_pulled(dir, meta, &contents, force).map_err(fail)?;
+    println!("Pulled version {n} into {}.", dir.display());
+    Ok(ExitCode::SUCCESS)
+}
+
+/// An old version's contents, after its signature is checked against the keys the version lists.
+fn open_version(archive: &[u8], n: u64) -> anyhow::Result<mastersos_bundle::Contents> {
+    use anyhow::Context as _;
+    let unpacked = mastersos_bundle::read_archive(archive).context("the archive cannot be read")?;
+    let sig: mastersos_bundle::SignatureFile =
+        toml::from_str(&unpacked.signature_toml).context("the signature file is not valid")?;
+    let manifest = mastersos_bundle::Manifest::parse(&unpacked.contents.manifest_text)
+        .context("the manifest cannot be read")?;
+    mastersos_bundle::verify_signature(
+        &mastersos_bundle::signed_message(&unpacked.contents),
+        &sig,
+        &manifest.trust,
+    )
+    .context("the signature does not match the keys the version lists")?;
+    anyhow::ensure!(
+        manifest.version == n,
+        "the archive holds version {}, not {n}",
+        manifest.version
+    );
+    Ok(unpacked.contents)
 }
 
 /// Issues for people: one per line (level, code, where, message), then a count.

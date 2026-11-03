@@ -17,6 +17,7 @@
 
 pub mod cli;
 pub mod tools;
+pub mod workdir;
 
 use std::borrow::Cow;
 use std::path::Path;

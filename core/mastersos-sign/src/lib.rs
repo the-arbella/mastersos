@@ -216,7 +216,7 @@ impl Api {
     }
 
     /// 已发布的最新版本号；还没发布过时是 0。
-    pub(crate) async fn latest_version(&self) -> Result<u64> {
+    pub async fn latest_version(&self) -> Result<u64> {
         #[derive(Deserialize)]
         struct V {
             version: u64,
@@ -228,7 +228,7 @@ impl Api {
     }
 
     /// 第 `v` 版的原始签名包。
-    pub(crate) async fn version_archive(&self, v: u64) -> Result<Vec<u8>> {
+    pub async fn version_archive(&self, v: u64) -> Result<Vec<u8>> {
         let vs = v.to_string();
         self.get_bytes(
             &["v1", "admin", "versions", &vs, "archive"],
