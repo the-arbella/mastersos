@@ -141,6 +141,7 @@ export default class MastersosLoginExtension extends Extension {
         this._more = false;
         this._sel = -1;
         this._picked = null;
+        this._dismissed = false;
         this._pollId = 0;
         this._domains = [];
         this._closeId = 0;
@@ -674,6 +675,7 @@ export default class MastersosLoginExtension extends Extension {
                 }
                 if (this._menu && !t.endsWith('@'))
                     this._scheduleClose();
+                this._dismissed = false;
                 if (this._atUsernameStep(entry))
                     this._showMatches(t);
                 else
@@ -696,6 +698,7 @@ export default class MastersosLoginExtension extends Extension {
             }
             if (key === Clutter.KEY_Escape) {
                 this._hideMatches();
+                this._dismissed = true;
                 return Clutter.EVENT_STOP;
             }
             return Clutter.EVENT_PROPAGATE;
@@ -735,9 +738,14 @@ export default class MastersosLoginExtension extends Extension {
     }
 
     // The person Enter takes when none was chosen with the arrow keys or the mouse, worked out from the text itself.
+    // Never a different account than the text names: not after Escape put the list away, and not when the text is
+    // exactly an account of this computer (hidden ones such as itadmin and guest included).
     _defaultPick(typed) {
-        if (this._sel >= 0 || this._matchBox?.visible)
+        if (this._dismissed || this._sel >= 0 || this._matchBox?.visible)
             return null; // the list was shown and nobody is chosen in it: Enter means what was typed
+        const name = typed.trim();
+        if (this._dialog?._userManager?.list_users().some(u => u.get_user_name() === name))
+            return null;
         const found = matchPeople(this._people(), typed);
         const i = preselect(typed, found.shown);
         return i >= 0 ? found.shown[i].userName : null;
@@ -774,6 +782,7 @@ export default class MastersosLoginExtension extends Extension {
     }
 
     _hideMatches() {
+        this._dismissed = false;
         this._shown = [];
         this._more = false;
         this._sel = -1;
