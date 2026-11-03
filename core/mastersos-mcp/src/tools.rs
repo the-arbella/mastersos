@@ -520,6 +520,26 @@ mod tests {
     }
 
     #[test]
+    fn tampered_base_error_shows_no_digest() {
+        // A digest of the filled base would let a weak password be guessed offline.
+        let t = tempfile::tempdir().unwrap();
+        let w = pulled(&t.path().join("school"));
+        let base = w.root.join(".mastersos/base/manifest.toml");
+        let text = std::fs::read_to_string(&base).unwrap();
+        std::fs::write(&base, format!("{text}# changed\n")).unwrap();
+        for tool in ["check", "diff"] {
+            let e = run(&w, tool).unwrap_err();
+            assert!(e.contains("mastersos pull --force"), "{e}");
+            let longest_hex = e
+                .split(|c: char| !c.is_ascii_hexdigit())
+                .map(str::len)
+                .max()
+                .unwrap_or(0);
+            assert!(longest_hex < 64, "{e}");
+        }
+    }
+
+    #[test]
     fn no_tool_can_approve_a_reroute() {
         // Only IT approves a rerouted secret (`mastersos publish --allow-reroute`): no tool
         // publishes, and no tool's parameters mention an approval.

@@ -334,32 +334,65 @@ pub fn fill(manifest_text: &str, secrets: &BTreeMap<String, String>) -> Result<S
     })
 }
 
-/// One place a reference is used: layer, ssid, referencing field and the routing fields.
+/// Where a secret field sends its value: layer, ssid, the field and the routing fields.
 type Occurrence = Vec<(&'static str, Option<String>)>;
 
-/// For each reference name in the text, every place that uses it.
-fn occurrences(doc: &mut DocumentMut) -> BTreeMap<String, Vec<Occurrence>> {
-    let mut out: BTreeMap<String, Vec<Occurrence>> = BTreeMap::new();
+/// The SHA-256 of a secret value. Not `Debug`, never printed: it would let a weak password be
+/// guessed offline.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct ValueHash([u8; 32]);
+
+impl ValueHash {
+    fn of(value: &str) -> ValueHash {
+        use sha2::Digest as _;
+        ValueHash(sha2::Sha256::digest(value.as_bytes()).into())
+    }
+}
+
+/// One secret field in use.
+struct Use {
+    /// The reference name; `None` for a value written in place (as in a published version).
+    name: Option<String>,
+    value: ValueHash,
+    route: Occurrence,
+}
+
+/// A field's text: the string itself, or the TOML of another value.
+fn text_of(item: &Item) -> String {
+    item.as_str()
+        .map(str::to_owned)
+        .unwrap_or_else(|| item.to_string().trim().to_owned())
+}
+
+/// Every secret field with a value: a reference is filled from `secrets` (an unknown one is
+/// skipped: `secret_unknown` reports it), a value written in place is taken as it is.
+fn uses(doc: &mut DocumentMut, secrets: &BTreeMap<String, String>) -> Vec<Use> {
+    let mut out = Vec::new();
     walk(
         doc,
         &mut |kind, layer, t| {
             for field in secret_fields(kind) {
-                if let Some(name) = t.get(field).and_then(reference) {
-                    let mut occ: Occurrence = vec![
-                        ("layer", Some(layer.to_owned())),
-                        (
-                            "ssid",
-                            t.get("ssid").map(|i| i.to_string().trim().to_owned()),
-                        ),
-                        ("field", Some((*field).to_owned())),
-                    ];
-                    occ.extend(
-                        ROUTING_FIELDS
-                            .iter()
-                            .map(|f| (*f, t.get(f).map(|i| i.to_string().trim().to_owned()))),
-                    );
-                    out.entry(name.to_owned()).or_default().push(occ);
-                }
+                let Some(text) = t.get(field).and_then(Item::as_str) else {
+                    continue;
+                };
+                let (name, value) = match text.strip_prefix(PREFIX) {
+                    Some(n) => match secrets.get(n) {
+                        Some(v) => (Some(n.to_owned()), v.as_str()),
+                        None => continue,
+                    },
+                    None => (None, text),
+                };
+                let mut route: Occurrence = vec![
+                    ("layer", Some(layer.to_owned())),
+                    ("ssid", t.get("ssid").map(text_of)),
+                    ("field", Some((*field).to_owned())),
+                ];
+                route.extend(ROUTING_FIELDS.iter().map(|f| (*f, t.get(f).map(text_of))));
+                out.push(Use {
+                    name,
+                    value: ValueHash::of(value),
+                    route,
+                });
             }
         },
         &mut |_| {},
@@ -368,17 +401,28 @@ fn occurrences(doc: &mut DocumentMut) -> BTreeMap<String, Vec<Occurrence>> {
 }
 
 /// `secret_unknown` (error): a reference with no entry in `secrets`. `secret_unused` (warning):
-/// an entry nothing refers to. `secret_rerouted` (warning): a referenced secret's network changed
-/// its layer, `ssid`, field or a routing field (`eap`, `server_domain`, ...) since `base_text`,
-/// or a name the base never referenced is referenced now (whether or not `secrets.toml` already
-/// held a value for it). Without a base (the first version) nothing is rerouted. It stays a
-/// warning (the settings are valid), but `mastersos publish` refuses while one exists unless IT
-/// approves that secret by name ([`unapproved_reroutes`]). Text that does not parse gives no
-/// lints here; the syntax check reports it.
+/// an entry nothing refers to. Both go by name.
+///
+/// `secret_rerouted` (warning) goes by value, against `base_filled`: the published version with
+/// its secret values in (the caller has checked it is the version this computer verified). Each
+/// secret field of `manifest_text` that is a reference with a value in `secrets` has a value v
+/// and a route t (layer, `ssid`, the field, and `eap`, `phase2`, `identity`,
+/// `anonymous_identity`, `server_domain`, `ca_cert`, `check_server`):
+///
+/// - v was in the base under t: fine;
+/// - v was in the base, only under other routes: rerouted (an existing secret goes somewhere new);
+/// - v was not in the base, but t was (with any value): fine, a password change;
+/// - v was not in the base and neither was t: rerouted (a new network).
+///
+/// The lint names the working copy's reference, which `--allow-reroute` takes. Values are
+/// compared as SHA-256 hashes and never leave this function. Without a base (the first version)
+/// nothing is rerouted. It stays a warning (the settings are valid), but `mastersos publish`
+/// refuses while one exists unless IT approves that secret by name ([`unapproved_reroutes`]).
+/// Text that does not parse gives no lints here; the syntax check reports it.
 pub fn lints(
     manifest_text: &str,
     secrets: &BTreeMap<String, String>,
-    base_text: Option<&str>,
+    base_filled: Option<&str>,
 ) -> Vec<Lint> {
     let Ok(mut doc) = manifest_text.parse::<DocumentMut>() else {
         return Vec::new();
@@ -409,54 +453,64 @@ pub fn lints(
             .param("name", name),
         );
     }
-    if let Some(mut base) = base_text.and_then(|b| b.parse::<DocumentMut>().ok()) {
-        let before = occurrences(&mut base);
-        for (name, now) in occurrences(&mut doc) {
-            let Some(was) = before.get(&name) else {
-                // The published version never sent this secret anywhere: a value already in
-                // secrets.toml (a stale entry) or a new one now reaches a network IT has not
-                // approved. Only a directory with no published base (the first version) is free.
-                out.push(
+    if let Some(mut base) = base_filled.and_then(|b| b.parse::<DocumentMut>().ok()) {
+        // By value, never by name: the base's reference names live in a file anyone can edit,
+        // but the filled base is the published version (its digest is checked against the pin).
+        let before = uses(&mut base, &BTreeMap::new());
+        let mut routes_of: BTreeMap<&ValueHash, Vec<&Occurrence>> = BTreeMap::new();
+        for u in &before {
+            routes_of.entry(&u.value).or_default().push(&u.route);
+        }
+        let known: BTreeSet<&Occurrence> = before.iter().map(|u| &u.route).collect();
+        for u in uses(&mut doc, secrets) {
+            let Some(name) = u.name else {
+                continue;
+            };
+            match routes_of.get(&u.value) {
+                // The same value where the base sent it.
+                Some(was) if was.contains(&&u.route) => {}
+                // A value the base sent elsewhere now goes here.
+                Some(was) => {
+                    // Report the differences against the closest place the base used it.
+                    let changed: Vec<&str> = was
+                        .iter()
+                        .map(|w| {
+                            u.route
+                                .iter()
+                                .zip(w.iter())
+                                .filter(|(a, b)| a.1 != b.1)
+                                .map(|(a, _)| a.0)
+                                .collect::<Vec<_>>()
+                        })
+                        .min_by_key(Vec::len)
+                        .unwrap_or_default();
+                    out.push(
+                        Lint::new(
+                            LintLevel::Warning,
+                            "secret_rerouted",
+                            format!(
+                                "Secret \"{name}\" was sent to another network in the published version; here {} differ, so it would be sent somewhere new. `mastersos publish` refuses this until IT checks `mastersos diff`, confirms the secret belongs there and passes --allow-reroute {name}.",
+                                changed.join(", ")
+                            ),
+                        )
+                        .param("name", &name)
+                        .param("fields", changed.join(", ")),
+                    );
+                }
+                // A value the base never had, on a network the base had: a password change.
+                None if known.contains(&u.route) => {}
+                // A value the base never had, on a network the base did not have.
+                None => out.push(
                     Lint::new(
                         LintLevel::Warning,
                         "secret_rerouted",
                         format!(
-                            "Secret \"{name}\" is used by a network it was not used by in the published version, so it would be sent somewhere new. `mastersos publish` refuses this until IT checks `mastersos diff` and passes --allow-reroute {name}."
+                            "Secret \"{name}\" goes to a network the published version did not have, so it would be sent somewhere new. `mastersos publish` refuses this until IT checks `mastersos diff` and passes --allow-reroute {name}."
                         ),
                     )
                     .param("name", &name)
                     .param("fields", "new network"),
-                );
-                continue;
-            };
-            for occ in &now {
-                if was.contains(occ) {
-                    continue;
-                }
-                // Report the differences against the closest place the base used it.
-                let changed: Vec<&str> = was
-                    .iter()
-                    .map(|w| {
-                        occ.iter()
-                            .zip(w)
-                            .filter(|(a, b)| a.1 != b.1)
-                            .map(|(a, _)| a.0)
-                            .collect::<Vec<_>>()
-                    })
-                    .min_by_key(Vec::len)
-                    .unwrap_or_default();
-                out.push(
-                    Lint::new(
-                        LintLevel::Warning,
-                        "secret_rerouted",
-                        format!(
-                            "The network using secret \"{name}\" changed {}, so the secret would be sent somewhere new. `mastersos publish` refuses this until IT checks `mastersos diff`, confirms the secret still belongs there and passes --allow-reroute {name}.",
-                            changed.join(", ")
-                        ),
-                    )
-                    .param("name", &name)
-                    .param("fields", changed.join(", ")),
-                );
+                ),
             }
         }
     }
@@ -551,10 +605,10 @@ password = "eappass"
     #[test]
     fn lints_unused_and_rerouted() {
         let (text, mut secrets) = split(SAMPLE).unwrap();
-        assert!(lints(&text, &secrets, Some(&text)).is_empty());
+        assert!(lints(&text, &secrets, Some(SAMPLE)).is_empty());
         secrets.insert("extra".into(), "x".into());
         let now = text.replace("a.example", "b.example");
-        let l = lints(&now, &secrets, Some(&text));
+        let l = lints(&now, &secrets, Some(SAMPLE));
         assert_eq!(codes(&l), ["secret_unused", "secret_rerouted"]);
         assert_eq!(l[1].level, LintLevel::Warning);
         assert_eq!(l[1].params["fields"], "server_domain");
@@ -644,7 +698,7 @@ password = "eappass"
     fn rerouted_when_second_network_reuses_secret() {
         let (base, secrets) = split(SAMPLE).unwrap();
         let now = format!("{base}\n[[config]]\nid = \"evil\"\nwifi = [{{ ssid = \"Evil\", psk = \"secret:defaults-guest-psk\" }}]\n");
-        let l = lints(&now, &secrets, Some(&base));
+        let l = lints(&now, &secrets, Some(SAMPLE));
         assert_eq!(codes(&l), ["secret_rerouted"], "{l:?}");
     }
 
@@ -652,7 +706,7 @@ password = "eappass"
     fn rerouted_when_ssid_changes() {
         let (base, secrets) = split(SAMPLE).unwrap();
         let now = base.replace("\"Guest\"", "\"Other\"");
-        let l = lints(&now, &secrets, Some(&base));
+        let l = lints(&now, &secrets, Some(SAMPLE));
         assert_eq!(codes(&l), ["secret_rerouted"], "{l:?}");
         assert_eq!(l[0].params["fields"], "ssid");
         let moved = base.replace(
@@ -660,7 +714,7 @@ password = "eappass"
             "password = \"secret:defaults-guest-psk\"",
         );
         assert_eq!(
-            codes(&lints(&moved, &secrets, Some(&base))),
+            codes(&lints(&moved, &secrets, Some(SAMPLE))),
             ["secret_rerouted"]
         );
     }
@@ -671,7 +725,7 @@ password = "eappass"
         let now = base
             .replace("a.example", "b.example")
             .replace("\"Guest\"", "\"Other\"");
-        let l = lints(&now, &secrets, Some(&base));
+        let l = lints(&now, &secrets, Some(SAMPLE));
         assert_eq!(codes(&l), ["secret_rerouted", "secret_rerouted"], "{l:?}");
         assert!(l[0].message.contains("--allow-reroute"), "{}", l[0].message);
         let all = ["defaults-guest-psk", "lab-corp-password"];
@@ -685,7 +739,7 @@ password = "eappass"
         assert_eq!(unapproved_reroutes(&l, &["nope".into()]), all);
         let both: Vec<String> = all.iter().map(|s| s.to_string()).collect();
         assert!(unapproved_reroutes(&l, &both).is_empty());
-        assert!(unapproved_reroutes(&lints(&base, &secrets, Some(&base)), &[]).is_empty());
+        assert!(unapproved_reroutes(&lints(&base, &secrets, Some(SAMPLE)), &[]).is_empty());
     }
 
     #[test]
@@ -695,7 +749,7 @@ password = "eappass"
         let (base, mut secrets) = split(SAMPLE).unwrap();
         secrets.insert("old-corp".into(), "oldpass".into());
         let now = format!("{base}\n[[config]]\nid = \"evil\"\n[[config.wifi]]\nssid = \"Corp\"\neap = \"peap\"\nserver_domain = \"evil.example\"\npassword = \"secret:old-corp\"\n");
-        let l = lints(&now, &secrets, Some(&base));
+        let l = lints(&now, &secrets, Some(SAMPLE));
         assert_eq!(codes(&l), ["secret_rerouted"], "{l:?}");
         assert_eq!(l[0].params["name"], "old-corp");
         assert_eq!(unapproved_reroutes(&l, &[]), ["old-corp"]);
@@ -706,7 +760,7 @@ password = "eappass"
         let (base, mut secrets) = split(SAMPLE).unwrap();
         let now = format!("{base}\n[[config]]\nid = \"lab2\"\nwifi = [{{ ssid = \"Lab2\", psk = \"secret:lab2-psk\" }}]\n");
         secrets.insert("lab2-psk".into(), "lab2pass".into());
-        let l = lints(&now, &secrets, Some(&base));
+        let l = lints(&now, &secrets, Some(SAMPLE));
         assert_eq!(codes(&l), ["secret_rerouted"], "{l:?}");
         assert_eq!(unapproved_reroutes(&l, &[]), ["lab2-psk"]);
         assert!(unapproved_reroutes(&l, &["lab2-psk".into()]).is_empty());
@@ -715,8 +769,58 @@ password = "eappass"
     }
 
     #[test]
+    fn reroute_goes_by_value_not_by_name() {
+        // The working copy may name its references anything: a reference whose value the
+        // published version sent to Guest now on Corp is rerouted, whatever its name says.
+        let (base, mut secrets) = split(SAMPLE).unwrap();
+        secrets.insert("lab-corp-password".into(), "guestpass".into());
+        let l = lints(&base, &secrets, Some(SAMPLE));
+        assert_eq!(codes(&l), ["secret_rerouted"], "{l:?}");
+        assert_eq!(l[0].params["name"], "lab-corp-password");
+        // Two references swapped consistently with their values: both values move.
+        let (base, mut secrets) = split(SAMPLE).unwrap();
+        secrets.insert("lab-corp-password".into(), "guestpass".into());
+        secrets.insert("defaults-guest-psk".into(), "eappass".into());
+        let l = lints(&base, &secrets, Some(SAMPLE));
+        assert_eq!(
+            unapproved_reroutes(&l, &[]),
+            ["defaults-guest-psk", "lab-corp-password"]
+        );
+        // No message or param holds a value.
+        for x in &l {
+            let all = format!("{} {:?}", x.message, x.params);
+            assert!(
+                !all.contains("guestpass") && !all.contains("eappass"),
+                "{all}"
+            );
+        }
+    }
+
+    #[test]
+    fn password_change_on_the_same_network_is_not_a_reroute() {
+        let (base, mut secrets) = split(SAMPLE).unwrap();
+        secrets.insert("lab-corp-password".into(), "a-new-password".into());
+        assert!(lints(&base, &secrets, Some(SAMPLE)).is_empty());
+        // Renamed in the working copy, same value, same network: not a reroute either.
+        let renamed = base.replace("secret:defaults-guest-psk", "secret:guest");
+        let v = secrets.remove("defaults-guest-psk").unwrap();
+        secrets.insert("guest".into(), v);
+        assert!(lints(&renamed, &secrets, Some(SAMPLE)).is_empty());
+    }
+
+    #[test]
+    fn existing_value_moved_to_another_existing_network_is_rerouted() {
+        // Corp existed in the base, but with another value: Guest's password now goes there.
+        let (base, mut secrets) = split(SAMPLE).unwrap();
+        secrets.insert("lab-corp-password".into(), "guestpass".into());
+        let l = lints(&base, &secrets, Some(SAMPLE));
+        assert_eq!(codes(&l), ["secret_rerouted"]);
+        assert_ne!(l[0].params["fields"], "new network");
+    }
+
+    #[test]
     fn not_rerouted_when_unchanged() {
         let (base, secrets) = split(SAMPLE).unwrap();
-        assert!(lints(&base, &secrets, Some(&base)).is_empty());
+        assert!(lints(&base, &secrets, Some(SAMPLE)).is_empty());
     }
 }

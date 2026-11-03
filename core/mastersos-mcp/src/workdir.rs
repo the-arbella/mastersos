@@ -372,7 +372,7 @@ impl Workdir {
         match mastersos_sign::chain::recorded_digest(pins, &meta.server, v)? {
             Some(d) if d.eq_ignore_ascii_case(&digest) => Ok(()),
             Some(_) => bail!(
-                "The base differs from version {v} as this computer verified it (digest {digest}): {fix}"
+                "The base differs from version {v} as this computer verified it: {fix}"
             ),
             None => bail!(
                 "Version {v} was never verified on this computer (no record in the pins under {}), so the base cannot be trusted: {fix}",
@@ -624,7 +624,16 @@ pub fn check_snapshot(w: &Workdir, cur: &Snapshot) -> Result<Vec<Lint>> {
 fn check_at(w: &Workdir, cur: &Snapshot, today: chrono::NaiveDate) -> Result<Vec<Lint>> {
     w.verify_base()?;
     let base = read_snapshot(&w.base_dir())?;
-    let base_text = (!base.manifest.is_empty()).then_some(base.manifest.as_str());
+    // The base as published, secrets filled in: reroutes are judged by value against it, never
+    // by the base's reference names (verify_base checked its digest, not its names).
+    let base_filled = if base.manifest.is_empty() {
+        None
+    } else {
+        Some(
+            secret_ref::fill(&base.manifest, &base.secrets)
+                .map_err(|_| anyhow::anyhow!("the base refers to secrets it does not hold"))?,
+        )
+    };
     let present: BTreeSet<String> = cur.files.keys().cloned().collect();
 
     let mut out: Vec<Lint> = Vec::new();
@@ -640,7 +649,7 @@ fn check_at(w: &Workdir, cur: &Snapshot, today: chrono::NaiveDate) -> Result<Vec
             }
         }
     }
-    for l in secret_ref::lints(&cur.manifest, &cur.secrets, base_text) {
+    for l in secret_ref::lints(&cur.manifest, &cur.secrets, base_filled.as_deref()) {
         if !out.contains(&l) {
             out.push(l);
         }
@@ -1046,6 +1055,50 @@ mod tests {
         let w = pulled(&t.path().join("school"));
         fs::write(w.base_dir().join("files/a.txt"), "other").unwrap();
         base_refused(&w);
+    }
+
+    #[test]
+    fn base_names_swapped_with_their_values_do_not_approve_a_reroute() {
+        let text = SAMPLE.replace(
+            "wifi = [{ ssid = \"Guest\", psk = \"guestpass1\" }]",
+            "wifi = [{ ssid = \"Guest\", psk = \"guestpass1\" }, { ssid = \"Lobby\", psk = \"lobbypass1\" }]",
+        );
+        let c = Contents {
+            manifest_text: text,
+            files: contents().files,
+        };
+        let t = tempfile::tempdir().unwrap();
+        let w = Workdir::write_pulled(&t.path().join("school"), meta(3), &c, false)
+            .unwrap()
+            .pinned();
+        // The base is rewritten so that it claims Lobby's secret name was Guest's, with the
+        // values swapped to match: the filled base, and so its digest, is unchanged.
+        let b = w.base_dir();
+        let m = fs::read_to_string(b.join(MANIFEST))
+            .unwrap()
+            .replace("secret:defaults-guest-psk", "secret:SWAP")
+            .replace("secret:defaults-lobby-psk", "secret:defaults-guest-psk")
+            .replace("secret:SWAP", "secret:defaults-lobby-psk");
+        fs::write(b.join(MANIFEST), m).unwrap();
+        fs::write(
+            b.join(SECRETS),
+            "defaults-guest-psk = \"lobbypass1\"\ndefaults-lobby-psk = \"guestpass1\"\n",
+        )
+        .unwrap();
+        w.verify_base().unwrap();
+        // The working copy now sends Lobby's password to Guest.
+        let cur = w.manifest().unwrap().replacen(
+            "secret:defaults-guest-psk",
+            "secret:defaults-lobby-psk",
+            1,
+        );
+        fs::write(w.root.join(MANIFEST), cur).unwrap();
+        let lints = check(&w).unwrap();
+        assert_eq!(
+            secret_ref::unapproved_reroutes(&lints, &[]),
+            ["defaults-lobby-psk"],
+            "{lints:?}"
+        );
     }
 
     #[test]

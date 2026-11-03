@@ -3131,7 +3131,7 @@ config = "standard"
 
 ### `secret_rerouted`
 
-**Level:** warning; `mastersos publish` refuses it. **Meaning:** a network that uses a `secret:` reference changed its layer, `ssid`, secret field, `eap`, `phase2`, `identity`, `anonymous_identity`, `server_domain`, `ca_cert` or `check_server` since the pull, or uses a secret the pulled Version used nowhere (a new or leftover one).
+**Level:** warning; `mastersos publish` refuses it. **Meaning:** a secret value goes where the pulled Version did not send it: another layer, `ssid`, secret field, `eap`, `phase2`, `identity`, `anonymous_identity`, `server_domain`, `ca_cert` or `check_server`, or a new network. Compared by value, so renaming a reference changes nothing; a new password on the same network is fine.
 
 <!-- prompt:omit -->
 **Why:** these fields decide where the secret is sent; pointing a saved password at a different network or server would hand it over.

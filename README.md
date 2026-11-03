@@ -83,8 +83,9 @@ mastersos setup --server https://mastersos.school.ac.th --token-file /path/to/it
 - 秘密（Wi-Fi 的 `psk`、`password`、`client_key`、`client_key_password`，IT 账号的 `password_hash`）在 `manifest.toml` 里是 `secret:<名字>` 引用。
   `check`：引用了不存在的秘密是错误（`secret_unknown`）；没人用的秘密是警告；引用秘密的网络换了层、换了 `ssid`、秘密换了字段，
   或改了 `eap`、`phase2`、`identity`、`anonymous_identity`、`server_domain`、`ca_cert`、`check_server` 任一，警告 `secret_rerouted`
-  （密码会被发到新的地方）。已发布的版本有内容时，一个它没用过的秘密名被新网络引用也算改道：不论 `secrets.toml` 里是早就留着的旧值
-  还是这次新加的值，第一次送到任何网络都要 IT 同意（只有还没发布过的第一版不算）。`check` 末尾醒目列出这些秘密，
+  （密码会被发到新的地方）。改道按值判断，对照已验证的 base（秘密填回后的已发布版本），不信本地的引用名：一个值在 base 里送到过这个网络（同一组
+  层、`ssid`、字段与上面那些字段）就没事；送到过、但只在别的网络，算改道；base 里没有这个值、但有这个网络，是改密码，没事；
+  值和网络都是 base 里没有的（新网络），算改道。只有还没发布过的第一版不比。`check` 末尾醒目列出这些秘密，
   `--json` 的结果里是 `rerouted_secrets`（与 MCP 的 `check` 同一形状）。`publish` 遇到它就拒绝、什么都不上传，除非 IT 先跑
   `mastersos diff` 核对，再对每个改道的秘密都给 `--allow-reroute <名字>`（可重复；给错名字不算），
   例如 `mastersos publish ./school --kit school.kit --allow-reroute lab-corp-password`。

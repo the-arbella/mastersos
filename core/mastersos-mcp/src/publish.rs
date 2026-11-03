@@ -1177,6 +1177,7 @@ mod tests {
         Workdir::init(dir, meta, &manifest_trusting(&tk.id, &tk.public_key)).unwrap()
     }
 
+    /// Publish with `kit` (a kit or a key file) and the confirmations in `confirm`.
     async fn publish_with_kit(
         s: &MockServer,
         w: &Workdir,
@@ -1293,6 +1294,53 @@ mod tests {
         assert_eq!(body["signature"]["key_id"], kit.key_id());
         // The kit text never reaches the output.
         assert!(!out.contains(kit.to_display().as_str()), "{out}");
+    }
+
+    #[tokio::test]
+    async fn key_file_publish_leaves_a_base_that_matches_the_pin() {
+        let s = server().await;
+        let t = tempfile::tempdir().unwrap();
+        let key = t.path().join("rk.pem");
+        let tk = mastersos_sign::keygen(&key).unwrap().trust_key;
+        let pending = Pending::default();
+        for (m, p) in [
+            ("POST", "/v1/admin/publish/pending"),
+            ("GET", "/v1/admin/publish/pending/p-1"),
+        ] {
+            Mock::given(method(m))
+                .and(path(p))
+                .respond_with(pending.clone())
+                .mount(&s)
+                .await;
+        }
+        Mock::given(method("GET"))
+            .and(path("/v1/admin/versions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .mount(&s)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/admin/publish/pending/p-1/commit"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "version": 1 })))
+            .mount(&s)
+            .await;
+        let meta = Meta {
+            server: s.uri(),
+            school_id: SID.into(),
+            base_version: 0,
+        };
+        let w = Workdir::init(
+            &t.path().join("school"),
+            meta,
+            &manifest_trusting(&tk.id, &tk.public_key),
+        )
+        .unwrap();
+        let key = SignWith::key_file(&key).unwrap();
+        let (r, out) = publish_with_kit(&s, &w, key, t.path(), "1\ntrust\n").await;
+        assert_eq!(r.unwrap(), PublishOutcome::Published(1), "{out}");
+        let w = w.with_pins(t.path().join("pins"));
+        w.verify_base().unwrap();
+        assert!(!w.is_dirty().unwrap());
+        workdir::check(&w).unwrap();
     }
 
     #[tokio::test]
