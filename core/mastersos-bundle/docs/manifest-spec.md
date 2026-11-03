@@ -63,7 +63,8 @@ Some keys are written for you; do not write them by hand:
 3. otherwise the Group with id `default`. There must always be exactly one `default` Group.
 
 The Device then applies the Config its Group names. New Devices therefore start in `default`; move
-them into their Group with `[[device]]` entries (the Devices page writes them).
+them into their Group with `[[device]]` entries, written in `manifest.toml` like any other setting
+(`mastersos devices list` shows each Device's serial number).
 
 ### The installer seed
 
@@ -3898,8 +3899,8 @@ config = "student"
 
 ### Put Devices in a Group
 
-Add one `[[device]]` entry per Device with its serial number (from the Devices page) and the Group
-id, then Publish. To move a Device, change its `group`.
+Add one `[[device]]` entry per Device with its serial number (from `mastersos devices list`) and
+the Group id, then Publish. To move a Device, change its `group`.
 
 ```toml check=ok
 [[config]]
