@@ -23,6 +23,7 @@ const MANIFEST: &str = "manifest.toml";
 const SECRETS: &str = "secrets.toml";
 const GITIGNORE: &str = ".gitignore";
 const STATE: &str = ".mastersos";
+const UPLOAD_INFO: &str = "upload.toml";
 const MEMBER_DIRS: [&str; 2] = ["files", "scripts"];
 
 /// A new school's settings: `{school_id}` is filled in by [`template`].
@@ -58,12 +59,29 @@ pub fn template(school_id: &str) -> Result<String> {
 }
 
 /// Everything in a directory that belongs to a settings snapshot.
-struct Snapshot {
-    manifest: String,
-    secrets: BTreeMap<String, String>,
+pub struct Snapshot {
+    pub manifest: String,
+    pub secrets: BTreeMap<String, String>,
     /// `secrets.toml` as it is on disk (a copy keeps it byte for byte).
     secrets_raw: String,
-    files: BTreeMap<String, Vec<u8>>,
+    pub files: BTreeMap<String, Vec<u8>>,
+}
+
+impl Snapshot {
+    fn same_content(&self, other: &Snapshot) -> bool {
+        self.manifest == other.manifest
+            && self.secrets == other.secrets
+            && self.files == other.files
+    }
+}
+
+/// What was uploaded as a pending bundle: kept in `.mastersos/uploaded/` until it is known to be
+/// published (or discarded by a pull).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UploadInfo {
+    pub version: u64,
+    /// The server's content digest of the pending bundle (hex).
+    pub digest: String,
 }
 
 fn read_snapshot(dir: &Path) -> Result<Snapshot> {
@@ -242,6 +260,43 @@ impl Workdir {
         self.root.join(STATE).join("base")
     }
 
+    fn uploaded_dir(root: &Path) -> PathBuf {
+        root.join(STATE).join("uploaded")
+    }
+
+    /// Read manifest, secrets and files once, as one consistent snapshot.
+    pub fn freeze(&self) -> Result<Snapshot> {
+        read_snapshot(&self.root)
+    }
+
+    /// Keep exactly what was uploaded (`snap`) with the pending's version and digest. `mark_published`
+    /// and a later `pull` work from this, not from the directory as it is by then.
+    pub fn save_uploaded(&self, snap: &Snapshot, info: &UploadInfo) -> Result<()> {
+        let dir = Workdir::uploaded_dir(&self.root);
+        write_snapshot(&dir, &snap.manifest, &snap.secrets_raw, &snap.files)?;
+        let text = toml::to_string(info).context("could not write the upload record")?;
+        fs::write(dir.join(UPLOAD_INFO), text)?;
+        Ok(())
+    }
+
+    /// The upload record, when the directory still holds exactly what was uploaded (offline).
+    pub fn uploaded_unchanged(root: &Path) -> Result<Option<UploadInfo>> {
+        let dir = Workdir::uploaded_dir(root);
+        let Ok(text) = fs::read_to_string(dir.join(UPLOAD_INFO)) else {
+            return Ok(None);
+        };
+        let info: UploadInfo = toml::from_str(&text).context("the upload record is not valid")?;
+        let same = read_snapshot(root)?.same_content(&read_snapshot(&dir)?);
+        Ok(same.then_some(info))
+    }
+
+    /// Whether the directory is the upload of exactly this published version and digest: then a
+    /// pull may replace it without `--force`.
+    pub fn is_published_upload(root: &Path, version: u64, digest_hex: &str) -> Result<bool> {
+        Ok(Workdir::uploaded_unchanged(root)?
+            .is_some_and(|i| i.version == version && i.digest.eq_ignore_ascii_case(digest_hex)))
+    }
+
     /// Open an existing settings directory.
     pub fn open(root: &Path) -> Result<Workdir> {
         if !root.join(META).is_file() {
@@ -278,7 +333,9 @@ impl Workdir {
             return Ok(());
         }
         match Workdir::open(root) {
-            Ok(w) if w.is_dirty()? => bail!(
+            // Dirty only because it was uploaded: the pull decides, after verifying, whether that
+            // upload was published.
+            Ok(w) if w.is_dirty()? && Workdir::uploaded_unchanged(root)?.is_none() => bail!(
                 "{} has changes that are not published (see `mastersos diff`); pull again with --force to throw them away",
                 root.display()
             ),
@@ -318,6 +375,7 @@ impl Workdir {
             &contents.files,
         )?;
         write_meta(root, &meta)?;
+        remove_if_exists(&Workdir::uploaded_dir(root))?;
         Ok(Workdir {
             root: root.to_path_buf(),
         })
@@ -356,18 +414,21 @@ impl Workdir {
         Ok(cur.manifest != base.manifest || cur.secrets != base.secrets || cur.files != base.files)
     }
 
-    /// The directory is now what version `version` holds: record it and make it the base.
+    /// What was uploaded is now version `version`: make the uploaded snapshot (not the directory
+    /// as it is now, which may have been edited meanwhile) the base.
     pub fn mark_published(&self, version: u64) -> Result<()> {
+        let dir = Workdir::uploaded_dir(&self.root);
+        let info: UploadInfo = toml::from_str(&read_text(&dir.join(UPLOAD_INFO))?)
+            .context("there is no record of an upload to mark as published")?;
+        if info.version != version {
+            bail!("the upload was for version {}, not {version}", info.version);
+        }
+        let up = read_snapshot(&dir)?;
+        write_snapshot(&self.base_dir(), &up.manifest, &up.secrets_raw, &up.files)?;
         let mut meta = self.meta()?;
         meta.base_version = version;
-        let cur = read_snapshot(&self.root)?;
-        write_snapshot(
-            &self.base_dir(),
-            &cur.manifest,
-            &cur.secrets_raw,
-            &cur.files,
-        )?;
-        write_meta(&self.root, &meta)
+        write_meta(&self.root, &meta)?;
+        remove_if_exists(&dir)
     }
 }
 
@@ -673,9 +734,61 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let w = Workdir::init(&t.path().join("school"), meta(0), SAMPLE).unwrap();
         assert!(w.is_dirty().unwrap());
+        w.save_uploaded(&w.freeze().unwrap(), &info(4)).unwrap();
         w.mark_published(4).unwrap();
         assert_eq!(w.meta().unwrap().base_version, 4);
         assert!(!w.is_dirty().unwrap());
+        assert!(w.mark_published(4).is_err(), "the record is consumed");
+    }
+
+    fn info(v: u64) -> UploadInfo {
+        UploadInfo {
+            version: v,
+            digest: "ab".repeat(32),
+        }
+    }
+
+    #[test]
+    fn mark_published_uses_uploaded_snapshot() {
+        let t = tempfile::tempdir().unwrap();
+        let w = pulled(&t.path().join("school"));
+        std::fs::write(w.root.join("files/a.txt"), "uploaded").unwrap();
+        w.save_uploaded(&w.freeze().unwrap(), &info(4)).unwrap();
+        // Edited while the signing prompt was open.
+        std::fs::write(w.root.join("files/a.txt"), "edited later").unwrap();
+        assert!(w.mark_published(5).is_err(), "wrong version");
+        w.mark_published(4).unwrap();
+        let (_, _, files) = w.base().unwrap();
+        assert_eq!(files["files/a.txt"], b"uploaded");
+        assert!(w.is_dirty().unwrap(), "the later edit is still unpublished");
+    }
+
+    #[test]
+    fn pull_after_passkey_publish_is_clean() {
+        let t = tempfile::tempdir().unwrap();
+        let dir = t.path().join("school");
+        let w = pulled(&dir);
+        std::fs::write(dir.join("files/a.txt"), "changed").unwrap();
+        // Not uploaded: dirty, refused.
+        assert!(Workdir::ensure_pullable(&dir, false).is_err());
+        assert!(Workdir::uploaded_unchanged(&dir).unwrap().is_none());
+        w.save_uploaded(&w.freeze().unwrap(), &info(4)).unwrap();
+        // Dirty but equal to the upload: the offline pre-check lets it through.
+        Workdir::ensure_pullable(&dir, false).unwrap();
+        let digest = "ab".repeat(32);
+        assert!(Workdir::is_published_upload(&dir, 4, &digest).unwrap());
+        assert!(Workdir::is_published_upload(&dir, 4, &digest.to_uppercase()).unwrap());
+        // Another version or digest was published: not this upload.
+        assert!(!Workdir::is_published_upload(&dir, 5, &digest).unwrap());
+        assert!(!Workdir::is_published_upload(&dir, 4, &"cd".repeat(32)).unwrap());
+        // Edited after the upload: dirty again and refused.
+        std::fs::write(dir.join("files/a.txt"), "more").unwrap();
+        assert!(Workdir::ensure_pullable(&dir, false).is_err());
+        assert!(!Workdir::is_published_upload(&dir, 4, &digest).unwrap());
+        // A pull clears the record.
+        Workdir::write_pulled(&dir, meta(4), &contents(), true).unwrap();
+        assert!(Workdir::uploaded_unchanged(&dir).unwrap().is_none());
+        assert!(!dir.join(".mastersos/uploaded").exists());
     }
 
     #[test]

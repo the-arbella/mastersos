@@ -376,7 +376,6 @@ async fn devices(api: &Api, out: &Out, c: DevicesCmd) -> Result<ExitCode, OpErro
                             cell(&d["device_id"]),
                             cell(&d["serial"]),
                             cell(&d["group"]),
-                            cell(&d["draft_group"]),
                             cell(&d["bundle_version"]),
                             cell(&d["last_seen"]),
                             if state.is_empty() {
@@ -388,15 +387,7 @@ async fn devices(api: &Api, out: &Out, c: DevicesCmd) -> Result<ExitCode, OpErro
                     })
                     .collect();
                 table(
-                    &[
-                        "DEVICE",
-                        "SERIAL",
-                        "GROUP",
-                        "DRAFT GROUP",
-                        "VERSION",
-                        "LAST SEEN",
-                        "STATE",
-                    ],
+                    &["DEVICE", "SERIAL", "GROUP", "VERSION", "LAST SEEN", "STATE"],
                     rows,
                 )
             });
@@ -669,7 +660,22 @@ async fn pull_dir(
         school_id: id,
         base_version: n,
     };
-    Workdir::write_pulled(dir, meta, &contents, force).map_err(fail)?;
+    // A directory that differs from its base is replaced only if it is exactly what was uploaded
+    // and that upload is the version just verified (same digest): then it was published.
+    let mut overwrite = force;
+    if !force && Workdir::open(dir).is_ok_and(|w| w.is_dirty().unwrap_or(true)) {
+        let published = n == verified.version
+            && n == verified.latest
+            && Workdir::is_published_upload(dir, n, &verified.digest_hex).unwrap_or(false);
+        if !published {
+            return Err(OpError::Failed(format!(
+                "{} has changes that are not published (see `mastersos diff`); pull again with --force to throw them away",
+                dir.display()
+            )));
+        }
+        overwrite = true;
+    }
+    Workdir::write_pulled(dir, meta, &contents, overwrite).map_err(fail)?;
     println!("Pulled version {n} into {}.", dir.display());
     Ok(ExitCode::SUCCESS)
 }
@@ -799,7 +805,7 @@ async fn publish_dir(
         }
         Ok(PublishOutcome::NeedsPasskey { url, pending_id }) => {
             println!("Uploaded pending bundle {pending_id}. Nothing is published yet: IT signs it with a Passkey at\n{url}");
-            println!("After signing, run `mastersos pull` to update your base.");
+            println!("After signing in the browser, run `mastersos pull` to update your base.");
             Ok(ExitCode::SUCCESS)
         }
         Err(e) => match e.downcast::<CheckFailed>() {

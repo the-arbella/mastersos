@@ -16,7 +16,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::tools::Req;
-use crate::workdir::{self, Workdir};
+use crate::workdir::{self, UploadInfo, Workdir};
 use crate::{api_error, Api};
 
 /// What signing needs on this computer.
@@ -71,6 +71,13 @@ struct AuthConfig {
 struct Prepared {
     pending_id: String,
     version: u64,
+    digest: String,
+}
+
+fn error_code(body: &str) -> Option<String> {
+    serde_json::from_str::<Value>(body).ok()?["error"]["code"]
+        .as_str()
+        .map(str::to_owned)
 }
 
 /// The signing page link for a pending bundle.
@@ -97,9 +104,10 @@ pub async fn publish(
     if has_errors(&lints) {
         return Err(CheckFailed(lints).into());
     }
-    let manifest = w.manifest()?;
-    let filled = secret_ref::fill(&manifest, &w.secrets()?).map_err(CheckFailed)?;
-    let files = w.files()?;
+    // One read: what is uploaded, kept and later made the base is this snapshot.
+    let snap = w.freeze()?;
+    let filled = secret_ref::fill(&snap.manifest, &snap.secrets).map_err(CheckFailed)?;
+    let files = &snap.files;
 
     let cfg: AuthConfig = serde_json::from_str(
         &api.send(Req::get(&["v1", "auth", "config"]))
@@ -133,17 +141,17 @@ pub async fn publish(
         .map_err(|e| anyhow!("{e}"))?;
     match x.status {
         200 => {}
-        409 => {
+        409 if error_code(&x.body).as_deref() == Some("version_conflict") => {
             let newest = serde_json::from_str::<Value>(&x.body)
                 .ok()
-                .and_then(|v| v["error"]["details"]["current_version"].as_u64());
+                .and_then(|v| v["error"]["details"]["latest_version"].as_u64());
             return Err(match newest {
                 Some(n) => anyhow!(
-                    "Someone published v{n} after your base v{}; run `mastersos pull` and redo your change",
+                    "Someone published v{n} after your base v{}. Your edits are not published. Save your changes elsewhere, then run `mastersos pull --force` (this discards local edits) and redo them.",
                     meta.base_version
                 ),
                 None => anyhow!(
-                    "Someone published a newer version after your base v{}; run `mastersos pull` and redo your change",
+                    "Someone published a newer version after your base v{}. Your edits are not published. Save your changes elsewhere, then run `mastersos pull --force` (this discards local edits) and redo them.",
                     meta.base_version
                 ),
             });
@@ -159,6 +167,13 @@ pub async fn publish(
         );
     }
 
+    w.save_uploaded(
+        &snap,
+        &UploadInfo {
+            version,
+            digest: prepared.digest.clone(),
+        },
+    )?;
     match sign {
         Some(s) => {
             let sign_api = mastersos_sign::Api::from_token_file(&meta.server, s.token_file)?;
@@ -248,7 +263,7 @@ mod tests {
 
     fn accepted(version: u64) -> ResponseTemplate {
         ResponseTemplate::new(200).set_body_json(json!({
-            "pending_id": "p-1", "version": version, "digest": "00", "lints": []
+            "pending_id": "p-1", "version": version, "digest": "ab", "lints": []
         }))
     }
 
@@ -286,7 +301,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/v1/admin/publish/pending"))
             .respond_with(ResponseTemplate::new(409).set_body_json(json!({
-                "error": { "code": "version_conflict", "message": "newer version", "details": { "current_version": 6 } }
+                "error": { "code": "version_conflict", "message": "newer version", "details": { "latest_version": 6 } }
             })))
             .mount(&s)
             .await;
@@ -296,6 +311,24 @@ mod tests {
         assert!(err.contains("mastersos pull"), "{err}");
         assert!(err.contains("v6") && err.contains("base v4"), "{err}");
         assert_eq!(w.meta().unwrap().base_version, 4);
+        assert!(err.contains("pull --force"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn other_409_is_not_a_version_conflict() {
+        let s = server().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/admin/publish/pending"))
+            .respond_with(ResponseTemplate::new(409).set_body_json(json!({
+                "error": { "code": "pending_exists", "message": "a pending bundle exists" }
+            })))
+            .mount(&s)
+            .await;
+        let t = tempfile::tempdir().unwrap();
+        let w = workdir(&t.path().join("school"));
+        let err = run(&s, &w).await.unwrap_err().to_string();
+        assert!(err.contains("pending_exists"), "{err}");
+        assert!(!err.contains("Someone published"), "{err}");
     }
 
     #[tokio::test]
@@ -329,7 +362,9 @@ mod tests {
                 pending_id: "p-1".into()
             }
         );
-        // Not signed here: the base stays until IT signs and pulls.
+        // Not signed here: the base stays until IT signs and pulls; the upload is recorded so
+        // that pull accepts the directory as clean once it is published.
         assert_eq!(w.meta().unwrap().base_version, 4);
+        assert!(Workdir::is_published_upload(&w.root, 5, "ab").unwrap());
     }
 }

@@ -21,7 +21,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, ETAG};
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use reqwest::Url;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData,
@@ -146,16 +146,6 @@ impl Api {
             )
         })?;
         let status = res.status().as_u16();
-        let rev = res
-            .headers()
-            .get(ETAG)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| {
-                v.trim_start_matches("W/")
-                    .trim_matches('"')
-                    .parse::<u64>()
-                    .ok()
-            });
         let is_json = res
             .headers()
             .get("content-type")
@@ -169,7 +159,6 @@ impl Api {
         })?;
         Ok(Exchange {
             status,
-            rev,
             is_json,
             body,
         })
@@ -181,14 +170,13 @@ impl Api {
         if !(200..300).contains(&x.status) {
             return Err(api_error(x.status, &x.body));
         }
-        Ok(render(x.rev, x.is_json, x.body))
+        Ok(render(x.is_json, x.body))
     }
 }
 
 /// A complete HTTP answer, whatever its status.
 pub struct Exchange {
     pub status: u16,
-    pub rev: Option<u64>,
     pub is_json: bool,
     pub body: String,
 }
@@ -252,27 +240,17 @@ fn api_error(status: u16, body: &str) -> String {
     out
 }
 
-/// 成功的响应转成 JSON 文本。带 ETag 的（草稿相关）包一层 `{"rev", "data"|"text"}`，
-/// 模型下一次修改要用这个 rev。
-fn render(rev: Option<u64>, is_json: bool, body: String) -> String {
-    let data: Option<(&str, Value)> = if body.is_empty() {
-        None
+/// A successful response as JSON text: JSON as it is, plain text as `{"text"}`, nothing as `{"ok"}`.
+fn render(is_json: bool, body: String) -> String {
+    if body.is_empty() {
+        json!({ "ok": true }).to_string()
     } else if is_json {
-        Some((
-            "data",
-            serde_json::from_str(&body).unwrap_or(Value::String(body)),
-        ))
+        serde_json::from_str::<Value>(&body)
+            .unwrap_or(Value::String(body))
+            .to_string()
     } else {
-        Some(("text", Value::String(body)))
-    };
-    let v = match (rev, data) {
-        (Some(rev), Some((k, d))) => json!({ "rev": rev, k: d }),
-        (Some(rev), None) => json!({ "ok": true, "rev": rev }),
-        (None, Some((_, d))) if is_json => d,
-        (None, Some((_, d))) => json!({ "text": d }),
-        (None, None) => json!({ "ok": true }),
-    };
-    v.to_string()
+        json!({ "text": body }).to_string()
+    }
 }
 
 /// 启动：读 token 文件、`whoami`、检查范围。
