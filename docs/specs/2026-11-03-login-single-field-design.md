@@ -56,14 +56,14 @@
 
 | 方案 | 做法 | 取舍 |
 |---|---|---|
-| **A（选定）** | 用 GNOME 的用户名输入框；永远停在 “输入用户名” 这一步，不显示用户列表；框下用 `PopupMenu` 列出匹配（与学校域名弹出同一种控件）；拦截回车，选中某人时改走 `_signInAs` | 新人、域名弹出、学校卡片都已挂在这个框上，界面只有一个框；回车拦截依赖 GNOME 50 内部，扩展本来就锁版本 |
+| **A（选定）** | 用 GNOME 的用户名输入框；永远停在 “输入用户名” 这一步，不显示用户列表；框下用一个普通列表（不是 `PopupMenu`：弹出菜单会抢走键盘，打字就断）列出匹配；拦截回车，选中某人时改走 `_signInAs` | 新人、域名弹出、学校卡片都已挂在这个框上，界面只有一个框；回车拦截依赖 GNOME 50 内部，扩展本来就锁版本 |
 | B | 自己做一个搜索框和结果列表，GNOME 的输入框只在幕后用 | 外观完全可控；两个输入框要同步状态（切 VT、密码错、卡片取消都要复位），代码多两三倍 |
 | C | 保留 GNOME 的列表，加一个过滤框 | 改动最小；不打字时列表仍在，违背 “不显示名字”，也做不出 “以新邮箱登录” |
 
 ## 5. 留给实施者
 
-- 永远进入用户名一步的落点：`_onReset`／`_onUserListActivated` 之后的 `_hideUserListAskForUsernameAndBeginVerification`，
-  以及用户列表加载完时 GNOME 会切回列表的路径，都要覆盖；GNOME 50.1 源码在 `loginDialog.js`。
+- 永远停在用户名一步：用 GNOME 自己的设置 `org.gnome.login-screen disable-user-list=true`（镜像的 gschema override），
+  GNOME 50.1 的 `_onReset` 就走 `_hideUserListAskForUsernameAndBeginVerification`，用户名一步也自动隐藏返回键，不用打补丁。
 - 回车拦截：在用户名一步、输入框不是秘密输入时，挂 `activate` 之前；拿不准时宁可按 GNOME 原样处理。
 - `shelf.js` 去掉 Add person 按钮；`strings.js`、`.pot`、84 个 `.po` 同步（check-tree 第 50 条）。
 - 测试：gjs 能跑的匹配与排序单独成函数并加单元测试；VM 上验证 0 人、1 人、6 人以上、带 `@`、新邮箱、本地账号、
