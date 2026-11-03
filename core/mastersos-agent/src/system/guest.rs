@@ -856,6 +856,76 @@ mod tests {
         assert_eq!(procs.polls.lock().unwrap().len(), 175);
     }
 
+    /// The networks that list the guest go once its processes are gone (also one it shares with someone else); the
+    /// device's and other people's stay. Every nmcli call names the connection by `uuid`.
+    #[test]
+    fn cleanup_removes_the_guests_networks() {
+        let root = sysroot();
+        let r = Arc::new(FakeRunner::new());
+        let fm = answers(&r, GUEST_UID, &[]);
+        r.respond(
+            "nmcli -t -f UUID connection show",
+            Output::ok("11111111-1111-4111-8111-111111111111\n22222222-2222-4222-8222-222222222222\n33333333-3333-4333-8333-333333333333\n44444444-4444-4444-8444-444444444444\n"),
+        );
+        for (u, p) in [
+            ("11111111-1111-4111-8111-111111111111", "user\\:guest\n"),
+            ("22222222-2222-4222-8222-222222222222", "\n"),
+            ("33333333-3333-4333-8333-333333333333", "user\\:alice\n"),
+            (
+                "44444444-4444-4444-8444-444444444444",
+                "user\\:alice,user\\:guest\n",
+            ),
+        ] {
+            r.respond(
+                &format!("nmcli -g connection.permissions connection show uuid {u}"),
+                Output::ok(p),
+            );
+        }
+        let procs = FakeProcs::new(&r, &[], false);
+        cleanup(&genv(&r, &procs, root.path(), GUEST_UID, &fm)).unwrap();
+        let calls = r.calls();
+        let deletes: Vec<&String> = calls
+            .iter()
+            .filter(|c| c.starts_with("nmcli connection delete"))
+            .collect();
+        assert_eq!(
+            deletes,
+            vec![
+                "nmcli connection delete uuid 11111111-1111-4111-8111-111111111111",
+                "nmcli connection delete uuid 44444444-4444-4444-8444-444444444444"
+            ],
+            "{calls:?}"
+        );
+        let del = idx(&calls, "nmcli connection delete").unwrap();
+        assert!(
+            procs.first_inactive().is_some_and(|i| i <= del),
+            "only after the guest's processes are gone: {calls:?}"
+        );
+        assert!(mark(root.path()).exists());
+    }
+
+    /// NetworkManager not answering, or a listed name that is not a UUID: the cleanup fails and leaves no ready mark
+    /// (the unit tries again), so the next guest never gets the last one's networks.
+    #[test]
+    fn cleanup_fails_closed_without_networkmanager() {
+        for out in [
+            Output::fail(8, "Error: NetworkManager is not running."),
+            Output::ok("school-wifi\n"),
+        ] {
+            let root = sysroot();
+            let r = Arc::new(FakeRunner::new());
+            let fm = answers(&r, GUEST_UID, &[]);
+            r.respond("nmcli -t -f UUID connection show", out);
+            let procs = FakeProcs::new(&r, &[], false);
+            assert!(cleanup(&genv(&r, &procs, root.path(), GUEST_UID, &fm)).is_err());
+            assert!(!mark(root.path()).exists());
+            assert!(r
+                .calls()
+                .iter()
+                .all(|c| !c.starts_with("nmcli connection delete")));
+        }
+    }
+
     #[test]
     fn cleanup_mounts_fresh_tmpfs_and_marks_ready() {
         let root = sysroot();

@@ -1,0 +1,21 @@
+// Wi-Fi permissions, as on a ChromeOS device:
+// - The login screen (the gdm user) adds networks for the whole device: 20-gdm.rules allows it, untouched here.
+// - Inside a session (students, school accounts, the guest, kiosk accounts) nobody is asked for an administrator
+//   password. GNOME Shell asks polkit whether the person may change the device's own networks; when the answer is no it
+//   makes the new network private to that person (connection.permissions=user:<name>), which every active local session
+//   may do (settings.modify.own). The device's networks, including those the school's settings put there, cannot be
+//   changed or have their password read from a session.
+// - The guest's and kiosk accounts' private networks are removed when their session is cleaned up (mastersos-agent
+//   ephemeral cleanup), so the next person does not get them.
+// - IT keeps the usual rights: root, the IT account and members of sudo or netdev (unmanaged personal computers, where
+//   the owner is in sudo) fall through to the other rules.
+polkit.addRule(function (action, subject) {
+    if (action.id !== "org.freedesktop.NetworkManager.settings.modify.system") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    if (subject.user === "root" || subject.user === "itadmin" ||
+        subject.isInGroup("gdm") || subject.isInGroup("sudo") || subject.isInGroup("netdev")) {
+        return polkit.Result.NOT_HANDLED;
+    }
+    return polkit.Result.NO;
+});

@@ -399,6 +399,26 @@ export default class MastersosLoginExtension extends Extension {
         dlg._notListedButton.hide();
         this._patch(dlg._notListedButton, 'show', () => () => {});
 
+        // No session gear: the Ubuntu session is the only one people use, and a kiosk account's session comes from its
+        // AccountsService record, not from this menu. GNOME 50 sets `visible` from _shouldShowSessionMenuButton() in
+        // _onPrompted and calls updateSensitivity(true) (opacity 255) in _onReset, so all three are covered.
+        const sessions = dlg._sessionMenuButton;
+        if (sessions) {
+            sessions.hide();
+            this._patch(sessions, 'show', () => () => {});
+            this._patch(sessions, 'updateSensitivity', original =>
+                function (sensitive) {
+                    original.call(this, sensitive);
+                    this.hide();
+                });
+            if (typeof dlg._shouldShowSessionMenuButton === 'function')
+                this._patch(dlg, '_shouldShowSessionMenuButton', () => () => false);
+            else
+                log('mastersos-login: LoginDialog._shouldShowSessionMenuButton is missing; the session gear may show');
+        } else {
+            log('mastersos-login: LoginDialog._sessionMenuButton is missing; the session gear may show');
+        }
+
         const options = dlg._loginOptionsButton;
         options.hide();
         this._patch(options, 'show', () => () => {});

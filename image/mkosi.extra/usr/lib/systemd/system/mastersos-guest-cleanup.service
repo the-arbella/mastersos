@@ -12,7 +12,8 @@
 [Unit]
 Description=MastersOS: clean up after the guest session
 Documentation=file:/usr/bin/mastersos-agent
-After=local-fs.target systemd-tmpfiles-setup.service mastersos-agent-local.service
+# After NetworkManager: the cleanup removes the account's own network connections with nmcli and fails without it
+After=local-fs.target systemd-tmpfiles-setup.service mastersos-agent-local.service NetworkManager.service
 
 [Service]
 Type=oneshot

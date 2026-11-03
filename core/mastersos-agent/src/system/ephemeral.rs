@@ -508,6 +508,72 @@ fn remove_user_journals(env: &EphemeralEnv) -> Result<()> {
     Ok(())
 }
 
+/// Network connections this account may use: GNOME Shell makes a new Wi-Fi network private to the person
+/// (`connection.permissions=user:<name>`) when polkit does not let them change the device's own networks
+/// (`49-mastersos-network.rules`). The next person on this shared account must not get them or their passwords, so every
+/// connection that lists this account goes, also one it shares with others (the account may list anyone besides itself).
+/// A failure fails the cleanup (no ready mark; the unit retries in 30 seconds, after NetworkManager is up).
+/// Both nmcli calls name the connection with the `uuid` keyword: a bare argument also matches connection names, and the
+/// account could name its own connection after the UUID of one of the device's.
+fn remove_private_connections(env: &EphemeralEnv) -> Result<()> {
+    let user = env.acct.user.as_str();
+    let list = run_ok(
+        env.runner,
+        Cmd::new("nmcli", &["-t", "-f", "UUID", "connection", "show"]).timeout(CMD_TIMEOUT),
+    )
+    .context("list network connections")?;
+    for uuid in list.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        if !is_uuid(uuid) {
+            bail!("nmcli listed {uuid:?}, which is not a UUID");
+        }
+        let perms = run_ok(
+            env.runner,
+            Cmd::new(
+                "nmcli",
+                &[
+                    "-g",
+                    "connection.permissions",
+                    "connection",
+                    "show",
+                    "uuid",
+                    uuid,
+                ],
+            )
+            .timeout(CMD_TIMEOUT),
+        )?;
+        if lists_user(&perms, user) {
+            run_ok(
+                env.runner,
+                Cmd::new("nmcli", &["connection", "delete", "uuid", uuid]).timeout(CMD_TIMEOUT),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn is_uuid(s: &str) -> bool {
+    s.len() == 36
+        && s.char_indices().all(|(i, c)| {
+            if matches!(i, 8 | 13 | 18 | 23) {
+                c == '-'
+            } else {
+                c.is_ascii_hexdigit()
+            }
+        })
+}
+
+/// Whether `nmcli -g connection.permissions` output lists `user`. Entries are `user:<name>[:]`, separated by commas;
+/// `-g` escapes the colons with backslashes. Empty means everyone may use it: the device's, not listed.
+pub(crate) fn lists_user(perms: &str, user: &str) -> bool {
+    perms
+        .trim()
+        .replace('\\', "")
+        .split(',')
+        .map(str::trim)
+        .filter_map(|e| e.strip_prefix("user:"))
+        .any(|r| r.split(':').next() == Some(user))
+}
+
 /// 会话结束后（以及开机时）的清理。见模块文档；任何一步失败都返回错误、**不留标记**。失败时清理服务
 /// `Restart=on-failure` 30 秒后再来，点登录被拒时 `session_open` 也会拉起它（复审 I4）。
 /// 账号不存在时只卸载、清 `/tmp` 等与删掉按名字留下的东西，不挂、不写标记。
@@ -530,6 +596,7 @@ pub fn cleanup(env: &EphemeralEnv) -> Result<()> {
     // linger 在的话 user manager 不会停：先删掉它，下面的 SIGKILL 才停得下来（复审 I2）
     remove_named(env, LINGER_DIR, user)?;
     wait_slice_gone(env)?;
+    remove_private_connections(env)?;
     // 这个账号的进程都没了：下面才碰它能写的东西
     let home = env.home();
     unmount_home_tree(env)?;
@@ -940,6 +1007,31 @@ pub fn cleanup_main(user: Option<&OsStr>) -> ExitCode {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lists_user_matches_whole_names() {
+        assert!(lists_user("user\\:guest\n", "guest"));
+        assert!(lists_user("user:guest:", "guest"));
+        assert!(
+            lists_user("user\\:alice,user\\:guest", "guest"),
+            "shared with someone else still goes"
+        );
+        assert!(
+            !lists_user("\n", "guest"),
+            "everyone's (the device's) stays"
+        );
+        assert!(!lists_user("user\\:alice", "guest"));
+        assert!(!lists_user("user\\:guest2", "guest"));
+        assert!(!lists_user("guest", "guest"));
+    }
+
+    #[test]
+    fn uuid_syntax() {
+        assert!(is_uuid("99f78bb1-dfa1-4a74-915d-20c56c6cd68b"));
+        assert!(!is_uuid("school-wifi"));
+        assert!(!is_uuid("99f78bb1-dfa1-4a74-915d-20c56c6cd68"));
+        assert!(!is_uuid("99f78bb1xdfa1-4a74-915d-20c56c6cd68b"));
+    }
 
     #[test]
     fn kiosk_paths() {
