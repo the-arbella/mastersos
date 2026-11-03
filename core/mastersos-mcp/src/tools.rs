@@ -1,62 +1,94 @@
-//! The tool table and parameters: one tool per admin API operation, read and draft scopes only.
+//! The tool table and parameters. Nine read-only tools: five work on the local settings directory
+//! (`mastersos mcp --dir <dir>`) and never read `secrets.toml`; four are read-only admin API calls.
 //!
 //! The parameter structs are both the source of the JSON schema (schemars) and the deserialization target.
 
+use std::path::{Path, PathBuf};
+
+use anyhow::{bail, Context};
 use reqwest::Method;
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
+use crate::workdir::{self, redact, Workdir};
+
+/// Where a tool runs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    /// On the settings directory; no network.
+    Local,
+    /// One read-only admin API call.
+    Server,
+}
+
 /// One tool.
 pub struct Tool {
     pub name: &'static str,
-    /// The matching OpenAPI `operationId` (`/v1/openapi.json`).
-    pub operation_id: &'static str,
+    pub kind: Kind,
     /// For the model: when to use it and what the parameters mean.
     pub description: &'static str,
 }
 
-/// Every tool (the command line runs the same operations by these names): read-only. Task 5 settles the final set.
+/// The one rule the model must know about secrets; part of every tool that touches settings text.
+macro_rules! secret_rule {
+    () => {
+        "Secrets (Wi-Fi passwords and the like) never appear in manifest.toml: a secret field holds a reference such as psk = \"secret:guest-wifi\". The values live in secrets.toml, which these tools never read or show. To add a password network, write psk = \"secret:<name>\" (name: a-z, 0-9, hyphen) and ask IT to fill in that name in secrets.toml; do not ask for or write the password yourself."
+    };
+}
+
+/// Every tool, read-only. The command line runs the server ones by these names too.
 pub const TOOLS: &[Tool] = &[
     Tool {
-        name: "whoami",
-        operation_id: "whoami",
-        description: "Who you are: your scopes and the school's current signing mode. No parameters.",
+        name: "read_manifest",
+        kind: Kind::Local,
+        description: concat!(
+            "Read manifest.toml of the local settings directory, the Settings text you edit. No parameters. ",
+            secret_rule!()
+        ),
     },
     Tool {
-        name: "summary",
-        operation_id: "get_summary",
-        description: "Overview: the latest version, whether the draft has unpublished changes, Device counts by state, and publish requests awaiting confirmation. Use it first to get the big picture. No parameters.",
+        name: "list_files",
+        kind: Kind::Local,
+        description: "List the files the settings carry (under files/ and scripts/) with their sizes. No parameters. secrets.toml and the .mastersos/ folder are not listed.",
     },
     Tool {
-        name: "list_devices",
-        operation_id: "list_devices",
+        name: "read_file",
+        kind: Kind::Local,
+        description: "Read one text file under files/ or scripts/. Parameter path, such as \"files/wallpaper.txt\" or \"scripts/setup.sh\". Any other path (secrets.toml, .mastersos/, .., absolute paths, links) is refused.",
+    },
+    Tool {
+        name: "check",
+        kind: Kind::Local,
+        description: concat!(
+            "Check the local settings directory the way publishing would, without the network. Returns {issues, publishable}; each issue has level, code, message, path and a span where known. Run it after every edit and fix every error. Use spec with an issue code as the section to read how to fix it. No parameters. ",
+            secret_rule!()
+        ),
+    },
+    Tool {
+        name: "diff",
+        kind: Kind::Local,
+        description: "Show what changed in the local settings directory since the last pull: a unified diff of manifest.toml, then one line per changed secret (its name and added, removed or changed, never its value) and per changed file. No parameters.",
+    },
+    Tool {
+        name: "devices_list",
+        kind: Kind::Server,
         description: "List Devices with their latest report. Optional parameters: group (only this group), offline_days (last report older than this many days), status (behind: not on the latest version / errors: had execution errors / stale: Settings may be out of date / locked: locked Devices).",
     },
     Tool {
-        name: "list_versions",
-        operation_id: "list_versions",
-        description: "The published versions (version number, time, who published, who signed). No parameters.",
+        name: "device_show",
+        kind: Kind::Server,
+        description: "One Device's latest report. Parameter device is the device id or the serial number.",
     },
     Tool {
-        name: "get_version",
-        operation_id: "get_version",
-        description: "The Settings text and file list of one published version. Parameter version is the version number. Wi-Fi secrets (psk, password, client_key, client_key_password) always read as \"<kept>\": you never see their values.",
+        name: "keys_list",
+        kind: Kind::Server,
+        description: "The signing keys the server knows: id, algorithm, label. No parameters.",
     },
     Tool {
-        name: "get_version_diff",
-        operation_id: "diff_version",
-        description: "The difference between version-1 and version. Parameter version is the version number. Both sides show Wi-Fi secrets as \"<kept>\", so a changed password does not show as a difference.",
-    },
-    Tool {
-        name: "check_manifest",
-        operation_id: "check_manifest",
-        description: "Check a Settings text (TOML) without saving it. Returns {issues, publishable}; each issue has level, code, message, path and a span (line and column) where known. Always run this before put_draft_manifest; fix every error first. Use get_manifest_spec with an issue code as the section to read how to fix it. Parameter text is the full Settings text. Wi-Fi secrets follow the put_draft_manifest rule: \"<kept>\" is checked as the current value, any other secret value is refused (secret_via_web).",
-    },
-    Tool {
-        name: "get_manifest_spec",
-        operation_id: "get_manifest_spec",
+        name: "spec",
+        kind: Kind::Server,
         description: "The Settings reference in Markdown: every field, its rules, and every issue code with how to fix it. Without parameters it returns the short version meant for prompts. Parameter section (optional) returns just one section: an issue code such as icon_invalid, a table name such as config, group, config.apps.web or school.oidc, or top-level. An unknown section is an error that lists the available sections.",
     },
 ];
@@ -95,16 +127,6 @@ impl Req {
         Req::new(Method::POST, segments).json(body)
     }
 
-    fn with(mut self, extra: &[&str]) -> Req {
-        self.segments.extend(extra.iter().map(|s| s.to_string()));
-        self
-    }
-
-    fn id(mut self, seg: impl ToString) -> Req {
-        self.segments.push(seg.to_string());
-        self
-    }
-
     fn json(mut self, v: Value) -> Req {
         self.body = Body::Json(v);
         self
@@ -119,6 +141,13 @@ struct NoParams {}
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+struct ReadFile {
+    /// A path under files/ or scripts/, for example files/wallpaper.txt.
+    path: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct ListDevices {
     /// Only Devices in this group.
     group: Option<String>,
@@ -130,16 +159,9 @@ struct ListDevices {
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct VersionNo {
-    /// Version number.
-    version: u64,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-struct CheckManifest {
-    /// The full Settings text (TOML) to check.
-    text: String,
+struct ShowDevice {
+    /// The device id or the serial number.
+    device: String,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -160,10 +182,10 @@ fn schema<P: JsonSchema>() -> Map<String, Value> {
 /// The JSON schema of a tool's parameters.
 pub fn input_schema(name: &str) -> Map<String, Value> {
     match name {
-        "list_devices" => schema::<ListDevices>(),
-        "get_version" | "get_version_diff" => schema::<VersionNo>(),
-        "check_manifest" => schema::<CheckManifest>(),
-        "get_manifest_spec" => schema::<ManifestSpec>(),
+        "read_file" => schema::<ReadFile>(),
+        "devices_list" => schema::<ListDevices>(),
+        "device_show" => schema::<ShowDevice>(),
+        "spec" => schema::<ManifestSpec>(),
         _ => schema::<NoParams>(),
     }
 }
@@ -180,49 +202,34 @@ fn args<P: DeserializeOwned>(name: &str, v: Value) -> Result<P, String> {
     serde_json::from_value(v).map_err(|e| format!("Bad parameters for tool {name}: {e}"))
 }
 
-/// Tool name plus arguments -> HTTP request. Bad arguments return text for the model.
+/// Tool name plus arguments -> HTTP request, for the tools that are one API call
+/// (`device_show` lists and picks, see `call`). Bad arguments return text for the model.
 pub fn build(name: &str, a: Value) -> Result<Req, String> {
-    let admin = |rest: &[&str]| Req::new(Method::GET, &["v1", "admin"]).with(rest);
-    let post = |r: Req| Req {
-        method: Method::POST,
-        ..r
-    };
+    let admin = |rest: &str| Req::get(&["v1", "admin", rest]);
     Ok(match name {
-        "whoami" => {
-            args::<NoParams>(name, a)?;
-            admin(&["whoami"])
-        }
-        "summary" => {
-            args::<NoParams>(name, a)?;
-            admin(&["summary"])
-        }
-        "list_devices" => {
-            let p: ListDevices = args(name, a)?;
-            let mut r = admin(&["devices"]);
-            if let Some(g) = p.group {
-                r.query.push(("group".into(), g));
-            }
-            if let Some(d) = p.offline_days {
-                r.query.push(("offline_days".into(), d.to_string()));
-            }
-            if let Some(s) = p.status {
-                r.query.push(("status".into(), s));
+        "devices_list" | "device_show" => {
+            let mut r = admin("devices");
+            if name == "devices_list" {
+                let p: ListDevices = args(name, a)?;
+                if let Some(g) = p.group {
+                    r.query.push(("group".into(), g));
+                }
+                if let Some(d) = p.offline_days {
+                    r.query.push(("offline_days".into(), d.to_string()));
+                }
+                if let Some(s) = p.status {
+                    r.query.push(("status".into(), s));
+                }
+            } else {
+                args::<ShowDevice>(name, a)?;
             }
             r
         }
-        "list_versions" => {
+        "keys_list" => {
             args::<NoParams>(name, a)?;
-            admin(&["versions"])
+            admin("keys")
         }
-        "get_version" => admin(&["versions"]).id(args::<VersionNo>(name, a)?.version),
-        "get_version_diff" => admin(&["versions"])
-            .id(args::<VersionNo>(name, a)?.version)
-            .with(&["diff"]),
-        "check_manifest" => {
-            let p: CheckManifest = args(name, a)?;
-            post(admin(&["manifest", "check"])).json(json!({ "text": p.text }))
-        }
-        "get_manifest_spec" => {
+        "spec" => {
             let p: ManifestSpec = args(name, a)?;
             let mut r = Req::get(&["v1", "spec", "manifest"]);
             match p.section {
@@ -233,4 +240,271 @@ pub fn build(name: &str, a: Value) -> Result<Req, String> {
         }
         other => return Err(format!("No such tool: {other}")),
     })
+}
+
+/// The device id or serial number a `device_show` call asks for.
+pub fn device_wanted(a: Value) -> Result<String, String> {
+    Ok(args::<ShowDevice>("device_show", a)?.device)
+}
+
+// -- Local tools --
+
+/// Largest file `read_file` returns.
+const MAX_READ: u64 = 1024 * 1024;
+
+/// Run a local tool on the settings directory `dir`. Success is the text for the model. Neither the
+/// output nor the error holds a secret value: both go through the same scrub as `check`.
+pub fn call_local(dir: &Path, name: &str, a: Value) -> Result<String, String> {
+    let w = Workdir::open(dir).map_err(|e| format!("{e:#}"))?;
+    // Values to scrub with; if secrets.toml cannot be read nothing can be scrubbed, so nothing that
+    // may hold settings text is returned (the error text of that failure never quotes the file).
+    let secrets = w.secrets();
+    let result = run_local(&w, secrets.as_ref().ok(), name, a);
+    match result {
+        Ok(text) => Ok(text),
+        Err(e) => Err(match &secrets {
+            Ok(s) => redact(&e, s),
+            Err(_) => e,
+        }),
+    }
+}
+
+fn run_local(
+    w: &Workdir,
+    secrets: Option<&std::collections::BTreeMap<String, String>>,
+    name: &str,
+    a: Value,
+) -> Result<String, String> {
+    let fail = |e: anyhow::Error| format!("{e:#}");
+    let need = || {
+        secrets.ok_or_else(|| {
+            "secrets.toml could not be read, so the output cannot be scrubbed; ask IT to fix it"
+                .to_string()
+        })
+    };
+    match name {
+        "read_manifest" => {
+            args::<NoParams>(name, a)?;
+            // A person may have pasted a plain secret into manifest.toml: scrub like `check` does.
+            Ok(redact(&w.manifest().map_err(fail)?, need()?))
+        }
+        "list_files" => {
+            args::<NoParams>(name, a)?;
+            let files: Vec<Value> = w
+                .files()
+                .map_err(fail)?
+                .iter()
+                .filter(|(k, _)| mastersos_bundle::check_member_path(k).is_ok())
+                .map(|(k, v)| json!({ "path": k, "size": v.len() }))
+                .collect();
+            Ok(Value::Array(files).to_string())
+        }
+        "read_file" => {
+            let p: ReadFile = args(name, a)?;
+            Ok(redact(
+                &read_member(&w.root, &p.path).map_err(fail)?,
+                need()?,
+            ))
+        }
+        "check" => {
+            args::<NoParams>(name, a)?;
+            let issues = workdir::check(w).map_err(fail)?;
+            let publishable = !issues
+                .iter()
+                .any(|l| l.level == mastersos_bundle::LintLevel::Error);
+            serde_json::to_string(&json!({ "issues": issues, "publishable": publishable }))
+                .map_err(|e| e.to_string())
+        }
+        "diff" => {
+            args::<NoParams>(name, a)?;
+            let text = workdir::diff(w).map_err(fail)?;
+            // The manifest diff holds references only; scrub with the base's secrets too in case
+            // a plain value was pasted into either side.
+            let base_secrets = w.base().map(|b| b.1).map_err(fail)?;
+            Ok(redact(&redact(&text, need()?), &base_secrets))
+        }
+        other => Err(format!("No such tool: {other}")),
+    }
+}
+
+/// The text of one member file. Only `files/…` and `scripts/…` paths that pass the bundle's path
+/// check; never through a link; text only.
+fn read_member(root: &Path, path: &str) -> anyhow::Result<String> {
+    if mastersos_bundle::check_member_path(path).is_err() {
+        bail!(
+            "Only files under files/ or scripts/ can be read (secrets.toml and .mastersos/ never)"
+        );
+    }
+    let mut cur: PathBuf = root.to_path_buf();
+    for part in path.split('/') {
+        cur.push(part);
+        let meta =
+            std::fs::symlink_metadata(&cur).with_context(|| format!("There is no file {path}"))?;
+        if meta.file_type().is_symlink() {
+            bail!("{path} goes through a link, which is refused");
+        }
+    }
+    let meta = std::fs::symlink_metadata(&cur)?;
+    if !meta.is_file() {
+        bail!("{path} is not a file");
+    }
+    if meta.len() > MAX_READ {
+        bail!("{path} is larger than {MAX_READ} bytes");
+    }
+    let bytes = std::fs::read(&cur).with_context(|| format!("Could not read {path}"))?;
+    String::from_utf8(bytes).map_err(|_| anyhow::anyhow!("{path} is not a text file"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workdir::Meta;
+    use mastersos_bundle::Contents;
+    use std::collections::BTreeMap;
+
+    const SAMPLE: &str = "format = 2\n[school]\nid = \"11111111-1111-1111-1111-111111111111\"\n\n[defaults]\nwifi = [{ ssid = \"Guest\", psk = \"oldpass1\" }]\n\n[[config]]\nid = \"default\"\nname = \"Default\"\ninterface = \"learning\"\nlogin_methods = [\"local\"]\n\n[[group]]\nid = \"default\"\nname = \"Ungrouped\"\nconfig = \"default\"\n";
+
+    fn pulled(dir: &Path) -> Workdir {
+        let mut files = BTreeMap::new();
+        files.insert("files/a.txt".to_string(), b"hello".to_vec());
+        files.insert("scripts/s.sh".to_string(), b"echo oldpass1\n".to_vec());
+        let c = Contents {
+            manifest_text: SAMPLE.to_string(),
+            files,
+        };
+        let meta = Meta {
+            server: "https://school.example".into(),
+            school_id: "11111111-1111-1111-1111-111111111111".into(),
+            base_version: 1,
+        };
+        Workdir::write_pulled(dir, meta, &c, false).unwrap()
+    }
+
+    fn run(w: &Workdir, name: &str) -> Result<String, String> {
+        call_local(&w.root, name, json!({}))
+    }
+
+    fn read(w: &Workdir, path: &str) -> Result<String, String> {
+        call_local(&w.root, "read_file", json!({ "path": path }))
+    }
+
+    #[test]
+    fn read_file_refuses_secrets() {
+        let t = tempfile::tempdir().unwrap();
+        let w = pulled(&t.path().join("school"));
+        for p in [
+            "secrets.toml",
+            "../secrets.toml",
+            ".mastersos/base/secrets.toml",
+            "/etc/passwd",
+            "files/../secrets.toml",
+            "manifest.toml",
+        ] {
+            let e = read(&w, p).unwrap_err();
+            assert!(!e.contains("oldpass1"), "{p}: {e}");
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(w.root.join("secrets.toml"), w.root.join("files/link"))
+                .unwrap();
+            assert!(read_member(&w.root, "files/link").is_err());
+            std::fs::create_dir(t.path().join("outside")).unwrap();
+            std::fs::write(t.path().join("outside/x"), "x").unwrap();
+            std::os::unix::fs::symlink(t.path().join("outside"), w.root.join("files/dir")).unwrap();
+            assert!(read_member(&w.root, "files/dir/x").is_err());
+            // A link in the directory makes the whole snapshot unreadable: every tool fails closed.
+            assert!(read(&w, "files/a.txt").is_err());
+            std::fs::remove_file(w.root.join("files/link")).unwrap();
+            std::fs::remove_file(w.root.join("files/dir")).unwrap();
+        }
+        assert_eq!(read(&w, "files/a.txt").unwrap(), "hello");
+        // Values in a readable file are scrubbed too.
+        assert_eq!(
+            read(&w, "scripts/s.sh").unwrap(),
+            "echo secret:guest-wifi\n".replace("guest-wifi", &only_secret_name(&w))
+        );
+        let listed = run(&w, "list_files").unwrap();
+        assert!(
+            listed.contains("files/a.txt") && listed.contains("scripts/s.sh"),
+            "{listed}"
+        );
+        assert!(
+            !listed.contains("secrets") && !listed.contains(".mastersos"),
+            "{listed}"
+        );
+    }
+
+    fn only_secret_name(w: &Workdir) -> String {
+        w.secrets().unwrap().keys().next().unwrap().clone()
+    }
+
+    #[test]
+    fn diff_never_prints_secret_values() {
+        let t = tempfile::tempdir().unwrap();
+        let w = pulled(&t.path().join("school"));
+        let name = only_secret_name(&w);
+        std::fs::write(
+            w.root.join("secrets.toml"),
+            format!("{name} = \"newpass2\"\n"),
+        )
+        .unwrap();
+        let out = run(&w, "diff").unwrap();
+        assert!(
+            !out.contains("oldpass1") && !out.contains("newpass2"),
+            "{out}"
+        );
+        assert!(out.contains(&name) && out.contains("changed"), "{out}");
+    }
+
+    #[test]
+    fn read_manifest_scrubs_plain_secret() {
+        let t = tempfile::tempdir().unwrap();
+        let w = pulled(&t.path().join("school"));
+        let name = only_secret_name(&w);
+        let pasted = w
+            .manifest()
+            .unwrap()
+            .replace(&format!("secret:{name}"), "oldpass1");
+        assert!(pasted.contains("oldpass1"));
+        std::fs::write(w.root.join("manifest.toml"), pasted).unwrap();
+        let out = run(&w, "read_manifest").unwrap();
+        assert!(!out.contains("oldpass1"), "{out}");
+        assert!(out.contains(&format!("secret:{name}")), "{out}");
+        // The diff and check do not leak it either.
+        assert!(!run(&w, "diff").unwrap().contains("oldpass1"));
+        assert!(!run(&w, "check").unwrap().contains("oldpass1"));
+        // An unreadable secrets.toml fails closed.
+        std::fs::write(w.root.join("secrets.toml"), "oldpass1 oops").unwrap();
+        let e = run(&w, "read_manifest").unwrap_err();
+        assert!(!e.contains("oldpass1"), "{e}");
+    }
+
+    #[test]
+    fn tool_list_is_read_only() {
+        let mut names: Vec<String> = mcp_tools().iter().map(|t| t.name.to_string()).collect();
+        names.sort();
+        let mut want = [
+            "read_manifest",
+            "list_files",
+            "read_file",
+            "check",
+            "diff",
+            "devices_list",
+            "device_show",
+            "keys_list",
+            "spec",
+        ]
+        .map(String::from)
+        .to_vec();
+        want.sort();
+        assert_eq!(names, want);
+        for t in TOOLS
+            .iter()
+            .filter(|t| t.name == "read_manifest" || t.name == "check")
+        {
+            assert!(
+                t.description.contains("secrets.toml") && t.description.contains("secret:<name>")
+            );
+        }
+    }
 }

@@ -474,47 +474,50 @@ fn check_at(w: &Workdir, today: chrono::NaiveDate) -> Result<Vec<Lint>> {
     Ok(scrub(out, &cur.secrets))
 }
 
-/// Replace every secret value in the lints' messages and params with `secret:<name>`.
+/// Replace every secret value in `s` with `secret:<name>`.
 ///
 /// Every occurrence of every value is found (overlapping ones too); ranges that overlap or touch
 /// are merged and each merged range becomes the references of the secrets in it
 /// (`secret:a+secret:b`), so no part of a value survives next to another one.
-fn scrub(mut lints: Vec<Lint>, secrets: &BTreeMap<String, String>) -> Vec<Lint> {
+pub fn redact(s: &str, secrets: &BTreeMap<String, String>) -> String {
     let values: Vec<(&String, &String)> = secrets.iter().filter(|(_, v)| !v.is_empty()).collect();
-    let clean = |s: &str| {
-        // (start, end, name) of every occurrence.
-        let mut hits: Vec<(usize, usize, &str)> = Vec::new();
-        for (name, value) in &values {
-            let mut from = 0;
-            while let Some(at) = s[from..].find(value.as_str()) {
-                let start = from + at;
-                hits.push((start, start + value.len(), name.as_str()));
-                // The next search starts one char later, so overlapping occurrences are found.
-                from = start + s[start..].chars().next().map_or(1, char::len_utf8);
-            }
+    // (start, end, name) of every occurrence.
+    let mut hits: Vec<(usize, usize, &str)> = Vec::new();
+    for (name, value) in &values {
+        let mut from = 0;
+        while let Some(at) = s[from..].find(value.as_str()) {
+            let start = from + at;
+            hits.push((start, start + value.len(), name.as_str()));
+            // The next search starts one char later, so overlapping occurrences are found.
+            from = start + s[start..].chars().next().map_or(1, char::len_utf8);
         }
-        hits.sort();
-        let mut out = String::with_capacity(s.len());
-        let mut pos = 0;
-        let mut i = 0;
-        while i < hits.len() {
-            let (start, mut end, _) = hits[i];
-            let mut names: Vec<&str> = Vec::new();
-            while i < hits.len() && hits[i].0 <= end {
-                end = end.max(hits[i].1);
-                if !names.contains(&hits[i].2) {
-                    names.push(hits[i].2);
-                }
-                i += 1;
+    }
+    hits.sort();
+    let mut out = String::with_capacity(s.len());
+    let mut pos = 0;
+    let mut i = 0;
+    while i < hits.len() {
+        let (start, mut end, _) = hits[i];
+        let mut names: Vec<&str> = Vec::new();
+        while i < hits.len() && hits[i].0 <= end {
+            end = end.max(hits[i].1);
+            if !names.contains(&hits[i].2) {
+                names.push(hits[i].2);
             }
-            out.push_str(&s[pos..start]);
-            let refs: Vec<String> = names.iter().map(|n| format!("secret:{n}")).collect();
-            out.push_str(&refs.join("+"));
-            pos = end;
+            i += 1;
         }
-        out.push_str(&s[pos..]);
-        out
-    };
+        out.push_str(&s[pos..start]);
+        let refs: Vec<String> = names.iter().map(|n| format!("secret:{n}")).collect();
+        out.push_str(&refs.join("+"));
+        pos = end;
+    }
+    out.push_str(&s[pos..]);
+    out
+}
+
+/// Replace every secret value in the lints' messages and params with `secret:<name>`.
+fn scrub(mut lints: Vec<Lint>, secrets: &BTreeMap<String, String>) -> Vec<Lint> {
+    let clean = |s: &str| redact(s, secrets);
     for l in &mut lints {
         l.message = clean(&l.message);
         for v in l.params.values_mut() {

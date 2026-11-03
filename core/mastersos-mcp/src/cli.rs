@@ -97,8 +97,12 @@ enum Cmd {
     /// The school's logos
     #[command(subcommand)]
     Logo(LogoCmd),
-    /// Serve the same operations as an MCP server over stdio (for clients that only speak MCP)
-    Mcp,
+    /// Serve read-only tools over MCP (stdio): read, check and diff the local settings directory (never its secrets), inspect Devices
+    Mcp {
+        /// The settings directory (default: the current directory)
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -222,7 +226,9 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         None => config_dir()?.join("token"),
     };
     check_private(&token_file)?;
-    if let Cmd::Mcp = cmd {
+    if let Cmd::Mcp { dir } = &cmd {
+        let dir = dir.clone().unwrap_or_else(|| PathBuf::from("."));
+        Workdir::open(&dir).map_err(fail)?;
         // The MCP server keeps its own exit codes: 2 for a token that must not be given to an AI.
         let api = match connect(&server, &token_file).await {
             Ok(api) => api,
@@ -231,7 +237,7 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
                 return Ok(ExitCode::from(e.exit_code()));
             }
         };
-        serve_stdio(api)
+        serve_stdio(api, dir)
             .await
             .map_err(|e| OpError::Failed(format!("{e:#}")))?;
         return Ok(ExitCode::SUCCESS);
@@ -241,7 +247,7 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         .map_err(|e| OpError::Failed(e.to_string()))?;
     let out = Out { json };
     match cmd {
-        Cmd::Setup | Cmd::Mcp | Cmd::Check { .. } | Cmd::Diff { .. } => {
+        Cmd::Setup | Cmd::Mcp { .. } | Cmd::Check { .. } | Cmd::Diff { .. } => {
             unreachable!("handled above")
         }
         Cmd::Init { dir } => init_dir(&api, &server, &token_file, &dir).await,
@@ -321,8 +327,8 @@ async fn setup(server: Option<String>, token_file: Option<PathBuf>) -> Result<Ex
     let api = connect(&server, &token_file)
         .await
         .map_err(|e| OpError::Failed(e.to_string()))?;
-    let who: Value =
-        serde_json::from_str(&call(&api, "whoami", json!({})).await?).unwrap_or(Value::Null);
+    let who: Value = serde_json::from_str(&api.send(Req::get(&["v1", "admin", "whoami"])).await?)
+        .unwrap_or(Value::Null);
     println!(
         "Connected to {server} as {} (scopes: {})",
         cell(&who["label"]),
@@ -356,7 +362,7 @@ async fn devices(api: &Api, out: &Out, c: DevicesCmd) -> Result<ExitCode, OpErro
             if let Some(g) = group {
                 args.insert("group".into(), Value::String(g));
             }
-            let text = call(api, "list_devices", Value::Object(args)).await?;
+            let text = call(api, "devices_list", Value::Object(args)).await?;
             out.print(&text, |v| {
                 let rows = items(v)
                     .iter()
@@ -393,19 +399,8 @@ async fn devices(api: &Api, out: &Out, c: DevicesCmd) -> Result<ExitCode, OpErro
             });
         }
         DevicesCmd::Show { device } => {
-            let text = call(api, "list_devices", json!({})).await?;
-            let all: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-            let want = device.trim().to_lowercase();
-            let found = items(&all)
-                .iter()
-                .find(|d| {
-                    d["device_id"].as_str() == Some(device.as_str())
-                        || d["serial"]
-                            .as_str()
-                            .is_some_and(|s| s.trim().to_lowercase() == want)
-                })
-                .cloned()
-                .ok_or_else(|| OpError::Failed(format!("No such Device: {device}")))?;
+            let text = call(api, "device_show", json!({ "device": device })).await?;
+            let found: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
             if out.json {
                 println!("{found}");
             } else if let Value::Object(m) = &found {
@@ -428,7 +423,7 @@ async fn spec(api: &Api, section: Option<String>, full: bool) -> Result<ExitCode
             Some(s) => json!({ "section": s }),
             None => json!({}),
         };
-        call(api, "get_manifest_spec", args).await?
+        call(api, "spec", args).await?
     };
     print!("{text}");
     if !text.ends_with('\n') {
