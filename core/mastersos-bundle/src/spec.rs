@@ -158,6 +158,7 @@ pub const ISSUE_CODES: &[&str] = &[
     "school_name_invalid",
     "school_wifi_moved",
     "script_timeout_too_long",
+    "secret_name_invalid",
     "secret_rerouted",
     "secret_unknown",
     "secret_unused",
@@ -775,6 +776,7 @@ mod tests {
     /// latest version): check_text never reports them, so the spec gives no check= example.
     const SERVER_ONLY: &[&str] = &[
         // Raised by `secret_ref::lints` against secrets.toml, which check_text never sees.
+        "secret_name_invalid",
         "secret_rerouted",
         "secret_unknown",
         "secret_unused",

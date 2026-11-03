@@ -190,7 +190,8 @@ fn parse_secrets(text: &str) -> Result<BTreeMap<String, String>> {
             toml::Value::String(s) => {
                 out.insert(k, s);
             }
-            _ => bail!("secret `{k}` is not a string"),
+            _ if secret_ref::is_valid_name(&k) => bail!("secret `{k}` is not a string"),
+            _ => bail!("a secret whose name is not valid is not a string"),
         }
     }
     Ok(out)
@@ -732,6 +733,12 @@ pub fn diff(w: &Workdir) -> Result<String> {
         ("file", changes(&base.files, &cur.files)),
     ] {
         for (name, what) in lines {
+            // A secret name that is not valid is never shown as it is (`check` reports it).
+            let name = if kind == "secret" && !secret_ref::is_valid_name(&name) {
+                "(invalid name)".to_string()
+            } else {
+                name.to_string()
+            };
             out.push_str(&format!("{kind} {name}: {what}\n"));
         }
     }

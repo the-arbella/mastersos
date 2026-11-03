@@ -560,7 +560,8 @@ entry with the same `ssid` as an inherited entry replaces that entry as a whole,
 never reported back.
 
 The secrets (`psk`, `password`, `client_key`, `client_key_password`) are not written in `manifest.toml`.
-There each one is a reference such as `psk = "secret:guest-wifi"`; the value lives in `secrets.toml` (mode
+There each one is a reference such as `psk = "secret:guest-wifi"` (names: 1 to 64 of `a-z`, `0-9`, `-`; else
+`secret_name_invalid`); the value lives in `secrets.toml` (mode
 0600, kept out of git), which IT fills in (`guest-wifi = "…"`). `mastersos pull` moves existing values there;
 `mastersos publish` puts them back when it builds the Version. An AI assistant never reads `secrets.toml`:
 for a new password network it writes the reference and asks IT to add the value. `mastersos check` reports
@@ -3128,6 +3129,16 @@ name = "Unassigned"
 config = "standard"
 ```
 <!-- /prompt:omit -->
+
+### `secret_name_invalid`
+
+**Level:** error. **Meaning:** a `secret:<name>` reference or a `secrets.toml` key is not 1 to 64 of `a-z`, `0-9` and `-`.
+
+<!-- prompt:omit -->
+**Why:** names are pasted into commands IT runs (`--allow-reroute <name>`); any other character could run something else. The name is never shown.
+<!-- /prompt:omit -->
+
+**How to fix:** rename the reference and the `secrets.toml` key, for example `guest-wifi`.
 
 ### `secret_rerouted`
 

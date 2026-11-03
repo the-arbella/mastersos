@@ -121,7 +121,7 @@ Say Settings, Config, Group, Device and Kiosk app to the person, not the file's 
   and puts the hash into `secrets.toml`; `password_hash` in `manifest.toml` stays a `secret:` reference. You never ask for the password.
 - Wi-Fi passwords and keys (`psk`, `password`, `client_key`, `client_key_password`) are secrets. In `manifest.toml` they
   are references such as `psk = "secret:guest-wifi"`; leave existing references as they are. For a **new** network that
-  needs a password, write the reference (`psk = "secret:<name>"`, a short unique name) and tell IT: "put
+  needs a password, write the reference (`psk = "secret:<name>"`, a short unique name of a-z, 0-9 and -; anything else is `secret_name_invalid`) and tell IT: "put
   `<name> = "..."` into `secrets.toml`". `check` reports `secret_unknown` until IT does. Never ask the person to tell
   you a password, and never write one into `manifest.toml`. Enterprise networks work the same way (`password`, `client_key` ...).
   `check` warns `secret_rerouted` when a network that has a secret moves to another layer, gets another `ssid`,

