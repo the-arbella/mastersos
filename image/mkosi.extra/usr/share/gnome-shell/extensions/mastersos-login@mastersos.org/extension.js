@@ -33,6 +33,7 @@ import * as SystemActions from 'resource:///org/gnome/shell/misc/systemActions.j
 import {loginArea} from './area.js';
 import {LoginCard} from './card.js';
 import {LanguageScreen, languageChosen, restartGreeter} from './setup.js';
+import {matchPeople, preselect} from './people.js';
 import {Shelf} from './shelf.js';
 import {agentRefusal, bannerText, brokerText, cleanText, fmt, strings} from './strings.js';
 
@@ -134,6 +135,12 @@ export default class MastersosLoginExtension extends Extension {
         this._menuManager = null;
         this._hookedText = null;
         this._textChangedId = 0;
+        this._keyPressId = 0;
+        this._matchBox = null;
+        this._shown = [];
+        this._more = false;
+        this._sel = -1;
+        this._picked = null;
         this._pollId = 0;
         this._domains = [];
         this._closeId = 0;
@@ -173,8 +180,7 @@ export default class MastersosLoginExtension extends Extension {
             this._adoptDialog(dlg);
         if (dlg && this._shelf && dlg._userManager?.is_loaded)
             this._shelf.setGuestAvailable(dlg._userManager.list_users().some(u => u.get_user_name() === GUEST));
-        if (this._domains.length)
-            this._tryHookEntry();
+        this._tryHookEntry();
         this._syncLanguageItem();
         if (dlg && this._firstRun && ++this._firstRunTicks % FIRST_RUN_TICKS === 0)
             this._syncFirstRun();
@@ -301,10 +307,12 @@ export default class MastersosLoginExtension extends Extension {
                 original.call(this);
                 this._authPrompt.setQuestion(ext._text.email);
                 ext._setAddPerson(true);
+                ext._takeUsernameStep(this);
             });
 
         this._patch(LoginDialog.LoginDialog.prototype, '_beginVerification', original =>
             function (params) {
+                ext._hideMatches();
                 ext._setAddPerson(false);
                 ext._clearNotice();
                 original.call(this, params);
@@ -445,6 +453,14 @@ export default class MastersosLoginExtension extends Extension {
             prompt._inputWell.add_child(button);
             return button;
         };
+        // The people found as the person types, right under the entry (a plain list: a popup menu would take the keyboard).
+        this._matchBox = new St.BoxLayout({
+            style_class: 'mastersos-people',
+            orientation: Clutter.Orientation.VERTICAL,
+            x_align: Clutter.ActorAlign.CENTER,
+            visible: false,
+        });
+        prompt._inputWell.add_child(this._matchBox);
         // "Local manager" goes straight to the IT account's password: nobody types its user name.
         this._itLink = link(this._text.itLink, () => {
             this._itLink.hide();
@@ -455,6 +471,7 @@ export default class MastersosLoginExtension extends Extension {
             prompt.connect('reset', () => {
                 // Coming back to this VT resets the prompt too. The card's sign-in ended with it, so its page could only fail.
                 this._card?.close();
+                this._hideMatches();
                 this._setAddPerson(false);
                 this._shelf?.refreshApps();
             }),
@@ -558,6 +575,12 @@ export default class MastersosLoginExtension extends Extension {
     _signInAs(userName) {
         const dlg = this._dialog;
         this._leaveCurrentSignIn();
+        // Leaving the username step for a set account: its Enter handler must not take the password as a user name.
+        if (dlg._nextSignalId) {
+            dlg._authPrompt.disconnect(dlg._nextSignalId);
+            dlg._nextSignalId = 0;
+        }
+        this._hideMatches();
         const user = dlg._userManager.get_user(userName);
         dlg._user = user;
         dlg._hideUserList();
@@ -610,9 +633,13 @@ export default class MastersosLoginExtension extends Extension {
     _unhookEntry() {
         if (this._hookedText && this._textChangedId)
             this._hookedText.disconnect(this._textChangedId);
+        if (this._hookedText && this._keyPressId)
+            this._hookedText.disconnect(this._keyPressId);
         this._hookedText = null;
         this._textChangedId = 0;
+        this._keyPressId = 0;
         this._closeMenu();
+        this._hideMatches();
     }
 
     _tryHookEntry() {
@@ -631,19 +658,152 @@ export default class MastersosLoginExtension extends Extension {
                 // Left the username stage (password / code prompt now uses this entry): do nothing and read nothing.
                 if (this._isSecret(entry) || !entry.visible) {
                     this._scheduleClose();
+                    this._hideMatches();
                     return;
                 }
                 const t = ct.get_text();
-                // Only a single trailing '@' on a non-empty name opens the list; "itadmin" and
-                // everything else without '@' never triggers anything.
-                if (t.length > 1 && t.endsWith('@') && !t.slice(0, -1).includes('@'))
+                // Only a single trailing '@' on a non-empty name opens the school domains, and then the people
+                // step aside: one list under the entry at a time.
+                if (this._domains.length && t.length > 1 && t.endsWith('@') && !t.slice(0, -1).includes('@')) {
+                    this._hideMatches();
                     this._showDomains(entry, ct);
-                else if (this._menu && !t.endsWith('@'))
+                    return;
+                }
+                if (this._menu && !t.endsWith('@'))
                     this._scheduleClose();
+                if (this._atUsernameStep(entry))
+                    this._showMatches(t);
+                else
+                    this._hideMatches();
             } catch (e) {
                 log(`mastersos-login: ${e.message ?? e}`);
             }
         });
+        this._keyPressId = ct.connect('key-press-event', (actor, event) => {
+            if (!this._matchBox?.visible)
+                return Clutter.EVENT_PROPAGATE;
+            const key = event.get_key_symbol();
+            if (key === Clutter.KEY_Down || key === Clutter.KEY_Up) {
+                this._moveSelection(key === Clutter.KEY_Down ? 1 : -1);
+                return Clutter.EVENT_STOP;
+            }
+            if (key === Clutter.KEY_Escape) {
+                this._hideMatches();
+                return Clutter.EVENT_STOP;
+            }
+            return Clutter.EVENT_PROPAGATE;
+        });
+    }
+
+    // The entry asks for who is signing in: no sign-in has started and it is the prompt's own (plain) entry.
+    _atUsernameStep(entry) {
+        const prompt = this._dialog?._authPrompt;
+        return !!prompt && entry === prompt._entry && !this._isSecret(entry) &&
+            prompt.verificationStatus === AuthPrompt.AuthPromptStatus.NOT_VERIFYING;
+    }
+
+    // Enter on the username step: the person picked below the entry, else what was typed (a new school email, a local
+    // account name). The body is Ubuntu gnome-shell 50.1-0ubuntu1.4 loginDialog.js _askForUsernameAndBeginVerification's
+    // 'next' handler, with the picked person in place of the typed text; anything else there stays GNOME's.
+    _takeUsernameStep(dlg) {
+        const prompt = dlg._authPrompt;
+        if (!dlg._nextSignalId) {
+            log('mastersos-login: LoginDialog._nextSignalId is missing; Enter signs in what was typed');
+            return;
+        }
+        prompt.disconnect(dlg._nextSignalId);
+        dlg._nextSignalId = prompt.connect('next', () => {
+            prompt.disconnect(dlg._nextSignalId);
+            dlg._nextSignalId = 0;
+            prompt.updateSensitivity(false);
+            const typed = prompt.getAnswer();
+            const answer = this._picked ?? typed;
+            this._hideMatches();
+            dlg._user = dlg._userManager.get_user(answer);
+            if (answer !== typed)
+                prompt.setUser(dlg._user);
+            prompt.clear();
+            dlg._beginVerification({userName: answer});
+        });
+    }
+
+    _people() {
+        const users = this._dialog?._userManager;
+        if (!users?.is_loaded)
+            return [];
+        return users.list_users()
+            .filter(u => !u.is_system_account?.())
+            .map(u => ({
+                user: u,
+                userName: u.get_user_name(),
+                realName: u.get_real_name() || u.get_user_name(),
+                loginTime: u.get_login_time?.() ?? 0,
+            }));
+    }
+
+    _showMatches(text) {
+        const found = matchPeople(this._people(), text);
+        this._shown = found.shown;
+        this._more = found.more;
+        this._sel = preselect(text, found.shown);
+        this._renderMatches();
+    }
+
+    _moveSelection(delta) {
+        const n = this._shown.length;
+        if (!n)
+            return;
+        this._sel = this._sel < 0 ? (delta > 0 ? 0 : n - 1) : (this._sel + delta + n) % n;
+        this._renderMatches();
+    }
+
+    _hideMatches() {
+        this._shown = [];
+        this._more = false;
+        this._sel = -1;
+        this._picked = null;
+        if (this._matchBox) {
+            this._matchBox.destroy_all_children();
+            this._matchBox.hide();
+        }
+    }
+
+    _renderMatches() {
+        const box = this._matchBox;
+        if (!box)
+            return;
+        box.destroy_all_children();
+        this._picked = this._sel >= 0 ? this._shown[this._sel].userName : null;
+        if (!this._shown.length) {
+            box.hide();
+            return;
+        }
+        this._shown.forEach((p, i) => {
+            const row = new St.BoxLayout({style_class: 'mastersos-person-content'});
+            const file = p.user.get_icon_file?.();
+            row.add_child(file && GLib.file_test(file, GLib.FileTest.IS_REGULAR)
+                ? new St.Icon({gicon: new Gio.FileIcon({file: Gio.File.new_for_path(file)}), style_class: 'mastersos-person-icon'})
+                : new St.Icon({icon_name: 'avatar-default-symbolic', style_class: 'mastersos-person-icon'}));
+            const names = new St.BoxLayout({orientation: Clutter.Orientation.VERTICAL, y_align: Clutter.ActorAlign.CENTER});
+            names.add_child(new St.Label({text: p.realName, style_class: 'mastersos-person-name'}));
+            if (p.realName !== p.userName)
+                names.add_child(new St.Label({text: p.userName, style_class: 'mastersos-person-user'}));
+            row.add_child(names);
+            // Not focusable: the keyboard stays in the entry, where typing goes on.
+            const button = new St.Button({child: row, style_class: 'mastersos-person', can_focus: false, x_expand: true});
+            if (i === this._sel)
+                button.add_style_pseudo_class('selected');
+            button.connect('clicked', () => {
+                this._sel = i;
+                this._picked = p.userName;
+                // The same way as Enter, so the same 'next' handler starts the sign-in.
+                this._dialog?._authPrompt?._entry?.clutter_text?.activate();
+            });
+            box.add_child(button);
+        });
+        if (this._more)
+            box.add_child(new St.Label({text: this._text.narrow, style_class: 'mastersos-person-more'}));
+        box.show();
     }
 
     _showDomains(entry, ct) {
@@ -730,6 +890,8 @@ export default class MastersosLoginExtension extends Extension {
         }
         this._itLink?.destroy();
         this._itLink = null;
+        this._matchBox?.destroy();
+        this._matchBox = null;
         for (const undo of this._restore.reverse())
             undo();
         this._restore = [];
