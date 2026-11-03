@@ -127,11 +127,12 @@ Say Settings, Config, Group, Device and Kiosk app to the person, not the file's 
   `check` warns `secret_rerouted` when a network that has a secret moves to another layer, gets another `ssid`,
   moves the secret to another field, or changes `eap`, `phase2`, `identity`, `anonymous_identity`,
   `server_domain`, `ca_cert` or `check_server`: the password would be sent to a new place. Do not do it unless
-  asked. A renamed `ssid` is a new network: it needs its own secret.
+  asked. A renamed `ssid` is a new network: it needs its own secret. Once the school has published, any secret a
+  network uses for the first time (a new name, or an old value left in `secrets.toml`) is reported the same way.
 - **Never pass `--allow-reroute`, and never tell IT to "just add" it as a fix.** `mastersos publish` refuses while
   any `secret_rerouted` warning exists; only IT may approve a rerouted secret, by name. Tell IT which secret
   (`rerouted_secrets` in the `check` tool's result, or the names `mastersos check` prints) moved where, and leave
-  the decision to IT.
+  the decision to IT (who checks `mastersos diff` before approving).
 
 ## Reference
 

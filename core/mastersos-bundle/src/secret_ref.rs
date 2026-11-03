@@ -369,8 +369,9 @@ fn occurrences(doc: &mut DocumentMut) -> BTreeMap<String, Vec<Occurrence>> {
 
 /// `secret_unknown` (error): a reference with no entry in `secrets`. `secret_unused` (warning):
 /// an entry nothing refers to. `secret_rerouted` (warning): a referenced secret's network changed
-/// its layer, `ssid`, field or a routing field (`eap`, `server_domain`, ...) since `base_text`.
-/// It stays a warning (the settings are valid), but `mastersos publish` refuses while one exists
+/// its layer, `ssid`, field or a routing field (`eap`, `server_domain`, ...) since `base_text`,
+/// or a name the base never referenced is referenced now (whether or not `secrets.toml` already
+/// held a value for it). Without a base (the first version) nothing is rerouted. It stays a warning (the settings are valid), but `mastersos publish` refuses while one exists
 /// unless IT approves that secret by name ([`unapproved_reroutes`]). Text that does not parse
 /// gives no lints here; the syntax check reports it.
 pub fn lints(
@@ -411,6 +412,20 @@ pub fn lints(
         let before = occurrences(&mut base);
         for (name, now) in occurrences(&mut doc) {
             let Some(was) = before.get(&name) else {
+                // The published version never sent this secret anywhere: a value already in
+                // secrets.toml (a stale entry) or a new one now reaches a network IT has not
+                // approved. Only a directory with no published base (the first version) is free.
+                out.push(
+                    Lint::new(
+                        LintLevel::Warning,
+                        "secret_rerouted",
+                        format!(
+                            "Secret \"{name}\" is used by a network it was not used by in the published version, so it would be sent somewhere new. `mastersos publish` refuses this until IT checks `mastersos diff` and passes --allow-reroute {name}."
+                        ),
+                    )
+                    .param("name", &name)
+                    .param("fields", "new network"),
+                );
                 continue;
             };
             for occ in &now {
@@ -434,7 +449,7 @@ pub fn lints(
                         LintLevel::Warning,
                         "secret_rerouted",
                         format!(
-                            "The network using secret \"{name}\" changed {}, so the secret would be sent somewhere new. `mastersos publish` refuses this until IT confirms the secret still belongs there and passes --allow-reroute {name}.",
+                            "The network using secret \"{name}\" changed {}, so the secret would be sent somewhere new. `mastersos publish` refuses this until IT checks `mastersos diff`, confirms the secret still belongs there and passes --allow-reroute {name}.",
                             changed.join(", ")
                         ),
                     )
@@ -670,6 +685,32 @@ password = "eappass"
         let both: Vec<String> = all.iter().map(|s| s.to_string()).collect();
         assert!(unapproved_reroutes(&l, &both).is_empty());
         assert!(unapproved_reroutes(&lints(&base, &secrets, Some(&base)), &[]).is_empty());
+    }
+
+    #[test]
+    fn stale_secret_on_a_new_network_is_rerouted() {
+        // secrets.toml still holds a value nothing in the base refers to; a new network that
+        // points at it (here with a server of its choosing) must not pass silently.
+        let (base, mut secrets) = split(SAMPLE).unwrap();
+        secrets.insert("old-corp".into(), "oldpass".into());
+        let now = format!("{base}\n[[config]]\nid = \"evil\"\n[[config.wifi]]\nssid = \"Corp\"\neap = \"peap\"\nserver_domain = \"evil.example\"\npassword = \"secret:old-corp\"\n");
+        let l = lints(&now, &secrets, Some(&base));
+        assert_eq!(codes(&l), ["secret_rerouted"], "{l:?}");
+        assert_eq!(l[0].params["name"], "old-corp");
+        assert_eq!(unapproved_reroutes(&l, &[]), ["old-corp"]);
+    }
+
+    #[test]
+    fn new_secret_needs_approval_unless_there_is_no_base() {
+        let (base, mut secrets) = split(SAMPLE).unwrap();
+        let now = format!("{base}\n[[config]]\nid = \"lab2\"\nwifi = [{{ ssid = \"Lab2\", psk = \"secret:lab2-psk\" }}]\n");
+        secrets.insert("lab2-psk".into(), "lab2pass".into());
+        let l = lints(&now, &secrets, Some(&base));
+        assert_eq!(codes(&l), ["secret_rerouted"], "{l:?}");
+        assert_eq!(unapproved_reroutes(&l, &[]), ["lab2-psk"]);
+        assert!(unapproved_reroutes(&l, &["lab2-psk".into()]).is_empty());
+        // No published base (the first version): nothing is rerouted.
+        assert!(lints(&now, &secrets, None).is_empty());
     }
 
     #[test]

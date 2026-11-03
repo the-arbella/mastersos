@@ -137,7 +137,8 @@ A network that already has a password shows `psk = "secret:guest-wifi"`. Leave t
 something else (for example `hidden`). Renaming the `ssid` makes it a new network that needs its own secret, and so
 does changing where an enterprise password is sent (`eap`, `phase2`, `identity`, `anonymous_identity`,
 `server_domain`, `ca_cert`, `check_server`): `check` warns `secret_rerouted`, and `mastersos publish` refuses until
-IT approves that secret by name (`--allow-reroute <name>`). Tell IT which secret; never pass that flag yourself.
+IT checks `mastersos diff` and approves that secret by name (`--allow-reroute <name>`). A new network with a new
+`secret:` name is reported the same way once the school has published. Tell IT which secret; never pass that flag yourself.
 
 Issues: `wifi_invalid`, `wifi_ssid_duplicate`, `secret_unknown` (a `secret:` name missing from `secrets.toml`),
 `secret_rerouted`, `wifi_open_implicit` (an older entry without `psk`, `eap` or `open = true`: Devices join it as

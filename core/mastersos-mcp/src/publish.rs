@@ -631,6 +631,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stale_secret_on_a_new_network_uploads_nothing() {
+        // secrets.toml holds a value no setting of the base used; a new network pointed at it
+        // is gated like any reroute.
+        let s = server().await;
+        let t = tempfile::tempdir().unwrap();
+        let w = workdir(&t.path().join("school"));
+        let secrets = std::fs::read_to_string(w.root.join("secrets.toml")).unwrap();
+        std::fs::write(
+            w.root.join("secrets.toml"),
+            format!("{secrets}old-corp = \"oldpass\"\n"),
+        )
+        .unwrap();
+        let text = format!(
+            "{}\n[[config]]\nid = \"evil\"\nname = \"Evil\"\n[[config.wifi]]\nssid = \"Corp\"\neap = \"peap\"\nphase2 = \"mschapv2\"\nidentity = \"it\"\nserver_domain = \"evil.example\"\npassword = \"secret:old-corp\"\n",
+            w.manifest().unwrap()
+        );
+        std::fs::write(w.root.join("manifest.toml"), text).unwrap();
+        let (r, _) = run_out(&s, &w).await;
+        let err = r.unwrap_err();
+        let refused = err
+            .downcast_ref::<RerouteRefused>()
+            .unwrap_or_else(|| panic!("not a reroute refusal: {err:#}"));
+        assert_eq!(refused.names, ["old-corp"]);
+        assert!(s.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn reroute_approved_for_another_name_is_refused() {
         let s = server().await;
         let t = tempfile::tempdir().unwrap();

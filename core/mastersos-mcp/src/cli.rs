@@ -16,7 +16,7 @@ use crate::workdir::{self, Meta, Workdir};
 use crate::{call, check_server, connect, serve_stdio, Api, OpError, Req, TokenUse};
 
 const EXIT_CODES: &str = "Exit codes: 0 success; 1 failure (network, token, the server refused); \
-2 `check` or `publish` found errors in the local settings.";
+2 `check` or `publish` found errors in the local settings (or `publish` found a secret rerouted without --allow-reroute).";
 
 #[derive(Parser)]
 #[command(
@@ -609,11 +609,11 @@ fn reroute_notice(lints: &[mastersos_bundle::Lint]) -> Option<String> {
 /// `mastersos check`: the lints of the local directory; exit code 2 when any is an error.
 fn local_check(dir: Option<&Path>, json: bool) -> Result<ExitCode, OpError> {
     let lints = workdir::check(&open_dir(dir)?).map_err(fail)?;
-    let issues = lint_values(&lints);
     if json {
-        println!("{}", Value::Array(issues));
+        // The same shape as the MCP `check` tool.
+        println!("{}", crate::tools::check_result(&lints));
     } else {
-        print_issues(&issues);
+        print_issues(&lint_values(&lints));
         if let Some(n) = reroute_notice(&lints) {
             println!("{n}");
         }

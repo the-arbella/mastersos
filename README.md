@@ -51,7 +51,7 @@ mastersos publish ./school                    # 不带 --kit/--key：只上传�
   之后走 `mastersos-sign` 同一条签名路径（`SigningKey::Kit`）：本地验链、对照上传时本地算的摘要、键入版本号确认、签名并 commit。
   第一版（R1g）也用它签。
 - `--key <文件>`：PKCS#8 恢复钥匙文件，与 `--kit` 二选一。
-- `--allow-reroute <秘密名>`（可重复）：见下面的 `secret_rerouted`，只由 IT 给。
+- `--allow-reroute <秘密名>`（可重复）：见下面的 `secret_rerouted`，只由 IT 给，给之前先跑 `mastersos diff` 看清秘密要被发到哪里。
 
 其他子命令：`mastersos devices list|show`、`keys list`（服务端的机器与已登记钥匙，供手写 `[[device]]` 与 `trust`）、
 `hash-password`（不回显读口令，输出 IT 账号的哈希，写进 `secrets.toml`）、`logo upload <登录页.png> <图标.png>`、`spec`、`setup`。
@@ -80,8 +80,11 @@ mastersos setup --server https://mastersos.school.ac.th --token-file /path/to/it
 - 秘密（Wi-Fi 的 `psk`、`password`、`client_key`、`client_key_password`，IT 账号的 `password_hash`）在 `manifest.toml` 里是 `secret:<名字>` 引用。
   `check`：引用了不存在的秘密是错误（`secret_unknown`）；没人用的秘密是警告；引用秘密的网络换了层、换了 `ssid`、秘密换了字段，
   或改了 `eap`、`phase2`、`identity`、`anonymous_identity`、`server_domain`、`ca_cert`、`check_server` 任一，警告 `secret_rerouted`
-  （密码会被发到新的地方），`check` 末尾醒目列出这些秘密。`publish` 遇到它就拒绝、什么都不上传，除非 IT 对每个改道的秘密都给
-  `--allow-reroute <名字>`（可重复；给错名字不算），例如 `mastersos publish ./school --kit school.kit --allow-reroute lab-corp-password`。
+  （密码会被发到新的地方）。已发布的版本有内容时，一个它没用过的秘密名被新网络引用也算改道：不论 `secrets.toml` 里是早就留着的旧值
+  还是这次新加的值，第一次送到任何网络都要 IT 同意（只有还没发布过的第一版不算）。`check` 末尾醒目列出这些秘密，
+  `--json` 的结果里是 `rerouted_secrets`（与 MCP 的 `check` 同一形状）。`publish` 遇到它就拒绝、什么都不上传，除非 IT 先跑
+  `mastersos diff` 核对，再对每个改道的秘密都给 `--allow-reroute <名字>`（可重复；给错名字不算），
+  例如 `mastersos publish ./school --kit school.kit --allow-reroute lab-corp-password`。
   只有 IT 能下这个决定：MCP 没有发布工具，也没有任何参数能传它，AI 从不替 IT 传。
 - `publish` 上传前先打印本地检查的全部警告。
 - AI 不改 trust：`trust` 照 `manifest.toml` 写的，发布不自动填；trust 的变化只能由 IT 用恢复钥匙经 `mastersos-sign` 签。
@@ -213,15 +216,16 @@ kiosk PWA），同时联系厂商取得长期支持（设计 `docs/superpowers/s
   学校换管理域名不影响 passkey；只有签名源本身搬家时，才要在新签名源上登记 passkey，再用恢复钥匙签一版把它加进 trust。
   - 同步型 passkey 的私钥跟着 IT 的 Apple 或 Google 账号走。钥匙页会标出「同步型」。
   - 签名页在 https 的签名源上；只有本机演示用 `http://localhost`。
-- **恢复钥匙**：Ed25519，用 `mastersos-sign` 生成、登记和签名。平时打印在纸上锁进柜子，电脑上不留私钥。
+- **恢复钥匙包**：Ed25519 恢复钥匙（与托管钥匙同出一个 kit），必需。用 `mastersos-sign kit new` 生成、登记；签名用
+  `mastersos publish --kit`、`mastersos-sign --kit` 或签名页的「载入恢复钥匙包」。kit 文件随用随带、用完收好（0600）。
   trust 里至少要有一把恢复钥匙（R6）。
 
 ### 网页签名与 `mastersos-sign` 的分工
 
-- **签名页的 passkey**：用于日常发布（trust 与托管收件人都没有变化的那些）和心跳续签。签名页下载待发布的每个文件、自己算摘要；
-  从上一版的归档里读出 trust 与托管收件人自己比对，和服务端说的对不上就按变化处理；签名用的消息在本地重建，不签服务端给的字节。
-  发布之后再按一次 passkey 续签 30 天心跳。trust 或收件人有变化（以及第一版）时只给「载入恢复钥匙包」
-  （网页载入 kit 在计划 6 Task 18 落地，在那之前页面给出带 `--kit` 的 `mastersos-sign sign` 命令）。
+- **签名页**：每一版（包括第一版和 trust、托管收件人有变化的版本）都可以「载入恢复钥匙包」签；trust 与收件人都没变化的日常发布，
+  登记过 passkey 的也可以用 passkey 签（可选）。签名页下载待发布的每个文件、自己算摘要；从上一版的归档里读出 trust 与托管收件人
+  自己比对，和服务端说的对不上就按变化处理；签名用的消息在本地重建，不签服务端给的字节。
+  签名页的心跳续签目前只支持 passkey；只有恢复钥匙包时，页面给出 `mastersos-sign heartbeat --kit <文件>` 命令照着跑。
   **网页签名信任的是发出签名页的云**（横幅写明构建号与签名源）：怀疑签名页被换过时，改用 `mastersos-sign`。
 - **`mastersos-sign`**：不信任服务端。签名前，它从本机 pin 住的那一版起，逐版取回服务端发布过的每一版原始包，像 agent 一样验签。
   差异、摘要、trust 的增删都在本地算，服务端给的差异和 lint 只作参考。**trust 的任何变化都只能经它、用恢复钥匙签**
@@ -256,7 +260,7 @@ $S seed-check --server https://mastersos.school.ac.th --token-file draft.token s
 $S heartbeat --server https://mastersos.school.ac.th --token-file draft.token --key rk.key --days 30
 ```
 
-**恢复钥匙包（kit，计划 6）**：一个 32 字节主密钥，导出 Ed25519 恢复钥匙（`rk-…`，进 trust）和 age 的托管钥匙
+**恢复钥匙包**：一个 32 字节主密钥，导出 Ed25519 恢复钥匙（`rk-…`，进 trust）和 age 的托管钥匙
 （`age1…`，进 `[school].escrow_recipients`）。文字形式是 `MASTERSKIT1…`（bech32m），抄错一个字符、混写大小写都会被拒，
 不会悄悄变成另一把钥匙。`sign`、`heartbeat`、`register` 都可以用 `--kit <文件>` 代替 `--key`（`--kit -` 从标准输入的第一行读）。
 `--kit -` 要用管道或重定向喂进去（`--kit - < usb/school.kit`）：在终端里直接敲或粘贴，kit 会回显在屏幕上。
@@ -319,4 +323,4 @@ $S escrow-read --server https://<slug>.os.khundavid.com --token-file recovery.to
 - 现在已经过了「接受这一版 + 7 天」与「心跳到期」两者中较晚的那个时刻。
 
 心跳说有更新的版本、而机器立即重拉仍拿不到时，机器回报「有更新被扣住」。**心跳的有效期就是服务端扣住更新、
-而机器看不出来的最长时间。** 服务端从不自签心跳，由 IT 签，最长 31 天（按签发时刻算；机器容许签发时刻比本机快 1 天，所以从机器的角度看最多约 32 天）：用网页的「用 passkey 续签」，或者用 `mastersos-sign heartbeat`。
+而机器看不出来的最长时间。** 服务端从不自签心跳，由 IT 签，最长 31 天（按签发时刻算；机器容许签发时刻比本机快 1 天，所以从机器的角度看最多约 32 天）：用 `mastersos-sign heartbeat --kit <文件>`（签名页在只有 kit 时也给出这条命令），或者登记过 passkey 的，用网页的「用 passkey 续签」。

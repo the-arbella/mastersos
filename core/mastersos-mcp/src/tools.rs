@@ -309,19 +309,7 @@ fn run_local(
         "check" => {
             args::<NoParams>(name, a)?;
             let issues = workdir::check(w).map_err(fail)?;
-            let rerouted = mastersos_bundle::secret_ref::rerouted_names(&issues);
-            // A rerouted secret stops publishing until IT approves it, so the directory is not
-            // publishable as it stands.
-            let publishable = rerouted.is_empty()
-                && !issues
-                    .iter()
-                    .any(|l| l.level == mastersos_bundle::LintLevel::Error);
-            serde_json::to_string(&json!({
-                "issues": issues,
-                "publishable": publishable,
-                "rerouted_secrets": rerouted,
-            }))
-            .map_err(|e| e.to_string())
+            Ok(check_result(&issues).to_string())
         }
         "diff" => {
             args::<NoParams>(name, a)?;
@@ -333,6 +321,19 @@ fn run_local(
         }
         other => Err(format!("No such tool: {other}")),
     }
+}
+
+/// The check's result, for the `check` tool and `mastersos --json check`: `{issues, publishable,
+/// rerouted_secrets}`. A rerouted secret stops publishing until IT approves it, so a directory
+/// with one is not publishable as it stands.
+pub fn check_result(issues: &[mastersos_bundle::Lint]) -> Value {
+    let rerouted = mastersos_bundle::secret_ref::rerouted_names(issues);
+    let publishable = rerouted.is_empty() && !mastersos_bundle::has_errors(issues);
+    json!({
+        "issues": issues,
+        "publishable": publishable,
+        "rerouted_secrets": rerouted,
+    })
 }
 
 /// The text of one member file. Only `files/…` and `scripts/…` paths that pass the bundle's path

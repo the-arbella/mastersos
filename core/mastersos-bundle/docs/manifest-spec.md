@@ -3131,13 +3131,13 @@ config = "standard"
 
 ### `secret_rerouted`
 
-**Level:** warning; `mastersos publish` refuses it. **Meaning:** a network that uses a `secret:` reference changed its layer, `ssid`, secret field, `eap`, `phase2`, `identity`, `anonymous_identity`, `server_domain`, `ca_cert` or `check_server` since the pull.
+**Level:** warning; `mastersos publish` refuses it. **Meaning:** a network that uses a `secret:` reference changed its layer, `ssid`, secret field, `eap`, `phase2`, `identity`, `anonymous_identity`, `server_domain`, `ca_cert` or `check_server` since the pull, or uses a secret the pulled Version used nowhere (a new or leftover one).
 
 <!-- prompt:omit -->
 **Why:** these fields decide where the secret is sent; pointing a saved password at a different network or server would hand it over.
 <!-- /prompt:omit -->
 
-**How to fix:** undo the change, or give the network a new secret. If it is intended, only IT approves it: `mastersos publish --allow-reroute <name>` once per secret. An AI never passes that flag.
+**How to fix:** undo the change, or give the network a new secret. If it is intended, only IT approves it after `mastersos diff`: `mastersos publish --allow-reroute <name>` once per secret. An AI never passes that flag.
 
 ### `secret_unknown`
 
