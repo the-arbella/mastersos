@@ -565,9 +565,8 @@ There each one is a reference such as `psk = "secret:guest-wifi"`; the value liv
 `mastersos publish` puts them back when it builds the Version. An AI assistant never reads `secrets.toml`:
 for a new password network it writes the reference and asks IT to add the value. `mastersos check` reports
 `secret_unknown` (a reference with no value: error), `secret_unused` (a value nothing refers to: warning) and
-`secret_rerouted` (a network that has a secret changed `eap`, `phase2`, `identity`, `anonymous_identity`,
-`server_domain`, `ca_cert` or `check_server`, so the secret would be sent somewhere new: warning; IT
-confirms). A renamed `ssid` is a new network and needs its own secret.
+`secret_rerouted` (a secret's network changed where the secret goes: warning, but `mastersos publish`
+refuses it until IT passes `--allow-reroute <name>`). A renamed `ssid` is a new network and needs its own secret.
 
 The kind of network follows from the keys written:
 
@@ -3132,13 +3131,13 @@ config = "standard"
 
 ### `secret_rerouted`
 
-**Level:** warning. **Meaning:** a network that uses a `secret:` reference changed `eap`, `phase2`, `identity`, `anonymous_identity`, `server_domain`, `ca_cert` or `check_server` since the settings were pulled.
+**Level:** warning; `mastersos publish` refuses it. **Meaning:** a network that uses a `secret:` reference changed its layer, `ssid`, secret field, `eap`, `phase2`, `identity`, `anonymous_identity`, `server_domain`, `ca_cert` or `check_server` since the pull.
 
 <!-- prompt:omit -->
-**Why:** these fields decide where the secret is sent; pointing a saved password at a different server would hand it over.
+**Why:** these fields decide where the secret is sent; pointing a saved password at a different network or server would hand it over.
 <!-- /prompt:omit -->
 
-**How to fix:** make sure the change is intended, or enter the password again for the changed network.
+**How to fix:** undo the change, or give the network a new secret. If it is intended, only IT approves it: `mastersos publish --allow-reroute <name>` once per secret. An AI never passes that flag.
 
 ### `secret_unknown`
 

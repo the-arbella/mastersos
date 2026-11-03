@@ -68,8 +68,11 @@ mastersos setup --server https://mastersos.school.ac.th --token-file /path/to/it
 - token 带 read、draft 以外的范围（`publish`、`keys` ……）时：`mastersos mcp` 以退出码 2 结束，其他子命令以 1 结束。
 - 退出码：0 成功；1 失败（网络、认证、服务端拒绝）；2 `check` 有 error。
 - 秘密（Wi-Fi 的 `psk`、`password`、`client_key`、`client_key_password`，IT 账号的 `password_hash`）在 `manifest.toml` 里是 `secret:<名字>` 引用。
-  `check`：引用了不存在的秘密是错误（`secret_unknown`）；没人用的秘密是警告；引用秘密的网络改了 `eap`、`phase2`、`identity`、
-  `anonymous_identity`、`server_domain`、`ca_cert`、`check_server` 任一，警告 `secret_rerouted`（密码会被发到新的地方，请 IT 确认）。
+  `check`：引用了不存在的秘密是错误（`secret_unknown`）；没人用的秘密是警告；引用秘密的网络换了层、换了 `ssid`、秘密换了字段，
+  或改了 `eap`、`phase2`、`identity`、`anonymous_identity`、`server_domain`、`ca_cert`、`check_server` 任一，警告 `secret_rerouted`
+  （密码会被发到新的地方），`check` 末尾醒目列出这些秘密。`publish` 遇到它就拒绝、什么都不上传，除非 IT 对每个改道的秘密都给
+  `--allow-reroute <名字>`（可重复；给错名字不算）。只有 IT 能下这个决定：MCP 没有发布工具，也没有任何参数能传它，AI 从不替 IT 传。
+- `publish` 上传前先打印本地检查的全部警告。
 - AI 不改 trust：`trust` 照 `manifest.toml` 写的，发布不自动填；trust 的变化只能由 IT 用恢复钥匙经 `mastersos-sign` 签。
 
 ### 装命令行与 skill

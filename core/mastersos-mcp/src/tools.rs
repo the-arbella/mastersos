@@ -62,7 +62,7 @@ pub const TOOLS: &[Tool] = &[
         name: "check",
         kind: Kind::Local,
         description: concat!(
-            "Check the local settings directory the way publishing would, without the network. Returns {issues, publishable}; each issue has level, code, message, path and a span where known. Run it after every edit and fix every error. Use spec with an issue code as the section to read how to fix it. No parameters. ",
+            "Check the local settings directory the way publishing would, without the network. Returns {issues, publishable, rerouted_secrets}; each issue has level, code, message, path and a span where known. Run it after every edit and fix every error. Use spec with an issue code as the section to read how to fix it. rerouted_secrets lists the secrets a secret_rerouted warning names: publishing refuses until IT approves each one on the command line; tell IT which secrets and why, and leave the decision to IT (you have no way to approve it and must not suggest the approval flag as a fix). No parameters. ",
             secret_rule!()
         ),
     },
@@ -309,11 +309,19 @@ fn run_local(
         "check" => {
             args::<NoParams>(name, a)?;
             let issues = workdir::check(w).map_err(fail)?;
-            let publishable = !issues
-                .iter()
-                .any(|l| l.level == mastersos_bundle::LintLevel::Error);
-            serde_json::to_string(&json!({ "issues": issues, "publishable": publishable }))
-                .map_err(|e| e.to_string())
+            let rerouted = mastersos_bundle::secret_ref::rerouted_names(&issues);
+            // A rerouted secret stops publishing until IT approves it, so the directory is not
+            // publishable as it stands.
+            let publishable = rerouted.is_empty()
+                && !issues
+                    .iter()
+                    .any(|l| l.level == mastersos_bundle::LintLevel::Error);
+            serde_json::to_string(&json!({
+                "issues": issues,
+                "publishable": publishable,
+                "rerouted_secrets": rerouted,
+            }))
+            .map_err(|e| e.to_string())
         }
         "diff" => {
             args::<NoParams>(name, a)?;
@@ -484,6 +492,34 @@ mod tests {
         std::fs::write(w.root.join("secrets.toml"), "oldpass1 oops").unwrap();
         let e = run(&w, "read_manifest").unwrap_err();
         assert!(!e.contains("oldpass1"), "{e}");
+    }
+
+    #[test]
+    fn check_lists_rerouted_secrets_as_not_publishable() {
+        let t = tempfile::tempdir().unwrap();
+        let w = pulled(&t.path().join("school"));
+        let name = only_secret_name(&w);
+        let v: Value = serde_json::from_str(&run(&w, "check").unwrap()).unwrap();
+        assert_eq!(v["rerouted_secrets"], json!([]));
+        let text = w.manifest().unwrap().replace("\"Guest\"", "\"Lobby\"");
+        std::fs::write(w.root.join("manifest.toml"), text).unwrap();
+        let v: Value = serde_json::from_str(&run(&w, "check").unwrap()).unwrap();
+        assert_eq!(v["rerouted_secrets"], json!([name]));
+        assert_eq!(v["publishable"], false);
+    }
+
+    #[test]
+    fn no_tool_can_approve_a_reroute() {
+        // Only IT approves a rerouted secret (`mastersos publish --allow-reroute`): no tool
+        // publishes, and no tool's parameters mention an approval.
+        for t in mcp_tools() {
+            let schema = serde_json::to_string(&t.input_schema).unwrap();
+            assert!(!t.name.contains("publish"), "{}", t.name);
+            assert!(
+                !schema.contains("allow") && !schema.contains("reroute"),
+                "{schema}"
+            );
+        }
     }
 
     #[test]

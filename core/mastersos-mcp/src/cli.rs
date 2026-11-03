@@ -92,6 +92,9 @@ enum Cmd {
         /// A recovery key file: verify and sign on this computer (without it, IT signs on the signing page with a Passkey, or the first version with the recovery kit)
         #[arg(long)]
         key: Option<PathBuf>,
+        /// IT approves that secret NAME may go to its changed network (`secret_rerouted`); give it once per rerouted secret. Without it publish refuses. Never passed by an AI
+        #[arg(long = "allow-reroute", value_name = "NAME")]
+        allow_reroute: Vec<String>,
     },
     /// The signing keys the server knows
     #[command(subcommand)]
@@ -279,8 +282,20 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         }
         Cmd::Devices(c) => devices(&api, &out, c).await,
         Cmd::Spec { section, full } => spec(&api, section, full).await,
-        Cmd::Publish { dir, key } => {
-            publish_dir(&api, &server, &token_file, dir.as_deref(), key.as_deref()).await
+        Cmd::Publish {
+            dir,
+            key,
+            allow_reroute,
+        } => {
+            publish_dir(
+                &api,
+                &server,
+                &token_file,
+                dir.as_deref(),
+                key.as_deref(),
+                &allow_reroute,
+            )
+            .await
         }
         Cmd::Keys(KeysCmd::List) => {
             let text = api.send(Req::get(&["v1", "admin", "signing-keys"])).await?;
@@ -554,17 +569,47 @@ fn open_dir(dir: Option<&Path>) -> Result<Workdir, OpError> {
     Workdir::open(dir.unwrap_or_else(|| Path::new("."))).map_err(fail)
 }
 
+fn lint_values(lints: &[mastersos_bundle::Lint]) -> Vec<Value> {
+    lints
+        .iter()
+        .map(|l| serde_json::to_value(l).unwrap_or(Value::Null))
+        .collect()
+}
+
+/// What `mastersos check` prints after the issues when secrets are rerouted: publishing stops
+/// on them until IT approves each one by name.
+fn reroute_notice(lints: &[mastersos_bundle::Lint]) -> Option<String> {
+    let names = mastersos_bundle::secret_ref::rerouted_names(lints);
+    if names.is_empty() {
+        return None;
+    }
+    // Secret names are checked to be a-z, 0-9 and hyphens; escape anyway, they come from a file.
+    let names: Vec<String> = names
+        .iter()
+        .map(|n| n.escape_default().to_string())
+        .collect();
+    let flags: Vec<String> = names
+        .iter()
+        .map(|n| format!("--allow-reroute {n}"))
+        .collect();
+    Some(format!(
+        "\n!! SECRET REROUTED: {} would be sent to a changed network.\n!! `mastersos publish` refuses until IT checks the change (`mastersos diff`) and approves it:\n!!   mastersos publish {}\n!! Only IT decides this; an AI assistant never passes --allow-reroute.",
+        names.join(", "),
+        flags.join(" ")
+    ))
+}
+
 /// `mastersos check`: the lints of the local directory; exit code 2 when any is an error.
 fn local_check(dir: Option<&Path>, json: bool) -> Result<ExitCode, OpError> {
     let lints = workdir::check(&open_dir(dir)?).map_err(fail)?;
-    let issues: Vec<Value> = lints
-        .iter()
-        .map(|l| serde_json::to_value(l).unwrap_or(Value::Null))
-        .collect();
+    let issues = lint_values(&lints);
     if json {
         println!("{}", Value::Array(issues));
     } else {
         print_issues(&issues);
+        if let Some(n) = reroute_notice(&lints) {
+            println!("{n}");
+        }
     }
     Ok(if mastersos_bundle::has_errors(&lints) {
         ExitCode::from(2)
@@ -823,8 +868,11 @@ async fn publish_dir(
     token_file: &Path,
     dir: Option<&Path>,
     key: Option<&Path>,
+    allow_reroute: &[String],
 ) -> Result<ExitCode, OpError> {
-    use crate::publish::{publish, CheckFailed, PublishOutcome, ServerRefused, SignOpts};
+    use crate::publish::{
+        publish, CheckFailed, PublishOutcome, RerouteRefused, ServerRefused, SignOpts,
+    };
     let w = open_dir(dir)?;
     let m = w.meta().map_err(fail)?;
     if !same_server(&m.server, server) {
@@ -844,6 +892,7 @@ async fn publish_dir(
         api,
         &w,
         sign,
+        allow_reroute,
         chrono::Utc::now(),
         &mut std::io::stdin().lock(),
         &mut std::io::stdout(),
@@ -870,22 +919,22 @@ async fn publish_dir(
             Ok(ExitCode::SUCCESS)
         }
         Err(e) => match e.downcast::<CheckFailed>() {
-            Ok(c) => {
-                let issues: Vec<Value> =
-                    c.0.iter()
-                        .map(|l| serde_json::to_value(l).unwrap_or(Value::Null))
-                        .collect();
-                Err(OpError::Refused {
-                    message: c.to_string(),
-                    issues: Some(issues),
-                })
-            }
-            Err(e) => match e.downcast::<ServerRefused>() {
+            Ok(c) => Err(OpError::Refused {
+                message: c.to_string(),
+                issues: Some(lint_values(&c.0)),
+            }),
+            Err(e) => match e.downcast::<RerouteRefused>() {
                 Ok(r) => Err(OpError::Refused {
-                    message: r.message,
-                    issues: Some(r.issues),
+                    message: r.to_string(),
+                    issues: Some(lint_values(&r.lints)),
                 }),
-                Err(e) => Err(fail(e)),
+                Err(e) => match e.downcast::<ServerRefused>() {
+                    Ok(r) => Err(OpError::Refused {
+                        message: r.message,
+                        issues: Some(r.issues),
+                    }),
+                    Err(e) => Err(fail(e)),
+                },
             },
         },
     }
@@ -894,6 +943,22 @@ async fn publish_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn check_names_every_rerouted_secret_and_the_flag() {
+        use mastersos_bundle::{Lint, LintLevel};
+        let lint = |name: &str| {
+            Lint::new(LintLevel::Warning, "secret_rerouted", "changed").param("name", name)
+        };
+        assert!(reroute_notice(&[Lint::new(LintLevel::Warning, "secret_unused", "x")]).is_none());
+        let n = reroute_notice(&[lint("b-psk"), lint("a-psk"), lint("b-psk")]).unwrap();
+        assert!(n.contains("SECRET REROUTED: a-psk, b-psk"), "{n}");
+        assert!(
+            n.contains("mastersos publish --allow-reroute a-psk --allow-reroute b-psk"),
+            "{n}"
+        );
+        assert!(n.contains("never passes --allow-reroute"), "{n}");
+    }
 
     #[test]
     fn server_addresses_compare_as_urls() {

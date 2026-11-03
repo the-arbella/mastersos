@@ -369,7 +369,9 @@ fn occurrences(doc: &mut DocumentMut) -> BTreeMap<String, Vec<Occurrence>> {
 
 /// `secret_unknown` (error): a reference with no entry in `secrets`. `secret_unused` (warning):
 /// an entry nothing refers to. `secret_rerouted` (warning): a referenced secret's network changed
-/// a routing field (`eap`, `server_domain`, ...) since `base_text`. Text that does not parse
+/// its layer, `ssid`, field or a routing field (`eap`, `server_domain`, ...) since `base_text`.
+/// It stays a warning (the settings are valid), but `mastersos publish` refuses while one exists
+/// unless IT approves that secret by name ([`unapproved_reroutes`]). Text that does not parse
 /// gives no lints here; the syntax check reports it.
 pub fn lints(
     manifest_text: &str,
@@ -432,7 +434,7 @@ pub fn lints(
                         LintLevel::Warning,
                         "secret_rerouted",
                         format!(
-                            "The network using secret \"{name}\" changed {}; check the secret still belongs there.",
+                            "The network using secret \"{name}\" changed {}, so the secret would be sent somewhere new. `mastersos publish` refuses this until IT confirms the secret still belongs there and passes --allow-reroute {name}.",
                             changed.join(", ")
                         ),
                     )
@@ -443,6 +445,25 @@ pub fn lints(
         }
     }
     out
+}
+
+/// The secret names that `secret_rerouted` lints in `lints` report, each once.
+pub fn rerouted_names(lints: &[Lint]) -> BTreeSet<String> {
+    lints
+        .iter()
+        .filter(|l| l.code == "secret_rerouted")
+        .filter_map(|l| l.params.get("name").cloned())
+        .collect()
+}
+
+/// The rerouted secrets ([`rerouted_names`]) that IT has not approved by name in `allowed`
+/// (`mastersos publish --allow-reroute <name>`), sorted. Publishing goes ahead only when this is
+/// empty; an approval names one secret, so approving another name approves nothing here.
+pub fn unapproved_reroutes(lints: &[Lint], allowed: &[String]) -> Vec<String> {
+    rerouted_names(lints)
+        .into_iter()
+        .filter(|n| !allowed.iter().any(|a| a == n))
+        .collect()
 }
 
 #[cfg(test)]
@@ -626,6 +647,29 @@ password = "eappass"
             codes(&lints(&moved, &secrets, Some(&base))),
             ["secret_rerouted"]
         );
+    }
+
+    #[test]
+    fn reroutes_need_approval_by_name() {
+        let (base, secrets) = split(SAMPLE).unwrap();
+        let now = base
+            .replace("a.example", "b.example")
+            .replace("\"Guest\"", "\"Other\"");
+        let l = lints(&now, &secrets, Some(&base));
+        assert_eq!(codes(&l), ["secret_rerouted", "secret_rerouted"], "{l:?}");
+        assert!(l[0].message.contains("--allow-reroute"), "{}", l[0].message);
+        let all = ["defaults-guest-psk", "lab-corp-password"];
+        assert_eq!(rerouted_names(&l).into_iter().collect::<Vec<_>>(), all);
+        assert_eq!(unapproved_reroutes(&l, &[]), all);
+        assert_eq!(
+            unapproved_reroutes(&l, &["defaults-guest-psk".into()]),
+            ["lab-corp-password"]
+        );
+        // A wrong name approves nothing.
+        assert_eq!(unapproved_reroutes(&l, &["nope".into()]), all);
+        let both: Vec<String> = all.iter().map(|s| s.to_string()).collect();
+        assert!(unapproved_reroutes(&l, &both).is_empty());
+        assert!(unapproved_reroutes(&lints(&base, &secrets, Some(&base)), &[]).is_empty());
     }
 
     #[test]

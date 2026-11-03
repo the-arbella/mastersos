@@ -14,7 +14,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{DateTime, SecondsFormat, Utc};
 use mastersos_bundle::secret_ref;
 use mastersos_bundle::stamp::{school_name_to_write, stamp};
-use mastersos_bundle::{content_digest, has_errors, Contents, Lint};
+use mastersos_bundle::{content_digest, has_errors, Contents, Lint, LintLevel};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -85,6 +85,33 @@ impl std::fmt::Display for CheckFailed {
 
 impl std::error::Error for CheckFailed {}
 
+/// A secret would be sent to a changed network (`secret_rerouted`) and IT has not approved it by
+/// name with `--allow-reroute`; nothing was sent. `lints` holds every local warning.
+#[derive(Debug)]
+pub struct RerouteRefused {
+    /// The rerouted secrets not approved, sorted.
+    pub names: Vec<String>,
+    pub lints: Vec<Lint>,
+}
+
+impl std::fmt::Display for RerouteRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names = self.names.join(", ");
+        let flags: Vec<String> = self
+            .names
+            .iter()
+            .map(|n| format!("--allow-reroute {n}"))
+            .collect();
+        write!(
+            f,
+            "Not published: the network using secret(s) {names} changed, so the secret would be sent somewhere new (secret_rerouted). Only IT decides this: check the change with `mastersos diff`; if each secret really belongs to its changed network, run `mastersos publish {}`",
+            flags.join(" ")
+        )
+    }
+}
+
+impl std::error::Error for RerouteRefused {}
+
 /// The server's pre-publish check refused the upload (422 `lint_failed`): its issues, with every
 /// secret value of the snapshot replaced by its reference.
 #[derive(Debug)]
@@ -152,6 +179,32 @@ fn clean_lint(mut l: Value, secrets: &BTreeMap<String, String>) -> Value {
     l
 }
 
+/// The local check's warnings and notes, one per line, before anything is uploaded.
+fn print_local_lints(
+    out: &mut dyn Write,
+    lints: &[Lint],
+    secrets: &BTreeMap<String, String>,
+) -> Result<()> {
+    if lints.is_empty() {
+        return Ok(());
+    }
+    writeln!(out, "The local check:")?;
+    for l in lints {
+        let level = match l.level {
+            LintLevel::Error => "error",
+            LintLevel::Warning => "warning",
+            LintLevel::Info => "info",
+        };
+        writeln!(
+            out,
+            "{level:<7} {:<24} {}",
+            l.code,
+            clean(&l.message, secrets)
+        )?;
+    }
+    Ok(())
+}
+
 /// The server's warnings, one per line.
 fn print_server_lints(out: &mut dyn Write, lints: &[Value]) -> Result<()> {
     if lints.is_empty() {
@@ -204,10 +257,13 @@ fn sign_link(c: &AuthConfig, server: &str, pending_id: &str) -> String {
     )
 }
 
+/// `allow_reroute` holds the secret names IT approved with `--allow-reroute`: every secret a
+/// `secret_rerouted` warning names must be among them, or nothing is uploaded.
 pub async fn publish(
     api: &Api,
     w: &Workdir,
     sign: Option<SignOpts<'_>>,
+    allow_reroute: &[String],
     now: DateTime<Utc>,
     confirm: &mut dyn BufRead,
     out: &mut dyn Write,
@@ -226,6 +282,21 @@ pub async fn publish(
     let lints = workdir::check_snapshot(w, &snap)?;
     if has_errors(&lints) {
         return Err(CheckFailed(lints).into());
+    }
+    // A secret pointed at a changed network would be handed to whoever runs it: only IT may
+    // approve that, by name, on the command line (the MCP tools have no way to pass it).
+    let names = secret_ref::unapproved_reroutes(&lints, allow_reroute);
+    if !names.is_empty() {
+        return Err(RerouteRefused { names, lints }.into());
+    }
+    print_local_lints(out, &lints, &snap.secrets)?;
+    let rerouted = secret_ref::rerouted_names(&lints);
+    for a in allow_reroute.iter().filter(|a| !rerouted.contains(*a)) {
+        writeln!(
+            out,
+            "Note: --allow-reroute {} approves nothing: no secret of that name is rerouted",
+            clean(a, &snap.secrets)
+        )?;
     }
     let filled = secret_ref::fill(&snap.manifest, &snap.secrets).map_err(CheckFailed)?;
     let files = &snap.files;
@@ -421,10 +492,107 @@ mod tests {
     }
 
     async fn run_out(s: &MockServer, w: &Workdir) -> (Result<PublishOutcome>, String) {
+        run_allow(s, w, &[]).await
+    }
+
+    async fn run_allow(
+        s: &MockServer,
+        w: &Workdir,
+        allow: &[&str],
+    ) -> (Result<PublishOutcome>, String) {
         let api = Api::new(&s.uri(), "tok").unwrap();
+        let allow: Vec<String> = allow.iter().map(|a| a.to_string()).collect();
         let mut out = Vec::new();
-        let r = publish(&api, w, None, now(), &mut std::io::empty(), &mut out).await;
+        let r = publish(
+            &api,
+            w,
+            None,
+            &allow,
+            now(),
+            &mut std::io::empty(),
+            &mut out,
+        )
+        .await;
         (r, String::from_utf8(out).unwrap())
+    }
+
+    /// The test directory with the Guest network renamed: its secret would now be sent to
+    /// another network (`secret_rerouted` for `defaults-guest-psk`).
+    fn rerouted_workdir(dir: &Path) -> Workdir {
+        let w = workdir(dir);
+        let text = w.manifest().unwrap().replace("\"Guest\"", "\"Lobby\"");
+        std::fs::write(w.root.join("manifest.toml"), text).unwrap();
+        w
+    }
+
+    const GUEST: &str = "defaults-guest-psk";
+
+    #[tokio::test]
+    async fn reroute_without_approval_uploads_nothing() {
+        let s = server().await;
+        let t = tempfile::tempdir().unwrap();
+        let w = rerouted_workdir(&t.path().join("school"));
+        let (r, _) = run_out(&s, &w).await;
+        let err = r.unwrap_err();
+        let refused = err
+            .downcast_ref::<RerouteRefused>()
+            .expect("a reroute refusal");
+        assert_eq!(refused.names, [GUEST]);
+        assert!(refused.lints.iter().any(|l| l.code == "secret_rerouted"));
+        let text = err.to_string();
+        assert!(
+            text.contains(&format!("mastersos publish --allow-reroute {GUEST}")),
+            "{text}"
+        );
+        // Nothing touched the server, and nothing was recorded as uploaded.
+        assert!(s.received_requests().await.unwrap().is_empty());
+        assert!(Workdir::uploaded_unchanged(&w.root).unwrap().is_none());
+        assert_eq!(w.meta().unwrap().base_version, 4);
+    }
+
+    #[tokio::test]
+    async fn reroute_approved_for_another_name_is_refused() {
+        let s = server().await;
+        let t = tempfile::tempdir().unwrap();
+        let w = rerouted_workdir(&t.path().join("school"));
+        let (r, out) = run_allow(&s, &w, &["lab-corp-password"]).await;
+        let err = r.unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<RerouteRefused>()
+                .expect("a reroute refusal")
+                .names,
+            [GUEST]
+        );
+        assert!(s.received_requests().await.unwrap().is_empty());
+        assert!(out.is_empty(), "{out}");
+    }
+
+    #[tokio::test]
+    async fn reroute_approved_by_name_uploads_after_printing_warnings() {
+        let s = server().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/admin/publish/pending"))
+            .respond_with(Accept(
+                5,
+                vec![json!({ "level": "warning", "code": "server_says", "message": "hi" })],
+            ))
+            .mount(&s)
+            .await;
+        let t = tempfile::tempdir().unwrap();
+        let w = rerouted_workdir(&t.path().join("school"));
+        let (r, out) = run_allow(&s, &w, &[GUEST, "unused-name"]).await;
+        assert!(matches!(r.unwrap(), PublishOutcome::NeedsPasskey { .. }));
+        assert_eq!(uploads(&s).await.len(), 1);
+        // Every local warning is printed, before the server's answer.
+        let local = out.find("The local check:").expect(&out);
+        let rerouted = out.find("secret_rerouted").expect(&out);
+        let server = out.find("The server's check:").expect(&out);
+        assert!(local < rerouted && rerouted < server, "{out}");
+        assert!(
+            out.contains("--allow-reroute unused-name approves nothing"),
+            "{out}"
+        );
+        assert!(!out.contains("guestpass1"), "{out}");
     }
 
     async fn uploads(s: &MockServer) -> Vec<Value> {
@@ -724,6 +892,7 @@ mod tests {
                 token_file: &token,
                 pin_dir: &pins,
             }),
+            &[],
             now(),
             &mut std::io::empty(),
             &mut out,

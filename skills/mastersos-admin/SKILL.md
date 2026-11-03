@@ -122,9 +122,14 @@ Say Settings, Config, Group, Device and Kiosk app to the person, not the file's 
   needs a password, write the reference (`psk = "secret:<name>"`, a short unique name) and tell IT: "put
   `<name> = "..."` into `secrets.toml`". `check` reports `secret_unknown` until IT does. Never ask the person to tell
   you a password, and never write one into `manifest.toml`. Enterprise networks work the same way (`password`, `client_key` ...).
-  `check` warns `secret_rerouted` when a network that has a secret changes `eap`, `phase2`, `identity`,
-  `anonymous_identity`, `server_domain`, `ca_cert` or `check_server`: the password would be sent to a new place.
-  Do not do it unless asked, and ask IT to confirm. A renamed `ssid` is a new network: it needs its own secret.
+  `check` warns `secret_rerouted` when a network that has a secret moves to another layer, gets another `ssid`,
+  moves the secret to another field, or changes `eap`, `phase2`, `identity`, `anonymous_identity`,
+  `server_domain`, `ca_cert` or `check_server`: the password would be sent to a new place. Do not do it unless
+  asked. A renamed `ssid` is a new network: it needs its own secret.
+- **Never pass `--allow-reroute`, and never tell IT to "just add" it as a fix.** `mastersos publish` refuses while
+  any `secret_rerouted` warning exists; only IT may approve a rerouted secret, by name. Tell IT which secret
+  (`rerouted_secrets` in the `check` tool's result, or the names `mastersos check` prints) moved where, and leave
+  the decision to IT.
 
 ## Reference
 

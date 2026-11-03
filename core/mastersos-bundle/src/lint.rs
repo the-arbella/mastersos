@@ -20,7 +20,8 @@ use crate::{
 pub enum LintLevel {
     /// Blocks publishing.
     Error,
-    /// Shown only.
+    /// Shown only. One exception outside the bundle: `mastersos publish` refuses while a
+    /// `secret_rerouted` warning exists until IT approves that secret by name.
     Warning,
     /// Reports the current state (for example which configs pause Chrome updates); not a problem.
     Info,
