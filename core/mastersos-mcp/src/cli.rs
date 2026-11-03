@@ -301,6 +301,7 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
                 dir.as_deref(),
                 sign_with,
                 &allow_reroute,
+                json,
             )
             .await
         }
@@ -892,11 +893,54 @@ async fn publish_dir(
     dir: Option<&Path>,
     key: Option<SignWith>,
     allow_reroute: &[String],
+    json: bool,
+) -> Result<ExitCode, OpError> {
+    let w = open_dir(dir)?;
+    let pins = config_dir()?.join("pins");
+    publish_to(
+        api,
+        server,
+        &PublishArgs {
+            w: &w,
+            token_file,
+            pins: &pins,
+            key: key.as_ref(),
+            allow_reroute,
+            json,
+        },
+        &mut std::io::stdin().lock(),
+        &mut std::io::stdout(),
+        &mut std::io::stderr(),
+    )
+    .await
+}
+
+/// What [`publish_to`] works on.
+pub(crate) struct PublishArgs<'a> {
+    pub w: &'a Workdir,
+    pub token_file: &'a Path,
+    pub pins: &'a Path,
+    pub key: Option<&'a SignWith>,
+    pub allow_reroute: &'a [String],
+    /// `--json`: `stdout` gets exactly one JSON document (the result; a refusal is printed by
+    /// [`main`]), and everything else (local and server warnings, the signing dialogue) goes to
+    /// `stderr`.
+    pub json: bool,
+}
+
+/// [`publish_dir`] with its streams given.
+pub(crate) async fn publish_to(
+    api: &Api,
+    server: &str,
+    a: &PublishArgs<'_>,
+    confirm: &mut dyn std::io::BufRead,
+    stdout: &mut dyn std::io::Write,
+    stderr: &mut dyn std::io::Write,
 ) -> Result<ExitCode, OpError> {
     use crate::publish::{
         publish, CheckFailed, PublishOutcome, RerouteRefused, ServerRefused, SignOpts,
     };
-    let w = open_dir(dir)?;
+    let w = a.w;
     let m = w.meta().map_err(fail)?;
     if !same_server(&m.server, server) {
         return Err(OpError::Failed(format!(
@@ -905,28 +949,38 @@ async fn publish_dir(
             m.server
         )));
     }
-    let pins = config_dir()?.join("pins");
-    let sign = key.as_ref().map(|key| SignOpts {
+    let sign = a.key.map(|key| SignOpts {
         key,
-        token_file,
-        pin_dir: &pins,
+        token_file: a.token_file,
+        pin_dir: a.pins,
     });
-    let r = publish(
-        api,
-        &w,
-        sign,
-        allow_reroute,
-        chrono::Utc::now(),
-        &mut std::io::stdin().lock(),
-        &mut std::io::stdout(),
-    )
-    .await;
+    let r = {
+        let out: &mut dyn std::io::Write = if a.json { stderr } else { &mut *stdout };
+        publish(
+            api,
+            w,
+            sign,
+            a.allow_reroute,
+            chrono::Utc::now(),
+            confirm,
+            out,
+        )
+        .await
+    };
+    let print = |stdout: &mut dyn std::io::Write, v: Value, text: String| {
+        let line = if a.json { v.to_string() } else { text };
+        writeln!(stdout, "{line}").map_err(fail)
+    };
     match r {
         Ok(PublishOutcome::Published(v)) => {
-            println!(
-                "Published version {v}. {} is now based on it.",
-                w.root.display()
-            );
+            print(
+                stdout,
+                json!({ "published": true, "version": v }),
+                format!(
+                    "Published version {v}. {} is now based on it.",
+                    w.root.display()
+                ),
+            )?;
             Ok(ExitCode::SUCCESS)
         }
         Ok(PublishOutcome::NeedsSigning {
@@ -935,10 +989,15 @@ async fn publish_dir(
             version,
             digest_hex,
         }) => {
-            println!(
-                "{}",
-                crate::publish::needs_signing_text(&url, &pending_id, version, &digest_hex)
-            );
+            let text = crate::publish::needs_signing_text(&url, &pending_id, version, &digest_hex);
+            print(
+                stdout,
+                json!({
+                    "published": false, "pending_id": pending_id, "version": version,
+                    "sign_url": url, "digest_hex": digest_hex,
+                }),
+                text,
+            )?;
             Ok(ExitCode::SUCCESS)
         }
         Err(e) => match e.downcast::<CheckFailed>() {

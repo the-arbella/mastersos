@@ -721,6 +721,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn json_publish_writes_one_json_document_to_stdout() {
+        let s = server().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/admin/publish/pending"))
+            .respond_with(Accept(
+                5,
+                vec![json!({ "level": "warning", "code": "server_says", "message": "hi" })],
+            ))
+            .mount(&s)
+            .await;
+        for json_mode in [true, false] {
+            let t = tempfile::tempdir().unwrap();
+            // A rerouted secret approved by IT: the local check has a warning to print.
+            let w = rerouted_workdir(&t.path().join("school"));
+            let api = Api::new(&s.uri(), "tok").unwrap();
+            let allow = vec![GUEST.to_string()];
+            let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+            crate::cli::publish_to(
+                &api,
+                "https://school.example",
+                &crate::cli::PublishArgs {
+                    w: &w,
+                    token_file: &t.path().join("token"),
+                    pins: &w.test_pins(),
+                    key: None,
+                    allow_reroute: &allow,
+                    json: json_mode,
+                },
+                &mut std::io::empty(),
+                &mut stdout,
+                &mut stderr,
+            )
+            .await
+            .unwrap();
+            let (stdout, stderr) = (
+                String::from_utf8(stdout).unwrap(),
+                String::from_utf8(stderr).unwrap(),
+            );
+            if json_mode {
+                let v: Value = serde_json::from_str(&stdout).expect(&stdout);
+                assert_eq!(v["published"], false);
+                assert_eq!(v["pending_id"], "p-1");
+                assert_eq!(v["version"], 5);
+                assert_eq!(stdout.lines().count(), 1, "{stdout}");
+                assert!(stderr.contains("The local check:") && stderr.contains("secret_rerouted"));
+                assert!(stderr.contains("The server's check:"), "{stderr}");
+            } else {
+                assert!(
+                    stdout.contains("The local check:")
+                        && stdout.contains("Uploaded pending bundle p-1")
+                );
+                assert!(stderr.is_empty(), "{stderr}");
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn reroute_approved_for_another_name_is_refused() {
         let s = server().await;
         let t = tempfile::tempdir().unwrap();
