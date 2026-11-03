@@ -230,7 +230,12 @@ pub fn split(manifest_text: &str) -> Result<(String, BTreeMap<String, String>), 
     walk(
         &mut doc,
         &mut |kind, layer, t| {
-            let ssid = t.get("ssid").and_then(Item::as_str).map(slug);
+            let ssid = t
+                .get("ssid")
+                .and_then(Item::as_str)
+                .map(|s| slug(s).trim_start_matches('-').to_owned());
+            // A generated name never starts with `-` (it would read as a flag).
+            let layer = layer.trim_start_matches('-');
             for field in secret_fields(kind) {
                 let Some(item) = t.get_mut(field) else {
                     continue;
@@ -249,6 +254,7 @@ pub fn split(manifest_text: &str) -> Result<(String, BTreeMap<String, String>), 
                         format!("{layer}-{}-{field}", ssid.as_deref().unwrap_or("network"))
                     }
                 };
+                let base = base.trim_start_matches('-').to_owned();
                 let mut n = 1;
                 let name = loop {
                     let suffix = if n == 1 {
@@ -282,14 +288,16 @@ pub fn split(manifest_text: &str) -> Result<(String, BTreeMap<String, String>), 
     Ok((text, out))
 }
 
-/// Whether `name` is a valid secret name: 1 to 64 of `a-z`, `0-9` and `-` (what [`split`]
-/// generates). Names end up in commands IT is told to run (`--allow-reroute <name>`), so nothing
+/// Whether `name` is a valid secret name: 1 to 64 of `a-z`, `0-9` and `-`, not starting with `-`
+/// (what [`split`]
+/// generates). Names end up in commands IT is told to run (`--allow-reroute=<name>`), so nothing
 /// else (spaces, quotes, `;`, `|`, `$`, upper case ...) is ever accepted or printed.
 pub fn is_valid_name(name: &str) -> bool {
+    let alnum = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit();
     (1..=MAX_NAME).contains(&name.len())
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        // Not a leading `-`: the name would read as a command-line flag.
+        && name.bytes().next().is_some_and(alnum)
+        && name.bytes().all(|b| alnum(b) || b == b'-')
 }
 
 /// `secret_name_invalid` for a reference at `layer`.`field`; the name itself is never shown.
@@ -538,7 +546,7 @@ pub fn lints(
                             LintLevel::Warning,
                             "secret_rerouted",
                             format!(
-                                "Secret \"{name}\" was sent to another network in the published version; here {} differ, so it would be sent somewhere new. `mastersos publish` refuses this until IT checks `mastersos diff`, confirms the secret belongs there and passes --allow-reroute {name}.",
+                                "Secret \"{name}\" was sent to another network in the published version; here {} differ, so it would be sent somewhere new. `mastersos publish` refuses this until IT checks `mastersos diff`, confirms the secret belongs there and passes --allow-reroute={name}.",
                                 changed.join(", ")
                             ),
                         )
@@ -554,7 +562,7 @@ pub fn lints(
                         LintLevel::Warning,
                         "secret_rerouted",
                         format!(
-                            "Secret \"{name}\" goes to a network the published version did not have, so it would be sent somewhere new. `mastersos publish` refuses this until IT checks `mastersos diff` and passes --allow-reroute {name}."
+                            "Secret \"{name}\" goes to a network the published version did not have, so it would be sent somewhere new. `mastersos publish` refuses this until IT checks `mastersos diff` and passes --allow-reroute={name}."
                         ),
                     )
                     .param("name", &name)
@@ -578,7 +586,7 @@ pub fn rerouted_names(lints: &[Lint]) -> BTreeSet<String> {
 }
 
 /// The rerouted secrets ([`rerouted_names`]) that IT has not approved by name in `allowed`
-/// (`mastersos publish --allow-reroute <name>`), sorted. Publishing goes ahead only when this is
+/// (`mastersos publish --allow-reroute=<name>`), sorted. Publishing goes ahead only when this is
 /// empty; an approval names one secret, so approving another name approves nothing here.
 pub fn unapproved_reroutes(lints: &[Lint], allowed: &[String]) -> Vec<String> {
     rerouted_names(lints)
@@ -895,6 +903,26 @@ password = "eappass"
         // A rerouted lint built elsewhere with such a name is never offered for a command.
         let forged = Lint::new(LintLevel::Warning, "secret_rerouted", "x").param("name", evil);
         assert!(rerouted_names(&[forged]).is_empty());
+    }
+
+    #[test]
+    fn leading_dash_names_are_refused_and_never_generated() {
+        assert!(!is_valid_name("-x-corp-psk") && !is_valid_name("-"));
+        let (base, mut secrets) = split(SAMPLE).unwrap();
+        let now = base.replace("secret:defaults-guest-psk", "secret:-guest");
+        let v = secrets.remove("defaults-guest-psk").unwrap();
+        secrets.insert("-guest".into(), v);
+        let l = lints(&now, &secrets, Some(SAMPLE));
+        assert!(!l.is_empty());
+        assert!(l.iter().all(|x| x.code == "secret_name_invalid"), "{l:?}");
+        // Config ids and SSIDs that slug to a leading `-` still give valid names.
+        let t = "[[config]]\nid = \"!x\"\nwifi = [{ ssid = \"!Corp\", psk = \"p1\" }, { ssid = \"Corp\", psk = \"p2\" }]\n[[config]]\nid = \"!!!\"\nit_account = { password_hash = \"h\" }\n[[group]]\nid = \"?\"\nwifi = [{ ssid = \"?\", psk = \"p3\" }]\n";
+        let (_, m) = split(t).unwrap();
+        assert_eq!(m.len(), 4);
+        for k in m.keys() {
+            assert!(is_valid_name(k), "{k}");
+        }
+        assert!(m.contains_key("x-corp-psk"), "{m:?}");
     }
 
     #[test]

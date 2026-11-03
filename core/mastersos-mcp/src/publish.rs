@@ -147,7 +147,7 @@ impl std::fmt::Display for RerouteRefused {
         let flags: Vec<String> = self
             .names
             .iter()
-            .map(|n| format!("--allow-reroute {n}"))
+            .map(|n| format!("--allow-reroute={n}"))
             .collect();
         write!(
             f,
@@ -372,7 +372,7 @@ pub async fn publish(
         if secret_ref::is_valid_name(a) {
             writeln!(
                 out,
-                "Note: --allow-reroute {a} approves nothing: no secret of that name is rerouted"
+                "Note: --allow-reroute={a} approves nothing: no secret of that name is rerouted"
             )?;
         } else {
             writeln!(
@@ -640,7 +640,7 @@ mod tests {
         assert!(refused.lints.iter().any(|l| l.code == "secret_rerouted"));
         let text = err.to_string();
         assert!(
-            text.contains(&format!("mastersos publish --allow-reroute {GUEST}")),
+            text.contains(&format!("mastersos publish --allow-reroute={GUEST}")),
             "{text}"
         );
         // Nothing touched the server, and nothing was recorded as uploaded.
@@ -759,7 +759,7 @@ mod tests {
         let server = out.find("The server's check:").expect(&out);
         assert!(local < rerouted && rerouted < server, "{out}");
         assert!(
-            out.contains("--allow-reroute unused-name approves nothing"),
+            out.contains("--allow-reroute=unused-name approves nothing"),
             "{out}"
         );
         assert!(!out.contains("guestpass1"), "{out}");

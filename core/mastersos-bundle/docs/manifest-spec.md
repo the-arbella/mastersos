@@ -560,14 +560,14 @@ entry with the same `ssid` as an inherited entry replaces that entry as a whole,
 never reported back.
 
 The secrets (`psk`, `password`, `client_key`, `client_key_password`) are not written in `manifest.toml`.
-There each one is a reference such as `psk = "secret:guest-wifi"` (names: 1 to 64 of `a-z`, `0-9`, `-`; else
+There each one is a reference such as `psk = "secret:guest-wifi"` (names: 1 to 64 of `a-z`, `0-9`, `-`, not starting with `-`; else
 `secret_name_invalid`); the value lives in `secrets.toml` (mode
 0600, kept out of git), which IT fills in (`guest-wifi = "…"`). `mastersos pull` moves existing values there;
 `mastersos publish` puts them back when it builds the Version. An AI assistant never reads `secrets.toml`:
 for a new password network it writes the reference and asks IT to add the value. `mastersos check` reports
 `secret_unknown` (a reference with no value: error), `secret_unused` (a value nothing refers to: warning) and
 `secret_rerouted` (a secret's network changed where the secret goes: warning, but `mastersos publish`
-refuses it until IT passes `--allow-reroute <name>`). A renamed `ssid` is a new network and needs its own secret.
+refuses it until IT passes `--allow-reroute=<name>`). A renamed `ssid` is a new network and needs its own secret.
 
 The kind of network follows from the keys written:
 
@@ -3132,10 +3132,10 @@ config = "standard"
 
 ### `secret_name_invalid`
 
-**Level:** error. **Meaning:** a `secret:<name>` reference or a `secrets.toml` key is not 1 to 64 of `a-z`, `0-9` and `-`.
+**Level:** error. **Meaning:** a `secret:<name>` reference or a `secrets.toml` key is not 1 to 64 of `a-z`, `0-9` and `-`, or starts with `-`.
 
 <!-- prompt:omit -->
-**Why:** names are pasted into commands IT runs (`--allow-reroute <name>`); any other character could run something else. The name is never shown.
+**Why:** names are pasted into commands IT runs (`--allow-reroute=<name>`); any other character could run something else. The name is never shown.
 <!-- /prompt:omit -->
 
 **How to fix:** rename the reference and the `secrets.toml` key, for example `guest-wifi`.
@@ -3148,7 +3148,7 @@ config = "standard"
 **Why:** these fields decide where the secret is sent; pointing a saved password at a different network or server would hand it over.
 <!-- /prompt:omit -->
 
-**How to fix:** undo the change, or give the network a new secret. If it is intended, only IT approves it after `mastersos diff`: `mastersos publish --allow-reroute <name>` once per secret. An AI never passes that flag.
+**How to fix:** undo the change, or give the network a new secret. If it is intended, only IT approves it after `mastersos diff`: `mastersos publish --allow-reroute=<name>` once per secret. An AI never passes that flag.
 
 ### `secret_unknown`
 

@@ -54,7 +54,7 @@ mastersos publish ./school                    # 不带 --kit/--key：只上传�
   之后走 `mastersos-sign` 同一条签名路径（`SigningKey::Kit`）：本地验链、对照上传时本地算的摘要、键入版本号确认、签名并 commit。
   第一版（R1g）也用它签。
 - `--key <文件>`：PKCS#8 恢复钥匙文件，与 `--kit` 二选一。
-- `--allow-reroute <秘密名>`（可重复）：见下面的 `secret_rerouted`，只由 IT 给，给之前先跑 `mastersos diff` 看清秘密要被发到哪里。
+- `--allow-reroute=<秘密名>`（可重复）：见下面的 `secret_rerouted`，只由 IT 给，给之前先跑 `mastersos diff` 看清秘密要被发到哪里。
 
 其他子命令：`mastersos devices list|show`、`keys list`（服务端的机器与已登记钥匙，供手写 `[[device]]` 与 `trust`）、
 `hash-password`（不回显读口令，输出 IT 账号的哈希，写进 `secrets.toml`）、`logo upload <登录页.png> <图标.png>`、`spec`、`setup`。
@@ -87,8 +87,8 @@ mastersos setup --server https://mastersos.school.ac.th --token-file /path/to/it
   层、`ssid`、字段与上面那些字段）就没事；送到过、但只在别的网络，算改道；base 里没有这个值、但有这个网络，是改密码，没事；
   值和网络都是 base 里没有的（新网络），算改道。只有还没发布过的第一版不比。`check` 末尾醒目列出这些秘密，
   `--json` 的结果里是 `rerouted_secrets`（与 MCP 的 `check` 同一形状）。`publish` 遇到它就拒绝、什么都不上传，除非 IT 先跑
-  `mastersos diff` 核对，再对每个改道的秘密都给 `--allow-reroute <名字>`（可重复；给错名字不算），
-  例如 `mastersos publish ./school --kit school.kit --allow-reroute lab-corp-password`。
+  `mastersos diff` 核对，再对每个改道的秘密都给 `--allow-reroute=<名字>`（可重复；给错名字不算），
+  例如 `mastersos publish ./school --kit school.kit --allow-reroute=lab-corp-password`。
   只有 IT 能下这个决定：MCP 没有发布工具，也没有任何参数能传它，AI 从不替 IT 传。
 - `publish` 上传前先打印本地检查的全部警告。
 - AI 不改 trust：`trust` 照 `manifest.toml` 写的，发布不自动填；trust 的变化只能由 IT 用恢复钥匙经 `mastersos-sign` 签。

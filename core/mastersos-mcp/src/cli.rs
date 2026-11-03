@@ -602,7 +602,7 @@ fn reroute_notice(lints: &[mastersos_bundle::Lint]) -> Option<String> {
     let names: Vec<String> = names.into_iter().collect();
     let flags: Vec<String> = names
         .iter()
-        .map(|n| format!("--allow-reroute {n}"))
+        .map(|n| format!("--allow-reroute={n}"))
         .collect();
     Some(format!(
         "\n!! SECRET REROUTED: {} would be sent to a changed network.\n!! `mastersos publish` refuses until IT checks the change (`mastersos diff`) and approves it:\n!!   mastersos publish {}\n!! Only IT decides this; an AI assistant never passes --allow-reroute.",
@@ -979,8 +979,7 @@ mod tests {
             "school.kit",
             "--allow-reroute",
             "x-psk",
-            "--allow-reroute",
-            "y-psk",
+            "--allow-reroute=y-psk",
         ])
         .unwrap();
         let Cmd::Publish {
@@ -1010,7 +1009,7 @@ mod tests {
         let n = reroute_notice(&[lint("b-psk"), lint("a-psk"), lint("b-psk")]).unwrap();
         assert!(n.contains("SECRET REROUTED: a-psk, b-psk"), "{n}");
         assert!(
-            n.contains("mastersos publish --allow-reroute a-psk --allow-reroute b-psk"),
+            n.contains("mastersos publish --allow-reroute=a-psk --allow-reroute=b-psk"),
             "{n}"
         );
         assert!(n.contains("never passes --allow-reroute"), "{n}");

