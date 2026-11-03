@@ -100,6 +100,8 @@ jobs:
           image/mkosi.initrd.conf/mkosi.extra/usr/lib/mastersos/ventoy-attach
           image/tests/fake-aws
       - run: bash image/tests/check-tree.sh
+      # The login screen's person search: matching and order (people.js, design 2026-11-03 login single field)
+      - run: bash image/tests/login-people-test.sh
       # 正式私钥只从 tmpfs 读（keyset_priv release）与 key-leak-check.py；ceremony-test.sh 要 root 与 loop 设备，只 shellcheck、不在这里跑
       - run: bash image/tests/keyset-test.sh
       - run: bash image/tests/health-check-test.sh
