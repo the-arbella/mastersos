@@ -33,6 +33,72 @@ pub struct Pin {
     /// 这一版的 `content_digest`（小写十六进制）：再验时确认服务端没有换掉 pin 住的那一版。
     pub digest_hex: String,
     pub trust: Vec<TrustKey>,
+    /// Every version this computer verified, with its content digest, in order. The only record
+    /// of history that can be trusted later: the manifests link to no earlier digest, so a past
+    /// version cannot be authenticated from the pin alone. Pin files from before this field read
+    /// as empty (see [`load_pin`], which adds the pinned version).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verified: Vec<VerifiedVersion>,
+}
+
+impl Pin {
+    /// The pinned version itself is always a verified one (pin files from before the list
+    /// existed have none): add it.
+    fn normalized(mut self) -> Pin {
+        let digest = self.digest_hex.clone();
+        record_verified(&mut self.verified, self.version, &digest);
+        self
+    }
+}
+
+/// A version this computer verified and the `content_digest` (lower-case hex) it had.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerifiedVersion {
+    pub version: u64,
+    pub digest_hex: String,
+}
+
+/// Add `version` to a verified list (once; the list stays ordered by version).
+pub fn record_verified(list: &mut Vec<VerifiedVersion>, version: u64, digest_hex: &str) {
+    if !list.iter().any(|e| e.version == version) {
+        list.push(VerifiedVersion {
+            version,
+            digest_hex: digest_hex.to_owned(),
+        });
+        list.sort_by_key(|e| e.version);
+    }
+}
+
+/// The contents of an old version, taken only if this computer verified it before: `archive` must
+/// hold exactly the digest recorded for `want`. A version that is not recorded (published before
+/// the first use here, or refused by machines) cannot be checked and is an error.
+pub fn recorded_contents(
+    verified: &[VerifiedVersion],
+    want: u64,
+    archive: &[u8],
+) -> Result<Contents> {
+    let rec = recorded_version(verified, want)?;
+    let contents = read_archive(archive)
+        .map_err(|e| tampered(want, e))?
+        .contents;
+    if hex(&content_digest(&contents)) != rec.digest_hex {
+        return Err(tampered(want, "的内容与本机验证过的不同"));
+    }
+    Ok(contents)
+}
+
+/// The record of `want`, or the error [`recorded_contents`] gives when there is none.
+pub fn recorded_version(verified: &[VerifiedVersion], want: u64) -> Result<&VerifiedVersion> {
+    verified
+        .iter()
+        .find(|e| e.version == want)
+        .with_context(|| {
+            format!(
+                "version {want} was published before this computer started verifying this school; \
+             it cannot be checked"
+            )
+        })
 }
 
 /// 验证过的最新版。
@@ -52,6 +118,8 @@ pub struct Verified {
     pub contents: Contents,
     /// The newest version on the chain (`>= version`).
     pub latest: u64,
+    /// Every version verified so far on this computer (the pin's [`Pin::verified`]).
+    pub history: Vec<VerifiedVersion>,
 }
 
 pub fn pin_path(pin_dir: &Path, api: &Api) -> PathBuf {
@@ -61,9 +129,9 @@ pub fn pin_path(pin_dir: &Path, api: &Api) -> PathBuf {
 pub(crate) fn load_pin(path: &Path) -> Result<Option<Pin>> {
     match std::fs::read_to_string(path) {
         Ok(text) => {
-            Ok(Some(toml::from_str(&text).with_context(|| {
-                format!("pin 文件 {} 读不懂", path.display())
-            })?))
+            let pin: Pin = toml::from_str(&text)
+                .with_context(|| format!("pin 文件 {} 读不懂", path.display()))?;
+            Ok(Some(pin.normalized()))
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e).with_context(|| format!("读 pin 文件 {} 失败", path.display())),
@@ -84,6 +152,9 @@ pub fn save_pin(path: &Path, prev: Option<&Pin>, pin: &Pin) -> Result<()> {
     std::fs::create_dir_all(dir)
         .with_context(|| format!("cannot create the directory {}", dir.display()))?;
     let _lock = lock_pin(path)?;
+    let prev = prev.cloned().map(Pin::normalized);
+    let prev = prev.as_ref();
+    let pin = &pin.clone().normalized();
     match (load_pin(path)?, prev) {
         (None, None) => {}
         (Some(cur), Some(prev)) if cur == *prev => {
@@ -244,6 +315,7 @@ pub async fn verify_chain(
         trust: pin.trust.clone(),
         contents,
         latest: pin.version,
+        history: pin.verified.clone(),
     };
     for v in pin.version + 1..=latest {
         let archive = api.version_archive(v).await?;
@@ -328,12 +400,16 @@ pub async fn verify_chain(
             cur.latest = v;
             continue;
         }
+        let digest_hex = hex(&content_digest(&b.contents));
+        let mut history = std::mem::take(&mut cur.history);
+        record_verified(&mut history, v, &digest_hex);
         cur = Verified {
             version: v,
-            digest_hex: hex(&content_digest(&b.contents)),
+            digest_hex,
             trust: b.manifest.trust,
             contents: b.contents,
             latest: v,
+            history,
         };
     }
     if cur.latest != pin.version {
@@ -361,80 +437,13 @@ pub async fn verify_chain(
     Ok(cur)
 }
 
-/// The contents of version `want` (`1 <= want <= pin_version`), after the whole chain up to the
-/// pinned version is verified from the start: version 1 against its own trust (genesis), every
-/// later version under the trust of the version machines run before it (the same acceptance,
-/// R7/R8 included, as [`verify_chain`]); the version at `pin_version` must have the pinned
-/// digest. `archives[i]` is version `i + 1`, for `i < pin_version`. A version that machines
-/// refuse (R7/R8) is skipped as machines skip it, and cannot be `want`. Any failure is an error.
-pub fn verify_history(
-    archives: &[Vec<u8>],
-    pin_version: u64,
-    pin_digest_hex: &str,
-    want: u64,
-) -> Result<Contents> {
-    if want == 0 || want > pin_version || archives.len() as u64 != pin_version {
-        bail!("version {want} is not in the verified history (1..={pin_version})");
-    }
-    let mut cur: Option<(u64, Vec<TrustKey>, Contents)> = None;
-    let mut found = None;
-    for (i, archive) in archives.iter().enumerate() {
-        let v = i as u64 + 1;
-        let (b, refused) = match &cur {
-            None => {
-                let first = read_archive(archive).map_err(|e| tampered(v, e))?;
-                let m =
-                    Manifest::parse(&first.contents.manifest_text).map_err(|e| tampered(v, e))?;
-                (
-                    accept(archive, &m.trust, None).map_err(|e| tampered(v, e))?,
-                    false,
-                )
-            }
-            Some((cv, trust, contents)) => {
-                let (b, signer) =
-                    accept_signed(archive, trust, Some(*cv)).map_err(|e| tampered(v, e))?;
-                let old = Manifest::parse(&contents.manifest_text)
-                    .map_err(|e| tampered(*cv, e))?
-                    .school
-                    .escrow_recipients;
-                let refused = match check_recovery_signed(trust, &old, &b.manifest, &signer) {
-                    Ok(()) => false,
-                    Err(BundleError::KitRequired(_)) => true,
-                    Err(e) => return Err(tampered(v, e)),
-                };
-                (b, refused)
-            }
-        };
-        if b.manifest.version != v {
-            return Err(tampered(
-                v,
-                format!("的包里写的是第 {} 版", b.manifest.version),
-            ));
-        }
-        if refused {
-            if v == want {
-                bail!("version {v} was refused by machines (trust or recipients changed without a recovery kit)");
-            }
-            continue;
-        }
-        if v == want {
-            found = Some(b.contents.clone());
-        }
-        cur = Some((v, b.manifest.trust, b.contents));
-    }
-    let (last, _, contents) = cur.context("no versions")?;
-    if last != pin_version || hex(&content_digest(&contents)) != pin_digest_hex {
-        bail!("the history up to version {pin_version} does not end in the pinned version: the server may have been tampered with");
-    }
-    found.context("version not found in the verified history")
-}
-
 pub(crate) fn pin_of(api: &Api, v: &Verified) -> Pin {
     Pin {
         host: api.host(),
         version: v.version,
         digest_hex: v.digest_hex.clone(),
         trust: v.trust.clone(),
+        verified: v.history.clone(),
     }
 }
 
@@ -481,12 +490,16 @@ async fn first_use(
             b.manifest.version
         );
     }
+    let digest_hex = hex(&content_digest(&b.contents));
+    let mut history = Vec::new();
+    record_verified(&mut history, latest, &digest_hex);
     let v = Verified {
         version: latest,
-        digest_hex: hex(&content_digest(&b.contents)),
+        digest_hex,
         trust: b.manifest.trust,
         contents: b.contents,
         latest,
+        history,
     };
     save_pin(path, None, &pin_of(api, &v))?;
     writeln!(out, "已记下第 {latest} 版的 trust（{}）。", path.display())?;
@@ -503,7 +516,9 @@ mod tests {
             version,
             digest_hex: digest.to_owned(),
             trust: Vec::new(),
+            verified: Vec::new(),
         }
+        .normalized()
     }
 
     #[test]
@@ -577,26 +592,21 @@ mod tests {
         use super::super::*;
         use mastersos_bundle::{pack, Ed25519Signer};
 
-        fn signer(n: u8) -> Ed25519Signer {
-            Ed25519Signer::from_seed(&format!("key-{n}"), &[n; 32])
-        }
-
-        fn archive(
-            v: u64,
-            trust: &Ed25519Signer,
-            signed_by: &Ed25519Signer,
-            note: &str,
-        ) -> Vec<u8> {
-            let k = trust.trust_key();
+        fn archive(v: u64, note: &str) -> Vec<u8> {
+            let k = Ed25519Signer::from_seed("key-1", &[1; 32]);
+            let t = k.trust_key();
             let text = format!(
                 "version = {v}\nissued_at = \"2026-11-03T00:00:00Z\"\n\n[[trust]]\nid = \"{}\"\nalg = \"ed25519\"\npublic_key = \"{}\"\n\n[school]\nid = \"11111111-1111-1111-1111-111111111111\"\n\n[[config]]\nid = \"default\"\nname = \"Default {note}\"\ninterface = \"learning\"\nlogin_methods = [\"local\"]\n\n[[group]]\nid = \"default\"\nname = \"Ungrouped\"\nconfig = \"default\"\n",
-                k.id, k.public_key
+                t.id, t.public_key
             );
-            let c = Contents {
-                manifest_text: text,
-                files: Default::default(),
-            };
-            pack(&c, signed_by).unwrap()
+            pack(
+                &Contents {
+                    manifest_text: text,
+                    files: Default::default(),
+                },
+                &k,
+            )
+            .unwrap()
         }
 
         fn digest(a: &[u8]) -> String {
@@ -604,37 +614,61 @@ mod tests {
         }
 
         #[test]
-        fn old_version_chain_walks_to_the_pin() {
-            let k = signer(1);
-            let a: Vec<Vec<u8>> = (1..=3)
-                .map(|v| archive(v, &k, &k, &format!("v{v}")))
-                .collect();
-            let c = verify_history(&a, 3, &digest(&a[2]), 2).unwrap();
-            assert!(c.manifest_text.contains("Default v2"));
+        fn pinned_history_records_each_verified_version() {
+            let mut list = Vec::new();
+            for v in [3, 4, 4, 5] {
+                record_verified(&mut list, v, &format!("d{v}"));
+            }
+            assert_eq!(
+                list.iter().map(|e| e.version).collect::<Vec<_>>(),
+                [3, 4, 5]
+            );
+            // It survives the pin file, and a pin file without the field still loads, with the
+            // pinned version recorded.
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("h.toml");
+            let mut p = super::pin("h", 5, "d5");
+            p.verified = list.clone();
+            save_pin(&path, None, &p).unwrap();
+            assert_eq!(load_pin(&path).unwrap().unwrap().verified, list);
+            let old = dir.path().join("old.toml");
+            std::fs::write(
+                &old,
+                "host = \"h\"\nversion = 2\ndigest_hex = \"d2\"\ntrust = []\n",
+            )
+            .unwrap();
+            let loaded = load_pin(&old).unwrap().unwrap();
+            assert_eq!(
+                loaded.verified,
+                [VerifiedVersion {
+                    version: 2,
+                    digest_hex: "d2".into()
+                }]
+            );
         }
 
         #[test]
-        fn old_version_with_foreign_trust_is_refused() {
-            let (good, evil) = (signer(1), signer(2));
-            let mut a: Vec<Vec<u8>> = (1..=3).map(|v| archive(v, &good, &good, "")).collect();
-            // Version 2 lists and is signed by a key version 1 never trusted.
-            a[1] = archive(2, &evil, &evil, "forged");
-            let pin = digest(&a[2]);
-            assert!(verify_history(&a, 3, &pin, 2).is_err());
-            assert!(verify_history(&a, 3, &pin, 1).is_err());
+        fn pull_version_requires_recorded_digest() {
+            let (a2, a3) = (archive(2, "real"), archive(2, "forged"));
+            let mut list = Vec::new();
+            record_verified(&mut list, 2, &digest(&a2));
+            assert!(recorded_contents(&list, 2, &a2)
+                .unwrap()
+                .manifest_text
+                .contains("real"));
+            assert!(recorded_contents(&list, 2, &a3).is_err());
         }
 
         #[test]
-        fn old_version_chain_must_reach_pin() {
-            let k = signer(1);
-            let a: Vec<Vec<u8>> = (1..=3)
-                .map(|v| archive(v, &k, &k, &format!("v{v}")))
-                .collect();
-            assert!(verify_history(&a, 3, "00ff", 2).is_err());
-            // Wrong count of archives, and a version outside the history.
-            assert!(verify_history(&a[..2], 3, &digest(&a[2]), 2).is_err());
-            assert!(verify_history(&a, 3, &digest(&a[2]), 4).is_err());
-            assert!(verify_history(&a, 3, &digest(&a[2]), 0).is_err());
+        fn pull_version_before_first_use_refused() {
+            let a = archive(1, "x");
+            let mut list = Vec::new();
+            record_verified(&mut list, 2, &digest(&archive(2, "y")));
+            let err = recorded_contents(&list, 1, &a).unwrap_err().to_string();
+            assert!(
+                err.contains("before this computer started verifying"),
+                "{err}"
+            );
         }
     }
 }

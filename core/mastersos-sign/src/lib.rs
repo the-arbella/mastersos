@@ -851,6 +851,7 @@ pub async fn sign_pending(
                 files: BTreeMap::new(),
             },
             latest: 0,
+            history: Vec::new(),
         };
         (base, Vec::new())
     } else {
@@ -1008,6 +1009,8 @@ pub async fn sign_pending(
     }
     // The pin on disk is the one this run verified from (none for the first version).
     let prev = (!genesis).then(|| chain::pin_of(api, &verified));
+    let mut history = verified.history.clone();
+    chain::record_verified(&mut history, next, &digest);
     chain::save_pin(
         &pin_file,
         prev.as_ref(),
@@ -1016,6 +1019,7 @@ pub async fn sign_pending(
             version: next,
             digest_hex: digest,
             trust: manifest.trust.clone(),
+            verified: history,
         },
     )?;
     writeln!(out, "已签名并发布第 {next} 版，pin 前进到第 {next} 版。")?;
@@ -1273,6 +1277,7 @@ mod tests {
                 files: BTreeMap::new(),
             },
             latest: 1,
+            history: Vec::new(),
         };
         let mut files = BTreeMap::new();
         files.insert("files/a\u{1b}[2K\r.txt".to_owned(), b"x".to_vec());

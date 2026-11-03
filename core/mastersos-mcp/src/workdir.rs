@@ -266,7 +266,6 @@ impl Workdir {
         write_snapshot(root, manifest_text, "", &BTreeMap::new())?;
         write_snapshot(&root.join(STATE).join("base"), "", "", &BTreeMap::new())?;
         write_meta(root, &meta)?;
-        ensure_gitignore(root)?;
         Ok(Workdir {
             root: root.to_path_buf(),
         })
@@ -308,6 +307,9 @@ impl Workdir {
         for key in contents.files.keys() {
             check_key(key)?;
         }
+        // The ignore file comes before the first secret is written.
+        fs::create_dir_all(root)?;
+        ensure_gitignore(root)?;
         write_snapshot(root, &manifest, &secrets_raw, &contents.files)?;
         write_snapshot(
             &root.join(STATE).join("base"),
@@ -316,7 +318,6 @@ impl Workdir {
             &contents.files,
         )?;
         write_meta(root, &meta)?;
-        ensure_gitignore(root)?;
         Ok(Workdir {
             root: root.to_path_buf(),
         })
@@ -413,28 +414,44 @@ fn check_at(w: &Workdir, today: chrono::NaiveDate) -> Result<Vec<Lint>> {
 }
 
 /// Replace every secret value in the lints' messages and params with `secret:<name>`.
+///
+/// Every occurrence of every value is found (overlapping ones too); ranges that overlap or touch
+/// are merged and each merged range becomes the references of the secrets in it
+/// (`secret:a+secret:b`), so no part of a value survives next to another one.
 fn scrub(mut lints: Vec<Lint>, secrets: &BTreeMap<String, String>) -> Vec<Lint> {
-    // Longest values first, so a value that contains another is replaced whole.
-    let mut pairs: Vec<(&String, &String)> =
-        secrets.iter().filter(|(_, v)| !v.is_empty()).collect();
-    pairs.sort_by_key(|(_, v)| std::cmp::Reverse(v.len()));
-    // One pass: at each position the longest value that starts there is replaced, and the
-    // inserted reference is never scanned again.
+    let values: Vec<(&String, &String)> = secrets.iter().filter(|(_, v)| !v.is_empty()).collect();
     let clean = |s: &str| {
-        let mut out = String::with_capacity(s.len());
-        let mut i = 0;
-        while i < s.len() {
-            if let Some((name, value)) = pairs.iter().find(|(_, v)| s[i..].starts_with(v.as_str()))
-            {
-                out.push_str("secret:");
-                out.push_str(name);
-                i += value.len();
-            } else {
-                let c = s[i..].chars().next().unwrap_or_default();
-                out.push(c);
-                i += c.len_utf8().max(1);
+        // (start, end, name) of every occurrence.
+        let mut hits: Vec<(usize, usize, &str)> = Vec::new();
+        for (name, value) in &values {
+            let mut from = 0;
+            while let Some(at) = s[from..].find(value.as_str()) {
+                let start = from + at;
+                hits.push((start, start + value.len(), name.as_str()));
+                // The next search starts one char later, so overlapping occurrences are found.
+                from = start + s[start..].chars().next().map_or(1, char::len_utf8);
             }
         }
+        hits.sort();
+        let mut out = String::with_capacity(s.len());
+        let mut pos = 0;
+        let mut i = 0;
+        while i < hits.len() {
+            let (start, mut end, _) = hits[i];
+            let mut names: Vec<&str> = Vec::new();
+            while i < hits.len() && hits[i].0 <= end {
+                end = end.max(hits[i].1);
+                if !names.contains(&hits[i].2) {
+                    names.push(hits[i].2);
+                }
+                i += 1;
+            }
+            out.push_str(&s[pos..start]);
+            let refs: Vec<String> = names.iter().map(|n| format!("secret:{n}")).collect();
+            out.push_str(&refs.join("+"));
+            pos = end;
+        }
+        out.push_str(&s[pos..]);
         out
     };
     for l in &mut lints {
@@ -714,6 +731,20 @@ mod tests {
     }
 
     #[test]
+    fn scrub_overlapping_values() {
+        let mut s = BTreeMap::new();
+        s.insert("a".to_string(), "abcd".to_string());
+        s.insert("b".to_string(), "cdef".to_string());
+        let l = Lint::new(LintLevel::Error, "c", "xxabcdefyy and abcd");
+        let out = scrub(vec![l], &s)[0].message.clone();
+        assert_eq!(out, "xxsecret:a+secret:byy and secret:a");
+        // Adjacent values merge too; a value inside another does not leave a remainder.
+        s.insert("c".to_string(), "ab".to_string());
+        let l = Lint::new(LintLevel::Error, "c", "abab");
+        assert_eq!(scrub(vec![l], &s)[0].message, "secret:c");
+    }
+
+    #[test]
     fn write_pulled_rejects_unsafe_paths() {
         let t = tempfile::tempdir().unwrap();
         for bad in ["files/../x", "/etc/x", "other/x", "files/a\\b"] {
@@ -745,6 +776,17 @@ mod tests {
             gi.starts_with("target\n") && gi.contains("secrets.toml"),
             "{gi}"
         );
+    }
+
+    #[test]
+    fn gitignore_is_written_before_the_snapshot() {
+        let t = tempfile::tempdir().unwrap();
+        let dir = t.path().join("school");
+        // manifest.toml is a directory, so the snapshot write fails.
+        std::fs::create_dir_all(dir.join("manifest.toml/x")).unwrap();
+        assert!(Workdir::write_pulled(&dir, meta(3), &contents(), true).is_err());
+        let gi = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
+        assert!(gi.contains("secrets.toml"), "{gi}");
     }
 
     #[test]

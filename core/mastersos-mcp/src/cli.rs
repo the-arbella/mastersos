@@ -392,6 +392,11 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
     match &cmd {
         Cmd::Check { dir } => return local_check(dir.as_deref(), json),
         Cmd::Diff { dir } => return local_diff(dir.as_deref()),
+        // A directory with unpublished changes is refused before the network is touched.
+        Cmd::Pull { dir, force, .. } => {
+            let dir = dir.as_deref().unwrap_or_else(|| Path::new("."));
+            Workdir::ensure_pullable(dir, *force).map_err(fail)?;
+        }
         _ => {}
     }
     // Refuse a Wi-Fi secret flag before the config, the token or the network is touched.
@@ -1360,7 +1365,7 @@ async fn init_dir(
 }
 
 /// `mastersos pull`: the chain is verified from the pin first; an older `--version` is taken only
-/// after the whole history up to the pinned version verifies (`verify_history`).
+/// if this computer verified it before (the pin's recorded digest).
 async fn pull_dir(
     api: &Api,
     server: &str,
@@ -1369,11 +1374,12 @@ async fn pull_dir(
     version: Option<u64>,
     force: bool,
 ) -> Result<ExitCode, OpError> {
-    // Before any network use: a dirty directory is refused without touching the server.
-    Workdir::ensure_pullable(dir, force).map_err(fail)?;
+    // (`run` already refused a dirty directory before connecting.)
     let id = school_id(api).await?;
+    let mut anchor = id.clone();
     if let Ok(w) = Workdir::open(dir) {
         let m = w.meta().map_err(fail)?;
+        anchor = m.school_id.clone();
         if m.school_id != id || m.server != server {
             return Err(OpError::Failed(format!(
                 "{} belongs to school {} on {}, not to {id} on {server}",
@@ -1404,27 +1410,26 @@ async fn pull_dir(
         )))
         }
         Some(n) => {
-            // The whole chain up to the pinned version is verified before version n is taken.
-            let mut archives = Vec::new();
-            for v in 1..=verified.version {
-                archives.push(sign.version_archive(v).await.map_err(fail)?);
-            }
-            let contents = mastersos_sign::chain::verify_history(
-                &archives,
-                verified.version,
-                &verified.digest_hex,
-                n,
-            )
-            .map_err(fail)?;
+            // Only a version this computer verified before, with the digest it had then: the
+            // manifests link to no earlier digest, so history before the first use here cannot
+            // be authenticated.
+            mastersos_sign::chain::recorded_version(&verified.history, n).map_err(fail)?;
+            let archive = sign.version_archive(n).await.map_err(fail)?;
+            let contents = mastersos_sign::chain::recorded_contents(&verified.history, n, &archive)
+                .map_err(fail)?;
             (n, contents)
         }
     };
     let manifest = mastersos_bundle::Manifest::parse(&contents.manifest_text)
         .map_err(|e| OpError::Failed(format!("version {n}: the manifest cannot be read: {e}")))?;
-    if mastersos_bundle::school_id_mismatch(&manifest, &id).is_some() {
-        return Err(OpError::Failed(format!(
-            "version {n} belongs to a different school than {id}"
-        )));
+    // The directory's own school id (written by `init` or an earlier `pull`) is the local anchor;
+    // the server's answer must agree as well.
+    for expected in [&anchor, &id] {
+        if mastersos_bundle::school_id_mismatch(&manifest, expected).is_some() {
+            return Err(OpError::Failed(format!(
+                "version {n} belongs to a different school than {expected}"
+            )));
+        }
     }
     let meta = Meta {
         server: server.to_owned(),
