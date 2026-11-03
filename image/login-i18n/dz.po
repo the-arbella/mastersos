@@ -107,3 +107,15 @@ msgstr "ཨེཔ་འདི་ ནང་འཛུལ་གྱི་བརྙ�
 
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "ཨེཔ་འདི་ལུ་ ཡོངས་འབྲེལ་དགོས། སྟེང་གི་ཕྲ་རིང་ལས་ Wi-Fi ལུ་ མཐུད་ཞིནམ་ལས་ ལོག་ཚོད་ལྟ་འབད།"
+
+msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
+msgstr "ཡོངས་འབྲེལ་མེད། གཡས་ཕྱོགས་སྟེང་གི་ཐོ་གཞུང་ལས་ Wi-Fi ཡོངས་འབྲེལ་ཅིག་ གདམ་ཁ་རྐྱབ། ཡང་ན་ ཡོངས་འབྲེལ་གློག་ཐག་ ཡང་ན་ USB བརྒྱུད་དེ་ ཡོངས་འབྲེལ་བགོ་བཤའ་རྐྱབ་མི་ ཁ་པར་ཅིག་ མཐུད།"
+
+msgid "Waiting for school settings."
+msgstr "སློབ་གྲྭའི་སྒྲིག་སྟངས་ལུ་ བསྒུག་དོ།"
+
+msgid "Installing the web browser. You can sign in; it will appear when ready."
+msgstr "ཝེབ་བརའུ་ཟར་ གཞི་བཙུགས་འབད་དོ། ཁྱོད་ཀྱིས་ ནང་འཛུལ་འབད་ཚུགས། གྲ་སྒྲིག་ལེགས་ཚར་བའི་སྐབས་ མཐོང་འོང་།"
+
+msgid "The web browser could not be installed yet; it will try again. You can sign in."
+msgstr "ཝེབ་བརའུ་ཟར་ ད་ཚུན་ གཞི་བཙུགས་འབད་མ་ཚུགས། ལོག་ཚོད་ལྟ་འབད་འོང་། ཁྱོད་ཀྱིས་ ནང་འཛུལ་འབད་ཚུགས།"

@@ -106,3 +106,15 @@ msgstr "এই অ্যাপটি শুধুমাত্র সাইন-�
 
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "এই অ্যাপের জন্য নেটওয়ার্ক প্রয়োজন। উপরের বার থেকে Wi-Fi-তে সংযুক্ত হন, তারপর আবার চেষ্টা করুন।"
+
+msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
+msgstr "নেটওয়ার্ক নেই। উপরের ডানদিকের মেনু থেকে একটি Wi-Fi নেটওয়ার্ক বেছে নিন, অথবা একটি নেটওয়ার্ক কেবল বা USB টিথারিং চালু থাকা একটি ফোন লাগান।"
+
+msgid "Waiting for school settings."
+msgstr "স্কুলের সেটিংসের জন্য অপেক্ষা করা হচ্ছে।"
+
+msgid "Installing the web browser. You can sign in; it will appear when ready."
+msgstr "ওয়েব ব্রাউজার ইনস্টল করা হচ্ছে। আপনি সাইন ইন করতে পারেন; প্রস্তুত হলে এটি দেখা যাবে।"
+
+msgid "The web browser could not be installed yet; it will try again. You can sign in."
+msgstr "ওয়েব ব্রাউজার এখনও ইনস্টল করা যায়নি; আবার চেষ্টা করা হবে। আপনি সাইন ইন করতে পারেন।"

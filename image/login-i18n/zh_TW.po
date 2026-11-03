@@ -106,3 +106,15 @@ msgstr "此應用程式只能從登入畫面開啟"
 
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "此應用程式需要網路。請從頂端列連接 Wi-Fi，然後重試。"
+
+msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
+msgstr "沒有網路。請從右上角選單選擇 Wi-Fi 網路，或插入網路線，或連接已開啟 USB 網路共用的手機。"
+
+msgid "Waiting for school settings."
+msgstr "正在等待學校設定。"
+
+msgid "Installing the web browser. You can sign in; it will appear when ready."
+msgstr "正在安裝網頁瀏覽器。可以先登入，安裝完成後會自動出現。"
+
+msgid "The web browser could not be installed yet; it will try again. You can sign in."
+msgstr "網頁瀏覽器暫時無法安裝，稍後會自動重試。可以先登入。"

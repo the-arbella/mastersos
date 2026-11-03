@@ -106,3 +106,15 @@ msgstr "Chan fhosgail an aplacaid seo ach o sgrìn an inntrigidh"
 
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Tha feum aig an aplacaid seo air lìonra. Ceangail ri Wi-Fi on bhàr gu h-àrd agus feuch a-rithist."
+
+msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
+msgstr "Chan eil lìonra ann. Tagh lìonra Wi-Fi sa chlàr-taice gu h-àrd air an làimh dheis, no cuir a-steach càball lìonraidh no fòn a cho-roinneas a cheangal thar USB."
+
+msgid "Waiting for school settings."
+msgstr "A' feitheamh air roghainnean na sgoile."
+
+msgid "Installing the web browser. You can sign in; it will appear when ready."
+msgstr "A' stàladh a' bhrabhsair-lìn. 'S urrainn dhut inntrigeadh; nochdaidh e nuair a bhios e deiseil."
+
+msgid "The web browser could not be installed yet; it will try again. You can sign in."
+msgstr "Cha b' urrainn dhuinn am brabhsair-lìn a stàladh fhathast; thèid feuchainn a-rithist. 'S urrainn dhut inntrigeadh."

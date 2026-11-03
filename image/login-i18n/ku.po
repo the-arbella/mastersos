@@ -106,3 +106,15 @@ msgstr "Ev sepan tenê ji dîmendera têketinê tê vekirin"
 
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Ev sepan tora tê hewce dike. Ji darika jorîn bi Wi-Fi ve girêbide, paşê dîsa biceribîne."
+
+msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
+msgstr "Tor tune. Ji menuya jor a rastê torek Wi-Fi hilbijêre, an kabloyek torê an telefonek ku înternetê bi USB parve dike girêbide."
+
+msgid "Waiting for school settings."
+msgstr "Li benda mîhengên dibistanê."
+
+msgid "Installing the web browser. You can sign in; it will appear when ready."
+msgstr "Geroka webê tê sazkirin. Tu dikarî têkevî; dema amade bibe dê xuya bibe."
+
+msgid "The web browser could not be installed yet; it will try again. You can sign in."
+msgstr "Geroka webê hîn nehat sazkirin; dê dîsa were ceribandin. Tu dikarî têkevî."

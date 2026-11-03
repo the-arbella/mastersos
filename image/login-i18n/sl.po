@@ -106,3 +106,15 @@ msgstr "To aplikacijo je mogoče odpreti samo na zaslonu za prijavo"
 
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Ta aplikacija potrebuje omrežje. Povežite se z omrežjem Wi-Fi v zgornji vrstici in poskusite znova."
+
+msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
+msgstr "Ni omrežja. Izberite omrežje Wi-Fi v meniju zgoraj desno ali priključite omrežni kabel oziroma telefon z deljenjem povezave prek USB."
+
+msgid "Waiting for school settings."
+msgstr "Čakanje na nastavitve šole."
+
+msgid "Installing the web browser. You can sign in; it will appear when ready."
+msgstr "Nameščanje spletnega brskalnika. Lahko se prijavite; prikazal se bo, ko bo pripravljen."
+
+msgid "The web browser could not be installed yet; it will try again. You can sign in."
+msgstr "Spletnega brskalnika še ni bilo mogoče namestiti; poskus bo ponovljen. Lahko se prijavite."

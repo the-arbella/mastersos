@@ -106,3 +106,15 @@ msgstr "Esta aplicación namás se pue abrir dende la pantalla d'aniciu de sesi�
 
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Esta aplicación necesita una rede. Conéctate a una rede Wi-Fi dende la barra de riba y volvi intentalo."
+
+msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
+msgstr "Nun hai rede. Escueyi una rede Wi-Fi nel menú de la esquina superior derecha, o enchufa un cable de rede o un teléfonu con anclaxe USB."
+
+msgid "Waiting for school settings."
+msgstr "Esperando pola configuración de la escuela."
+
+msgid "Installing the web browser. You can sign in; it will appear when ready."
+msgstr "Instalando'l restolador web. Pues aniciar sesión; apaecerá cuando tea preparáu."
+
+msgid "The web browser could not be installed yet; it will try again. You can sign in."
+msgstr "Entá nun se pudo instalar el restolador web; volverá intentase. Pues aniciar sesión."

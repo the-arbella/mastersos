@@ -107,3 +107,15 @@ msgstr "Ta aplikacyjŏ może być ôtwarta yno z ekranu logowaniŏ"
 
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Ta aplikacyjo potrzebuje siyci. Połōncz sie z Wi-Fi z gōrnego posku, a potym sprōbuj zaś."
+
+msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
+msgstr "Niy ma siyci. Wybier siyć Wi-Fi w menu w prawym gōrnym rogu abo podłōncz kabel sieciowy abo telefōn z tetheringiym USB."
+
+msgid "Waiting for school settings."
+msgstr "Czekanie na ustawiynia szkoły."
+
+msgid "Installing the web browser. You can sign in; it will appear when ready."
+msgstr "Instalowanie przeglōndarki. Możesz sie już zalogować; pokoże sie, jak bydzie fertich."
+
+msgid "The web browser could not be installed yet; it will try again. You can sign in."
+msgstr "Niy szło jeszcze zainstalować przeglōndarki; bydzie prōbowane zaś. Możesz sie zalogować."

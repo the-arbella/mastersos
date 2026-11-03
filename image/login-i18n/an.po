@@ -106,3 +106,15 @@ msgstr "Esta aplicación nomás se puede ubrir dende a pantalla d'inicio de sesi
 
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Esta aplicación necesita una reixa. Connecta-te a una Wi-Fi dende a barra superior y torna a intentar-lo."
+
+msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
+msgstr "No i hai reixa. Tría una reixa Wi-Fi en o menú d'alto a la dreita, u connecta un cable de reixa u un telefono con compartición de connexión por USB."
+
+msgid "Waiting for school settings."
+msgstr "Asperando a configuración d'a escuela."
+
+msgid "Installing the web browser. You can sign in; it will appear when ready."
+msgstr "Se ye instalando o navegador web. Puetz iniciar sesión; amaneixerá quan sía listo."
+
+msgid "The web browser could not be installed yet; it will try again. You can sign in."
+msgstr "No s'ha puesto instalar encara o navegador web; se tornará a intentar. Puetz iniciar sesión."

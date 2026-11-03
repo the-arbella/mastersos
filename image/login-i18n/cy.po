@@ -106,3 +106,15 @@ msgstr "Dim ond o'r sgrin mewngofnodi y mae modd agor yr ap hwn"
 
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Mae'r ap hwn angen rhwydwaith. Cysylltwch â Wi-Fi o'r bar uchaf, yna ceisiwch eto."
+
+msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
+msgstr "Dim rhwydwaith. Dewiswch rwydwaith Wi-Fi yn y ddewislen ar y dde uchaf, neu plygiwch gebl rhwydwaith neu ffôn sy'n rhannu cysylltiad drwy USB."
+
+msgid "Waiting for school settings."
+msgstr "Yn aros am osodiadau'r ysgol."
+
+msgid "Installing the web browser. You can sign in; it will appear when ready."
+msgstr "Wrthi'n gosod y porwr gwe. Gallwch fewngofnodi; bydd yn ymddangos pan fydd yn barod."
+
+msgid "The web browser could not be installed yet; it will try again. You can sign in."
+msgstr "Doedd dim modd gosod y porwr gwe eto; bydd yn ceisio eto. Gallwch fewngofnodi."

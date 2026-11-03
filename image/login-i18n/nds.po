@@ -106,3 +106,15 @@ msgstr "Disse App lett sik blots vun den Anmellschirm ut opmaken"
 
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Disse App bruukt en Netz. Verbinn di boven in de Balken mit Wi-Fi un versöök dat nochmal."
+
+msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
+msgstr "Keen Netz. Söök di boven rechts in't Menü en Wi-Fi-Netz ut, or stick en Netzkabel or en Telefoon mit USB-Tethering an."
+
+msgid "Waiting for school settings."
+msgstr "Töövt op de School-Instellen."
+
+msgid "Installing the web browser. You can sign in; it will appear when ready."
+msgstr "De Webbrowser warrt installeert. Du kannst di anmellen; he dukt op, wenn he praat is."
+
+msgid "The web browser could not be installed yet; it will try again. You can sign in."
+msgstr "De Webbrowser kunn noch nich installeert warrn; dat warrt nochmal versöcht. Du kannst di anmellen."

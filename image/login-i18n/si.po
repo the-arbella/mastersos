@@ -106,3 +106,15 @@ msgstr "මෙම යෙදුම විවෘත කළ හැක්කේ ප�
 
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "මෙම යෙදුමට ජාලයක් අවශ්‍යයි. ඉහළ තීරුවෙන් Wi-Fi වෙත සම්බන්ධ වී නැවත උත්සාහ කරන්න."
+
+msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
+msgstr "ජාලයක් නැත. ඉහළ දකුණු මෙනුවෙන් Wi-Fi ජාලයක් තෝරන්න, නැතහොත් ජාල කේබලයක් හෝ USB ටෙදරින් සහිත දුරකථනයක් සම්බන්ධ කරන්න."
+
+msgid "Waiting for school settings."
+msgstr "පාසල් සැකසුම් සඳහා රැඳී සිටිමින්."
+
+msgid "Installing the web browser. You can sign in; it will appear when ready."
+msgstr "වෙබ් බ්‍රව්සරය ස්ථාපනය වෙමින් පවතී. ඔබට පිවිසිය හැක; සූදානම් වූ විට එය දිස් වේ."
+
+msgid "The web browser could not be installed yet; it will try again. You can sign in."
+msgstr "වෙබ් බ්‍රව්සරය තවමත් ස්ථාපනය කළ නොහැකි විය; නැවත උත්සාහ කරනු ඇත. ඔබට පිවිසිය හැක."

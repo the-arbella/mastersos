@@ -106,3 +106,15 @@ msgstr "لا يمكن فتح هذا التطبيق إلا من شاشة تسجي
 
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "يحتاج هذا التطبيق إلى شبكة. اتصل بشبكة Wi-Fi من الشريط العلوي ثم أعد المحاولة."
+
+msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
+msgstr "لا توجد شبكة. اختر شبكة Wi-Fi من القائمة أعلى اليسار، أو صِل كبل شبكة أو هاتفًا يشارك الإنترنت عبر USB."
+
+msgid "Waiting for school settings."
+msgstr "في انتظار إعدادات المدرسة."
+
+msgid "Installing the web browser. You can sign in; it will appear when ready."
+msgstr "جارٍ تثبيت متصفح الويب. يمكنك تسجيل الدخول؛ وسيظهر المتصفح عندما يصبح جاهزًا."
+
+msgid "The web browser could not be installed yet; it will try again. You can sign in."
+msgstr "تعذّر تثبيت متصفح الويب حتى الآن؛ ستتم إعادة المحاولة. يمكنك تسجيل الدخول."

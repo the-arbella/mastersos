@@ -106,3 +106,15 @@ msgstr "Bu programma yalnız kirüv ekranından açıla bile"
 
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Bu uygulama bir ağğa muhtaçtır. Üst panelden Wi-Fi ağına bağlanıñız, soñra yañıdan sınañız."
+
+msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
+msgstr "Ağ yoq. Yuqarı sağdaki menüden bir Wi-Fi ağı saylañız ya da ağ kabelini yaki USB modem rejiminde telefonnı bağlañız."
+
+msgid "Waiting for school settings."
+msgstr "Mektep ayarları beklene."
+
+msgid "Installing the web browser. You can sign in; it will appear when ready."
+msgstr "Veb-brauzer qurula. Kirip olasıñız; azır olğanda peyda olur."
+
+msgid "The web browser could not be installed yet; it will try again. You can sign in."
+msgstr "Veb-brauzer daa qurulıp olamadı; yañıdan sınalacaq. Kirip olasıñız."
