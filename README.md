@@ -9,7 +9,7 @@
 
 - `mastersos-bundle`：设置包的清单、打包、签名与验签（Ed25519 与 passkey 的 WebAuthn 断言）、心跳、发布前 lint。
 - `mastersos-agent`：机器上拉取、验签、应用设置的服务；另有恢复密钥托管与 TPM 槽（`luks`）、Chrome sysext（`mastersos-agent chrome`）、开机快速应用（`apply-local`）。
-- `mastersos-mcp`：给 AI 与人用的 `mastersos` 命令行（`mastersos mcp` 子命令是 stdio 的 MCP 服务，两者共用代码与防护）。只能查询、改草稿、提交发布请求，不能发布。
+- `mastersos-mcp`：给 AI 与人用的 `mastersos` 命令行（`mastersos mcp` 子命令是 stdio 的只读 MCP 服务）。设置在本地目录里编辑，命令行负责 pull、check、diff、publish；AI 只改文件，不能发布。
 - `mastersos-sign`：学校恢复钥匙的命令行。它在本地验链后签名，trust 的变化只能经它签。
 - `mastersos-installer`：U 盘安装器（tty 上的纯文本流程）与未受管机器的首次开机建用户（`mastersos-firstrun`）。
 
@@ -25,50 +25,63 @@ cd core && cargo test --workspace
 
 工具链是 Rust 1.98（`core/rust-toolchain.toml`）。CI 见 `.github/workflows/mastersos.yml`。`image-lint` 对 `image/` 跑 shellcheck、`tests/check-tree.sh` 与几个不碰 VM 的脚本测试。
 
-## 命令行与 MCP：让 AI 起草
+## 命令行与 MCP：本地目录里改设置
 
-`mastersos` 命令行（设备、草稿检查/写入/差异、配置、分组、学校设置、规范、发布请求；`--json` 给 AI 用）与 `mastersos mcp`（stdio 的 MCP 服务，
-任何支持 MCP 的客户端都能接）共用同一套代码与防护。它要一个**只有 `read`、`draft` 范围**的 token，由运营者发：
+设置不在服务端存草稿：IT 把已发布的版本拉成一个本地目录，人或 AI 在里面改 `manifest.toml`，本地检查、看差异，最后由 IT 发布。
 
 ```bash
-printf '%s\n' "$OPERATOR_URL" | mastersos-server cloud school token create --operator-database-url-stdin \
-  --slug alpha --name ai --scope read --scope draft      # 明文只打印这一次，存进文件交给使用者
+mastersos init ./school          # 新学校：用模板建目录（已发布过的学校用 pull）
+mastersos pull ./school          # 下载最新已发布版本，沿版本链验签，拆成目录
+$EDITOR ./school/manifest.toml   # 或让 AI 改；新密码网络写 psk = "secret:<名字>"，值由 IT 填进 secrets.toml
+mastersos check ./school && mastersos diff ./school     # 本地，不联网；check 有错误退出码 2
+mastersos publish ./school [--key rk.key]   # 有恢复钥匙文件就本机验证、签名并 commit；没有就打印签名页链接，
+                                            # IT 在浏览器里用 passkey 签完后再跑 mastersos pull
 ```
 
-`mastersos setup --server https://mastersos.school.ac.th --token-file /path/to/ai.token` 把两者存进 `~/.config/mastersos/config.toml`
-（token 文件默认 `~/.config/mastersos/token`，权限必须是 0600）；之后 `mastersos devices list`、`mastersos draft check` 之类不用再带参数。
-MCP 客户端里把 `mastersos mcp` 配成一个 stdio 服务器。
+目录里：`mastersos.toml`（学校主机与 `base_version`）、`manifest.toml`（秘密只写引用）、`secrets.toml`（0600，git 忽略，秘密的值）、
+`files/`、`.mastersos/base/`（pull 下来的原样，`diff` 用）。`pull` 在目录有未发布改动时拒绝覆盖，除非 `--force`；
+`--version N` 只取本机验证过的旧版本。`publish` 先 `check`，在本地合成（引用换成值，写 `version`、`issued_at`、学校名），
+上传成待签名包；服务端拒收（base 之后已有人发布、阻断检查不过）就停并显示原因。
 
-- token 只从文件读，不接受命令行明文。
+其他子命令：`mastersos devices list|show`、`keys list`（服务端的机器与已登记钥匙，供手写 `[[device]]` 与 `trust`）、
+`hash-password`（不回显读口令，输出 IT 账号的哈希，写进 `secrets.toml`）、`logo upload <登录页.png> <图标.png>`、`spec`、`setup`。
+`--json` 给脚本与 AI 用。
+
+`mastersos mcp --dir <目录>` 是 stdio 的 MCP 服务，只读：`read_manifest`、`list_files`、`read_file`、`check`、`diff`、`devices_list`、
+`device_show`、`keys_list`、`spec`。没有写工具，也不碰 `secrets.toml`、合成出的包和签名；AI 用自己的文件工具改 `manifest.toml` 与 `files/`。
+
+`setup` 与服务端 token：联网的命令（`pull`、`publish`、`devices`、`keys`、`logo`）要一个 token，由学校管理员在管理页「AI tools」建：
+
+```bash
+mastersos setup --server https://mastersos.school.ac.th --token-file /path/to/ai.token
+```
+
+`setup` 把两者存进 `~/.config/mastersos/config.toml`（token 文件默认 `~/.config/mastersos/token`，权限必须是 0600）。
+
+- token 只从文件读，不接受命令行明文。AI 用的 token 只能读机器与状态，不能下载包，不能读待签名包。
 - token 带 `publish` 或 `keys` 范围时：`mastersos mcp` 以退出码 2 结束，其他子命令以 1 结束。
-- 命令行退出码：0 成功；1 失败（网络、认证、服务端拒绝）；2 `draft check` 有 error，或 `draft put` 被检查或防护拒绝。
-- 工具与管理 API 一一对应：可以查机器、分组、版本与差异，可以改草稿和分组、分配机器、锁定机器。
-  `request_publish(note)` 只是留一条发布请求。网页顶部会出现「请求发布」的提示，IT 点进去，照常 prepare、核对，然后发布或签名。
-- Wi-Fi 在 Defaults 里（所有 Config 继承）：`mastersos defaults wifi list|add|remove`（旧的 `school wifi` 已删，会提示改用这个；`add` 只有 `--open` 与 `--enterprise <peap|ttls|tls|pwd> --identity …`，企业网络建出来没有密码）。命令读整张 Defaults 表、改完整张写回（服务端的 PUT 整表替换），所以别的网络、别的键与已有秘密都原样保留。
-  `mastersos defaults show|set <file>` 读写整张 `[defaults]`；`config show/set` 里没写的单值继承 Defaults；`draft get` 打印服务端排版后的文本，写回照常校验。
-  IT 账号的口令没有命令行入口，只能在管理网页设（AI 不能设）；命令行只改草稿，不发布。
-  对 AI token，服务端把所有 Wi-Fi 秘密（`psk`、`password`、`client_key`、`client_key_password`）都显示成 `"<kept>"`，写回 `"<kept>"` 只在同层同 SSID
-  且去向字段不变时保留旧值，新的明文一律 400 `secret_via_web`；命令行没有 `--psk`、`--password` 之类的开关，传了会在发请求前被拒并指向管理网页。
-  密码与私钥只能由 IT 在管理网页里填（草稿检查会报 `wifi_invalid` 直到填上）。
-- AI 不能改 trust：`draft put`（`put_draft_manifest`）与 `restore_version_to_draft` 发现新旧 trust 或 `[[device]].reset` 不同就拒绝。
-  这是第二道防线，主防线是服务端的 R2：trust 里的每把钥匙都必须是登记过的钥匙，而登记要 `keys` 范围。
+- 退出码：0 成功；1 失败（网络、认证、服务端拒绝）；2 `check` 有 error。
+- 秘密（Wi-Fi 的 `psk`、`password`、`client_key`、`client_key_password`，IT 账号的 `password_hash`）在 `manifest.toml` 里是 `secret:<名字>` 引用。
+  `check`：引用了不存在的秘密是错误（`secret_unknown`）；没人用的秘密是警告；引用秘密的网络改了 `eap`、`phase2`、`identity`、
+  `anonymous_identity`、`server_domain`、`ca_cert`、`check_server` 任一，警告 `secret_rerouted`（密码会被发到新的地方，请 IT 确认）。
+- AI 不改 trust：`trust` 照 `manifest.toml` 写的，发布不自动填；trust 的变化只能由 IT 用恢复钥匙经 `mastersos-sign` 签。
 
 ### 装命令行与 skill
 
 运营者命令行（`cloud school …`）看不到也撤销不了 AI token（运营者角色只有 SELECT）。出了泄漏时的杠杆有两个：
 把建 token 的人从该校 `admins` 里删掉（他建的所有 token 随之失效，加回来又生效），或者让管理员在管理页 `/ai` 撤销。
 
-学校管理员在管理页「AI tools」建 token（只有 `read`、`draft`，30/90/180 天过期，建它的人不再是管理员就失效；管理页会把这样的 token 标成「未生效」，但它仍占 10 个名额直到撤销或过期），存进
+学校管理员在管理页「AI tools」建 token（30/90/180 天过期，建它的人不再是管理员就失效；管理页会把这样的 token 标成「未生效」，但它仍占 10 个名额直到撤销或过期），存进
 `~/.config/mastersos/token`（权限 0600）。然后：
 
 ```bash
 curl -fsSL https://os.khundavid.com/downloads/mastersos/install.sh | sh     # 装 mastersos 与 skill（删掉旧的 mastersos-mcp）
 mastersos setup --server https://<school>.os.khundavid.com
-claude mcp add mastersos -- mastersos mcp     # 可选：只给需要 MCP 的客户端
+claude mcp add mastersos -- mastersos mcp --dir ./school     # 可选：只给需要 MCP 的客户端
 ```
 
-skill 在 `skills/mastersos-admin/`（装到 `~/.claude/skills/mastersos-admin/`）：先读草稿、检查到无错误再写、给人看差异后才留发布请求，
-红线写在 `SKILL.md`。`reference/settings-reference.md` 是 `core/mastersos-bundle/docs/manifest-spec.md` 的逐字副本，改了规范要重新复制
+skill 在 `skills/mastersos-admin/`（装到 `~/.claude/skills/mastersos-admin/`）：在 IT 给的本地目录里改 `manifest.toml`、跑 `check` 与 `diff`、给人看差异，
+不读 `secrets.toml` 与合成出的包，改完请 IT `mastersos publish`；红线写在 `SKILL.md`。`reference/settings-reference.md` 是 `core/mastersos-bundle/docs/manifest-spec.md` 的逐字副本，改了规范要重新复制
 （`skill_reference_matches_spec` 测试会红）；`reference/recipes.md` 的每个 TOML 块由 `skill_recipes_parse` 检查。
 
 ## 锁定应用
@@ -254,7 +267,7 @@ $S escrow-read --server https://<slug>.os.khundavid.com --token-file recovery.to
 ### 第一版与 trust 的变化
 
 1. 在网页登记 passkey，建议在不同设备上登记两把。用临时 `keys` token 经 `mastersos-sign register` 登记恢复钥匙，登记完删掉这个 token。
-2. 把草稿的 trust 设成登记过的钥匙（`POST /v1/admin/draft/trust`），用 `mastersos-sign sign` 以恢复钥匙签第一版（R1g）。
+2. 在本地目录的 `manifest.toml` 里把 `[[trust]]` 写成登记过的钥匙（`mastersos keys list` 可查），用 `mastersos-sign sign` 以恢复钥匙签第一版（R1g）。
    发布第一版之前没有种子可下载（`GET /v1/admin/seed` 回 409 `no_published_version`）。
 3. 之后的日常发布可以用网页 passkey 签。每次发布之后续签一次心跳。trust 的变化只能用恢复钥匙经 `mastersos-sign` 签。
 
