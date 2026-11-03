@@ -53,7 +53,7 @@ struct StderrLog;
 
 impl log::Log for StderrLog {
     fn enabled(&self, m: &log::Metadata) -> bool {
-        m.level() <= log::Level::Info
+        m.level() <= log::max_level()
     }
     fn log(&self, r: &log::Record) {
         if self.enabled(r.metadata()) {
@@ -61,6 +61,20 @@ impl log::Log for StderrLog {
         }
     }
     fn flush(&self) {}
+}
+
+/// The log level from `MASTERSOS_LOG_LEVEL`: `debug` or `trace` (exactly), anything else is `info`. The developer diagnostics
+/// switch sets it through /run/mastersos/diag.env (docs/specs/2026-11-03-diagnostics-design.md).
+fn level_from_env(v: Option<&str>) -> log::LevelFilter {
+    match v {
+        Some("debug") => log::LevelFilter::Debug,
+        Some("trace") => log::LevelFilter::Trace,
+        _ => log::LevelFilter::Info,
+    }
+}
+
+fn env_level() -> log::LevelFilter {
+    level_from_env(std::env::var("MASTERSOS_LOG_LEVEL").ok().as_deref())
 }
 
 /// PAM 调用的子命令（`pam-check`、`pam-session`）、临时账号的清理（`ephemeral-cleanup`、`guest-cleanup`）与锁定会话的
@@ -102,7 +116,7 @@ fn main() -> ExitCode {
     // (plan 5 Task 8); synchronous, exit 0 = prepared or not needed, 1 = failed (the shim is replaced anyway)
     if sub.as_deref() == Some(OsStr::new("shim-prepare")) {
         // its log lines (e.g. removing the PIN credential failed) go to stderr, which bootloader-update captures
-        let _ = log::set_logger(&StderrLog).map(|()| log::set_max_level(log::LevelFilter::Info));
+        let _ = log::set_logger(&StderrLog).map(|()| log::set_max_level(env_level()));
         return mastersos_agent::shim_predict::shim_prepare_main(std::env::args_os().skip(2));
     }
     let rt = match tokio::runtime::Builder::new_multi_thread()
@@ -134,7 +148,7 @@ fn main() -> ExitCode {
 }
 
 async fn agent_main() -> anyhow::Result<()> {
-    let _ = log::set_logger(&StderrLog).map(|()| log::set_max_level(log::LevelFilter::Info));
+    let _ = log::set_logger(&StderrLog).map(|()| log::set_max_level(env_level()));
     let cli = Cli::parse();
     let cfg = AgentConfig {
         state_dir: cli.state_dir,
@@ -211,5 +225,21 @@ async fn agent_main() -> anyhow::Result<()> {
             ];
             mastersos_agent::run(cfg, applier, jobs, shutdown).await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::level_from_env;
+    use log::LevelFilter;
+
+    #[test]
+    fn level_from_env_values() {
+        assert_eq!(level_from_env(None), LevelFilter::Info);
+        assert_eq!(level_from_env(Some("")), LevelFilter::Info);
+        assert_eq!(level_from_env(Some("debug")), LevelFilter::Debug);
+        assert_eq!(level_from_env(Some("trace")), LevelFilter::Trace);
+        assert_eq!(level_from_env(Some("verbose")), LevelFilter::Info);
+        assert_eq!(level_from_env(Some("DEBUG")), LevelFilter::Info);
     }
 }
