@@ -91,7 +91,7 @@ fn duplicate_stanzas_are_an_error() {
         "Package: google-chrome-stable",
     );
     let e = find_package(&extra, STABLE).unwrap_err();
-    assert!(format!("{e:#}").contains("不止一个"), "{e:#}");
+    assert!(format!("{e:#}").contains("more than once"), "{e:#}");
 }
 
 #[test]
@@ -429,7 +429,7 @@ async fn bad_inrelease_signature_stops_before_download() {
         .respond("gpgv", Output::fail(1, "gpgv: BAD signature"));
     let r = lab.run().await;
     assert!(!r.ok, "{r:?}");
-    assert!(r.detail.as_deref().unwrap().contains("签名"), "{r:?}");
+    assert!(r.detail.as_deref().unwrap().contains("signature"), "{r:?}");
     assert!(
         r.detail.as_deref().unwrap().contains("BAD signature"),
         "带上 gpgv 的说明（换子钥时看得出）：{r:?}"
@@ -527,7 +527,13 @@ async fn lower_version_is_refused() {
     lab.fake.respond("dpkg --compare-versions", Output::ok(""));
     let r = lab.run().await;
     assert!(!r.ok, "{r:?}");
-    assert!(r.detail.as_deref().unwrap().contains("拒绝降级"), "{r:?}");
+    assert!(
+        r.detail
+            .as_deref()
+            .unwrap()
+            .contains("refusing to downgrade"),
+        "{r:?}"
+    );
     assert!(
         lab.ran("dpkg --compare-versions 155.0.8059.39-1 lt 130.0"),
         "{:?}",
@@ -731,7 +737,7 @@ async fn replayed_older_index_is_refused() {
     .unwrap();
     let r = lab.run().await;
     assert!(!r.ok, "{r:?}");
-    assert!(r.detail.as_deref().unwrap().contains("回放"), "{r:?}");
+    assert!(r.detail.as_deref().unwrap().contains("replay"), "{r:?}");
     let req = lab.paths_requested().await;
     assert_eq!(req, vec!["/dists/stable/InRelease"], "{req:?}");
     lab.old_untouched();
@@ -761,7 +767,13 @@ async fn second_updater_is_locked_out() {
     rustix::fs::flock(&held, rustix::fs::FlockOperation::NonBlockingLockExclusive).unwrap();
     let r = lab.run().await;
     assert!(!r.ok, "{r:?}");
-    assert!(r.detail.as_deref().unwrap().contains("另一个"), "{r:?}");
+    assert!(
+        r.detail
+            .as_deref()
+            .unwrap()
+            .contains("another Chrome update"),
+        "{r:?}"
+    );
     assert!(lab.paths_requested().await.is_empty());
     assert!(
         !lab.work.join("result.json").exists(),
@@ -946,7 +958,7 @@ async fn oversized_deb_is_refused() {
     .max_deb_bytes(2);
     let r = job.update_once().await;
     assert!(!r.ok, "{r:?}");
-    assert!(r.detail.as_deref().unwrap().contains("上限"), "{r:?}");
+    assert!(r.detail.as_deref().unwrap().contains("size limit"), "{r:?}");
     assert!(!lab.ran("dpkg-deb"));
     lab.old_untouched();
 }
@@ -1072,7 +1084,12 @@ async fn status_without_any_result_waits_for_grace_on_the_monotonic_clock() {
         .run(&lab.cx)
         .await;
     assert!(
-        !r[0].ok && r[0].detail.as_deref().unwrap().contains("还没有跑完过"),
+        !r[0].ok
+            && r[0]
+                .detail
+                .as_deref()
+                .unwrap()
+                .contains("has ever finished"),
         "{r:?}"
     );
 }
@@ -1110,7 +1127,7 @@ async fn suspend_does_not_make_the_result_stale() {
     assert!(!r[0].ok, "{r:?}");
     let d = r[0].detail.as_deref().unwrap();
     assert!(
-        d.contains("小时没有跑完") && d.contains("155.0.8059.39-1"),
+        d.contains("hours without a finished") && d.contains("155.0.8059.39-1"),
         "{d}"
     );
 }
@@ -1127,7 +1144,7 @@ async fn result_from_previous_boot_is_kept_until_grace() {
     assert!(r[0].ok, "{r:?}");
     let d = r[0].detail.as_deref().unwrap();
     assert!(
-        d.contains("155.0.8059.39-1") && d.contains("上次开机"),
+        d.contains("155.0.8059.39-1") && d.contains("previous boot"),
         "{d}"
     );
     // 这次开机 2 小时还没跑完一轮：失败
@@ -1136,7 +1153,10 @@ async fn result_from_previous_boot_is_kept_until_grace() {
         .await;
     assert!(!r[0].ok, "{r:?}");
     assert!(
-        r[0].detail.as_deref().unwrap().contains("这次开机"),
+        r[0].detail
+            .as_deref()
+            .unwrap()
+            .contains("in this boot without"),
         "{r:?}"
     );
     // 读不出 boot id：当作不同的一次开机（宽限之后失败）
@@ -1250,7 +1270,10 @@ async fn outside_window_skips_download_and_reports_ok() {
     let r = lab.run().await;
     assert!(r.ok, "{r:?}");
     let d = r.detail.as_deref().unwrap();
-    assert!(d.contains("等更新时段") && d.contains("16:00-07:00"), "{d}");
+    assert!(
+        d.contains("waiting for the update window") && d.contains("16:00-07:00"),
+        "{d}"
+    );
     assert!(d.contains("154.0.1-1"), "带上当前版本：{d}");
     assert!(
         lab.paths_requested().await.is_empty(),
@@ -1273,7 +1296,7 @@ async fn paused_skips_download() {
     assert!(r.ok, "{r:?}");
     let d = r.detail.as_deref().unwrap();
     assert!(
-        d.contains("暂停到 2026-11-10") && d.contains("154.0.1-1"),
+        d.contains("paused until 2026-11-10") && d.contains("154.0.1-1"),
         "{d}"
     );
     assert!(lab.paths_requested().await.is_empty());
@@ -1311,7 +1334,13 @@ async fn no_downgrade_unchanged_when_window_opens() {
     lab.fake.respond("dpkg --compare-versions", Output::ok(""));
     let r = lab.run().await;
     assert!(!r.ok, "{r:?}");
-    assert!(r.detail.as_deref().unwrap().contains("拒绝降级"), "{r:?}");
+    assert!(
+        r.detail
+            .as_deref()
+            .unwrap()
+            .contains("refusing to downgrade"),
+        "{r:?}"
+    );
     assert!(!lab
         .paths_requested()
         .await
@@ -1385,7 +1414,7 @@ async fn window_holds_within_7_days_and_starts_the_clock() {
     lab.installed("154.0.1-1");
     lab.settings(Some("16:00-07:00"), None);
     let r = lab.run().await;
-    assert!(r.detail.unwrap().contains("等更新时段"));
+    assert!(r.detail.unwrap().contains("waiting for the update window"));
     assert!(!lab.asked_source().await);
     assert_eq!(lab.checked_at(), None, "没查源就不写 checked-at（复审 N3）");
     assert_eq!(
@@ -1395,7 +1424,7 @@ async fn window_holds_within_7_days_and_starts_the_clock() {
     );
     lab.checked_ago(6 * DAY);
     let r = lab.run().await;
-    assert!(r.detail.unwrap().contains("等更新时段"));
+    assert!(r.detail.unwrap().contains("waiting for the update window"));
     assert!(!lab.asked_source().await);
     assert_eq!(
         lab.checked_at(),
@@ -1412,7 +1441,7 @@ async fn pause_is_never_overridden() {
     lab.settings(Some("16:00-07:00"), Some("2026-11-12"));
     lab.checked_ago(30 * DAY);
     let r = lab.run().await;
-    assert!(r.detail.unwrap().contains("暂停到 2026-11-12"));
+    assert!(r.detail.unwrap().contains("paused until 2026-11-12"));
     assert!(!lab.asked_source().await);
 }
 
@@ -1535,12 +1564,15 @@ async fn held_round_keeps_a_previous_failure() {
     let lab = Lab::new(b"deb", b"deb", true).await;
     lab.installed("160.0");
     lab.fake.respond("dpkg --compare-versions", Output::ok(""));
-    assert!(!lab.run().await.ok, "拒绝降级");
+    assert!(!lab.run().await.ok, "refusing to downgrade");
     lab.settings(Some("16:00-07:00"), None);
     let r = lab.run().await;
     assert!(!r.ok, "{r:?}");
     let d = r.detail.unwrap();
-    assert!(d.contains("拒绝降级") && d.contains("等更新时段"), "{d}");
+    assert!(
+        d.contains("refusing to downgrade") && d.contains("waiting for the update window"),
+        "{d}"
+    );
     let again = lab.run().await;
     assert_eq!(again.detail.unwrap(), d, "连着被挡下不越接越长");
 }
@@ -1565,7 +1597,7 @@ async fn pause_days_do_not_count_toward_the_window_override() {
     lab.job = lab.job.with_now(nov21_0740);
     let r = lab.run().await;
     assert!(
-        r.detail.unwrap().contains("等更新时段"),
+        r.detail.unwrap().contains("waiting for the update window"),
         "暂停刚结束：照样等时段"
     );
     assert!(!lab.asked_source().await);
@@ -1592,7 +1624,7 @@ async fn corrupt_or_future_checked_at_holds_and_restarts_the_clock() {
         fs::write(lab.work.join("checked-at"), &content).unwrap();
         let r = lab.run().await;
         assert!(
-            r.ok && r.detail.unwrap().contains("等更新时段"),
+            r.ok && r.detail.unwrap().contains("waiting for the update window"),
             "{content}"
         );
         assert!(!lab.asked_source().await);

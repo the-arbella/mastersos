@@ -158,7 +158,7 @@ async fn http_client_uses_custom_redirect_policy() {
         chain.push_str(&format!(" / {s}"));
         src = s.source();
     }
-    assert!(chain.contains("重定向被拒"), "{chain}");
+    assert!(chain.contains("redirect refused"), "{chain}");
     // 跟随 MAX_REDIRECTS - 1 = 9 次之后再遇到重定向就停（reqwest 默认是 10 次、报错文字不同）。
     assert_eq!(srv.received_requests().await.unwrap().len(), 10);
 }

@@ -1034,7 +1034,7 @@ echo $$ > /run/t20-sleeper.pid; sleep 600' S_LOGIN=$l1 B_GROUP=teacher B_TEACHER
 	o=$(device_json "$(my_id)" | jq -c '[.results[]? | select(.item | test("t20-apply"))]')
 	log "timed-out apply script: report ${o}; process $(gx 'p=$(cat /run/t20-sleeper.pid 2>/dev/null); [ -n "$p" ] && { kill -0 $p 2>/dev/null && echo "still running" || echo "killed"; } || echo "never started"')"
 	# the agent's report detail says timeout / 超时
-	grep -qE '超时|timeout' <<<"$o" || bad="${bad}no timeout in the report of the timed-out apply script; "
+	grep -qE '超时|timeout|timed out' <<<"$o" || bad="${bad}no timeout in the report of the timed-out apply script; "
 	gx 'p=$(cat /run/t20-sleeper.pid 2>/dev/null); [ -z "$p" ] || ! kill -0 $p 2>/dev/null' || bad="${bad}the timed-out apply script was not killed; "
 	# login scripts (the apply script goes back to a2, which already ran)
 	v=$(S_APPLY=$a2 S_LOGIN=$l1 B_GROUP=teacher B_TEACHER_SED='/^flatpak = /d' pub scripts-login) || true
@@ -1094,7 +1094,7 @@ sleep 600' B_GROUP=teacher B_TEACHER_SED='/^flatpak = /d; s|{ path = "scripts/t2
 	sleep 30
 	o=$(device_json "$(my_id)" | jq -c '[.results[]? | select(.item | test("^login-script:"))]')
 	log "timed-out login script: report $o"
-	grep -qE '超时|timeout' <<<"$o" || bad="${bad}no timeout in the report of the timed-out login script; "
+	grep -qE '超时|timeout|timed out' <<<"$o" || bad="${bad}no timeout in the report of the timed-out login script; "
 	grep -qE 't20local|@' <<<"$o" && bad="${bad}the login-script report contains a user name; "
 	# stale-settings notice: no server (offline), clock 8 days ahead, log in again
 	lab_prep || true
@@ -1811,7 +1811,7 @@ PY
 		log "$kind: state.json v$(state_version); report bundle $o"
 		[ "$(state_version)" = "$v" ] || bad="${bad}the $kind bundle was accepted; "
 		[ "$(jq -r .ok <<<"$o" 2>/dev/null)" = false ] && grep -q "v$((v + 1))" <<<"$o" || bad="${bad}no rejection report for $kind; "
-		gx 'journalctl -u mastersos-agent --since -1min -o cat --no-pager | grep -E "拒|reject" | tail -1' | sed 's/^/  agent: /'
+		gx 'journalctl -u mastersos-agent --since -1min -o cat --no-pager | grep -E "拒|reject|refused" | tail -1' | sed 's/^/  agent: /'
 		b161 "cd ~/t12-server; pkill -f '^\./mastersos-server\.bin --config server\.toml$'; sleep 1; cp -p data/mastersos.db.t20-tamper data/mastersos.db; rm -f data/mastersos.db.t20-tamper data/mastersos.db-wal data/mastersos.db-shm; (setsid nohup ./mastersos-server.bin --config server.toml >>server.log 2>&1 </dev/null &); sleep 3"
 	done
 	b161 'rm -rf ~/t20-other'
@@ -2021,9 +2021,9 @@ c_chrome_window() {
 	# no window: two scheduled runs; the second one stays offline (6-hour throttle)
 	v=$(B_GROUP=teacher B_TEACHER_SED='/^flatpak = /d' pub chrome-none) || bad="${bad}cannot publish; "
 	wait_bundle "$v" 30 >/dev/null || true
-	runs=$(GX_TIMEOUT=600 gx 'systemctl start mastersos-chrome.service; systemctl start mastersos-chrome.service; journalctl -u mastersos-chrome --since -10min -o cat --no-pager | grep -E "小时内查过源|在等|照常查|已是最新|装好" | tail -3')
+	runs=$(GX_TIMEOUT=600 gx 'systemctl start mastersos-chrome.service; systemctl start mastersos-chrome.service; journalctl -u mastersos-chrome --since -10min -o cat --no-pager | grep -E "checked within|waiting for the update window|checking anyway|installed" | tail -3')
 	log "no window, two scheduled runs: ${runs//$'\n'/ | }"
-	grep -q '小时内查过源，这一轮（定时器）不联网' <<<"$runs" || bad="${bad}the second scheduled run was not throttled; "
+	grep -q 'this (timer) round stays offline' <<<"$runs" || bad="${bad}the second scheduled run was not throttled; "
 	# a window that does not include now: the round is held
 	h1=$(( ($(date +%H | sed 's/^0//') + 3) % 24 ))
 	h2=$(( (h1 + 2) % 24 ))
@@ -2032,11 +2032,11 @@ c_chrome_window() {
 	sleep 3
 	o=$(GX_TIMEOUT=600 gx 'systemctl start mastersos-chrome.service; cat /var/lib/mastersos/chrome/result.json 2>/dev/null | head -c 300')
 	log "outside the window $(printf '%02d:00-%02d:00' "$h1" "$h2"): $o"
-	grep -q '在等更新时段' <<<"$o" || bad="${bad}the round outside the window was not held; "
+	grep -q 'waiting for the update window' <<<"$o" || bad="${bad}the round outside the window was not held; "
 	# no check for more than 7 days while the window blocks: overridden
-	o=$(GX_TIMEOUT=900 gx 'echo $(( $(date +%s) - 8 * 86400 )) > /var/lib/mastersos/chrome/checked-at; rm -f /var/lib/mastersos/chrome/window-clock; systemctl start mastersos-chrome.service; journalctl -u mastersos-chrome --since -15min -o cat --no-pager | grep -E "天没查过源" | tail -1; cat /var/lib/mastersos/chrome/result.json 2>/dev/null | head -c 300')
+	o=$(GX_TIMEOUT=900 gx 'echo $(( $(date +%s) - 8 * 86400 )) > /var/lib/mastersos/chrome/checked-at; rm -f /var/lib/mastersos/chrome/window-clock; systemctl start mastersos-chrome.service; journalctl -u mastersos-chrome --since -15min -o cat --no-pager | grep -F "has not been checked for" | tail -1; cat /var/lib/mastersos/chrome/result.json 2>/dev/null | head -c 300')
 	log "window blocked for 8 days: ${o//$'\n'/ | }"
-	grep -q '没查过源（时段里一直没开机或睡着），这一轮照常查' <<<"$o" || bad="${bad}the 7-day override did not happen; "
+	grep -q 'checking anyway this round' <<<"$o" || bad="${bad}the 7-day override did not happen; "
 	stop_vm
 	rollback t20-up
 	[ -z "$bad" ] && pass "$name" || fail "$name" "$bad"

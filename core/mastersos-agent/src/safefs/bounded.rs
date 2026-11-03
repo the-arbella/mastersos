@@ -135,7 +135,7 @@ pub fn check_private_dir(fd: &OwnedFd) -> Result<()> {
         || st.st_mode as u32 & 0o077 != 0
     {
         bail!(
-            "暂存目录不可信（不是 root 自己的、或权限 {:o} 不是 0700），这一轮不删",
+            "the staging directory is not trusted (not owned by root, or mode {:o} is not 0700); not removing this round",
             st.st_mode as u32 & 0o7777
         );
     }
@@ -232,7 +232,7 @@ struct Level {
 }
 
 fn level(fd: OwnedFd, name: &OsStr) -> Result<Level> {
-    let dir = Dir::read_from(&fd).map_err(|e| anyhow!("读目录：{e}"))?;
+    let dir = Dir::read_from(&fd).map_err(|e| anyhow!("reading directory: {e}"))?;
     Ok(Level {
         fd,
         dir,
@@ -426,9 +426,9 @@ fn make_hold(dir: &OwnedFd) -> Option<(String, OwnedFd)> {
 
 /// 上一次中途崩溃留下的暂存目录（[`HOLD_PREFIX`] 开头、是本进程自己的 0700 真实目录）：删空、删掉。
 fn clean_old_holds(dir: &OwnedFd, b: &Boundary, out: &mut Removal) -> Result<()> {
-    let mut d = Dir::read_from(dir).map_err(|e| io(e).context("读目录"))?;
+    let mut d = Dir::read_from(dir).map_err(|e| io(e).context("reading directory"))?;
     while let Some(e) = d.read() {
-        let e = e.map_err(|e| io(e).context("读目录"))?;
+        let e = e.map_err(|e| io(e).context("reading directory"))?;
         let n = OsStr::from_bytes(e.file_name().to_bytes()).to_owned();
         if !n.as_bytes().starts_with(HOLD_PREFIX.as_bytes()) {
             continue;
@@ -459,9 +459,9 @@ fn remove_owned_level(
     out: &mut Removal,
 ) -> Result<usize> {
     let mut n = 0;
-    let mut stream = Dir::read_from(d).map_err(|e| io(e).context("读目录"))?;
+    let mut stream = Dir::read_from(d).map_err(|e| io(e).context("reading directory"))?;
     while let Some(e) = stream.read() {
-        let e = e.map_err(|e| io(e).context("读目录"))?;
+        let e = e.map_err(|e| io(e).context("reading directory"))?;
         let name = OsStr::from_bytes(e.file_name().to_bytes()).to_owned();
         if name.as_bytes() == b"." || name.as_bytes() == b".." {
             continue;
@@ -502,9 +502,9 @@ pub fn remove_owned_bounded(dir: &Path, uid: u32, sticky: bool) -> Result<usize>
     };
     let mut n = remove_owned_level(&d, uid, skip, hold_fd, &b, &mut out)?;
     if sticky {
-        let mut stream = Dir::read_from(&d).map_err(|e| io(e).context("读目录"))?;
+        let mut stream = Dir::read_from(&d).map_err(|e| io(e).context("reading directory"))?;
         while let Some(e) = stream.read() {
-            let e = e.map_err(|e| io(e).context("读目录"))?;
+            let e = e.map_err(|e| io(e).context("reading directory"))?;
             let name = OsStr::from_bytes(e.file_name().to_bytes()).to_owned();
             if name.as_bytes() == b"." || name.as_bytes() == b".." {
                 continue;
@@ -541,7 +541,9 @@ pub fn remove_owned_bounded(dir: &Path, uid: u32, sticky: bool) -> Result<usize>
             }
             // 别的挂载（不是访客的，访客的已经卸掉了）：跳过、不算留下（复审 T19 R3：否则访客从此登录不了）
             if !b.same(&sub) {
-                log::info!("访客清理：一个带 sticky 位的子目录是另一个挂载，不进去");
+                log::info!(
+                    "guest cleanup: a sticky subdirectory is a separate mount; not entering it"
+                );
                 continue;
             }
             n += remove_owned_level(&sub, uid, None, hold_fd, &b, &mut out)?;
@@ -557,7 +559,7 @@ pub fn remove_owned_bounded(dir: &Path, uid: u32, sticky: bool) -> Result<usize>
     }
     if out.left() > 0 {
         bail!(
-            "{} 处删不掉（{} 处挂载点、{} 处出错）",
+            "{} entries could not be removed ({} mount points, {} errors)",
             out.left(),
             out.mounts,
             out.errors

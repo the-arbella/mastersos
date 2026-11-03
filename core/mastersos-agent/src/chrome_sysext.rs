@@ -168,10 +168,10 @@ pub fn find_package(packages: &str, name: &str) -> Result<DebEntry> {
         }
         ensure!(
             pkgs.len() == 1,
-            "Packages 里 {name} 那一段的 Package 不止一行，不更新"
+            "the {name} stanza in Packages has more than one Package line; not updating"
         );
         if found.is_some() {
-            bail!("Packages 里 {name} 不止一个，不更新");
+            bail!("Packages lists {name} more than once; not updating");
         }
         let get = |key: &str| {
             let n = stanza
@@ -180,8 +180,11 @@ pub fn find_package(packages: &str, name: &str) -> Result<DebEntry> {
                     !l.starts_with([' ', '\t']) && l.split_once(':').is_some_and(|(k, _)| k == key)
                 })
                 .count();
-            ensure!(n <= 1, "Packages 里 {name} 的 {key} 不止一行，不更新");
-            field(key).ok_or_else(|| anyhow!("Packages 里 {name} 缺 {key}"))
+            ensure!(
+                n <= 1,
+                "the {name} entry in Packages has more than one {key} line; not updating"
+            );
+            field(key).ok_or_else(|| anyhow!("the {name} entry in Packages has no {key}"))
         };
         let e = DebEntry {
             version: get("Version")?,
@@ -190,19 +193,19 @@ pub fn find_package(packages: &str, name: &str) -> Result<DebEntry> {
         };
         ensure!(
             valid_version(&e.version),
-            "Packages 里 {name} 的版本号不规范"
+            "the {name} entry in Packages has a malformed version"
         );
         ensure!(
             valid_filename(&e.filename),
-            "Packages 里 {name} 的文件路径不规范"
+            "the {name} entry in Packages has a malformed file path"
         );
         ensure!(
             is_sha256_hex(&e.sha256),
-            "Packages 里 {name} 的 SHA256 不规范"
+            "the {name} entry in Packages has a malformed SHA256"
         );
         found = Some(e);
     }
-    found.ok_or_else(|| anyhow!("Packages 里没有 {name}"))
+    found.ok_or_else(|| anyhow!("Packages has no {name}"))
 }
 
 /// `opt/google/chrome` 里的文件名 → 要复制的图标：`product_logo_<N>.png` →
@@ -313,7 +316,7 @@ pub fn prune_tree(root: &std::os::fd::OwnedFd) -> Result<Vec<String>> {
         let mut d = safefs::open_dir_at(root, Path::new(""), false)?;
         for part in dir.split('/').filter(|p| !p.is_empty()) {
             match safefs::open_child_dir(&d, part)
-                .with_context(|| format!("解开的 deb 里的 {dir}"))?
+                .with_context(|| format!("{dir} in the unpacked deb"))?
             {
                 Some(next) => d = next,
                 None => continue 'level,
@@ -339,14 +342,17 @@ pub fn prune_tree(root: &std::os::fd::OwnedFd) -> Result<Vec<String>> {
             };
             let st = rustix::fs::statat(&d, n.as_str(), AtFlags::SYMLINK_NOFOLLOW)
                 .map_err(std::io::Error::from)
-                .with_context(|| format!("检查 {path}"))?;
+                .with_context(|| format!("checking {path}"))?;
             let t = FileType::from_raw_mode(st.st_mode);
             let ok = match kind {
                 Kind::Dir => t == FileType::Directory,
                 Kind::FileOrLink => t == FileType::RegularFile || t == FileType::Symlink,
                 Kind::File => t == FileType::RegularFile,
             };
-            ensure!(ok, "解开的 deb 里的 {path} 类型不对（{t:?}），不更新");
+            ensure!(
+                ok,
+                "{path} in the unpacked deb has the wrong type ({t:?}); not updating"
+            );
         }
     }
     Ok(removed)
@@ -388,9 +394,11 @@ pub fn hold_reason(sys: &SysState, now: chrono::DateTime<chrono::FixedOffset>) -
         match checks::chrome_date(p)
             .and_then(|d| checks::chrome_pause_on_machine(p, local.date()).map(|()| d))
         {
-            Ok(d) if local.date() <= d => return Some(Hold::Pause(format!("暂停到 {p}（含）"))),
+            Ok(d) if local.date() <= d => {
+                return Some(Hold::Pause(format!("paused until {p} (inclusive)")))
+            }
             Ok(_) => {}
-            Err(e) => log::warn!("chrome：{e}，不暂停"),
+            Err(e) => log::warn!("chrome: {e}; not pausing"),
         }
     }
     if let Some(w) = sys.chrome_window.as_deref() {
@@ -400,10 +408,12 @@ pub fn hold_reason(sys: &SysState, now: chrono::DateTime<chrono::FixedOffset>) -
                 let minute = (local.hour() * 60 + local.minute()) as u16;
                 if !checks::chrome_in_window(win, minute) {
                     let tz = checks::utc_offset_label(now.offset().local_minus_utc());
-                    return Some(Hold::Window(format!("在等更新时段 {w}（本机时间 {tz}）")));
+                    return Some(Hold::Window(format!(
+                        "waiting for the update window {w} (local time {tz})"
+                    )));
                 }
             }
-            Err(e) => log::warn!("chrome：{e}，不限时段"),
+            Err(e) => log::warn!("chrome: {e}; no update window applied"),
         }
     }
     None
@@ -488,7 +498,7 @@ impl ChromeJob {
         let sys = match SysState::peek(&self.sys) {
             Ok(s) => s.unwrap_or_default(),
             Err(e) => {
-                log::warn!("chrome：读不出更新时段与暂停的设置，不限制：{e:#}");
+                log::warn!("chrome: cannot read the update window and pause settings; not restricting: {e:#}");
                 SysState::default()
             }
         };
@@ -499,7 +509,9 @@ impl ChromeJob {
         let checked = sane(read_secs(work, CHECKED_FILE)?);
         let since_checked = checked.map(|c| Duration::from_secs((t - c).max(0) as u64));
         match hold_reason(&sys, now) {
-            Some(Hold::Pause(why)) => return Ok(Gate::Held(format!("{why}，当前 {installed}"))),
+            Some(Hold::Pause(why)) => {
+                return Ok(Gate::Held(format!("{why}; installed {installed}")))
+            }
             Some(Hold::Window(why)) => {
                 // 时段的 7 天：从上一次成功查源、开始计时、暂停结束（暂停那天的第二天 0 点）三者里最晚的一个算起——
                 // 暂停的日子不算（复审 N2：考试周暂停一结束，第一个早上不能在上课时更新）
@@ -516,14 +528,14 @@ impl ChromeJob {
                 let Some(from) = [checked, clock, pause_end].into_iter().flatten().max() else {
                     // 还没有记录（刚升级上来）或读不懂：从现在开始算 7 天，不立刻破例
                     write_secs(work, WINDOW_CLOCK_FILE, t)?;
-                    return Ok(Gate::Held(format!("{why}，当前 {installed}")));
+                    return Ok(Gate::Held(format!("{why}; installed {installed}")));
                 };
                 let waited = Duration::from_secs((t - from).max(0) as u64);
                 if waited < WINDOW_OVERRIDE_AFTER {
-                    return Ok(Gate::Held(format!("{why}，当前 {installed}")));
+                    return Ok(Gate::Held(format!("{why}; installed {installed}")));
                 }
                 log::warn!(
-                    "chrome：{why}，但已 {} 天没查过源（时段里一直没开机或睡着），这一轮照常查",
+                    "chrome: {why}, but the source has not been checked for {} days (the device was off or asleep during the window); checking anyway this round",
                     waited.as_secs() / 86_400
                 );
                 return Ok(Gate::Go(Some(
@@ -539,7 +551,7 @@ impl ChromeJob {
             .is_some_and(|w| mastersos_bundle::checks::chrome_window(w).is_ok());
         if self.scheduled && !windowed && since_checked.is_some_and(|a| a < SCHEDULED_MIN_GAP) {
             log::info!(
-                "chrome：{} 小时内查过源，这一轮（定时器）不联网、保留上一轮的结果；要立刻查，在 shell 里跑 mastersos-agent chrome",
+                "chrome: the source was checked within {} hours; this (timer) round stays offline and keeps the previous result; to check now, run mastersos-agent chrome in a shell",
                 SCHEDULED_MIN_GAP.as_secs() / 3600
             );
             return Ok(Gate::Throttled(installed.to_string()));
@@ -571,7 +583,7 @@ impl ChromeJob {
         let program = cmd.program.clone();
         tokio::task::spawn_blocking(move || r.run(&cmd))
             .await
-            .map_err(|e| anyhow!("{program} 异常退出：{e}"))?
+            .map_err(|e| anyhow!("{program} exited abnormally: {e}"))?
     }
 
     async fn exec_ok(&self, cmd: Cmd) -> Result<String> {
@@ -579,7 +591,7 @@ impl ChromeJob {
         let program = cmd.program.clone();
         tokio::task::spawn_blocking(move || run_ok(r.as_ref(), cmd))
             .await
-            .map_err(|e| anyhow!("{program} 异常退出：{e}"))?
+            .map_err(|e| anyhow!("{program} exited abnormally: {e}"))?
     }
 
     /// GET 一个索引文件，失败就按 `retry` 隔一会儿再试（刚连上网时 DNS 往往还没好；索引只有几 KB）。
@@ -590,7 +602,7 @@ impl ChromeJob {
                 Ok(b) => return Ok(b),
                 Err(e) => match delays.next() {
                     Some(d) => {
-                        log::info!("chrome：{e:#}，{} 秒后重试", d.as_secs());
+                        log::info!("chrome: {e:#}; retrying in {} s", d.as_secs());
                         tokio::time::sleep(*d).await;
                     }
                     None => return Err(e),
@@ -607,21 +619,21 @@ impl ChromeJob {
             .timeout(INDEX_TIMEOUT)
             .send()
             .await
-            .with_context(|| format!("下载 {rel} 失败"))?;
+            .with_context(|| format!("downloading {rel} failed"))?;
         ensure!(
             resp.status().is_success(),
-            "下载 {rel}：源返回 {}",
+            "downloading {rel}: the source returned {}",
             resp.status()
         );
         let mut body = Vec::new();
         while let Some(chunk) = resp
             .chunk()
             .await
-            .with_context(|| format!("读取 {rel} 失败"))?
+            .with_context(|| format!("reading {rel} failed"))?
         {
             ensure!(
                 body.len() + chunk.len() <= MAX_INDEX_BYTES,
-                "{rel} 超过大小上限"
+                "{rel} exceeds the size limit"
             );
             body.extend_from_slice(&chunk);
         }
@@ -636,21 +648,25 @@ impl ChromeJob {
             .timeout(DEB_TIMEOUT)
             .send()
             .await
-            .context("下载 Chrome 的 .deb 失败")?;
+            .context("downloading the Chrome .deb failed")?;
         ensure!(
             resp.status().is_success(),
-            "下载 Chrome 的 .deb：源返回 {}",
+            "downloading the Chrome .deb: the source returned {}",
             resp.status()
         );
         ensure!(
             resp.content_length().is_none_or(|n| n <= self.max_deb),
-            "Chrome 的 .deb 超过大小上限"
+            "the Chrome .deb exceeds the size limit"
         );
         let mut tmp = safefs::TmpFile::create(work, DEB_FILE, 0o600)?;
         let mut h = Sha256::new();
         let mut n: u64 = 0;
         let mut stamped = false;
-        while let Some(chunk) = resp.chunk().await.context("读取 Chrome 的 .deb 失败")? {
+        while let Some(chunk) = resp
+            .chunk()
+            .await
+            .context("reading the Chrome .deb failed")?
+        {
             // 收到第一批字节时留时间戳：NetworkManager 钩子看到一小时内下载过就不再触发（下载之后才失败的，不因
             // Wi‑Fi 时断时续一遍遍重下约 140 MB）。请求立刻失败、一个字节都没收到的不算，钩子下次连网照样触发
             if !stamped {
@@ -658,14 +674,14 @@ impl ChromeJob {
                 stamped = true;
             }
             n += chunk.len() as u64;
-            ensure!(n <= self.max_deb, "Chrome 的 .deb 超过大小上限");
+            ensure!(n <= self.max_deb, "the Chrome .deb exceeds the size limit");
             h.update(&chunk);
-            tmp.write_all(&chunk).context("写入 Chrome 的 .deb")?;
+            tmp.write_all(&chunk).context("writing the Chrome .deb")?;
         }
         let got = hex(&h.finalize());
         ensure!(
             got == e.sha256,
-            "Chrome 的 .deb sha256 与 Packages 不符（{got} ≠ {}），保留现有版本",
+            "the Chrome .deb sha256 does not match Packages ({got} ≠ {}); keeping the current version",
             e.sha256
         );
         tmp.commit()
@@ -673,7 +689,10 @@ impl ChromeJob {
 
     async fn round(&self) -> Result<RoundOut> {
         let (ext_parent, ext_name) = split(&self.ext)?;
-        ensure!(ext_name == EXT_NAME, "扩展目录必须叫 {EXT_NAME}");
+        ensure!(
+            ext_name == EXT_NAME,
+            "the extension directory must be named {EXT_NAME}"
+        );
         let new_name = format!("{ext_name}.new");
 
         let work = safefs::open_abs_dir(&self.work, true)?;
@@ -682,7 +701,7 @@ impl ChromeJob {
 
         // 上一轮中途断掉留下的 .new：它可能正是合并着的那一层（互换之后、合并之前断掉），先合并、再删。
         if safefs::open_child_dir(&ext_dir, &new_name)?.is_some() {
-            log::warn!("chrome：上一轮留下了 {new_name}，先重新合并再删掉");
+            log::warn!("chrome: the previous round left {new_name}; re-merging before removing it");
             self.exec_ok(refresh_cmd()).await?;
             safefs::remove_tree_at(&ext_dir, &new_name)?;
         }
@@ -694,7 +713,7 @@ impl ChromeJob {
                 safefs::read_at(&d, VERSION_FILE)?
                     .map(|b| String::from_utf8_lossy(&b).trim().to_string())
                     .ok_or_else(|| {
-                        anyhow!("{EXT_DIR} 在，但没有 {VERSION_FILE}：不知道装的是哪个版本，不更新")
+                        anyhow!("{EXT_DIR} exists but has no {VERSION_FILE}: the installed version is unknown; not updating")
                     })?,
             ),
             None => None,
@@ -704,7 +723,7 @@ impl ChromeJob {
         if let Some(old) = installed.as_deref() {
             match self.gate(&work, old)? {
                 Gate::Held(detail) => {
-                    log::info!("chrome：{detail}，这一轮不换版本");
+                    log::info!("chrome: {detail}; not changing the version this round");
                     return Ok(RoundOut::Held(detail));
                 }
                 Gate::Throttled(v) => return Ok(RoundOut::Throttled(v)),
@@ -715,7 +734,7 @@ impl ChromeJob {
         let done = |v: String| -> Result<RoundOut> {
             write_secs(&work, CHECKED_FILE, (self.now)().timestamp())?;
             Ok(RoundOut::Done(match &note {
-                Some(n) => format!("{v}（{n}）"),
+                Some(n) => format!("{v} ({n})"),
                 None => v,
             }))
         };
@@ -742,14 +761,14 @@ impl ChromeJob {
         }
         ensure!(
             out.code == 0,
-            "InRelease 的签名验不过（gpgv 退出码 {}：{}），保留现有版本",
+            "the InRelease signature does not verify (gpgv exit code {}: {}); keeping the current version",
             out.code,
-            last_lines(&out.stderr, 2).replace('\n', "；")
+            last_lines(&out.stderr, 2).replace('\n', "; ")
         );
-        let release =
-            safefs::read_at(&work, "Release")?.ok_or_else(|| anyhow!("gpgv 没有写出 Release"))?;
-        let release = String::from_utf8(release).context("Release 不是 UTF-8")?;
-        let date = release_date(&release).ok_or_else(|| anyhow!("Release 里没有可读的 Date"))?;
+        let release = safefs::read_at(&work, "Release")?
+            .ok_or_else(|| anyhow!("gpgv did not write Release"))?;
+        let release = String::from_utf8(release).context("Release is not UTF-8")?;
+        let date = release_date(&release).ok_or_else(|| anyhow!("Release has no readable Date"))?;
         let floor = match safefs::read_at(&work, FLOOR_FILE)? {
             None => None,
             Some(b) => Some(
@@ -758,15 +777,15 @@ impl ChromeJob {
                     .parse::<i64>()
                     .ok()
                     .ok_or_else(|| {
-                        anyhow!("{WORK_DIR}/{FLOOR_FILE} 读不懂（防回放的下限），不更新；确认无误后删掉它")
+                        anyhow!("{WORK_DIR}/{FLOOR_FILE} is unreadable (the anti-replay floor); not updating; delete it once you have checked")
                     })?,
             ),
         };
         if let Some(f) = floor {
             ensure!(
                 date >= f,
-                "源里的签名索引比见过的旧（Date {} 早于 {}），保留现有版本：可能是回放，也可能是 CDN 的边缘节点\
-                 还没同步（下一轮自己恢复）；一直这样且确认源没问题时，删掉 {WORK_DIR}/{FLOOR_FILE} 重来",
+                "the signed index from the source is older than one already seen (Date {} before {}); keeping the current version: this may be a replay, \
+                 or a CDN edge not yet in sync (recovers on its own next round); if it persists and the source is fine, delete {WORK_DIR}/{FLOOR_FILE} and retry",
                 fmt_date(date),
                 fmt_date(f)
             );
@@ -777,14 +796,14 @@ impl ChromeJob {
 
         // 2. Packages 的哈希
         let want = release_sha256(&release, PACKAGES_PATH)
-            .ok_or_else(|| anyhow!("Release 里没有 {PACKAGES_PATH} 的 SHA256"))?;
+            .ok_or_else(|| anyhow!("Release has no SHA256 for {PACKAGES_PATH}"))?;
         let packages = self.get_index(&format!("{SUITE}/{PACKAGES_PATH}")).await?;
         let got = hex(&Sha256::digest(&packages));
         ensure!(
             got == want,
-            "Packages 的 sha256 与 Release 不符，保留现有版本"
+            "the Packages sha256 does not match Release; keeping the current version"
         );
-        let packages = String::from_utf8(packages).context("Packages 不是 UTF-8")?;
+        let packages = String::from_utf8(packages).context("Packages is not UTF-8")?;
         let entry = find_package(&packages, PACKAGE)?;
 
         // 3. 版本：一样就结束（中途断掉的 .new 已在开头先合并、再删）；更旧就拒绝
@@ -792,7 +811,10 @@ impl ChromeJob {
             if old == entry.version {
                 return done(entry.version);
             }
-            ensure!(valid_version(old), "已装的版本号不规范：{old:?}");
+            ensure!(
+                valid_version(old),
+                "the installed version is malformed: {old:?}"
+            );
             let lt = self
                 .exec(Cmd::new(
                     "dpkg",
@@ -801,11 +823,11 @@ impl ChromeJob {
                 .await?;
             match lt.code {
                 0 => bail!(
-                    "源里的版本比已装的旧，拒绝降级（源里 {}，已装 {old}）",
+                    "the source version is older than the installed one; refusing to downgrade (source {}, installed {old})",
                     entry.version
                 ),
                 1 => {}
-                c => bail!("dpkg --compare-versions 退出码 {c}"),
+                c => bail!("dpkg --compare-versions exit code {c}"),
             }
         }
 
@@ -834,23 +856,27 @@ impl ChromeJob {
                 safefs::exchange_at(&ext_dir, ext_name, &new_name)
             };
             match back {
-                Err(b) => log::warn!("chrome：合并失败后换回旧版本也失败：{b:#}"),
+                Err(b) => log::warn!("chrome: the merge failed and switching back to the old version also failed: {b:#}"),
                 Ok(()) => match self.exec_ok(refresh_cmd()).await {
                     Ok(_) => {
                         let _ = safefs::remove_tree_at(&ext_dir, &new_name);
                     }
-                    Err(r) => log::warn!("chrome：换回旧版本后重新合并也失败（下一轮再试）：{r:#}"),
+                    Err(r) => log::warn!("chrome: re-merging after switching back to the old version also failed (retrying next round): {r:#}"),
                 },
             }
-            return Err(e.context("合并新版本 Chrome 失败，保留现有版本"));
+            return Err(
+                e.context("merging the new Chrome version failed; keeping the current version")
+            );
         }
         if let Err(e) = safefs::remove_tree_at(&ext_dir, &new_name) {
-            log::warn!("chrome：删除换下来的旧版本失败（下一轮再删）：{e:#}");
+            log::warn!(
+                "chrome: removing the replaced old version failed (retrying next round): {e:#}"
+            );
         }
         log::info!(
-            "chrome：装好 {}（原来 {}）",
+            "chrome: installed {} (was {})",
             entry.version,
-            installed.as_deref().unwrap_or("未装")
+            installed.as_deref().unwrap_or("none")
         );
         done(entry.version)
     }
@@ -875,13 +901,13 @@ impl ChromeJob {
         )
         .await?;
         let new = safefs::open_child_dir(ext_dir, new_name)?
-            .ok_or_else(|| anyhow!("{new_name} 不见了"))?;
+            .ok_or_else(|| anyhow!("{new_name} is missing"))?;
         // sysext 只合并 /usr 与 /opt；deb 自带的 cron 加源脚本（etc/）与清单外的东西都不要
         let pruned = prune_tree(&new)?;
         if pruned.iter().any(|p| p != "etc") {
             log::warn!(
-                "chrome：deb 里有允许清单之外的路径，已删掉：{}",
-                pruned.join("、")
+                "chrome: removed paths in the deb outside the allowlist: {}",
+                pruned.join(", ")
             );
         }
         let rel = safefs::open_dir_at(&new, Path::new("usr/lib/extension-release.d"), true)?;
@@ -892,20 +918,21 @@ impl ChromeJob {
             0o644,
         )?;
         let chrome = safefs::open_dir_at(&new, Path::new("opt/google/chrome"), false)
-            .context("deb 里没有 opt/google/chrome")?;
+            .context("the deb has no opt/google/chrome")?;
         let icons = icon_targets(&safefs::list_at(&chrome)?);
         for (from, to) in &icons {
             let name = from.rsplit('/').next().unwrap_or_default();
-            let bytes = safefs::read_at(&chrome, name)?.ok_or_else(|| anyhow!("{from} 不见了"))?;
+            let bytes =
+                safefs::read_at(&chrome, name)?.ok_or_else(|| anyhow!("{from} is missing"))?;
             let (dir, file) = to.rsplit_once('/').unwrap_or_default();
             let d = safefs::open_dir_at(&new, Path::new(dir), true)?;
             safefs::write_at(&d, file, &bytes, 0o644)?;
         }
         let apps = safefs::open_dir_at(&new, Path::new("usr/share/applications"), false)
-            .context("deb 里没有 usr/share/applications/google-chrome.desktop")?;
+            .context("the deb has no usr/share/applications/google-chrome.desktop")?;
         ensure!(
             safefs::open_file_at(&apps, DESKTOP_FILE)?.is_some(),
-            "deb 里没有 usr/share/applications/{DESKTOP_FILE}"
+            "the deb has no usr/share/applications/{DESKTOP_FILE}"
         );
         // 上面复制进 hicolor 的图标 GNOME 多半查不到：图标主题的 icon-theme.cache 是镜像构建时生成的，比扩展的目录新，
         // GTK 认为缓存有效就只查缓存（VM 165 实测 Dock 里是通用图标；S2 也是）。每个 .desktop 都改指扩展里最大的那张
@@ -958,7 +985,7 @@ fn refresh_cmd() -> Cmd {
 fn split(p: &Path) -> Result<(&Path, &str)> {
     match (p.parent(), p.file_name().and_then(|n| n.to_str())) {
         (Some(parent), Some(name)) => Ok((parent, name)),
-        _ => bail!("扩展目录路径不规范：{}", p.display()),
+        _ => bail!("malformed extension directory path: {}", p.display()),
     }
 }
 
@@ -969,7 +996,7 @@ impl ChromeJob {
     /// （每轮都重写，mtime 是「最近一次跑完」）。锁不到就不写（不覆盖正在跑的那一轮）。
     pub async fn update_once(&self) -> ItemResult {
         let fail = |e: anyhow::Error| {
-            log::warn!("chrome：{e:#}");
+            log::warn!("chrome: {e:#}");
             ItemResult {
                 item: "chrome".into(),
                 ok: false,
@@ -996,12 +1023,12 @@ impl ChromeJob {
             Ok(RoundOut::Held(why)) => match prev {
                 Some(p) if !p.ok => ItemResult {
                     detail: Some(format!(
-                        "{}；这一轮：{why}",
+                        "{}; this round: {why}",
                         // 连着几轮被挡下时不越接越长
                         p.detail
                             .as_deref()
-                            .unwrap_or("失败")
-                            .split("；这一轮：")
+                            .unwrap_or("failed")
+                            .split("; this round: ")
                             .next()
                             .unwrap_or_default()
                     )),
@@ -1019,7 +1046,7 @@ impl ChromeJob {
             monotonic_secs: Some(monotonic_now().as_secs()),
         };
         if let Err(e) = save_result(&work, &saved) {
-            log::warn!("chrome：写不了 {RESULT_FILE}：{e:#}");
+            log::warn!("chrome: cannot write {RESULT_FILE}: {e:#}");
         }
         drop(work); // 放锁
         r
@@ -1030,7 +1057,7 @@ impl ChromeJob {
         let work = safefs::open_abs_dir(&self.work, true)?;
         safefs::set_mode(&work, 0o700)?;
         if rustix::fs::flock(&work, rustix::fs::FlockOperation::NonBlockingLockExclusive).is_err() {
-            bail!("另一个 Chrome 更新正在进行，这一轮跳过");
+            bail!("another Chrome update is in progress; skipping this round");
         }
         Ok(work)
     }
@@ -1073,7 +1100,7 @@ pub fn monotonic_now() -> Duration {
 fn save_result(work: &std::os::fd::OwnedFd, r: &Saved) -> Result<()> {
     let mut t = safefs::TmpFile::create(work, RESULT_FILE, 0o600)?;
     t.write_all(&serde_json::to_vec(r)?)
-        .context("写入 result.json")?;
+        .context("writing result.json")?;
     t.commit()
 }
 
@@ -1122,7 +1149,7 @@ impl ChromeStatus {
             self.work
                 .file_name()
                 .and_then(|n| n.to_str())
-                .ok_or_else(|| anyhow!("目录名不规范"))?,
+                .ok_or_else(|| anyhow!("malformed directory name"))?,
         )?
         else {
             return Ok(None);
@@ -1130,7 +1157,7 @@ impl ChromeStatus {
         match safefs::read_at(&work, RESULT_FILE)? {
             None => Ok(None),
             Some(b) => Ok(Some(
-                serde_json::from_slice(&b).context("result.json 读不懂")?,
+                serde_json::from_slice(&b).context("result.json is unreadable")?,
             )),
         }
     }
@@ -1150,14 +1177,14 @@ impl ChromeStatus {
             }]
         };
         let describe = |r: &ItemResult| match (&r.ok, &r.detail) {
-            (true, Some(v)) => format!("成功，{v}"),
-            (false, Some(d)) => format!("失败：{d}"),
-            _ => "无说明".into(),
+            (true, Some(v)) => format!("succeeded, {v}"),
+            (false, Some(d)) => format!("failed: {d}"),
+            _ => "no details".into(),
         };
         let now = (self.mono)();
         let in_grace = now < RESULT_BOOT_GRACE;
         let saved = match self.read() {
-            Err(e) => return fail(format!("读不出 Chrome 更新的结果：{e:#}")),
+            Err(e) => return fail(format!("cannot read the Chrome update result: {e:#}")),
             Ok(s) => s,
         };
         let Some(saved) = saved else {
@@ -1165,7 +1192,7 @@ impl ChromeStatus {
                 vec![]
             } else {
                 fail(format!(
-                    "开机后醒着超过 {} 分钟还没有跑完过一轮 Chrome 更新（mastersos-chrome.timer）",
+                    "awake for over {} minutes since boot and no Chrome update round has ever finished (mastersos-chrome.timer)",
                     RESULT_BOOT_GRACE.as_secs() / 60
                 ))
             };
@@ -1181,7 +1208,7 @@ impl ChromeStatus {
                     vec![saved.result]
                 } else {
                     fail(format!(
-                        "醒着 {} 小时没有跑完一轮 Chrome 更新（mastersos-chrome.timer）；最后一次：{}",
+                        "awake for {} hours without a finished Chrome update round (mastersos-chrome.timer); last result: {}",
                         age.as_secs() / 3600,
                         describe(&saved.result)
                     ))
@@ -1190,13 +1217,13 @@ impl ChromeStatus {
             _ if in_grace => {
                 let mut r = saved.result;
                 r.detail = Some(format!(
-                    "{}（上次开机的结果，这次开机还没跑完一轮）",
+                    "{} (result from the previous boot; no round has finished in this boot yet)",
                     r.detail.unwrap_or_default()
                 ));
                 vec![r]
             }
             _ => fail(format!(
-                "这次开机醒着超过 {} 分钟还没有跑完一轮 Chrome 更新；上次开机：{}",
+                "awake for over {} minutes in this boot without a finished Chrome update round; previous boot: {}",
                 RESULT_BOOT_GRACE.as_secs() / 60,
                 describe(&saved.result)
             )),

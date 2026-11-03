@@ -93,7 +93,7 @@ pub fn enqueue(uid: u32) -> Result<()> {
 pub fn enqueue_at(root: &Path, uid: u32, runner: &dyn Runner) -> Result<()> {
     if let Err(e) = put(root, uid) {
         warn(&format!(
-            "写不进登录队列（这次不跑 login 脚本，登录照常）：{e:#}"
+            "cannot write to the login queue (login scripts are skipped this time; sign-in goes ahead): {e:#}"
         ));
     }
     // 记号写没写进去都叫醒：每次登录都立即拉取一次（spec §6.6）。
@@ -112,10 +112,10 @@ pub fn enqueue_at(root: &Path, uid: u32, runner: &dyn Runner) -> Result<()> {
     match runner.run(&cmd) {
         Ok(o) if o.code == 0 => {}
         Ok(o) => warn(&format!(
-            "叫醒 agent 失败（systemctl 退出码 {}；agent 没在跑时它下次启动时取走队列）",
+            "waking the agent failed (systemctl exit code {}; if the agent is not running it takes the queue when it next starts)",
             o.code
         )),
-        Err(e) => warn(&format!("叫醒 agent 失败：{e:#}")),
+        Err(e) => warn(&format!("waking the agent failed: {e:#}")),
     }
     Ok(())
 }
@@ -145,7 +145,7 @@ fn trusted_dir(dir: &std::os::fd::OwnedFd) -> Result<()> {
     let me = rustix::process::geteuid().as_raw();
     if st.st_uid != me || st.st_mode as u32 & 0o077 != 0 {
         anyhow::bail!(
-            "属主 {}、权限 {:o}（应为属主 {me}、0700）",
+            "owner {}, mode {:o} (expected owner {me}, 0700)",
             st.st_uid,
             st.st_mode as u32 & 0o7777
         );
@@ -171,18 +171,18 @@ pub fn drain_with(dir: &Path, before_ack: impl FnOnce(&[u32]) -> bool) -> Vec<u3
     let fd = match safefs::open_abs_dir(dir, false) {
         Ok(d) => d,
         Err(e) => {
-            log::debug!("登录队列打不开（没有人登录过）：{e:#}");
+            log::debug!("cannot open the login queue (nobody has signed in): {e:#}");
             return vec![];
         }
     };
     if let Err(e) = trusted_dir(&fd) {
-        log::warn!("登录队列目录不可信，不取：{e:#}");
+        log::warn!("the login queue directory is not trusted; not taking from it: {e:#}");
         return vec![];
     }
     let names = match safefs::list_at(&fd) {
         Ok(n) => n,
         Err(e) => {
-            log::warn!("读登录队列失败：{e:#}");
+            log::warn!("reading the login queue failed: {e:#}");
             return vec![];
         }
     };
@@ -195,9 +195,9 @@ pub fn drain_with(dir: &Path, before_ack: impl FnOnce(&[u32]) -> bool) -> Vec<u3
                 marks.push(n);
             }
             Err(_) => {
-                log::warn!("登录队列里有认不出的名字 {n:?}，删掉");
+                log::warn!("unrecognized name {n:?} in the login queue; removing it");
                 if let Err(e) = safefs::remove_at(&fd, &n) {
-                    log::warn!("从登录队列删掉一个记号失败：{e:#}");
+                    log::warn!("removing a marker from the login queue failed: {e:#}");
                 }
             }
         }
@@ -208,7 +208,7 @@ pub fn drain_with(dir: &Path, before_ack: impl FnOnce(&[u32]) -> bool) -> Vec<u3
     }
     for n in marks {
         if let Err(e) = safefs::remove_at(&fd, &n) {
-            log::warn!("从登录队列删掉一个记号失败：{e:#}");
+            log::warn!("removing a marker from the login queue failed: {e:#}");
         }
     }
     uids
@@ -292,7 +292,7 @@ fn export_list(scripts: &[&Script], bundle_dir: &Path, paths: &SysPaths) -> Vec<
         Err(e) => {
             return scripts
                 .iter()
-                .map(|s| failed(&s.path, format!("导出失败：{e:#}")))
+                .map(|s| failed(&s.path, format!("export failed: {e:#}")))
                 .collect()
         }
     };
@@ -302,7 +302,7 @@ fn export_list(scripts: &[&Script], bundle_dir: &Path, paths: &SysPaths) -> Vec<
     for s in scripts {
         let name = exported_name(&s.path);
         let written = std::fs::read(bundle_dir.join(&s.path))
-            .context("包里没有这个脚本")
+            .context("the bundle has no such script")
             .and_then(|b| safefs::write_at(&dir, &name, &b, 0o755));
         match written {
             Ok(_) => {
@@ -315,24 +315,24 @@ fn export_list(scripts: &[&Script], bundle_dir: &Path, paths: &SysPaths) -> Vec<
                 );
                 keep.insert(name);
             }
-            Err(e) => out.push(failed(&s.path, format!("导出失败：{e:#}"))),
+            Err(e) => out.push(failed(&s.path, format!("export failed: {e:#}"))),
         }
     }
     let idx = serde_json::to_vec_pretty(&index)
         .map_err(anyhow::Error::from)
         .and_then(|b| safefs::write_at(&dir, INDEX, &b, 0o644));
     if let Err(e) = idx {
-        log::warn!("写 {INDEX} 失败：{e:#}");
+        log::warn!("writing {INDEX} failed: {e:#}");
     }
     match safefs::list_at(&dir) {
         Ok(names) => {
             for n in names.iter().filter(|n| !keep.contains(*n)) {
                 if let Err(e) = safefs::remove_at(&dir, n) {
-                    log::warn!("删掉不再需要的 login 脚本 {n} 失败：{e:#}");
+                    log::warn!("removing the unneeded login script {n} failed: {e:#}");
                 }
             }
         }
-        Err(e) => log::warn!("读 login 脚本导出目录失败：{e:#}"),
+        Err(e) => log::warn!("reading the login script export directory failed: {e:#}"),
     }
     out
 }
@@ -402,7 +402,7 @@ fn run_login_scripts_with(
     for s in login_scripts(config) {
         let file = export_dir.join(exported_name(&s.path));
         let Ok(bytes) = std::fs::read(&file) else {
-            out.push(failed(&s.path, "没有导出这个脚本".into()));
+            out.push(failed(&s.path, "this script was not exported".into()));
             continue;
         };
         let hash = sha256_hex(&bytes);
@@ -420,7 +420,7 @@ fn run_login_scripts_with(
             failed(
                 &s.path,
                 format!(
-                    "用户会话没有就绪（{} 秒内 user manager 没有起来），这次没跑",
+                    "the user session was not ready (the user manager did not start within {} s); not run this time",
                     wait.as_secs()
                 ),
             )
@@ -438,9 +438,11 @@ fn run_login_scripts_with(
             Ok(o) if o.code == 0 => (true, None),
             Ok(o) if timed_out(&o) => (
                 false,
-                Some(format!("超时：{secs} 秒内没有结束，已由 systemd 终止")),
+                Some(format!(
+                    "timed out: did not finish within {secs} s; stopped by systemd"
+                )),
             ),
-            Ok(o) => (false, Some(format!("退出码 {}", o.code))),
+            Ok(o) => (false, Some(format!("exit code {}", o.code))),
             // RealRunner 的错误只带程序名（「systemd-run 无法运行」「systemd-run 超时……」）
             Err(e) => (false, Some(format!("{e:#}"))),
         };
@@ -564,7 +566,7 @@ pub fn notify_if_stale(uid: u32, state: &State, now: DateTime<Utc>, runner: &dyn
 
 fn notify_with(uid: u32, text: &str, runner: &dyn Runner, wait: Duration, pause: Duration) {
     if !wait_user(uid, runner, wait) {
-        log::warn!("用户会话没有就绪，没发过期提示");
+        log::warn!("the user session was not ready; no staleness notice sent");
         return;
     }
     for i in 0..NOTIFY_TRIES {
@@ -583,14 +585,17 @@ fn notify_with(uid: u32, text: &str, runner: &dyn Runner, wait: Duration, pause:
         .timeout(NOTIFY_TIMEOUT);
         match runner.run(&cmd) {
             Ok(o) if o.code == 0 => return,
-            Ok(o) => log::info!("过期提示没发出去（退出码 {}），稍后再试", o.code),
-            Err(e) => log::info!("过期提示没发出去：{e:#}"),
+            Ok(o) => log::info!(
+                "the staleness notice was not sent (exit code {}); retrying later",
+                o.code
+            ),
+            Err(e) => log::info!("the staleness notice was not sent: {e:#}"),
         }
         if i + 1 < NOTIFY_TRIES {
             std::thread::sleep(pause);
         }
     }
-    log::warn!("过期提示试了 {NOTIFY_TRIES} 次都没发出去");
+    log::warn!("the staleness notice was not sent after {NOTIFY_TRIES} tries");
 }
 
 #[cfg(test)]
@@ -659,7 +664,10 @@ mod tests {
         );
         assert!(enqueue_at(d.path(), 1001, &r).is_ok());
         let q = d.path().join(QUEUE_DIR.trim_start_matches('/'));
-        assert!(q.join("1001").exists(), "记号写下了，agent 下次起来时取走");
+        assert!(
+            q.join("1001").exists(),
+            "the marker is written; the agent takes it when it next starts"
+        );
         assert_eq!(mode(&q), 0o700);
     }
 
@@ -675,7 +683,7 @@ mod tests {
         assert_eq!(drain(&q), vec![1001, 1002]);
         assert!(
             fs::read_dir(&q).unwrap().next().is_none(),
-            "读完即删，认不出的也删"
+            "removed after reading, unrecognized ones too"
         );
         assert!(drain(&q).is_empty());
         assert!(drain(&d.path().join("missing")).is_empty());
@@ -717,7 +725,7 @@ mod tests {
         let mut st2 = State::default();
         let res = run_login_scripts(1003, &g, ex.path(), &mut st2, &r);
         assert!(!res[0].ok);
-        assert_eq!(res[0].detail.as_deref(), Some("退出码 3"));
+        assert_eq!(res[0].detail.as_deref(), Some("exit code 3"));
         assert!(st2.login_script_hashes.is_empty());
         run_login_scripts(1003, &g, ex.path(), &mut st2, &r);
         assert_eq!(runs(&r).len(), 6);
@@ -755,7 +763,7 @@ mod tests {
         let res = run_login_scripts(1001, &g, ex.path(), &mut st, &r);
         assert!(!res[0].ok);
         let d = res[0].detail.as_deref().unwrap();
-        assert!(d.contains("超时"), "{d}");
+        assert!(d.contains("timed out"), "{d}");
         assert!(d.contains('5'), "{d}");
         assert!(st.login_script_hashes.is_empty());
         assert!(
@@ -771,7 +779,7 @@ mod tests {
         let res = run_login_scripts(1001, &g, ex.path(), &mut st, &r);
         assert_eq!(
             res[0].detail.as_deref(),
-            Some(format!("退出码 {SYSTEMD_RUN_TIMEOUT_CODE}").as_str())
+            Some(format!("exit code {SYSTEMD_RUN_TIMEOUT_CODE}").as_str())
         );
     }
 
@@ -977,7 +985,11 @@ mod tests {
         enqueue_at(d.path(), 1001, &FakeRunner::new()).unwrap();
         let q = d.path().join(QUEUE_DIR.trim_start_matches('/'));
         assert_eq!(mode(&q), 0o700);
-        assert_eq!(mode(q.parent().unwrap()), 0o700, "/run/mastersos 也收紧");
+        assert_eq!(
+            mode(q.parent().unwrap()),
+            0o700,
+            "/run/mastersos is tightened too"
+        );
         for m in [0o750, 0o705, 0o777] {
             fs::set_permissions(&q, fs::Permissions::from_mode(m)).unwrap();
             assert!(drain(&q).is_empty(), "{m:o}");
@@ -1084,7 +1096,7 @@ mod tests {
                 "1001:scripts/gone.sh",
                 "1002:scripts/a.sh"
             ],
-            "1001 的键换成这一轮的，1002 不动；去掉删掉的脚本是 prune 的事"
+            "1001's key is replaced with this round's, 1002 is untouched; dropping removed scripts is prune's job"
         );
         all.insert("1003:scripts/gone.sh".into(), "z".into());
         prune_hashes(&mut all, &g);

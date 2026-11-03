@@ -85,7 +85,7 @@ async fn fetch_aborts_oversized_body() {
         .await;
     let f = Fetcher::from_seed(&seed(&srv.uri(), None));
     let err = f.fetch_now(0).await.unwrap_err();
-    assert!(err.to_string().contains("上限"), "{err}");
+    assert!(err.to_string().contains("size limit"), "{err}");
 }
 
 #[tokio::test]
@@ -272,7 +272,7 @@ async fn heartbeat_fetch_outcomes() {
     );
     assert_eq!(f.heartbeat().await.unwrap(), None);
     let big = f.heartbeat().await.unwrap_err().to_string();
-    assert!(big.contains("大小上限"), "{big}");
+    assert!(big.contains("size limit"), "{big}");
     assert!(f.heartbeat().await.is_err());
 }
 
@@ -331,9 +331,9 @@ async fn escrow_posts_with_token_and_reports_rejections() {
         serde_json::from_slice(&srv.received_requests().await.unwrap()[0].body).unwrap();
     assert_eq!(body["recovery_key_age"], req.recovery_key_age);
     for want in [
-        "托管被拒（403）：这台机器的托管凭据与登记的不同",
-        "托管被拒（429）：已到上限",
-        "托管被拒（500）",
+        "escrow refused (403): 这台机器的托管凭据与登记的不同",
+        "escrow refused (429): 已到上限",
+        "escrow refused (500)",
     ] {
         let e = format!("{:#}", f.escrow(&req, true).await.unwrap_err());
         assert_eq!(e, want);
@@ -365,7 +365,7 @@ async fn escrow_refuses_cleartext_server_url_on_release_image() {
         let f = Fetcher::from_seed(&seed(url, Some("tok")));
         let e = format!("{:#}", f.escrow(&req, false).await.unwrap_err());
         assert!(
-            e.starts_with("托管被拒（本机）") && e.contains("https"),
+            e.starts_with("escrow refused (locally)") && e.contains("https"),
             "{url}: {e}"
         );
         assert!(
@@ -430,7 +430,7 @@ async fn escrow_does_not_follow_redirects() {
     let req = escrow_req();
     for code in [301u16, 302, 307, 308] {
         let e = format!("{:#}", f.escrow(&req, true).await.unwrap_err());
-        assert_eq!(e, format!("托管被拒（{code}）"));
+        assert_eq!(e, format!("escrow refused ({code})"));
     }
 }
 
@@ -504,7 +504,7 @@ async fn release_image_refuses_loopback_http_escrow() {
         .await;
     let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
     let e = format!("{:#}", f.escrow(&escrow_req(), false).await.unwrap_err());
-    assert!(e.starts_with("托管被拒（本机）"), "{e}");
+    assert!(e.starts_with("escrow refused (locally)"), "{e}");
     let e = format!("{:#}", f.renew_token(&identity(), false).await.unwrap_err());
     assert!(e.contains("https"), "{e}");
 }
