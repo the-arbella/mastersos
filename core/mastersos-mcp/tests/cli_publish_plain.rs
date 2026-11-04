@@ -503,3 +503,81 @@ async fn publish_later_version_signs_its_checkin() {
     assert_eq!(statement.digest_hex, digest);
     verify_statement(&statement, &signature, &[kit.trust_key()]).unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn publish_key_change_answered_no_publishes_nothing() {
+    let t = tempfile::tempdir().unwrap();
+    let (key, kit) = school_key(t.path());
+    let (s, school) = server(&kit, 204).await;
+    let home = connected_home(&s.uri());
+    let dir = folder(home.path(), t.path(), &key).await;
+    let before = manifest(&dir);
+    let o = run(
+        home.path(),
+        args(&[&"publish", &dir, &"--school-key", &key]),
+        "1\nno\n",
+    )
+    .await;
+    let (out, err) = text(&o);
+    assert!(!o.status.success(), "{out}{err}");
+    assert!(out.contains("type yes: "), "{out}");
+    assert!(
+        err.contains("not confirmed") && err.contains("nothing was approved"),
+        "{err}"
+    );
+    assert!(!out.contains("Published version"), "{out}");
+    // Nothing signed, nothing published, no check-in; the folder still has nothing published.
+    let reqs = s.received_requests().await.unwrap();
+    assert!(
+        !reqs.iter().any(|r| r.url.path().ends_with("/commit")),
+        "{reqs:?}"
+    );
+    assert!(school.0.lock().unwrap().archives.is_empty());
+    assert!(checkins(&s).await.is_empty());
+    assert_eq!(manifest(&dir), before);
+}
+
+/// Answers the publish commit like [`School`], after removing the folder's record of the upload,
+/// so that the folder cannot note the published version.
+struct LoseUploadRecord {
+    school: School,
+    record: PathBuf,
+}
+
+impl Respond for LoseUploadRecord {
+    fn respond(&self, r: &Request) -> ResponseTemplate {
+        std::fs::remove_file(&self.record).unwrap();
+        self.school.respond(r)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn publish_checks_in_even_when_the_folder_cannot_record_it() {
+    let t = tempfile::tempdir().unwrap();
+    let (key, kit) = school_key(t.path());
+    let (s, school) = server(&kit, 204).await;
+    let home = connected_home(&s.uri());
+    let dir = folder(home.path(), t.path(), &key).await;
+    Mock::given(method("POST"))
+        .and(path("/v1/admin/publish/pending/p-1/commit"))
+        .respond_with(LoseUploadRecord {
+            school: school.clone(),
+            record: dir.join(".mastersos").join("uploaded").join("upload.toml"),
+        })
+        .with_priority(1)
+        .mount(&s)
+        .await;
+    let o = run(
+        home.path(),
+        args(&[&"publish", &dir, &"--school-key", &key]),
+        "1\nyes\n",
+    )
+    .await;
+    let (out, err) = text(&o);
+    // Published on the server and checked in, but the local bookkeeping failed: an error.
+    assert_eq!(school.0.lock().unwrap().archives.len(), 1);
+    assert_eq!(checkins(&s).await.len(), 1, "{out}{err}");
+    assert!(!o.status.success(), "{out}{err}");
+    assert!(err.contains("Published version 1"), "{err}");
+    assert!(err.contains("could not record"), "{err}");
+}

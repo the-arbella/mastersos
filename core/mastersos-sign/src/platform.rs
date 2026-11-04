@@ -98,7 +98,13 @@ pub(crate) fn open_private(path: &Path) -> Result<File> {
 /// rest of [`check_private`] (which a FAT32 or exFAT USB stick cannot pass) gives
 /// [`KEY_FILE_NOTE`] for the caller to say, instead of a refusal.
 pub fn open_school_key(path: &Path) -> Result<(File, Option<&'static str>)> {
-    let f = open(path)?;
+    let f = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
+    // A USB stick mounted by another user (FAT32, exFAT) gives every file to that user.
+    sys::check_owner(&f, path).map_err(|e| {
+        anyhow::anyhow!(
+            "{e}. Copy the file to your own folder first, or mount the stick as yourself."
+        )
+    })?;
     let broad = !matches!(sys::not_private(&f, path), Ok(None));
     Ok((f, broad.then_some(KEY_FILE_NOTE)))
 }
@@ -677,6 +683,29 @@ mod tests {
         check_private(&p).unwrap();
         // No temporary file left behind.
         assert_eq!(std::fs::read_dir(t.path()).unwrap().count(), 1);
+    }
+
+    /// A school key file owned by another user (a stick mounted by root) is refused with the
+    /// fix; a token file stays refused without it. Needs root to give a file away.
+    #[cfg(unix)]
+    #[test]
+    fn foreign_school_key_says_how_to_fix_it() {
+        if !nix::unistd::getuid().is_root() {
+            eprintln!("skipped: needs root to change a file's owner");
+            return;
+        }
+        let t = tempfile::tempdir().unwrap();
+        let p = t.path().join("school.key");
+        std::fs::write(&p, "x").unwrap();
+        nix::unistd::chown(&p, Some(nix::unistd::Uid::from_raw(65534)), None).unwrap();
+        let e = open_school_key(&p).unwrap_err().to_string();
+        assert!(e.contains("belongs to uid 65534"), "{e}");
+        assert!(
+            e.contains("Copy the file to your own folder first, or mount the stick as yourself"),
+            "{e}"
+        );
+        let e = check_private(&p).unwrap_err().to_string();
+        assert!(!e.contains("Copy the file"), "{e}");
     }
 
     #[cfg(unix)]

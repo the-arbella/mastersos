@@ -171,6 +171,9 @@ enum KeysCmd {
         /// The key code, with or without the dash
         #[arg(value_name = "KEY CODE")]
         code: String,
+        /// That school key's file, if you still have it: then the disk-unlocking entry that belongs to it is removed too, even in an older manifest.toml
+        #[arg(long = "school-key", alias = "kit", value_name = "FILE")]
+        school_key: Option<PathBuf>,
         /// The settings directory (default: the current directory)
         #[arg(long)]
         dir: Option<PathBuf>,
@@ -288,7 +291,20 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
             logo_body(login, icon)?;
         }
         // Only the local manifest.toml changes, and nothing from the server decides what.
-        Cmd::Keys(KeysCmd::Remove { code, dir }) => return keys_remove(dir.as_deref(), code),
+        Cmd::Keys(KeysCmd::Remove {
+            code,
+            school_key,
+            dir,
+        }) => {
+            return keys_remove(
+                dir.as_deref(),
+                code,
+                school_key.as_deref(),
+                server.as_deref(),
+                token_file.as_deref(),
+            )
+            .await
+        }
         Cmd::Init { school_key, .. } if school_key.is_empty() => {
             return Err(OpError::Failed(
                 "mastersos init needs a school key file: --school-key <FILE>. Make school keys on the admin site's signing page first."
@@ -321,7 +337,7 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
             Some(p) => p,
             None => config_dir()?.join("ai-token"),
         };
-        check_private(&ai_token_file)?;
+        check_private(&ai_token_file, AI_TOKEN_AGAIN)?;
         let dir = dir.clone().unwrap_or_else(|| PathBuf::from("."));
         Workdir::open(&dir).map_err(fail)?;
         // The MCP server keeps its own exit codes: 2 for a token that must not be given to an AI.
@@ -341,7 +357,7 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         Some(p) => p,
         None => config_dir()?.join("token"),
     };
-    check_private(&token_file)?;
+    check_private(&token_file, TOKEN_AGAIN)?;
     // The commands that write settings (or upload them) refuse an AI token: it reads secrets as
     // "<kept>" and must not be able to publish.
     let wanted = match &cmd {
@@ -435,9 +451,9 @@ async fn setup(
             "IT's token file and the AI token file must be different files".into(),
         ));
     }
-    for f in [&token_file, &ai_token_file] {
+    for (f, again) in [(&token_file, TOKEN_AGAIN), (&ai_token_file, AI_TOKEN_AGAIN)] {
         if f.exists() {
-            check_private(f)?;
+            check_private(f, again)?;
         }
     }
     std::fs::create_dir_all(&dir)
@@ -573,9 +589,17 @@ async fn connect_school(
 }
 
 /// The token file must be readable by its owner only.
-fn check_private(path: &Path) -> Result<(), OpError> {
-    mastersos_sign::platform::check_private(path).map_err(fail)
+fn check_private(path: &Path, again: &str) -> Result<(), OpError> {
+    mastersos_sign::platform::check_private(path).map_err(|e| {
+        let why = format!("{e:#}");
+        OpError::Failed(format!("{}. {again}", why.trim_end_matches('.')))
+    })
 }
+
+/// How to replace a token file that [`check_private`] refuses.
+const TOKEN_AGAIN: &str = "Or save a new token file: run `mastersos connect <SERVER_URL>` again.";
+const AI_TOKEN_AGAIN: &str =
+    "Or save the AI token again: create it under AI tools on the school's admin page.";
 
 async fn devices(api: &Api, out: &Out, c: DevicesCmd) -> Result<ExitCode, OpError> {
     match c {
@@ -922,6 +946,8 @@ struct ListedKey {
 #[derive(Deserialize)]
 struct ListedRecipient {
     recipient: String,
+    #[serde(default)]
+    bound_key_id: Option<String>,
 }
 
 async fn get_list<T: serde::de::DeserializeOwned>(
@@ -989,7 +1015,7 @@ async fn keys_dir(
     if m.school_id != id || !same_server(&m.server, server) {
         return Err(OpError::Failed(format!(
             "{} belongs to school {} on {}, not to {id} on {server}",
-            w.root.display(),
+            absolute(&w.root)?.display(),
             m.school_id,
             m.server
         )));
@@ -1021,27 +1047,119 @@ async fn keys_add(
     Ok(ExitCode::SUCCESS)
 }
 
-/// `mastersos keys remove <KEY CODE>`: offline. The disk-unlocking entry goes only when its
-/// `# school key <code>` comment ties it to the key; entries without one are listed for IT.
-fn keys_remove(dir: Option<&Path>, code: &str) -> Result<ExitCode, OpError> {
+/// `mastersos keys remove <KEY CODE> [--school-key <FILE>]`: only local data decides what is
+/// removed. The disk-unlocking entry goes when its `# school key <code>` comment ties it to the
+/// key, or when it is the one derived from the key's own file. Entries without either are listed
+/// for IT; when this computer is connected, the server's word on each is shown beside it, and
+/// nothing is removed on that basis.
+async fn keys_remove(
+    dir: Option<&Path>,
+    code: &str,
+    school_key: Option<&Path>,
+    server: Option<&str>,
+    token_file: Option<&Path>,
+) -> Result<ExitCode, OpError> {
+    let file = match school_key {
+        Some(p) => {
+            let kit = mastersos_sign::kit::load_kit(p).map_err(fail)?;
+            let file_code = workdir::shown_code(&kit.key_id());
+            match workdir::normalize_key_code(code) {
+                Some(want) if want == file_code => {}
+                // A code that is not a key code is refused below with its own message.
+                None => {}
+                Some(want) => {
+                    return Err(OpError::Failed(format!(
+                        "{} is school key {file_code}, not {want}. Nothing was changed.",
+                        absolute(p)?.display()
+                    )))
+                }
+            }
+            Some(kit)
+        }
+        None => None,
+    };
     let w = Workdir::open(dir.unwrap_or_else(|| Path::new("."))).map_err(fail)?;
-    let r = workdir::remove_school_key(&w.manifest().map_err(fail)?, code).map_err(fail)?;
-    w.write_manifest(&r.text).map_err(fail)?;
+    let recipient = file.as_ref().map(|k| k.escrow_recipient());
+    let r = workdir::remove_school_key(&w.manifest().map_err(fail)?, code, recipient.as_deref())
+        .map_err(fail)?;
     let path = absolute(&w.root.join("manifest.toml"))?;
     let shown = workdir::shown_code(&r.key_id);
+    if let Some(k) = &file {
+        if k.key_id() != r.key_id {
+            return Err(OpError::Failed(format!(
+                "manifest.toml has a school key {shown} that does not match {}. Check which file is the right one. Nothing was changed.",
+                absolute(school_key.unwrap_or(Path::new("")))?.display()
+            )));
+        }
+    }
+    w.write_manifest(&r.text).map_err(fail)?;
     println!("Removed school key {shown} from {}.", path.display());
-    if !r.recipient_removed && !r.unmarked.is_empty() {
+    if file.is_none() && !r.recipient_removed && !r.unmarked.is_empty() {
+        let said = server_says(&w, server, token_file).await;
         println!(
             "manifest.toml has disk-unlocking entries (under [school]) that this command could not match to {shown}:"
         );
         for u in &r.unmarked {
-            println!("  {u}");
+            match said.get(u) {
+                Some(c) => println!("  {u}  (the server says: school key {c})"),
+                None => println!("  {u}"),
+            }
         }
-        println!("Remove the one that belonged to {shown} by hand.");
+        println!(
+            "If you still have that key's file, run again with --school-key <file>: mastersos keys remove {shown} --school-key <file>"
+        );
+        println!("Otherwise remove the one that belonged to {shown} by hand.");
     }
     println!("{}", trusted_line(&r.text)?);
     println!("{PUBLISH_NEXT}");
     Ok(ExitCode::SUCCESS)
+}
+
+/// Text from the server, without control characters, for a terminal.
+fn printable(s: &str) -> String {
+    s.chars().filter(|c| !c.is_control()).collect()
+}
+
+/// Best effort, for display only: the key code the server binds each disk-unlocking entry to,
+/// when this computer is connected to the folder's own school. Any failure gives nothing.
+async fn server_says(
+    w: &Workdir,
+    server: Option<&str>,
+    token_file: Option<&Path>,
+) -> std::collections::HashMap<String, String> {
+    let fetch = async {
+        let cfg = load_config().ok()?;
+        let server = server.map(str::to_owned).or(cfg.server)?;
+        let token_file = match token_file.map(Path::to_path_buf).or(cfg.token_file) {
+            Some(p) => p,
+            None => config_dir().ok()?.join("token"),
+        };
+        mastersos_sign::platform::check_private(&token_file).ok()?;
+        let m = w.meta().ok()?;
+        if !same_server(&m.server, &server) {
+            return None;
+        }
+        let api = connect(&server, &token_file, TokenUse::Any).await.ok()?;
+        let (id, _) = school_info(&api, &server).await.ok()?;
+        if id != m.school_id {
+            return None;
+        }
+        let listed: Vec<ListedRecipient> = get_list(&api, "escrow-recipients").await.ok()?;
+        Some(
+            listed
+                .into_iter()
+                .filter_map(|l| {
+                    let code = printable(&workdir::shown_code(&l.bound_key_id?));
+                    (!code.is_empty()).then_some((l.recipient, code))
+                })
+                .collect(),
+        )
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(15), fetch)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default()
 }
 
 /// `mastersos keys list`: the registered school keys, and whether the local directory has each.
@@ -1083,11 +1201,11 @@ async fn keys_list(api: &Api, out: &Out, dir: Option<&Path>) -> Result<ExitCode,
         .iter()
         .map(|k| {
             vec![
-                workdir::shown_code(&k.key_id),
-                k.label.chars().filter(|c| !c.is_control()).collect(),
+                printable(&workdir::shown_code(&k.key_id)),
+                printable(&k.label),
                 k.created_at
                     .as_deref()
-                    .map_or("-".into(), |t| t.chars().take(10).collect()),
+                    .map_or("-".into(), |t| printable(t).chars().take(10).collect()),
                 yes_no(k.in_published_trust),
                 in_folder(&k.public_key).map_or("-".into(), yes_no),
             ]

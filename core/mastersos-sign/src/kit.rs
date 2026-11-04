@@ -103,7 +103,8 @@ fn parse(text: &str, from: &str) -> Result<Kit> {
 pub fn load_kit(path: &Path) -> Result<Kit> {
     let (f, note) = crate::platform::open_school_key(path)?;
     if let Some(note) = note {
-        eprintln!("{}: {note}", path.display());
+        let shown = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        eprintln!("{}: {note}", shown.display());
     }
     // Sized for the whole bounded read, so the buffer never reallocates while holding the kit.
     let mut text = Zeroizing::new(String::with_capacity(KIT_INPUT_MAX as usize + 1));

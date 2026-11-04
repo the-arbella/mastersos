@@ -341,7 +341,9 @@ async fn precheck_signer(
             bail!(
                 "Not uploaded: {} is not among the trusted keys in {}. Computers accept only trusted keys, and a school key cannot approve its own removal",
                 mastersos_sign::key_line(&tk),
-                root.join("manifest.toml").display()
+                std::path::absolute(root.join("manifest.toml"))
+                    .unwrap_or_else(|_| root.join("manifest.toml"))
+                    .display()
             );
         }
     }
@@ -573,13 +575,20 @@ pub async fn publish(
                 out,
             )
             .await?;
-            w.mark_published(v, &stamped_refs)?;
             // The version and digest just signed and committed, with that version's trust:
-            // nothing is fetched to decide what the check-in says.
+            // nothing is fetched to decide what the check-in says. It goes before this folder's
+            // own bookkeeping, so a published version always gets its check-in.
             let checkin = match checkin(&sign_api, s.key, v, &digest, &stamped).await {
                 Ok(until) => CheckIn::Until(until),
                 Err(e) => CheckIn::Failed(format!("{e:#}")),
             };
+            if let Err(e) = w.mark_published(v, &stamped_refs) {
+                let also = match &checkin {
+                    CheckIn::Failed(_) => format!(" {CHECKIN_FAILED_TEXT}"),
+                    CheckIn::Until(_) => String::new(),
+                };
+                bail!("Published version {v}, but this folder could not record it: {e:#}.{also}");
+            }
             Ok(PublishOutcome::Published {
                 version: v,
                 checkin,

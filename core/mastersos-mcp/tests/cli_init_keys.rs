@@ -52,6 +52,11 @@ fn code(kit: &Kit) -> String {
 
 /// A school whose registered school keys are `registered`.
 async fn server(registered: &[&Kit]) -> MockServer {
+    server_with(signing_keys(registered), registered).await
+}
+
+/// The server's list of signing keys with `registered`.
+fn signing_keys(registered: &[&Kit]) -> Value {
     let keys: Vec<Value> = registered
         .iter()
         .enumerate()
@@ -67,12 +72,26 @@ async fn server(registered: &[&Kit]) -> MockServer {
             })
         })
         .collect();
-    server_with(Value::Array(keys), registered).await
+    Value::Array(keys)
 }
 
 /// A school listing `keys` as its signing keys and the recipients of `recipients`.
 async fn server_with(keys: Value, recipients: &[&Kit]) -> MockServer {
-    let registered = recipients;
+    let recipients: Vec<Value> = recipients
+        .iter()
+        .map(|k| {
+            json!({
+                "recipient": k.escrow_recipient(), "bound_key_id": k.key_id(),
+                "label": "key", "created_by": "it", "created_at": "2026-11-03T09:00:00Z",
+                "in_published": false
+            })
+        })
+        .collect();
+    server_listing(keys, Value::Array(recipients)).await
+}
+
+/// A school listing `keys` as its signing keys and `recipients` as its recipients.
+async fn server_listing(keys: Value, recipients: Value) -> MockServer {
     let s = MockServer::start().await;
     let get = |p: &str, body: Value| {
         Mock::given(method("GET"))
@@ -93,17 +112,7 @@ async fn server_with(keys: Value, recipients: &[&Kit]) -> MockServer {
     .await;
     get("/v1/admin/versions", json!([])).mount(&s).await;
     get("/v1/admin/signing-keys", keys).mount(&s).await;
-    let recipients: Vec<Value> = registered
-        .iter()
-        .map(|k| {
-            json!({
-                "recipient": k.escrow_recipient(), "bound_key_id": k.key_id(),
-                "label": "key", "created_by": "it", "created_at": "2026-11-03T09:00:00Z",
-                "in_published": false
-            })
-        })
-        .collect();
-    get("/v1/admin/escrow-recipients", Value::Array(recipients))
+    get("/v1/admin/escrow-recipients", recipients)
         .mount(&s)
         .await;
     s
@@ -420,6 +429,11 @@ async fn keys_remove_keeps_unmarked_recipients_and_needs_no_server() {
     assert!(out.contains("could not match"), "{out}");
     assert!(out.contains(&b.escrow_recipient()), "{out}");
     assert!(out.contains("by hand"), "{out}");
+    assert!(
+        out.contains("If you still have that key's file, run again with --school-key <file>"),
+        "{out}"
+    );
+    assert!(!out.contains("the server says"), "{out}");
     assert!(!out.contains(&a.escrow_recipient()), "a's is marked: {out}");
     let abs = std::path::absolute(&dir).unwrap().display().to_string();
     plain_words(
@@ -427,4 +441,182 @@ async fn keys_remove_keeps_unmarked_recipients_and_needs_no_server() {
             .replace(&abs, "")
             .replace(&b.escrow_recipient(), ""),
     );
+}
+
+/// A folder trusting `a` and `b` whose recipients carry no `# school key` comment (as written
+/// before key codes were noted there).
+async fn untagged_folder(home: &Path, t: &Path, pa: &Path, pb: &Path, kits: &[&Kit]) -> PathBuf {
+    let dir = folder_with(home, t, pa).await;
+    let o = run(home, args(&[&"keys", &"add", &pb, &"--dir", &dir])).await;
+    assert!(o.status.success(), "{:?}", text(&o));
+    let mut m = std::fs::read_to_string(dir.join("manifest.toml")).unwrap();
+    for k in kits {
+        let tag = format!("# school key {}", code(k));
+        assert!(m.contains(&tag), "{m}");
+        m = m.replace(&tag, "");
+    }
+    std::fs::write(dir.join("manifest.toml"), m).unwrap();
+    dir
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn keys_remove_with_school_key_file_removes_its_untagged_recipient() {
+    let t = tempfile::tempdir().unwrap();
+    let (pa, a) = school_key(t.path(), "a.key");
+    let (pb, b) = school_key(t.path(), "b.key");
+    let s = server(&[&a, &b]).await;
+    let home = connected_home(&s.uri());
+    let dir = untagged_folder(home.path(), t.path(), &pa, &pb, &[&a, &b]).await;
+    // Offline: the file alone says which entry is b's.
+    let empty = tempfile::tempdir().unwrap();
+    drop(s);
+    let o = run(
+        empty.path(),
+        args(&[
+            &"keys",
+            &"remove",
+            &code(&b),
+            &"--school-key",
+            &pb,
+            &"--dir",
+            &dir,
+        ]),
+    )
+    .await;
+    let (out, err) = text(&o);
+    assert!(o.status.success(), "{out}{err}");
+    let (trust, recipients) = manifest(&dir);
+    assert_eq!(trust, [a.trust_key()]);
+    assert_eq!(recipients, [a.escrow_recipient()]);
+    assert!(!out.contains("by hand"), "{out}");
+    assert!(!out.contains(&a.escrow_recipient()), "{out}");
+    let abs = std::path::absolute(&dir).unwrap().display().to_string();
+    plain_words(&out.replace("already trusted", "").replace(&abs, ""));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn keys_remove_refuses_school_key_file_of_another_key() {
+    let t = tempfile::tempdir().unwrap();
+    let (pa, a) = school_key(t.path(), "a.key");
+    let (pb, b) = school_key(t.path(), "b.key");
+    let s = server(&[&a, &b]).await;
+    let home = connected_home(&s.uri());
+    let dir = untagged_folder(home.path(), t.path(), &pa, &pb, &[&a, &b]).await;
+    let before = std::fs::read_to_string(dir.join("manifest.toml")).unwrap();
+    let o = run(
+        home.path(),
+        args(&[
+            &"keys",
+            &"remove",
+            &code(&b),
+            &"--school-key",
+            &pa,
+            &"--dir",
+            &dir,
+        ]),
+    )
+    .await;
+    let (out, err) = text(&o);
+    assert!(!o.status.success(), "{out}{err}");
+    assert!(
+        err.contains(&code(&a)) && err.contains(&code(&b)),
+        "names both codes: {err}"
+    );
+    assert!(err.contains("Nothing was changed"), "{err}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("manifest.toml")).unwrap(),
+        before
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn keys_remove_shows_what_the_server_says_but_removes_nothing_more() {
+    let t = tempfile::tempdir().unwrap();
+    let (pa, a) = school_key(t.path(), "a.key");
+    let (pb, b) = school_key(t.path(), "b.key");
+    // The server ties b's entry to b, and a's entry to a name with control characters.
+    let s = server_listing(
+        signing_keys(&[&a, &b]),
+        json!([
+            { "recipient": b.escrow_recipient(), "bound_key_id": b.key_id() },
+            { "recipient": a.escrow_recipient(), "bound_key_id": "evil\u{1b}[2J\u{7}id" },
+        ]),
+    )
+    .await;
+    let home = connected_home(&s.uri());
+    let dir = untagged_folder(home.path(), t.path(), &pa, &pb, &[&a, &b]).await;
+    let before = s.received_requests().await.unwrap().len();
+    let o = run(
+        home.path(),
+        args(&[&"keys", &"remove", &code(&b), &"--dir", &dir]),
+    )
+    .await;
+    let (out, err) = text(&o);
+    assert!(o.status.success(), "{out}{err}");
+    // Only the trusted key goes; both entries stay for IT to decide.
+    let (trust, recipients) = manifest(&dir);
+    assert_eq!(trust, [a.trust_key()]);
+    assert_eq!(recipients, [a.escrow_recipient(), b.escrow_recipient()]);
+    let line = |r: &str| {
+        out.lines()
+            .find(|l| l.contains(r))
+            .unwrap_or_else(|| panic!("no line for {r}: {out}"))
+            .to_owned()
+    };
+    assert!(
+        line(&b.escrow_recipient())
+            .contains(&format!("(the server says: school key {})", code(&b))),
+        "{out}"
+    );
+    let la = line(&a.escrow_recipient());
+    assert!(
+        la.contains("(the server says: school key evil[2Jid)"),
+        "{out}"
+    );
+    assert!(!out.contains(['\u{1b}', '\u{7}']), "{out:?}");
+    assert!(out.contains("--school-key <file>"), "{out}");
+    assert!(out.contains("by hand"), "{out}");
+    // Only reads.
+    let reqs = s.received_requests().await.unwrap();
+    assert!(
+        reqs[before..].iter().all(|r| r.method.as_str() == "GET"),
+        "{reqs:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn keys_list_filters_control_characters() {
+    let t = tempfile::tempdir().unwrap();
+    let (_, a) = school_key(t.path(), "a.key");
+    let tk = a.trust_key();
+    let s = server_listing(
+        json!([{
+            "key_id": "k\u{1b}[31mid", "alg": "ed25519", "public_key": tk.public_key,
+            "label": "l\u{1b}[0m", "in_published_trust": false,
+            "created_at": "\u{1b}\u{7}2026-11-03T09:00:00Z"
+        }]),
+        json!([]),
+    )
+    .await;
+    let home = connected_home(&s.uri());
+    let o = run(home.path(), args(&[&"keys", &"list"])).await;
+    let (out, err) = text(&o);
+    assert!(o.status.success(), "{out}{err}");
+    assert!(!out.contains(['\u{1b}', '\u{7}']), "{out:?}");
+    assert!(out.contains("k[31mid"), "{out}");
+    assert!(out.contains("2026-11-03"), "{out}");
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn loose_token_file_says_how_to_fix_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let s = server(&[]).await;
+    let home = connected_home(&s.uri());
+    let token = config_dir(home.path()).join("token");
+    std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let o = run(home.path(), args(&[&"keys", &"list"])).await;
+    let (out, err) = text(&o);
+    assert!(!o.status.success(), "{out}{err}");
+    assert!(err.contains("mastersos connect"), "{err}");
 }

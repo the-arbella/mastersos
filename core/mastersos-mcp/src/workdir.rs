@@ -417,11 +417,42 @@ impl Workdir {
         })
     }
 
-    /// Replace `manifest.toml` (never through a link).
+    /// Replace `manifest.toml` (never through a link) in one step: a new temporary file next to
+    /// it with the old file's permissions, then a rename over it, so an interrupted write never
+    /// leaves half a manifest.
     pub fn write_manifest(&self, text: &str) -> Result<()> {
+        use std::io::Write as _;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
         let path = self.root.join(MANIFEST);
         refuse_link(&path)?;
-        fs::write(&path, text).with_context(|| format!("could not write {}", path.display()))
+        let perms = match fs::metadata(&path) {
+            Ok(m) => Some(m.permissions()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e).with_context(|| format!("could not read {}", path.display())),
+        };
+        let tmp = self.root.join(format!(
+            ".{MANIFEST}.{}.{}.tmp",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        let written = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+            .and_then(|mut f| {
+                if let Some(p) = &perms {
+                    f.set_permissions(p.clone())?;
+                }
+                f.write_all(text.as_bytes())?;
+                f.sync_all()
+            })
+            .and_then(|()| fs::rename(&tmp, &path));
+        if let Err(e) = written {
+            let _ = fs::remove_file(&tmp);
+            return Err(e).with_context(|| format!("could not write {}", path.display()));
+        }
+        Ok(())
     }
 
     /// Start a directory for a school that has nothing published: `manifest_text` (the
@@ -1003,8 +1034,13 @@ pub struct Removed {
 }
 
 /// Remove the school key with this key code (with or without its dash) and the recipient whose
-/// comment names that code. Refused when no school key would be left.
-pub fn remove_school_key(manifest_text: &str, code: &str) -> Result<Removed> {
+/// comment names that code, and `recipient` too (commented or not) when the caller derived it
+/// from the key's own file. Refused when no school key would be left.
+pub fn remove_school_key(
+    manifest_text: &str,
+    code: &str,
+    recipient: Option<&str>,
+) -> Result<Removed> {
     let Some(want) = normalize_key_code(code) else {
         bail!("{code:?} is not a key code (8 letters and digits, like 11d9-03eb)");
     };
@@ -1058,7 +1094,10 @@ pub fn remove_school_key(manifest_text: &str, code: &str) -> Result<Removed> {
             .and_then(toml_edit::Item::as_array_mut)
         {
             let before = list.len();
-            list.retain(|v| recipient_tag(v).as_deref() != Some(want.as_str()));
+            list.retain(|v| {
+                recipient_tag(v).as_deref() != Some(want.as_str())
+                    && (recipient.is_none() || v.as_str() != recipient)
+            });
             recipient_removed = list.len() != before;
             unmarked = list
                 .iter()
@@ -1080,7 +1119,7 @@ pub fn remove_school_key(manifest_text: &str, code: &str) -> Result<Removed> {
 
 /// [`remove_school_key`], the text only.
 pub fn remove_trusted_key(manifest_text: &str, code: &str) -> Result<String> {
-    Ok(remove_school_key(manifest_text, code)?.text)
+    Ok(remove_school_key(manifest_text, code, None)?.text)
 }
 
 #[cfg(test)]
@@ -1516,6 +1555,33 @@ mod tests {
     }
 
     #[test]
+    fn write_manifest_replaces_whole_file_and_keeps_mode() {
+        let t = tempfile::tempdir().unwrap();
+        let w = Workdir::init(&t.path().join("school"), meta(0), SAMPLE).unwrap();
+        let path = w.root.join(MANIFEST);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        }
+        w.write_manifest("# new\n").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "# new\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o640);
+        }
+        // No temporary file is left behind.
+        let left: Vec<_> = fs::read_dir(&w.root)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
+    }
+
+    #[test]
     fn mark_published_moves_base() {
         let t = tempfile::tempdir().unwrap();
         let w = Workdir::init(&t.path().join("school"), meta(0), SAMPLE).unwrap();
@@ -1694,7 +1760,7 @@ mod tests {
             "[school]\nid = \"11111111-1111-1111-1111-111111111111\"\nescrow_recipients = [\"{}\", \"{}\"] # keep\n\n[[trust]]\nid = \"{}\"\nalg = \"ed25519\"\npublic_key = \"{}\"\n\n[[trust]]\nid = \"{}\"\nalg = \"ed25519\"\npublic_key = \"{}\"\n",
             a.1, b.1, a.0.id, a.0.public_key, b.0.id, b.0.public_key
         );
-        let r = remove_school_key(&text, &code_of(2)).unwrap();
+        let r = remove_school_key(&text, &code_of(2), None).unwrap();
         assert!(!r.recipient_removed);
         assert_eq!(r.key_id, b.0.id);
         // Nothing ties a recipient to the key: both stay, listed for IT.
@@ -1704,6 +1770,11 @@ mod tests {
             (vec![a.0.clone()], vec![a.1.clone(), b.1.clone()])
         );
         assert!(r.text.contains("# keep"), "{}", r.text);
+        // With the recipient derived from the key's own file, exactly that one goes.
+        let exact = remove_school_key(&text, &code_of(2), Some(b.1.as_str())).unwrap();
+        assert!(exact.recipient_removed);
+        assert_eq!(exact.unmarked, std::slice::from_ref(&a.1));
+        assert_eq!(parsed(&exact.text), (vec![a.0.clone()], vec![a.1.clone()]));
         let done = r.text;
         // Adding to the inline list marks the new recipient with its code.
         let c = school_key(3);
