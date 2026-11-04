@@ -25,6 +25,8 @@ serde_json.workspace = true
 similar.workspace = true
 tokio.workspace = true
 toml.workspace = true
+# Edits manifest.toml's trusted keys without touching the rest (comments, order).
+toml_edit.workspace = true
 # hash-password: the typed password is wiped after use.
 zeroize.workspace = true
 # The IT maintenance account's password hash (itpass): yescrypt in crypt(3) form, as libxcrypt reads it.

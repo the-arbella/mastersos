@@ -54,10 +54,18 @@ enum Cmd {
     /// Save --server, --token-file and --ai-token-file to ~/.config/mastersos/config.toml, then test the connection
     #[command(hide = true)]
     Setup,
-    /// Start a local settings directory for a school that has published nothing yet
+    /// Start a local settings directory for a school that has published nothing yet, approved by the school keys given
     Init {
         /// The directory to create (it must be empty or not exist)
         dir: PathBuf,
+        /// A school key file; give it once for each school key (two is good). Make school keys on the admin site's signing page first
+        #[arg(
+            long = "school-key",
+            alias = "kit",
+            value_name = "FILE",
+            required = true
+        )]
+        school_key: Vec<PathBuf>,
     },
     /// Download the latest published settings (verified against the pinned keys) into a local directory
     Pull {
@@ -106,7 +114,7 @@ enum Cmd {
         #[arg(long = "allow-reroute", value_name = "NAME")]
         allow_reroute: Vec<String>,
     },
-    /// The signing keys the server knows
+    /// The school keys: list them, or add or remove one in the local settings directory
     #[command(subcommand)]
     Keys(KeysCmd),
     /// Read a password twice without echo and print its yescrypt hash for the IT account (it_account.password_hash)
@@ -124,8 +132,30 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum KeysCmd {
-    /// List the keys: id, algorithm, label
-    List,
+    /// List the school keys registered for this school: key code, label, registered date, whether the published settings and the local directory have them
+    List {
+        /// The settings directory (default: the current directory)
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
+    /// Add the school key in FILE (registered on the signing page) to the local manifest.toml; then publish with a school key already in use
+    Add {
+        /// The school key file
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+        /// The settings directory (default: the current directory)
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
+    /// Remove the school key with this key code (for example 11d9-03eb) from the local manifest.toml; then publish
+    Remove {
+        /// The key code, with or without the dash
+        #[arg(value_name = "KEY CODE")]
+        code: String,
+        /// The settings directory (default: the current directory)
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -238,8 +268,20 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
             // Wrong sizes are refused before the config, the token or the network is touched.
             logo_body(login, icon)?;
         }
+        Cmd::Keys(KeysCmd::Remove { code, dir }) => {
+            // Done offline when the recipient is marked with the key code.
+            if let Some(done) = remove_key_offline(dir.as_deref(), code)? {
+                return Ok(done);
+            }
+        }
         _ => {}
     }
+    // School key files that cannot be read stop before the network.
+    let school_keys = match &cmd {
+        Cmd::Init { school_key, .. } => load_school_keys(school_key)?,
+        Cmd::Keys(KeysCmd::Add { file, .. }) => load_school_keys(std::slice::from_ref(file))?,
+        _ => Vec::new(),
+    };
     // A kit or key file that is not private or does not parse stops before the network.
     let sign_with = match &cmd {
         Cmd::Publish { kit, key, .. } => signer(kit.as_deref(), key.as_deref())?,
@@ -282,7 +324,11 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
     // The commands that write settings (or upload them) refuse an AI token: it reads secrets as
     // "<kept>" and must not be able to publish.
     let wanted = match &cmd {
-        Cmd::Init { .. } | Cmd::Pull { .. } | Cmd::Publish { .. } | Cmd::Logo(_) => TokenUse::It,
+        Cmd::Init { .. }
+        | Cmd::Pull { .. }
+        | Cmd::Publish { .. }
+        | Cmd::Logo(_)
+        | Cmd::Keys(KeysCmd::Add { .. } | KeysCmd::Remove { .. }) => TokenUse::It,
         _ => TokenUse::Any,
     };
     let api = connect(&server, &token_file, wanted)
@@ -297,7 +343,7 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         | Cmd::Diff { .. } => {
             unreachable!("handled above")
         }
-        Cmd::Init { dir } => init_dir(&api, &server, &token_file, &dir).await,
+        Cmd::Init { dir, .. } => init_dir(&api, &server, &token_file, &dir, &school_keys).await,
         Cmd::Pull {
             dir,
             version,
@@ -322,15 +368,12 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
             )
             .await
         }
-        Cmd::Keys(KeysCmd::List) => {
-            let text = api.send(Req::get(&["v1", "admin", "signing-keys"])).await?;
-            out.print(&text, |v| {
-                table(
-                    &["KEY ID", "KIND", "ALGORITHM", "LABEL", "TRUSTED"],
-                    rows(v, &["key_id", "kind", "alg", "label", "in_published_trust"]),
-                )
-            });
-            Ok(ExitCode::SUCCESS)
+        Cmd::Keys(KeysCmd::List { dir }) => keys_list(&api, &out, dir.as_deref()).await,
+        Cmd::Keys(KeysCmd::Add { dir, .. }) => {
+            keys_add(&api, &server, dir.as_deref(), &school_keys).await
+        }
+        Cmd::Keys(KeysCmd::Remove { code, dir }) => {
+            keys_remove(&api, &server, dir.as_deref(), &code).await
         }
         Cmd::HashPassword => unreachable!("handled above"),
         Cmd::Logo(LogoCmd::Upload { login, icon }) => {
@@ -613,13 +656,6 @@ fn items(v: &Value) -> &[Value] {
     v.as_array().map_or(&[], Vec::as_slice)
 }
 
-fn rows(v: &Value, keys: &[&str]) -> Vec<Vec<String>> {
-    items(v)
-        .iter()
-        .map(|x| keys.iter().map(|k| cell(&x[*k])).collect())
-        .collect()
-}
-
 /// One value for a table cell or a line.
 fn cell(v: &Value) -> String {
     match v {
@@ -727,12 +763,34 @@ fn local_diff(dir: Option<&Path>) -> Result<ExitCode, OpError> {
 
 /// The school id the server says this token belongs to.
 async fn school_id(api: &Api) -> Result<String, OpError> {
+    Ok(school_info(api, "").await?.0)
+}
+
+/// The school id and name the server says this token belongs to (the name for messages only; the
+/// host when there is none).
+async fn school_info(api: &Api, server: &str) -> Result<(String, String), OpError> {
     let text = api.send(Req::get(&["v1", "auth", "config"])).await?;
     let v: Value = serde_json::from_str(&text).map_err(fail)?;
-    v["school_id"]
+    let id = v["school_id"]
         .as_str()
         .map(str::to_owned)
-        .ok_or_else(|| OpError::Failed("the server did not say which school this is".into()))
+        .ok_or_else(|| OpError::Failed("the server did not say which school this is".into()))?;
+    let name = v["name"]
+        .as_str()
+        .map(|n| {
+            n.chars()
+                .filter(|c| !c.is_control())
+                .take(64)
+                .collect::<String>()
+        })
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or_else(|| {
+            reqwest::Url::parse(server)
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_owned))
+                .unwrap_or_else(|| "this school".to_owned())
+        });
+    Ok((id, name))
 }
 
 fn sign_api(server: &str, token_file: &Path) -> Result<mastersos_sign::Api, OpError> {
@@ -757,14 +815,17 @@ fn same_server(a: &str, b: &str) -> bool {
     }
 }
 
-/// `mastersos init <dir>`.
+/// `mastersos init <dir> --school-key <FILE>…`: the trusted keys and the disk-unlocking
+/// recipients come from the school key files only; the server is asked only whether each is
+/// registered for this school. Nothing is written when one is not.
 async fn init_dir(
     api: &Api,
     server: &str,
     token_file: &Path,
     dir: &Path,
+    school_keys: &[SchoolKey],
 ) -> Result<ExitCode, OpError> {
-    let id = school_id(api).await?;
+    let (id, name) = school_info(api, server).await?;
     let latest = sign_api(server, token_file)?
         .latest_version()
         .await
@@ -775,15 +836,289 @@ async fn init_dir(
             dir.display()
         )));
     }
+    ensure_registered(api, school_keys, &name).await?;
+    let keys: Vec<(mastersos_bundle::TrustKey, String)> = school_keys
+        .iter()
+        .map(|k| (k.kit.trust_key(), k.kit.escrow_recipient()))
+        .collect();
+    let text =
+        workdir::set_trusted_keys(&workdir::template(&id).map_err(fail)?, &keys).map_err(fail)?;
     let meta = Meta {
         server: server.to_owned(),
-        school_id: id.clone(),
+        school_id: id,
         base_version: 0,
     };
-    Workdir::init(dir, meta, &workdir::template(&id).map_err(fail)?).map_err(fail)?;
+    Workdir::init(dir, meta, &text).map_err(fail)?;
+    let abs = absolute(dir)?;
+    println!("Created {} for {name}.", abs.display());
+    println!("  manifest.toml  the settings for every computer: edit this file");
     println!(
-        "Created {} for school {id}. Edit manifest.toml, then run `mastersos check`.",
-        dir.display()
+        "  secrets.toml   Wi-Fi passwords and other secrets that manifest.toml names as \"secret:<name>\"; keep it private"
+    );
+    println!("{}", trusted_line(&text)?);
+    println!("Next: edit manifest.toml, then run `mastersos check`.");
+    Ok(ExitCode::SUCCESS)
+}
+
+/// A school key file read for `init` or `keys add`.
+struct SchoolKey {
+    kit: mastersos_bundle::kit::Kit,
+}
+
+impl SchoolKey {
+    fn code(&self) -> String {
+        workdir::shown_code(&self.kit.key_id())
+    }
+}
+
+/// Read the school key files (one key given twice counts once).
+fn load_school_keys(paths: &[PathBuf]) -> Result<Vec<SchoolKey>, OpError> {
+    let mut out: Vec<SchoolKey> = Vec::new();
+    for p in paths {
+        let kit = mastersos_sign::kit::load_kit(p).map_err(fail)?;
+        if !out.iter().any(|k| k.kit.key_id() == kit.key_id()) {
+            out.push(SchoolKey { kit });
+        }
+    }
+    Ok(out)
+}
+
+/// `GET /v1/admin/signing-keys`, as far as the command line reads it.
+#[derive(Deserialize)]
+struct ListedKey {
+    key_id: String,
+    #[serde(default)]
+    alg: String,
+    #[serde(default)]
+    public_key: String,
+    #[serde(default)]
+    label: String,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    in_published_trust: bool,
+}
+
+/// `GET /v1/admin/escrow-recipients`, as far as the command line reads it.
+#[derive(Deserialize)]
+struct ListedRecipient {
+    recipient: String,
+    #[serde(default)]
+    bound_key_id: String,
+}
+
+async fn get_list<T: serde::de::DeserializeOwned>(
+    api: &Api,
+    what: &str,
+) -> Result<Vec<T>, OpError> {
+    let text = api.send(Req::get(&["v1", "admin", what])).await?;
+    serde_json::from_str(&text)
+        .map_err(|e| OpError::Failed(format!("the server's list of {what} cannot be read: {e}")))
+}
+
+/// Every school key must be registered for this school: its public key among the registered
+/// signing keys (compared by key, not by id or label) and its recipient among the registered
+/// recipients. The server's lists only answer yes or no; nothing from them is written.
+async fn ensure_registered(
+    api: &Api,
+    school_keys: &[SchoolKey],
+    school: &str,
+) -> Result<(), OpError> {
+    let keys: Vec<ListedKey> = get_list(api, "signing-keys").await?;
+    let recipients: Vec<ListedRecipient> = get_list(api, "escrow-recipients").await?;
+    for k in school_keys {
+        let tk = k.kit.trust_key();
+        let recipient = k.kit.escrow_recipient();
+        let key_ok = keys
+            .iter()
+            .any(|l| l.alg == tk.alg.as_str() && l.public_key == tk.public_key);
+        let recipient_ok = recipients.iter().any(|r| r.recipient == recipient);
+        if !key_ok || !recipient_ok {
+            return Err(OpError::Failed(format!(
+                "This school key ({}) is not registered for {school}. Make keys on the signing page first.",
+                k.code()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn absolute(p: &Path) -> Result<PathBuf, OpError> {
+    std::path::absolute(p).map_err(|e| OpError::Failed(format!("Bad path {}: {e}", p.display())))
+}
+
+/// `Trusted keys: 11d9-03eb, 7c42-a915` for this manifest.
+fn trusted_line(manifest_text: &str) -> Result<String, OpError> {
+    let codes: Vec<String> = workdir::trusted_keys(manifest_text)
+        .map_err(fail)?
+        .iter()
+        .map(|k| workdir::shown_code(&k.id))
+        .collect();
+    Ok(format!("Trusted keys: {}", codes.join(", ")))
+}
+
+const PUBLISH_NEXT: &str =
+    "Now publish with a school key that is already trusted: mastersos publish --school-key <file>";
+
+/// The settings directory the `keys` commands edit; it must belong to this server and school.
+async fn keys_dir(
+    api: &Api,
+    server: &str,
+    dir: Option<&Path>,
+) -> Result<(Workdir, String), OpError> {
+    let w = Workdir::open(dir.unwrap_or_else(|| Path::new("."))).map_err(fail)?;
+    let m = w.meta().map_err(fail)?;
+    let (id, name) = school_info(api, server).await?;
+    if m.school_id != id || !same_server(&m.server, server) {
+        return Err(OpError::Failed(format!(
+            "{} belongs to school {} on {}, not to {id} on {server}",
+            w.root.display(),
+            m.school_id,
+            m.server
+        )));
+    }
+    Ok((w, name))
+}
+
+/// `mastersos keys add <FILE>`: only the local manifest.toml changes.
+async fn keys_add(
+    api: &Api,
+    server: &str,
+    dir: Option<&Path>,
+    school_keys: &[SchoolKey],
+) -> Result<ExitCode, OpError> {
+    let (w, name) = keys_dir(api, server, dir).await?;
+    ensure_registered(api, school_keys, &name).await?;
+    let mut text = w.manifest().map_err(fail)?;
+    for k in school_keys {
+        text = workdir::add_trusted_key(&text, &k.kit.trust_key(), &k.kit.escrow_recipient())
+            .map_err(fail)?;
+    }
+    w.write_manifest(&text).map_err(fail)?;
+    let path = absolute(&w.root.join("manifest.toml"))?;
+    for k in school_keys {
+        println!("Added school key {} to {}.", k.code(), path.display());
+    }
+    println!("{}", trusted_line(&text)?);
+    println!("{PUBLISH_NEXT}");
+    Ok(ExitCode::SUCCESS)
+}
+
+fn print_removed(w: &Workdir, code: &str, text: &str, recipient: bool) -> Result<(), OpError> {
+    let path = absolute(&w.root.join("manifest.toml"))?;
+    println!("Removed school key {code} from {}.", path.display());
+    if !recipient {
+        println!("manifest.toml had no disk-unlocking entry for this key; nothing else changed.");
+    }
+    println!("{}", trusted_line(text)?);
+    println!("{PUBLISH_NEXT}");
+    Ok(())
+}
+
+/// `keys remove` without the network, when the recipient is marked with the key code: `None`
+/// when the server must say which recipient belongs to the key.
+fn remove_key_offline(dir: Option<&Path>, code: &str) -> Result<Option<ExitCode>, OpError> {
+    let w = Workdir::open(dir.unwrap_or_else(|| Path::new("."))).map_err(fail)?;
+    let r = workdir::remove_school_key(&w.manifest().map_err(fail)?, code).map_err(fail)?;
+    if !r.recipient_removed {
+        return Ok(None);
+    }
+    w.write_manifest(&r.text).map_err(fail)?;
+    print_removed(&w, &workdir::shown_code(&r.key_id), &r.text, true)?;
+    Ok(Some(ExitCode::SUCCESS))
+}
+
+/// `keys remove` for a recipient without the key code beside it (written by hand): the
+/// recipient the server registered for that key is removed, when it is in the list and not
+/// marked as another key's.
+async fn keys_remove(
+    api: &Api,
+    server: &str,
+    dir: Option<&Path>,
+    code: &str,
+) -> Result<ExitCode, OpError> {
+    let (w, _) = keys_dir(api, server, dir).await?;
+    let r = workdir::remove_school_key(&w.manifest().map_err(fail)?, code).map_err(fail)?;
+    let shown = workdir::shown_code(&r.key_id);
+    let listed: Vec<ListedRecipient> = get_list(api, "escrow-recipients").await?;
+    let local = workdir::recipients(&r.text).map_err(fail)?;
+    let mut text = r.text;
+    let mut removed = false;
+    for l in listed.iter().filter(|l| l.bound_key_id == r.key_id) {
+        let unmarked = local
+            .iter()
+            .any(|(rec, tag)| *rec == l.recipient && tag.is_none());
+        if unmarked {
+            text = workdir::remove_recipient(&text, &l.recipient).map_err(fail)?;
+            removed = true;
+        }
+    }
+    w.write_manifest(&text).map_err(fail)?;
+    print_removed(&w, &shown, &text, removed)?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `mastersos keys list`: the registered school keys, and whether the local directory has each.
+async fn keys_list(api: &Api, out: &Out, dir: Option<&Path>) -> Result<ExitCode, OpError> {
+    let local: Option<Vec<mastersos_bundle::TrustKey>> = match dir {
+        Some(d) => {
+            let w = Workdir::open(d).map_err(fail)?;
+            Some(workdir::trusted_keys(&w.manifest().map_err(fail)?).map_err(fail)?)
+        }
+        None => match Workdir::open(Path::new(".")) {
+            Ok(w) => workdir::trusted_keys(&w.manifest().map_err(fail)?).ok(),
+            Err(_) => None,
+        },
+    };
+    let text = api.send(Req::get(&["v1", "admin", "signing-keys"])).await?;
+    let in_folder = |public_key: &str| {
+        local
+            .as_ref()
+            .map(|l| l.iter().any(|k| k.public_key == public_key))
+    };
+    if out.json {
+        let mut v: Value = serde_json::from_str(&text).map_err(fail)?;
+        if let Value::Array(items) = &mut v {
+            for i in items {
+                let here = in_folder(i["public_key"].as_str().unwrap_or_default());
+                i["in_this_folder"] = json!(here);
+            }
+        }
+        println!("{v}");
+        return Ok(ExitCode::SUCCESS);
+    }
+    let keys: Vec<ListedKey> = serde_json::from_str(&text).map_err(|e| {
+        OpError::Failed(format!(
+            "the server's list of signing-keys cannot be read: {e}"
+        ))
+    })?;
+    let yes_no = |b: bool| if b { "yes" } else { "no" }.to_owned();
+    let rows = keys
+        .iter()
+        .map(|k| {
+            vec![
+                workdir::shown_code(&k.key_id),
+                k.label.chars().filter(|c| !c.is_control()).collect(),
+                k.created_at
+                    .as_deref()
+                    .map_or("-".into(), |t| t.chars().take(10).collect()),
+                yes_no(k.in_published_trust),
+                in_folder(&k.public_key).map_or("-".into(), yes_no),
+            ]
+        })
+        .collect();
+    println!(
+        "{}",
+        table(
+            &[
+                "KEY CODE",
+                "LABEL",
+                "REGISTERED",
+                "PUBLISHED",
+                "IN THIS FOLDER"
+            ],
+            rows
+        )
     );
     Ok(ExitCode::SUCCESS)
 }

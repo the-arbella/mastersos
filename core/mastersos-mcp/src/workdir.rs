@@ -20,7 +20,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use mastersos_bundle::{content_digest, secret_ref, Contents, Lint};
+use mastersos_bundle::{content_digest, secret_ref, Contents, Lint, TrustKey};
 use serde::{Deserialize, Serialize};
 
 const META: &str = "mastersos.toml";
@@ -417,6 +417,13 @@ impl Workdir {
         })
     }
 
+    /// Replace `manifest.toml` (never through a link).
+    pub fn write_manifest(&self, text: &str) -> Result<()> {
+        let path = self.root.join(MANIFEST);
+        refuse_link(&path)?;
+        fs::write(&path, text).with_context(|| format!("could not write {}", path.display()))
+    }
+
     /// Start a directory for a school that has nothing published: `manifest_text` (the
     /// [`template`]) is the only content and there is no base.
     pub fn init(root: &Path, meta: Meta, manifest_text: &str) -> Result<Workdir> {
@@ -751,6 +758,348 @@ fn changes<V: PartialEq>(
             _ => None,
         })
         .collect()
+}
+
+// —— Trusted keys and disk-unlocking recipients in manifest.toml ——
+//
+// `[[trust]]` and `[school].escrow_recipients` are written only from school key files IT holds
+// (`init --school-key`, `keys add`); the server is never the source of what goes in. Each
+// recipient carries a `# school key <code>` comment so that `keys remove` finds it offline.
+
+const RECIPIENT_TAG: &str = "# school key ";
+
+/// A key code as IT types it (`11d9-03eb`, `11D903EB`), in its printed form; `None` when it is
+/// not 8 hex digits.
+pub fn normalize_key_code(code: &str) -> Option<String> {
+    let hex: String = code
+        .trim()
+        .chars()
+        .filter(|c| *c != '-')
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    (hex.len() == 8 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| format!("{}-{}", &hex[..4], &hex[4..]))
+}
+
+/// The code IT sees for a trusted key: its key code, or its id when it has none (a Passkey).
+pub fn shown_code(key_id: &str) -> String {
+    mastersos_bundle::keyid::key_code(key_id).unwrap_or_else(|| key_id.to_owned())
+}
+
+fn parse_doc(text: &str) -> Result<toml_edit::DocumentMut> {
+    text.parse::<toml_edit::DocumentMut>()
+        .context("manifest.toml is not valid TOML; fix it first (`mastersos check`)")
+}
+
+/// The `[[trust]]` entries of a manifest (none when it has no `trust`).
+pub fn trusted_keys(manifest_text: &str) -> Result<Vec<TrustKey>> {
+    #[derive(Deserialize)]
+    struct Trust {
+        #[serde(default)]
+        trust: Vec<TrustKey>,
+    }
+    let t: Trust = toml::from_str(manifest_text).context(
+        "the trusted keys in manifest.toml cannot be read; fix them first (`mastersos check`)",
+    )?;
+    Ok(t.trust)
+}
+
+fn trust_table(k: &TrustKey) -> toml_edit::Table {
+    let mut t = toml_edit::Table::new();
+    t["id"] = toml_edit::value(k.id.as_str());
+    t["alg"] = toml_edit::value(k.alg.as_str());
+    t["public_key"] = toml_edit::value(k.public_key.as_str());
+    if let Some(rp) = &k.rp_id {
+        t["rp_id"] = toml_edit::value(rp.as_str());
+    }
+    t
+}
+
+fn table_str<'a>(t: &'a toml_edit::Table, key: &str) -> Option<&'a str> {
+    t.get(key).and_then(toml_edit::Item::as_str)
+}
+
+fn is_school_key(t: &toml_edit::Table) -> bool {
+    table_str(t, "alg") == Some(mastersos_bundle::KeyAlg::Ed25519.as_str())
+}
+
+/// `[[trust]]`, created empty when missing. A new list takes over the comment the document ends
+/// with (the template's explanation), so that the comment stays above it: returned as the prefix
+/// for its first table.
+fn trust_aot(
+    doc: &mut toml_edit::DocumentMut,
+) -> Result<(&mut toml_edit::ArrayOfTables, Option<String>)> {
+    let mut moved = None;
+    if !doc.contains_key("trust") {
+        let trailing = doc.trailing().as_str().unwrap_or("").to_owned();
+        if !trailing.trim().is_empty() {
+            let mut p = trailing;
+            if !p.starts_with('\n') {
+                p.insert(0, '\n');
+            }
+            if !p.ends_with('\n') {
+                p.push('\n');
+            }
+            moved = Some(p);
+            doc.set_trailing("");
+        }
+        doc.insert(
+            "trust",
+            toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new()),
+        );
+    }
+    match doc.get_mut("trust") {
+        Some(toml_edit::Item::ArrayOfTables(a)) => Ok((a, moved)),
+        _ => bail!("`trust` in manifest.toml is not a list of [[trust]] tables"),
+    }
+}
+
+/// `[school]`, created when missing.
+fn school_table(doc: &mut toml_edit::DocumentMut) -> Result<&mut toml_edit::Table> {
+    doc.entry("school")
+        .or_insert(toml_edit::table())
+        .as_table_mut()
+        .context("[school] in manifest.toml is not a table")
+}
+
+/// `[school].escrow_recipients`, created empty when missing.
+fn recipients_array(school: &mut toml_edit::Table) -> Result<&mut toml_edit::Array> {
+    school
+        .entry("escrow_recipients")
+        .or_insert(toml_edit::value(toml_edit::Array::new()))
+        .as_array_mut()
+        .context("[school].escrow_recipients in manifest.toml is not a list")
+}
+
+/// A recipient on its own line, below the comment naming its school key.
+fn tagged_recipient(recipient: &str, code: &str) -> toml_edit::Value {
+    let mut v = toml_edit::Value::from(recipient);
+    v.decor_mut()
+        .set_prefix(format!("\n    {RECIPIENT_TAG}{code}\n    "));
+    v.decor_mut().set_suffix("");
+    v
+}
+
+/// The key code a recipient's comment names.
+fn recipient_tag(v: &toml_edit::Value) -> Option<String> {
+    let prefix = v.decor().prefix()?.as_str()?;
+    prefix
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix(RECIPIENT_TAG))
+        .find_map(normalize_key_code)
+}
+
+fn finish_recipients(school: &mut toml_edit::Table) {
+    let empty = school
+        .get("escrow_recipients")
+        .and_then(toml_edit::Item::as_array)
+        .is_some_and(toml_edit::Array::is_empty);
+    if empty {
+        // An empty list is written by leaving the key out.
+        school.remove("escrow_recipients");
+    } else if let Some(a) = school
+        .get_mut("escrow_recipients")
+        .and_then(toml_edit::Item::as_array_mut)
+    {
+        // One recipient per line once any of them has its code above it.
+        if a.iter().any(|v| recipient_tag(v).is_some()) {
+            a.set_trailing_comma(true);
+            a.set_trailing("\n");
+        }
+    }
+}
+
+/// Replace `[[trust]]` and `[school].escrow_recipients` with these school keys (each with its
+/// disk-unlocking recipient); the rest of the text, comments included, stays as it is.
+pub fn set_trusted_keys(manifest_text: &str, keys: &[(TrustKey, String)]) -> Result<String> {
+    if keys.is_empty() {
+        bail!("at least one school key is needed");
+    }
+    let mut doc = parse_doc(manifest_text)?;
+    {
+        let (aot, moved) = trust_aot(&mut doc)?;
+        let (prefix, position) = match aot.get(0) {
+            Some(t) => (
+                t.decor()
+                    .prefix()
+                    .and_then(|p| p.as_str())
+                    .map(str::to_owned),
+                t.position(),
+            ),
+            None => (moved, None),
+        };
+        aot.clear();
+        for (i, (k, _)) in keys.iter().enumerate() {
+            let mut t = trust_table(k);
+            if i == 0 {
+                if let Some(p) = &prefix {
+                    t.decor_mut().set_prefix(p.as_str());
+                }
+                t.set_position(position);
+            }
+            aot.push(t);
+        }
+    }
+    let school = school_table(&mut doc)?;
+    school.remove("escrow_recipients");
+    let list = recipients_array(school)?;
+    for (k, r) in keys {
+        if !list.iter().any(|v| v.as_str() == Some(r.as_str())) {
+            list.push_formatted(tagged_recipient(r, &shown_code(&k.id)));
+        }
+    }
+    finish_recipients(school);
+    Ok(doc.to_string())
+}
+
+/// Add one school key and its recipient. Refused when both are there already; a missing
+/// recipient of a key that is there is added.
+pub fn add_trusted_key(manifest_text: &str, key: &TrustKey, recipient: &str) -> Result<String> {
+    let mut doc = parse_doc(manifest_text)?;
+    let code = shown_code(&key.id);
+    let trusted = {
+        let (aot, moved) = trust_aot(&mut doc)?;
+        let there = aot.iter().any(|t| {
+            table_str(t, "public_key") == Some(key.public_key.as_str())
+                || table_str(t, "id") == Some(key.id.as_str())
+        });
+        if !there {
+            let mut t = trust_table(key);
+            if let Some(p) = moved {
+                t.decor_mut().set_prefix(p);
+            }
+            aot.push(t);
+        }
+        there
+    };
+    let school = school_table(&mut doc)?;
+    let list = recipients_array(school)?;
+    let listed = list.iter().any(|v| v.as_str() == Some(recipient));
+    if trusted && listed {
+        bail!("This school key ({code}) is already in this folder's trusted keys");
+    }
+    if !listed {
+        list.push_formatted(tagged_recipient(recipient, &code));
+    }
+    finish_recipients(school);
+    Ok(doc.to_string())
+}
+
+/// What [`remove_school_key`] did.
+pub struct Removed {
+    pub text: String,
+    /// The removed `[[trust]]` entry's id.
+    pub key_id: String,
+    /// Whether a recipient commented with the key's code was removed too.
+    pub recipient_removed: bool,
+}
+
+/// Remove the school key with this key code (with or without its dash) and the recipient whose
+/// comment names that code. Refused when no school key would be left.
+pub fn remove_school_key(manifest_text: &str, code: &str) -> Result<Removed> {
+    let Some(want) = normalize_key_code(code) else {
+        bail!("{code:?} is not a key code (8 letters and digits, like 11d9-03eb)");
+    };
+    let mut doc = parse_doc(manifest_text)?;
+    let key_id = {
+        let aot = match doc.get_mut("trust") {
+            Some(toml_edit::Item::ArrayOfTables(a)) => a,
+            _ => bail!("No school key with code {want} in manifest.toml"),
+        };
+        let hits: Vec<usize> = aot
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| {
+                is_school_key(t)
+                    && table_str(t, "id").and_then(mastersos_bundle::keyid::key_code)
+                        == Some(want.clone())
+            })
+            .map(|(i, _)| i)
+            .collect();
+        match hits.len() {
+            0 => bail!("No school key with code {want} in manifest.toml"),
+            1 => {}
+            _ => bail!("More than one school key has code {want}; edit manifest.toml by hand"),
+        }
+        if aot.iter().filter(|t| is_school_key(t)).count() == 1 {
+            bail!("cannot remove the last school key: computers would accept no new settings. Add another one first (`mastersos keys add <FILE>`)");
+        }
+        let i = hits[0];
+        let first_prefix = (i == 0)
+            .then(|| {
+                aot.get(0)
+                    .and_then(|t| t.decor().prefix())
+                    .and_then(|p| p.as_str())
+                    .map(str::to_owned)
+            })
+            .flatten();
+        let removed = aot.remove(i);
+        if let (Some(p), Some(t)) = (first_prefix, aot.get_mut(0)) {
+            t.decor_mut().set_prefix(p);
+        }
+        table_str(&removed, "id").unwrap_or_default().to_owned()
+    };
+    let mut recipient_removed = false;
+    if let Some(school) = doc
+        .get_mut("school")
+        .and_then(toml_edit::Item::as_table_mut)
+    {
+        if let Some(list) = school
+            .get_mut("escrow_recipients")
+            .and_then(toml_edit::Item::as_array_mut)
+        {
+            let before = list.len();
+            list.retain(|v| recipient_tag(v).as_deref() != Some(want.as_str()));
+            recipient_removed = list.len() != before;
+            if recipient_removed {
+                finish_recipients(school);
+            }
+        }
+    }
+    Ok(Removed {
+        text: doc.to_string(),
+        key_id,
+        recipient_removed,
+    })
+}
+
+/// [`remove_school_key`], the text only.
+pub fn remove_trusted_key(manifest_text: &str, code: &str) -> Result<String> {
+    Ok(remove_school_key(manifest_text, code)?.text)
+}
+
+/// The recipients in `[school].escrow_recipients`, each with the key code its comment names.
+pub fn recipients(manifest_text: &str) -> Result<Vec<(String, Option<String>)>> {
+    let doc = parse_doc(manifest_text)?;
+    let list = doc
+        .get("school")
+        .and_then(|s| s.get("escrow_recipients"))
+        .and_then(toml_edit::Item::as_array);
+    Ok(list
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| Some((v.as_str()?.to_owned(), recipient_tag(v))))
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+/// Remove one recipient from `[school].escrow_recipients`.
+pub fn remove_recipient(manifest_text: &str, recipient: &str) -> Result<String> {
+    let mut doc = parse_doc(manifest_text)?;
+    if let Some(school) = doc
+        .get_mut("school")
+        .and_then(toml_edit::Item::as_table_mut)
+    {
+        if let Some(list) = school
+            .get_mut("escrow_recipients")
+            .and_then(toml_edit::Item::as_array_mut)
+        {
+            list.retain(|v| v.as_str() != Some(recipient));
+            finish_recipients(school);
+        }
+    }
+    Ok(doc.to_string())
 }
 
 #[cfg(test)]
@@ -1270,6 +1619,119 @@ mod tests {
         assert!(d.contains("file files/a.txt: changed"), "{d}");
         assert!(d.contains("file files/b.txt: added"), "{d}");
         assert!(d.contains("+# note"), "{d}");
+    }
+
+    fn school_key(n: u8) -> (TrustKey, String) {
+        let k = mastersos_bundle::kit::Kit::from_master(&[n; 32]);
+        (k.trust_key(), k.escrow_recipient())
+    }
+
+    fn code_of(n: u8) -> String {
+        shown_code(&school_key(n).0.id)
+    }
+
+    /// The trusted keys and recipients (the manifest is not stamped yet, so not a `Manifest`).
+    fn parsed(text: &str) -> (Vec<TrustKey>, Vec<String>) {
+        let v: toml::Table = text.parse().unwrap();
+        let recipients = v["school"]
+            .get("escrow_recipients")
+            .and_then(|r| r.as_array())
+            .map(|a| a.iter().map(|r| r.as_str().unwrap().to_owned()).collect())
+            .unwrap_or_default();
+        (trusted_keys(text).unwrap(), recipients)
+    }
+
+    #[test]
+    fn set_trusted_keys_fills_the_template() {
+        let (a, b) = (school_key(1), school_key(2));
+        let t = template("11111111-1111-1111-1111-111111111111").unwrap();
+        let text = set_trusted_keys(&t, &[a.clone(), b.clone()]).unwrap();
+        assert_eq!(parsed(&text), (vec![a.0, b.0], vec![a.1, b.1]));
+        // The template's explanation stays right above the first [[trust]].
+        let note = text.find("# Trusted keys:").unwrap();
+        let first = text.find("[[trust]]").unwrap();
+        assert!(note < first, "{text}");
+        assert!(
+            text[note..first]
+                .lines()
+                .all(|l| l.is_empty() || l.starts_with('#')),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("# school key {}", code_of(1))),
+            "{text}"
+        );
+        // Replacing keeps everything else.
+        let again = set_trusted_keys(&text, &[school_key(3)]).unwrap();
+        assert_eq!(parsed(&again).0, [school_key(3).0]);
+        assert!(
+            again.contains("# Trusted keys:") && again.contains("# Add \"sso\""),
+            "{again}"
+        );
+        assert!(set_trusted_keys(&t, &[]).is_err());
+    }
+
+    #[test]
+    fn add_and_remove_keep_comments() {
+        let (a, b) = (school_key(1), school_key(2));
+        let t = template("11111111-1111-1111-1111-111111111111").unwrap();
+        let text = set_trusted_keys(&t, std::slice::from_ref(&a)).unwrap();
+        let text = text.replace("[[group]]", "# mine\n[[group]]");
+        let added = add_trusted_key(&text, &b.0, &b.1).unwrap();
+        assert_eq!(
+            parsed(&added),
+            (
+                vec![a.0.clone(), b.0.clone()],
+                vec![a.1.clone(), b.1.clone()]
+            )
+        );
+        assert!(add_trusted_key(&added, &b.0, &b.1).is_err());
+        let removed =
+            remove_trusted_key(&added, &code_of(2).to_uppercase().replace('-', "")).unwrap();
+        assert_eq!(parsed(&removed), (vec![a.0.clone()], vec![a.1.clone()]));
+        assert!(removed.contains("# mine\n[[group]]"), "{removed}");
+        assert!(removed.contains("# Trusted keys:"), "{removed}");
+        // Removing the first key moves the explanation to the next one.
+        let first_gone = remove_trusted_key(&added, &code_of(1)).unwrap();
+        assert_eq!(parsed(&first_gone).0, std::slice::from_ref(&b.0));
+        assert!(first_gone.find("# Trusted keys:") < first_gone.find("[[trust]]"));
+        let err = remove_trusted_key(&removed, &code_of(1)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("cannot remove the last school key"),
+            "{err}"
+        );
+        assert!(remove_trusted_key(&added, "0000-0000").is_err());
+        assert!(remove_trusted_key(&added, "not-a-code").is_err());
+    }
+
+    #[test]
+    fn hand_written_trust_and_recipients() {
+        let (a, b) = (school_key(1), school_key(2));
+        // Written by hand: inline list, no codes beside the recipients.
+        let text = format!(
+            "[school]\nid = \"11111111-1111-1111-1111-111111111111\"\nescrow_recipients = [\"{}\", \"{}\"] # keep\n\n[[trust]]\nid = \"{}\"\nalg = \"ed25519\"\npublic_key = \"{}\"\n\n[[trust]]\nid = \"{}\"\nalg = \"ed25519\"\npublic_key = \"{}\"\n",
+            a.1, b.1, a.0.id, a.0.public_key, b.0.id, b.0.public_key
+        );
+        let r = remove_school_key(&text, &code_of(2)).unwrap();
+        assert!(!r.recipient_removed);
+        assert_eq!(r.key_id, b.0.id);
+        assert_eq!(
+            recipients(&r.text).unwrap(),
+            [(a.1.clone(), None), (b.1.clone(), None)]
+        );
+        let done = remove_recipient(&r.text, &b.1).unwrap();
+        assert_eq!(parsed(&done), (vec![a.0.clone()], vec![a.1.clone()]));
+        assert!(done.contains("# keep"), "{done}");
+        // Adding to the inline list marks the new recipient with its code.
+        let c = school_key(3);
+        let added = add_trusted_key(&done, &c.0, &c.1).unwrap();
+        assert_eq!(
+            recipients(&added).unwrap()[1],
+            (c.1.clone(), Some(code_of(3)))
+        );
+        assert_eq!(normalize_key_code(" 11D9-03eb "), Some("11d9-03eb".into()));
+        assert_eq!(normalize_key_code("11d903e"), None);
     }
 
     #[test]
