@@ -1,7 +1,10 @@
 #!/bin/bash
-# ExecStart of mastersos-diag-setup.service: the developer diagnostics switch (docs/specs/2026-11-03-diagnostics-design.md).
-# The switch is the regular file /var/lib/mastersos-seed/debug.conf (the installer creates it when the install stick has a
-# debug.conf next to the seeds; its content is never read). Without it nothing is written. With it, before the services start:
+# ExecStart of mastersos-diag-setup.service (no argument) and mastersos-diag-adopt.service ("adopt"): the developer
+# diagnostics switch (docs/specs/2026-11-03-diagnostics-design.md).
+# The switch is the regular file /var/lib/mastersos-diag/enabled on the encrypted root. Only the first boot creates it, from the
+# marker /var/lib/mastersos-seed/debug-install the installer wrote when d was held at its start ("adopt"). The seed partition is
+# not encrypted: a marker found there on any other boot was put there afterwards; it is deleted and never trusted. A factory
+# reset empties the root and so turns the switch off. Without the switch nothing is written. With it, before the services start:
 #   /run/mastersos/diag.env                          read by the 90-mastersos-diag.conf drop-ins (EnvironmentFile=-):
 #       MASTERSOS_LOG_LEVEL=debug                    mastersos-agent
 #       MASTERSOS_DIAG_AUTHD_ARGS=-vv                authd and authd-oidc (cobra -v count: -vv is DEBUG, -vvv only adds the caller)
@@ -12,7 +15,8 @@
 # MASTERSOS_DIAG_ROOT prefixes every path (tests/diag-setup-test.sh only).
 set -euo pipefail
 R=${MASTERSOS_DIAG_ROOT:-}
-switch=$R/var/lib/mastersos-seed/debug.conf
+switch=$R/var/lib/mastersos-diag/enabled
+marker=$R/var/lib/mastersos-seed/debug-install
 
 # write $2 to $1 through a temporary file in the same folder
 put() {
@@ -36,6 +40,20 @@ gdm_debug() {
 	mv -f "$f.tmp" "$f"
 }
 
+if [ "${1:-}" = adopt ]; then
+	if [ -f "$marker" ] && [ ! -L "$marker" ]; then
+		mkdir -p "$(dirname "$switch")"
+		chmod 0700 "$(dirname "$switch")"
+		: >"$switch"
+		echo "mastersos-diag-setup: first boot: the installer turned developer diagnostics on; switch $switch"
+	fi
+	rm -f -- "$marker"
+	exit 0
+fi
+if [ -e "$marker" ] || [ -L "$marker" ]; then
+	rm -f -- "$marker"
+	echo "mastersos-diag-setup: warning: removed $marker; only the first boot after an install can turn diagnostics on" >&2
+fi
 if [ ! -f "$switch" ] || [ -L "$switch" ]; then
 	exit 0
 fi
