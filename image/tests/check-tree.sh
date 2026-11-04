@@ -2329,6 +2329,35 @@ over = f"{ex}/usr/share/glib-2.0/schemas/90_mastersos.gschema.override"
 for u in re.findall(r"file://(/[^'\"]+)", open(over).read()):
     if not os.path.isfile(ex + u):
         errs.append(f"{over} refers to {u}, not in the tree")
+text = open(over).read()
+for want in ("[org.gnome.desktop.background]",
+             "picture-uri='file:///usr/share/backgrounds/mastersos/mastersos-day.jpg'",
+             "picture-uri-dark='file:///usr/share/backgrounds/mastersos/mastersos-night.jpg'",
+             "picture-options='zoom'", "[org.gnome.desktop.interface]", "color-scheme='default'", "accent-color=",
+             "transparency-mode='FIXED'", "background-opacity=", "custom-background-color=true", "background-color="):
+    if want not in text:
+        errs.append(f"{over} lacks {want}")
+# Ubuntu's own defaults are desktop-specific ([schema:ubuntu], 10_ubuntu-dock and 10_ubuntu-settings), and those beat every
+# plain [schema] override whatever the file order: each section here must have a :ubuntu twin with the same keys.
+sections, cur = {}, None
+for line in text.splitlines():
+    m = re.match(r"^\[([^\]]+)\]$", line.strip())
+    if m:
+        cur = m.group(1)
+        sections.setdefault(cur, [])
+    elif cur and "=" in line and not line.lstrip().startswith("#"):
+        sections[cur].append(line.strip())
+for name, keys in sections.items():
+    if name.endswith(":ubuntu") or name == "org.gnome.login-screen":
+        continue
+    twin = sections.get(name + ":ubuntu")
+    if twin != keys:
+        errs.append(f"{over}: [{name}] has no identical [{name}:ubuntu] (the Ubuntu session would use Ubuntu's values)")
+post = open(os.path.join(os.path.dirname(ex), "mkosi.postinst.chroot")).read()
+if 'XDG_CURRENT_DESKTOP=ubuntu:GNOME' not in post:
+    errs.append("mkosi.postinst.chroot: the defaults are not read back as the Ubuntu session sees them (XDG_CURRENT_DESKTOP=ubuntu:GNOME)")
+if "LOGO=mastersos-logo" not in post:
+    errs.append("mkosi.postinst.chroot: os-release has no LOGO=mastersos-logo")
 if total > 15 * 1024 * 1024:
     errs.append(f"brand assets are {total} bytes, over 15 MiB")
 if errs:
@@ -2338,6 +2367,6 @@ BRAND
 	bad 51 "brand: $why"
 	r=1
 fi
-[ "$r" = 0 ] && ok 51 "brand: wallpapers 3840x2400, logo at every size, background properties, total under 15 MiB"
+[ "$r" = 0 ] && ok 51 "brand: wallpapers 3840x2400, logo at every size, background properties, GNOME defaults (light, wallpapers, translucent Dock), about logo, total under 15 MiB"
 
 exit $fail

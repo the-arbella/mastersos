@@ -14,6 +14,51 @@ always-center-icons=true
 dock-fixed=true
 dash-max-icon-size=44
 show-mounts=false
+# Translucent shelf over the wallpaper (design 2026-11-04 visual identity §5.3); mastersos-agent writes none of these keys.
+transparency-mode='FIXED'
+background-opacity=0.45
+custom-background-color=true
+background-color='#14122a'
+
+# The MastersOS look (design 2026-11-04 visual identity §5.3). Light style by default, for classrooms and projectors (the users
+# are students); the dark style switches to the night picture. The login screen uses the night picture on its own.
+[org.gnome.desktop.background]
+picture-uri='file:///usr/share/backgrounds/mastersos/mastersos-day.jpg'
+picture-uri-dark='file:///usr/share/backgrounds/mastersos/mastersos-night.jpg'
+picture-options='zoom'
+primary-color='#13113a'
+
+[org.gnome.desktop.interface]
+color-scheme='default'
+accent-color='orange'
+
+# The same values for the Ubuntu session. Ubuntu sets its defaults per desktop ([schema:ubuntu] in 10_ubuntu-dock and
+# 10_ubuntu-settings: a left Dock, its own wallpaper and Dock apps), and a desktop-specific override beats every plain one
+# whatever the file order, so without these twins the Ubuntu session keeps Ubuntu's values. check-tree item 51 keeps them equal.
+[org.gnome.shell:ubuntu]
+favorite-apps=['google-chrome.desktop', 'org.gnome.Nautilus.desktop']
+
+[org.gnome.shell.extensions.dash-to-dock:ubuntu]
+dock-position='BOTTOM'
+extend-height=true
+always-center-icons=true
+dock-fixed=true
+dash-max-icon-size=44
+show-mounts=false
+transparency-mode='FIXED'
+background-opacity=0.45
+custom-background-color=true
+background-color='#14122a'
+
+[org.gnome.desktop.background:ubuntu]
+picture-uri='file:///usr/share/backgrounds/mastersos/mastersos-day.jpg'
+picture-uri-dark='file:///usr/share/backgrounds/mastersos/mastersos-night.jpg'
+picture-options='zoom'
+primary-color='#13113a'
+
+[org.gnome.desktop.interface:ubuntu]
+color-scheme='default'
+accent-color='orange'
 
 # The login screen has one entry and no user list (design 2026-11-03, login single field): people are found by typing.
 [org.gnome.login-screen]
