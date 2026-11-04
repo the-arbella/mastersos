@@ -101,7 +101,7 @@ GNOME 的默认值全部走 `90_mastersos.gschema.override` 并在 postinst 读�
 - [ ] **Step 2: 确认 bad。**
 - [ ] **Step 3: login 样式表**：背景图 + 上下渐暗遮罩（遮罩用 GNOME 登录框外层的半透明渐变实现）；用户名一步的提示区做毛玻璃卡片（半透明 `rgba(20,18,40,0.42)`、1px `rgba(255,255,255,0.12)` 描边、圆角 24、阴影）；输入框聚焦描边 `rgba(255,190,130,0.75)`；所有 `#8ab4f8` 焦点改成 `#ffb35c`；学校卡片保持白底，圆角改 20。具体选择器以 GNOME 50 的 `loginDialog.js` 为准，在 Task 5 的截图里核。
 - [ ] **Step 4: 左下角标志**：`mastersos-login` 在登录页加一个 `St.BoxLayout`（类名 `mastersos-brand-corner`，`mastersos-logo` 图标 24 px + `wordmark-light.svg` 高 18 px，不透明度 85%），放在 `Main.layoutManager` 的登录层，贴底 36 px；RTL（`Clutter.get_default_text_direction() === Clutter.TextDirection.RTL`）时贴右；`disable()` 里销毁。`mastersos-managed` 在 unlock-dialog 模式下加同样的东西（只在锁屏模式显示，回到 user 模式隐藏）。
-- [ ] **Step 5: 顶栏与快捷设置**：`mastersos-managed` 样式表在 user 模式给 `#panel` 半透明深色（`rgba(8,8,20,0.35)`；概览与锁屏按 GNOME 原样，用 `Main.sessionMode.currentMode === 'user'` 时才加类）；快捷设置那一行没有学校 icon 时用 `mastersos-logo-symbolic`。
+- [ ] **Step 5: 顶栏与快捷设置**：`mastersos-managed` 样式表在 user 模式给 `#panel` 半透明深色（`rgba(8,8,20,0.55)`，见设计 §5.5；概览与锁屏按 GNOME 原样，`currentMode === 'user'` 或 `parentMode === 'user'` 时才加类：桌面的模式是 ubuntu）；快捷设置那一行没有学校 icon 时用 `mastersos-logo-symbolic`。
 - [ ] **Step 6: `kiosk-error.html` 底色 `#090a16`、强调色 `#ffb35c`（文字不改）。**
 - [ ] **Step 7: check-tree ok；`gjs` 语法检查两个 `extension.js`（`gjs -m` 不可用时 `node --check` 退而求其次）；提交** `feat(image): 登录页与锁屏用夜间壁纸和毛玻璃卡片，角落加 MastersOS 标志`
 

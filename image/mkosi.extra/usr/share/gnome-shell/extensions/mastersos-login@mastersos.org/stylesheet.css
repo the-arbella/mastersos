@@ -49,11 +49,12 @@
     background-color: #070818;
     background-image: url("file:///usr/share/backgrounds/mastersos/mastersos-night.jpg");
     background-size: cover;
-    background-position: center;
 }
 
-/* A soft darkening over the picture keeps white text readable at the top and around the shelf. */
-.login-dialog {
+/* A soft darkening over the picture keeps white text readable at the top and around the shelf. The school card hides the
+   login dialog with the rest of the screen shield, so its background carries the same darkening as a layer of its own. */
+.login-dialog,
+.mastersos-card-scrim-shade {
     background-gradient-direction: vertical;
     background-gradient-start: rgba(7, 8, 26, 0.40);
     background-gradient-end: rgba(7, 8, 26, 0.55);
@@ -83,7 +84,6 @@
     background-image: url("file:///usr/share/mastersos/brand/wordmark-light.svg");
     background-size: contain;
     background-repeat: no-repeat;
-    background-position: center;
     width: 82px;
     height: 20px;
 }
@@ -150,7 +150,8 @@
 
 .mastersos-notice-retry,
 .mastersos-setup-continue {
-    background-color: #d9653b;
+    /* #b8512e: white text at 4.9:1 (WCAG AA); the lighter brand orange #d9653b is only 3.6:1 */
+    background-color: #b8512e;
     color: #ffffff;
     border-radius: 18px;
     padding: 8px 24px;
@@ -159,7 +160,7 @@
 
 .mastersos-notice-retry:hover,
 .mastersos-setup-continue:hover {
-    background-color: #b8512e;
+    background-color: #9c4426;
 }
 
 .mastersos-notice-retry:focus,
@@ -209,7 +210,7 @@
 }
 
 .mastersos-setup-item:checked {
-    background-color: #d9653b;
+    background-color: #b8512e;
     color: #ffffff;
 }
 

@@ -2512,4 +2512,66 @@ grep -qF 'background: #090a16' "$ex/usr/share/mastersos/kiosk-error.html" || {
 }
 [ "$r" = 0 ] && ok 53 "login and lock: night wallpaper background, MastersOS mark in the top bar of both, no old blue left, kiosk error page uses brand colours"
 
+# 54. Look details (final review minors, design 2026-11-04 visual identity): white text on every solid button background in the
+#     login styles reads at 4.5:1 or more (WCAG AA); no background-position keyword St does not know; the school card's
+#     background is darkened like the username step; the icon cache rebuild cannot be skipped; the splash's English-only titles
+#     are marked as such; the MastersOS mark (code and styles) is the same in both extensions; build.sh checks that the initrd
+#     really starts Plymouth (its wants links).
+r=0
+if ! why=$(python3 -I - "$gse" "$rel" 2>&1 <<'LOOK'
+import re, sys
+gse, rel = sys.argv[1], sys.argv[2]
+errs = []
+def lum(h):
+    c = [int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+    c = [x / 12.92 if x <= 0.03928 else ((x + 0.055) / 1.055) ** 2.4 for x in c]
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+css = {e: open(f"{gse}/{e}/stylesheet.css").read() for e in ("mastersos-login@mastersos.org", "mastersos-managed@mastersos.org")}
+for sel, body in re.findall(r"([^{}]+)\{([^}]*)\}", css["mastersos-login@mastersos.org"]):
+    fg = re.search(r"(?<![-\w])color:\s*#([0-9a-fA-F]{6})", body)
+    bg = re.search(r"background-color:\s*#([0-9a-fA-F]{6})", body)
+    if fg and bg and fg.group(1).lower() == "ffffff":
+        ratio = (1.05) / (lum(bg.group(1)) + 0.05)
+        if ratio < 4.5:
+            errs.append(f"{sel.strip()}: white on #{bg.group(1)} is {ratio:.2f}:1, under 4.5:1")
+for e, text in css.items():
+    if re.search(r"background-position:\s*(center|top|bottom|left|right)", text):
+        errs.append(f"{e}/stylesheet.css: St's background-position takes lengths only")
+login = css["mastersos-login@mastersos.org"]
+if ".mastersos-card-scrim-shade" not in login or "mastersos-card-scrim-shade" not in open(f"{gse}/mastersos-login@mastersos.org/card.js").read():
+    errs.append("the school card's background has no darkening layer (mastersos-card-scrim-shade)")
+def rule(text, name):
+    m = re.search(r"(^|\n)" + re.escape(name) + r"\s*\{[^}]*\}", text)
+    return m.group(0).strip() if m else None
+for name in (".mastersos-brand-corner", ".mastersos-brand-wordmark"):
+    a, b = rule(login, name), rule(css["mastersos-managed@mastersos.org"], name)
+    if not a or a != b:
+        errs.append(f"{name} differs between the two extensions' styles")
+def brand(text):
+    m = re.search(r"function brandMark\(\) \{.*?\n\}", text, re.S)
+    return m.group(0) if m else None
+a = brand(open(f"{gse}/mastersos-login@mastersos.org/brand.js").read())
+b = brand(open(f"{gse}/mastersos-managed@mastersos.org/extension.js").read())
+if not a or a.replace("export ", "") != b:
+    errs.append("brandMark() differs between mastersos-login/brand.js and mastersos-managed/extension.js")
+post = open(f"{rel}/mkosi.postinst.chroot").read()
+if "command -v gtk-update-icon-cache" in post or not re.search(r"^gtk-update-icon-cache -f -q /usr/share/icons/hicolor$", post, re.M):
+    errs.append("mkosi.postinst.chroot: gtk-update-icon-cache must always run (a stale cache hides mastersos-logo)")
+ply = open(f"{rel}/brand/mastersos.plymouth").read()
+if "English only" not in ply:
+    errs.append("brand/mastersos.plymouth: the fixed titles are not marked English only")
+build = open(f"{rel}/build.sh").read()
+for f in ("usr/lib/systemd/system/sysinit.target.wants/plymouth-start.service",
+          "usr/lib/systemd/system/initrd-switch-root.target.wants/plymouth-start.service"):
+    if f not in build:
+        errs.append(f"build.sh does not check the initrd for {f}")
+if errs:
+    sys.exit("; ".join(errs))
+LOOK
+); then
+	bad 54 "look: $why"
+	r=1
+fi
+[ "$r" = 0 ] && ok 54 "look details: white button text at 4.5:1, St-valid background-position, darkened card background, icon cache always rebuilt, English-only splash titles marked, one MastersOS mark in both extensions, initrd starts Plymouth"
+
 exit $fail

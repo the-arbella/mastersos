@@ -319,7 +319,9 @@ done
 # systemd's password prompts to Plymouth
 for f in usr/sbin/plymouthd usr/bin/plymouth usr/share/plymouth/plymouthd.defaults \
 	usr/share/plymouth/themes/mastersos/mastersos.plymouth usr/share/plymouth/themes/mastersos/throbber-0001.png \
-	usr/lib/systemd/system/systemd-ask-password-plymouth.path; do
+	usr/lib/systemd/system/systemd-ask-password-plymouth.path \
+	usr/lib/systemd/system/sysinit.target.wants/plymouth-start.service \
+	usr/lib/systemd/system/initrd-switch-root.target.wants/plymouth-start.service; do
 	grep -qx -- "$f" <<<"$initrd_list" || missing+=("$f (boot splash)")
 done
 for l in two-step.so label-pango.so; do

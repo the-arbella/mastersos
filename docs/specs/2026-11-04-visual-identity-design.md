@@ -133,7 +133,8 @@ logo 与开机画面简单、温暖、不说教，不改。
 
 ### 5.5 桌面
 
-- 顶栏：`mastersos-managed` 的样式表把 `#panel` 背景改成半透明深色（只在 `user` 模式；锁屏和概览按 GNOME 原样）。
+- 顶栏：`mastersos-managed` 的样式表把 `#panel` 背景改成半透明深色 `rgba(8,8,20,0.55)`（桌面的会话模式是 `ubuntu`，
+  父模式 `user`；锁屏和概览按 GNOME 原样）。0.55 而不是计划里的 0.35：默认是浅色的白天壁纸，0.35 时顶栏白字对比不够（终审）。
 - 快捷设置里“This device is managed by …”那一行：没有学校 logo 时用 `mastersos-logo-symbolic`。顶栏不加 MastersOS 标志（见第 3 节）。
 - 关于页：`os-release` 加 `LOGO=mastersos-logo`。
 - 锁定应用的出错页 `kiosk-error.html`：底色与强调色对齐品牌（不改文字）。

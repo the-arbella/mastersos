@@ -38,6 +38,8 @@ UseFirmwareBackground=false
 UseEndAnimation=false
 UseFirmwareBackground=false
 
+# The titles below are fixed English, never translated: screens before the session are English only (the console and the
+# initrd have no CJK font). Plymouth shows them only in the update, upgrade and reset modes.
 [updates]
 SuppressMessages=true
 ProgressBarShowPercentComplete=true
