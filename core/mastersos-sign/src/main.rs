@@ -101,7 +101,7 @@ fn load_key_arg(k: KeyArg, stdin: &std::io::Stdin) -> Result<Loaded> {
         (Some(p), None) => Ok(Loaded::File(p)),
         (None, Some(p)) => Ok(Loaded::Kit(kit_arg(&p, stdin)?)),
         (None, None) => anyhow::bail!("--school-key <FILE> is required"),
-        _ => anyhow::bail!("give only one of --school-key and --key"),
+        _ => anyhow::bail!("Give --school-key once."),
     }
 }
 

@@ -1169,11 +1169,7 @@ pub async fn sign_heartbeat_at(
         "Version:     {} (the latest verified here)",
         statement.version
     )?;
-    writeln!(
-        out,
-        "Content fingerprint (first 16 digits): {}",
-        &statement.digest_hex[..16]
-    )?;
+    writeln!(out, "Content fingerprint: {}", statement.digest_hex)?;
     writeln!(out, "Check code: {}", &statement.digest_hex[..8])?;
     writeln!(out, "issued_at:   {}", both_zones(statement.issued_at))?;
     writeln!(
