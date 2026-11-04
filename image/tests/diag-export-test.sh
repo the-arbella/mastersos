@@ -38,6 +38,7 @@ mkfake bootctl 'case "$*" in *--print-esp-path*) echo "$MASTERSOS_DIAG_ROOT/efi"
 mkfake coredumpctl 'echo "No coredumps found."; exit 1'
 mkfake logger ':'
 mkfake sync ':'
+mkfake blkid 'echo "${DIAG_TEST_FSTYPE:-vfat}"'
 
 new_root() {
 	rm -rf "$tmp/r"
@@ -49,13 +50,23 @@ new_root() {
 	echo 0123456789abcdef0123456789abcdef >"$R/etc/machine-id"
 	: >"$tmp/calls"
 }
-switch_on() { : >"$R/var/lib/mastersos-seed/debug.conf"; }
+switch_on() {
+	mkdir -p "$R/var/lib/mastersos-diag"
+	: >"$R/var/lib/mastersos-diag/enabled"
+}
 # runs the script's main with the fake PATH
 run_main() {
 	PATH=$fake:$PATH MASTERSOS_DIAG_ROOT=$R DIAG_TEST_CALLS=$tmp/calls DIAG_CMD_TIMEOUT=${DIAG_CMD_TIMEOUT:-5} \
 		bash "$script" "$@"
 }
 stick() { echo "$R/run/mastersos-diag/sdb1"; }
+# the stick's content: a seed file at <path> under the mount point (the fake mount leaves that folder as it is)
+seed_on_stick() {
+	mkdir -p "$(dirname "$(stick)/$1")"
+	echo 'server_url = "x"' >"$(stick)/$1"
+}
+# the packages on the stick, relative paths, sorted
+packages() { (cd "$(stick)" 2>/dev/null && find . -name 'mastersos-diag-*' | sort); }
 
 t=switch_off_no_mount
 new_root
@@ -67,8 +78,9 @@ else ok $t; fi
 t=full_export
 new_root
 switch_on
+seed_on_stick seed.toml
 run_main sdb1
-files=$(cd "$(stick)" 2>/dev/null && ls)
+files=$(packages | sed 's|^\./||')
 if [ "$(echo "$files" | grep -c '^mastersos-diag-01234567-[0-9]\{8\}T[0-9]\{6\}Z\.tar\.zst$')" != 1 ] || [ "$(echo "$files" | wc -l)" != 1 ]; then
 	fail $t "want one package on the stick, got: $files"
 else
@@ -78,10 +90,48 @@ else
 		echo "$list" | grep -qxF "$want" || missing="$missing $want"
 	done
 	if [ -n "$missing" ]; then fail $t "missing in package:$missing"
-	elif ! grep -q "^mount .*nosuid,nodev,noexec" "$tmp/calls" || ! grep -q '^umount' "$tmp/calls"; then fail $t "mount options or umount: $(cat "$tmp/calls")"
+	elif ! grep -q "^mount -t vfat -o nosuid,nodev,noexec,nosymfollow " "$tmp/calls" || ! grep -q '^umount' "$tmp/calls"; then fail $t "mount options or umount: $(cat "$tmp/calls")"
 	elif [ -n "$(ls -A "$R/var/tmp")" ]; then fail $t "staging left behind"
 	else ok $t; fi
 fi
+
+# where_case <name> <want: package folder relative to the stick, or "none"> <seed paths...>
+where_case() {
+	local t=$1 want=$2 got
+	shift 2
+	new_root
+	switch_on
+	local f
+	for f in "$@"; do seed_on_stick "$f"; done
+	run_main sdb1 >/dev/null
+	got=$(packages | sed -E 's|/[^/]+$||; s|^\.$|.|')
+	[ -n "$got" ] || got=none
+	if [ "$got" != "$want" ]; then fail "$t" "want $want, got $got"
+	elif ! grep -q '^umount' "$tmp/calls"; then fail "$t" "not unmounted"
+	else ok "$t"; fi
+}
+where_case seed_at_root . seed.toml
+where_case seed_one_level ./MastersOS MastersOS/seed-eis-a.toml
+where_case seed_two_levels ./x/install x/install/SEED.TOML
+where_case seed_too_deep none a/b/c/seed.toml
+where_case seed_shallowest_wins ./b a/c/seed.toml b/seed.toml
+where_case no_seed_no_write none notes.toml readme.txt
+
+t=seed_behind_symlink
+new_root
+switch_on
+mkdir -p "$tmp/elsewhere" "$(stick)"
+echo 'x' >"$tmp/elsewhere/seed.toml"
+ln -s "$tmp/elsewhere" "$(stick)/link"
+run_main sdb1 >/dev/null
+if [ -n "$(packages)" ] || [ -n "$(find "$tmp/elsewhere" -name 'mastersos-diag-*')" ]; then fail $t "wrote through a symlinked folder"; else ok $t; fi
+
+t=other_fs_not_mounted
+new_root
+switch_on
+seed_on_stick seed.toml
+DIAG_TEST_FSTYPE=ext4 run_main sdb1 >/dev/null
+if grep -q '^mount' "$tmp/calls" || [ -n "$(packages)" ]; then fail $t "mounted an ext4 stick"; else ok $t; fi
 
 # the functions, sourced
 # shellcheck disable=SC1090
@@ -149,6 +199,7 @@ t=staging_cleanup
 mkfake journalctl 'case "$*" in *--list-boots*) printf "IDX BOOT ID FIRST LAST\n  0 bbb x y\n";; *) echo "journal $*";; esac'
 new_root
 switch_on
+seed_on_stick seed.toml
 mkfake nmcli 'sleep 30'
 (PATH=$fake:$PATH MASTERSOS_DIAG_ROOT=$R DIAG_TEST_CALLS=$tmp/calls DIAG_CMD_TIMEOUT=60 bash "$script" sdb1) &
 pid=$!
@@ -158,7 +209,7 @@ kill -TERM "$pid"
 wait "$pid" || true
 if [ -n "$(ls -A "$R/var/tmp")" ]; then fail $t "staging left: $(ls "$R/var/tmp")"
 elif ! grep -q '^umount' "$tmp/calls"; then fail $t "not unmounted"
-elif [ -d "$(stick)" ] && [ -n "$(ls -A "$(stick)")" ]; then fail $t "left on the stick: $(ls "$(stick)")"
+elif [ -n "$(packages)" ]; then fail $t "left on the stick: $(packages)"
 else ok $t; fi
 
 echo "$((n - fails))/$n passed"
