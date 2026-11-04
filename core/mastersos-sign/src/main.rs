@@ -290,7 +290,10 @@ async fn run(cli: Cli) -> Result<()> {
             let key = load_key_arg(key, &stdin)?;
             let api = server.api()?;
             match (register(&api, key.signing(), &label).await, &key) {
-                (Ok(id), _) => println!("Registered: {id}"),
+                (Ok(id), _) => match mastersos_bundle::keyid::key_code(&id) {
+                    Some(code) => println!("Registered school key {code} ({id})."),
+                    None => println!("Registered key {id}."),
+                },
                 // A kit registered before (say the recipient step failed): go on to the
                 // recipient.
                 (Err(e), Loaded::Kit(kit)) if is_already_registered(&e) => {
@@ -330,7 +333,7 @@ async fn run(cli: Cli) -> Result<()> {
             pending,
         } => {
             let key = load_key_arg(key, &stdin)?;
-            sign_pending(
+            let v = sign_pending(
                 &server.api()?,
                 key.signing(),
                 &pin_dir.get()?,
@@ -339,6 +342,7 @@ async fn run(cli: Cli) -> Result<()> {
                 &mut out,
             )
             .await?;
+            println!("Published version {v}");
         }
         Cmd::Heartbeat {
             server,

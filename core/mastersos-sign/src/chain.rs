@@ -362,8 +362,8 @@ pub async fn verify_chain(
         if recipients_changed(&old_recipients, &b.manifest.school.escrow_recipients) {
             writeln!(
                 out,
-                "Version {v} changes the escrow recipients (machines seal their LUKS recovery keys \
-                 to them):"
+                "Version {v} changes disk unlocking (computers keep their disk recovery codes for \
+                 these school keys):"
             )?;
             for r in &old_recipients {
                 if !b.manifest.school.escrow_recipients.contains(r) {
@@ -386,20 +386,19 @@ pub async fn verify_chain(
         if let Err(BundleError::KitRequired(what)) =
             check_recovery_signed(&cur.trust, &old_recipients, &b.manifest, &signer)
         {
-            let rules = match what {
-                KitChange::Trust => "R7",
-                KitChange::Recipients => "R8",
-                KitChange::TrustAndRecipients => "R7 and R8",
+            // The rule ids stay out of the sentence; they are in the code above.
+            let changes = match what {
+                KitChange::Trust => "the trusted keys",
+                KitChange::Recipients => "disk unlocking",
+                KitChange::TrustAndRecipients => "the trusted keys and disk unlocking",
             };
             writeln!(
                 out,
-                "!!! WARNING: version {v} changes {} but is signed by a passkey, not a recovery kit \
-                 (publishing rule {rules}).\n\
-                 !!! An honest server never accepts this, and machines refuse it (they stay on version {}).\n\
+                "!!! WARNING: version {v} changes {changes} but was not approved with a school key.\n\
+                 !!! An honest server never accepts this, and computers refuse it (they stay on version {}).\n\
                  !!! The server or the signing page may be compromised. Check every added or changed key\n\
-                 !!! and recipient above; one you do not know means someone tried to take over the machines\n\
-                 !!! or their recovery keys. Sign a corrected version with a recovery kit and check the server.",
-                what.as_str(),
+                 !!! above; one you do not know means someone tried to take over the computers or unlock\n\
+                 !!! their disks. Approve a corrected version with a school key and check the server.",
                 cur.version
             )?;
             let typed = ask(
@@ -411,9 +410,8 @@ pub async fn verify_chain(
             .unwrap_or_default();
             if typed != "yes" {
                 bail!(
-                    "version {v} changes {} with a passkey signature (violates {rules}); not \
-                     confirmed, cancelled, pin unchanged",
-                    what.as_str()
+                    "version {v} changes {changes} without a school key's approval; not \
+                     confirmed, cancelled"
                 );
             }
             cur.latest = v;
@@ -442,9 +440,9 @@ pub async fn verify_chain(
     if cur.version != cur.latest {
         writeln!(
             out,
-            "Machines stay on version {}: the versions after it that change trust or escrow \
-             recipients without a recovery-kit signature are refused. The pin and the base for the \
-             next signature stay at version {}; the next version is {}.",
+            "Computers stay on version {}: the versions after it that change the trusted keys or \
+             disk unlocking without a school key's approval are refused. Checks start from version \
+             {} again next time; the next version is {}.",
             cur.version,
             cur.version,
             cur.latest + 1
@@ -476,8 +474,8 @@ async fn first_use(
 ) -> Result<Verified> {
     if latest == 0 {
         bail!(
-            "the server has not published any version yet: nothing to verify. The first version is \
-             signed with a registered recovery key listed in its own trust (R1g): `mastersos-sign sign`"
+            "the server has not published any version yet: nothing to verify. Approve the first \
+             version with a school key: `mastersos publish --school-key <FILE>`"
         );
     }
     let archive = api.version_archive(latest).await?;
@@ -486,7 +484,7 @@ async fn first_use(
         .context("The latest manifest cannot be read")?;
     writeln!(
         out,
-        "First use: this computer has no verification record (pin) for {}. The server's latest is version {latest}; it trusts these keys:",
+        "This computer has not checked {} before. The server's latest is version {latest}; it trusts these keys:",
         api.host()
     )?;
     print_trust(out, &m.trust)?;

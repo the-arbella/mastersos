@@ -1321,8 +1321,10 @@ pub(crate) async fn publish_to(
     stderr: &mut dyn std::io::Write,
 ) -> Result<ExitCode, OpError> {
     use crate::publish::{
-        publish, CheckFailed, PublishOutcome, RerouteRefused, ServerRefused, SignOpts,
+        publish, CheckFailed, CheckIn, PublishOutcome, RerouteRefused, ServerRefused, SignOpts,
+        CHECKIN_FAILED_TEXT,
     };
+    use chrono::SecondsFormat;
     let w = a.w;
     let m = w.meta().map_err(fail)?;
     if !same_server(&m.server, server) {
@@ -1355,15 +1357,19 @@ pub(crate) async fn publish_to(
         writeln!(stdout, "{line}").map_err(fail)
     };
     match r {
-        Ok(PublishOutcome::Published(v)) => {
-            print(
-                stdout,
-                json!({ "published": true, "version": v }),
-                format!(
-                    "Published version {v}. {} is now based on it.",
-                    w.root.display()
-                ),
-            )?;
+        Ok(PublishOutcome::Published { version, checkin }) => {
+            let mut v = json!({ "published": true, "version": version });
+            match &checkin {
+                CheckIn::Until(t) => {
+                    v["checkin_until"] = json!(t.to_rfc3339_opts(SecondsFormat::Secs, true))
+                }
+                CheckIn::Failed(e) => v["checkin_error"] = json!(e),
+            }
+            print(stdout, v, format!("Published version {version}"))?;
+            // The version stays published; people get one sentence, not the cryptography.
+            if let CheckIn::Failed(_) = checkin {
+                writeln!(stderr, "{CHECKIN_FAILED_TEXT}").map_err(fail)?;
+            }
             Ok(ExitCode::SUCCESS)
         }
         Ok(PublishOutcome::NeedsSigning {
@@ -1372,7 +1378,7 @@ pub(crate) async fn publish_to(
             version,
             digest_hex,
         }) => {
-            let text = crate::publish::needs_signing_text(&url, &pending_id, version, &digest_hex);
+            let text = crate::publish::needs_signing_text(&url, &digest_hex);
             print(
                 stdout,
                 json!({

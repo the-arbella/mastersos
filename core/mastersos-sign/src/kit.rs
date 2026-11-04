@@ -210,7 +210,11 @@ pub async fn register_escrow_recipient(
     {
         Ok(r) => r,
         Err(e) if is_already_registered(&e) => {
-            writeln!(out, "Escrow recipient {recipient} is already registered.")?;
+            writeln!(
+                out,
+                "Disk unlocking for school key {} is already registered.",
+                code_of(kit)
+            )?;
             return Ok(());
         }
         Err(e) => return Err(e),
@@ -225,10 +229,15 @@ pub async fn register_escrow_recipient(
     }
     writeln!(
         out,
-        "Escrow recipient registered: {recipient} (bound to {})",
-        kit.key_id()
+        "Disk unlocking registered for school key {}.",
+        code_of(kit)
     )?;
     Ok(())
+}
+
+/// The key code of `kit` (its key id where there is none).
+fn code_of(kit: &Kit) -> String {
+    mastersos_bundle::keyid::key_code(&kit.key_id()).unwrap_or_else(|| kit.key_id())
 }
 
 /// One escrowed row as `GET …/recovery-keys` lists it. Only the sealed form is opened.

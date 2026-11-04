@@ -552,14 +552,19 @@ pub(crate) fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
+/// One trusted key for people: the school key's key code (or the id of another kind of key), its
+/// full fingerprint, and the site a passkey belongs to.
 pub fn key_line(k: &TrustKey) -> String {
-    format!(
-        "{}  {}  {}  rp_id={}",
-        safe::field(&k.id),
-        k.alg.as_str(),
-        trust_fingerprint(k),
-        k.rp_id.as_deref().map_or("-".to_owned(), safe::field)
-    )
+    let name = match mastersos_bundle::keyid::key_code(&k.id) {
+        Some(code) => format!("school key {code}"),
+        None => format!("key {}", safe::field(&k.id)),
+    };
+    let site = k
+        .rp_id
+        .as_deref()
+        .map(|r| format!("  (passkey for {})", safe::field(r)))
+        .unwrap_or_default();
+    format!("{name}  fingerprint {}{site}", trust_fingerprint(k))
 }
 
 pub(crate) fn print_trust(out: &mut dyn Write, trust: &[TrustKey]) -> Result<()> {
@@ -770,7 +775,7 @@ fn hide_values(s: &str, values: &[String]) -> String {
 fn print_server_notes(out: &mut dyn Write, p: &Pending, secrets: &SecretValues) -> Result<()> {
     writeln!(
         out,
-        "\n== Server notes (for information only: not what will be signed; go by the differences computed on this computer above) =="
+        "\n== The server's notes (for information only; go by the differences computed on this computer above) =="
     )?;
     // The server's `manifest_diff` is not printed: it holds the real secret values, and a
     // multi-line or escaped one cannot be hidden reliably in its text. The local diff above
@@ -886,9 +891,9 @@ pub async fn sign_pending_expecting(
         // trust it chose, and reset the local anchor to its chain.
         if let Some(pin) = chain::load_pin(&pin_file)? {
             bail!(
-                "the server reports nothing published, but version {} was verified here (pin {}): \
-                 possible rollback or wrong server; not signing. Delete that pin file only if you \
-                 are sure the server was reset on purpose",
+                "the server reports nothing published, but version {} was checked on this computer \
+                 before ({}): the server may have been rolled back, or this is the wrong server; \
+                 nothing was approved. Delete that file only if you are sure the server was reset on purpose",
                 pin.version,
                 pin_file.display()
             );
@@ -933,8 +938,8 @@ pub async fn sign_pending_expecting(
     }
     if !manifest.trust.contains(&me) {
         bail!(
-            "The new trusted keys do not include this key ({}): a signer cannot remove itself (R5); to remove it, sign with another key that stays",
-            me.id
+            "The new trusted keys do not include this key ({}): a key cannot approve its own removal; approve that with another school key that stays",
+            key_line(&me)
         );
     }
 
@@ -952,12 +957,9 @@ pub async fn sign_pending_expecting(
     if genesis {
         writeln!(
             out,
-            "This is the first version (R1g): machines verify it with its own trust. Check every \
-             fingerprint against what you hold, not against this server's pages: your school key's \
-             fingerprint as printed by `mastersos-sign keygen` / `register` (or on the printed school key), and \
-             each passkey's fingerprint shown when it was registered on your device."
+            "This is the first version: computers will trust exactly these keys. Check each key code \
+             and fingerprint against the paper copy of your school key, not against this server's pages."
         )?;
-        delta.print(out)?;
     } else if delta.is_empty() {
         writeln!(
             out,
@@ -991,8 +993,8 @@ pub async fn sign_pending_expecting(
     if recipients_change {
         writeln!(
             out,
-            "Escrow recipients change (against version {} that machines run; they will seal their \
-             LUKS recovery keys to these):",
+            "Disk unlocking changes (against version {} that computers run; computers will keep \
+             their disk recovery codes for these school keys):",
             verified.version
         )?;
         for r in &base_recipients {
@@ -1007,23 +1009,25 @@ pub async fn sign_pending_expecting(
         }
         writeln!(
             out,
-            "Check every added recipient against your kits: an unknown one receives the machines' \
-             recovery keys."
+            "Each added line must come from one of your school keys: an unknown one could unlock \
+             the computers' disks."
         )?;
     }
 
     print_server_notes(out, &p, &secret_values)?;
 
-    // 6. 人工确认。
-    writeln!(out, "\nContent fingerprint computed here: {digest}")?;
-    writeln!(out, "Check code: {}", &digest[..8])?;
+    // 6. 人工确认。The caller that passed `expect_digest` printed the check code already.
+    if expect_digest.is_none() {
+        writeln!(out, "\nContent fingerprint computed here: {digest}")?;
+        writeln!(out, "Check code: {}", &digest[..8])?;
+    }
     let typed = ask(
         confirm,
         out,
-        &format!("Type the version number {next} to sign: "),
+        &format!("Type the version number {next} to approve it: "),
     )?;
     if typed != next.to_string() {
-        bail!("The version number you typed ({typed}) does not match version {next}; cancelled, nothing was signed");
+        bail!("The version number you typed ({typed}) does not match version {next}; cancelled, nothing was approved");
     }
     if !delta.is_empty() || recipients_change {
         let typed = ask(
@@ -1032,7 +1036,7 @@ pub async fn sign_pending_expecting(
             "This version changes the keys computers trust or the disk-unlocking recipient (see the changes above). If that is right, type trust: ",
         )?;
         if typed != "trust" {
-            bail!("The change of trusted keys or disk-unlocking recipient was not confirmed; cancelled, nothing was signed");
+            bail!("The change of trusted keys or disk unlocking was not confirmed; cancelled, nothing was approved");
         }
     }
 
@@ -1067,7 +1071,7 @@ pub async fn sign_pending_expecting(
         .await?;
     if c.version != next {
         bail!(
-            "The server says version {} was published, but version {next} was signed: the pin does not advance; run mastersos-sign verify to check again",
+            "The server says version {} was published, but version {next} was approved here: run `mastersos-sign verify` to check the server again",
             c.version
         );
     }
@@ -1085,10 +1089,6 @@ pub async fn sign_pending_expecting(
             trust: manifest.trust.clone(),
             verified: history,
         },
-    )?;
-    writeln!(
-        out,
-        "Signed and published version {next}; the pin moved to version {next}."
     )?;
     Ok(next)
 }
@@ -1222,6 +1222,80 @@ pub async fn sign_heartbeat_at(
         both_zones(statement.not_after)
     )?;
     Ok(())
+}
+
+/// The monthly check-in for the version `mastersos publish` has just approved, signed without a
+/// prompt: `version` and `digest` are what the caller verified, signed and saw committed, and
+/// `trust` is that version's trusted keys (what computers verify the check-in with). Nothing is
+/// fetched to decide what to sign. The statement lasts `days` days from now; it is checked here the
+/// way a computer checks it, then sent to `heartbeat/commit` (the server's `heartbeat/prepare` is
+/// not used, as in [`sign_heartbeat_at`]). Prints nothing; returns the end of the check-in.
+pub async fn checkin_after_publish(
+    api: &Api,
+    key: &SigningKey<'_>,
+    version: u64,
+    digest: &[u8; 32],
+    trust: &[TrustKey],
+    days: i64,
+) -> Result<chrono::DateTime<chrono::Utc>> {
+    checkin_after_publish_at(api, key, version, digest, trust, days, chrono::Utc::now()).await
+}
+
+/// [`checkin_after_publish`] with `issued_at = now`.
+pub async fn checkin_after_publish_at(
+    api: &Api,
+    key: &SigningKey<'_>,
+    version: u64,
+    digest: &[u8; 32],
+    trust: &[TrustKey],
+    days: i64,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<chrono::DateTime<chrono::Utc>> {
+    if !(1..=MAX_HEARTBEAT_DAYS).contains(&days) {
+        bail!("a monthly check-in lasts 1 to {MAX_HEARTBEAT_DAYS} days, not {days}");
+    }
+    // The caller checked the key against the server when it published; no second round trip.
+    let (signer, me) = load_signer(api, *key, true).await?;
+    if !trust.contains(&me) {
+        bail!(
+            "This key ({}) is not among the trusted keys of version {version}",
+            key_line(&me)
+        );
+    }
+    let issued_at = now.timestamp();
+    let statement = HeartbeatStatement {
+        version,
+        digest_hex: hex(digest),
+        issued_at,
+        not_after: issued_at + days * 86_400,
+    };
+    statement.check()?;
+    let signature = SignatureFile {
+        key_id: me.id.clone(),
+        alg: KeyAlg::Ed25519,
+        sig: STANDARD.encode(signer.sign(&heartbeat_message(&statement))),
+        authenticator_data: None,
+        client_data_json: None,
+    };
+    let text = Heartbeat {
+        statement: statement.clone(),
+        signature: signature.clone(),
+    }
+    .to_toml();
+    let checked = verify_heartbeat(&text, trust).context(
+        "The signed check-in fails the local self-check: computers would reject it; not submitting",
+    )?;
+    if checked != statement {
+        bail!("The check-in read back differs from the one signed; not submitting");
+    }
+    api.post_no_content(
+        &["v1", "admin", "heartbeat", "commit"],
+        &json!({ "statement": statement, "signature": signature }),
+        "submit the monthly check-in",
+    )
+    .await?;
+    chrono::DateTime::from_timestamp(statement.not_after, 0)
+        .context("the check-in's end is out of range")
 }
 
 // —— 种子核对 ——
