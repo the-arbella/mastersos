@@ -2574,4 +2574,33 @@ LOOK
 fi
 [ "$r" = 0 ] && ok 54 "look details: white button text at 4.5:1, St-valid background-position, darkened card background, icon cache always rebuilt, English-only splash titles marked, one MastersOS mark in both extensions, initrd starts Plymouth"
 
+# 55. snapshot.ubuntu.com is often down (5xx, 401): the package lists of one snapshot never change and every package is checked
+#     against them, so builds keep what they downloaded. The build host reuses a snapshot's cached lists (--cache-only=metadata)
+#     but never in CI; CI keeps only the packages between runs (actions/cache restore and save, pinned by commit, saved even when
+#     the build fails), never mkosi.cache with the lists: a release build always fetches and verifies fresh signed lists.
+r=0
+bsh=$rel/build.sh
+wf=$rel/../.github/workflows/mastersos-image.yml
+for k in '--cache-only=metadata' 'GITHUB_ACTIONS' '--package-cache-directory=' 'MASTERSOS_PACKAGE_CACHE'; do
+	grep -qF -- "$k" "$bsh" || {
+		bad 55 "build.sh lacks $k"
+		r=1
+	}
+done
+for a in restore save; do
+	grep -qE "uses: actions/cache/$a@[0-9a-f]{40} " "$wf" || {
+		bad 55 "mastersos-image.yml does not use actions/cache/$a pinned by commit"
+		r=1
+	}
+done
+if grep -A6 'actions/cache/' "$wf" | grep -qE '^\s+path:.*mkosi\.cache'; then
+	bad 55 "mastersos-image.yml must not cache mkosi.cache (the package lists) for a release build"
+	r=1
+fi
+grep -qF 'MASTERSOS_PACKAGE_CACHE' "$wf" || {
+	bad 55 "mastersos-image.yml does not hand the package cache to build.sh (MASTERSOS_PACKAGE_CACHE)"
+	r=1
+}
+[ "$r" = 0 ] && ok 55 "package cache: the build host reuses a snapshot's lists, CI keeps only packages between runs"
+
 exit $fail

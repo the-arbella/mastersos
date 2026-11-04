@@ -32,6 +32,32 @@ jobs:
           persist-credentials: false
       - name: Set up the runner
         run: bash image/ci-runner-setup.sh "$PROFILE"
+      - name: Choose the version and the Ubuntu snapshot
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_SNAPSHOT: ${{ inputs.snapshot }}
+        run: |
+          version=${INPUT_VERSION:-$(date -u +%Y%m%d).$GITHUB_RUN_NUMBER}
+          [[ $version =~ ^[0-9]{8}\.[0-9]+$ ]] || { echo "bad version" >&2; exit 1; }
+          snapshot=${INPUT_SNAPSHOT:-$(date -u +%Y%m%dT000000Z)}
+          [[ $snapshot =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || { echo "bad snapshot" >&2; exit 1; }
+          {
+            echo "VERSION=$version"
+            echo "MASTERSOS_SNAPSHOT=$snapshot"
+            echo "MASTERSOS_PACKAGE_CACHE=$RUNNER_TEMP/mkosi-packages"
+          } >>"$GITHUB_ENV"
+      # snapshot.ubuntu.com is often down (5xx, 401). Only the downloaded packages are kept between runs (apt checks each one
+      # against the snapshot's signed lists, which every run fetches itself); the lists and mkosi.cache are never cached.
+      - name: Restore the package cache
+        # A cache problem never stops a release build
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/mkosi-packages
+          key: mkosi-packages-${{ env.MASTERSOS_SNAPSHOT }}-${{ github.run_id }}
+          restore-keys: |
+            mkosi-packages-${{ env.MASTERSOS_SNAPSHOT }}-
+            mkosi-packages-
       - name: Load the release keys
         env:
           MASTERSOS_RELEASE_KEYS_AGE_B64: ${{ secrets.MASTERSOS_RELEASE_KEYS_AGE_B64 }}
@@ -42,24 +68,23 @@ jobs:
           python3 -I image/ci-load-release-keys.py "$age_file"
           rm -f "$age_file"
       - name: Build
-        env:
-          INPUT_VERSION: ${{ inputs.version }}
-          INPUT_SNAPSHOT: ${{ inputs.snapshot }}
         run: |
-          version=${INPUT_VERSION:-$(date -u +%Y%m%d).$GITHUB_RUN_NUMBER}
-          [[ $version =~ ^[0-9]{8}\.[0-9]+$ ]] || { echo "bad version" >&2; exit 1; }
-          echo "VERSION=$version" >>"$GITHUB_ENV"
-          if [ -n "$INPUT_SNAPSHOT" ]; then
-            [[ $INPUT_SNAPSHOT =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || { echo "bad snapshot" >&2; exit 1; }
-            export MASTERSOS_SNAPSHOT=$INPUT_SNAPSHOT
-          fi
-          # snapshot.ubuntu.com answers 5xx now and then; a retry keeps mkosi's package cache and only fetches what is missing
-          for attempt in 1 2 3; do
-            if image/build.sh "$version"; then exit 0; fi
+          # A retry keeps the package cache and only fetches what is missing; wait longer each time for the snapshot host
+          for attempt in 1 2 3 4 5; do
+            if image/build.sh "$VERSION"; then exit 0; fi
             echo "::warning::build attempt $attempt failed"
-            sleep 120
+            sleep $((attempt * 180))
           done
           exit 1
+      # Saved even when the build failed: the next run then only fetches what is still missing
+      - name: Save the package cache
+        if: always()
+        # A cache problem never stops a release build
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/mkosi-packages
+          key: mkosi-packages-${{ env.MASTERSOS_SNAPSHOT }}-${{ github.run_id }}
       - name: Scan the output for private keys
         id: leak_scan
         if: always()

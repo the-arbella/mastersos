@@ -14,6 +14,7 @@
 #                       pcr.key/crt（PCR 签名）（keyset.sh，Ruling 19）；lab-local/：试验用户的口令哈希与 authorized_keys。
 #                       正式构建的同名一套只从 tmpfs 读（keyset_priv release，先 keys-load.sh，见 docs/key-ceremony.md）。钥匙永不入库。
 #   MASTERSOS_LAB_SPLASH   1：lab 的截图构建，Plymouth 不管串口、屏幕上出真正的开机画面（提示只能在屏幕上答）；默认 0（串口答提示）
+#   MASTERSOS_PACKAGE_CACHE  mkosi 的软件包缓存目录（CI 在两次运行之间保留它）；默认 mkosi 自己的 /var/cache/mkosi
 #   MASTERSOS_CORE         core 的位置；默认 ../core（仓库里），其次 ~/mastersos-core（sync.sh 同步的位置）
 #   MASTERSOS_KIOSK_EXT_SRC  考试扩展的源码；默认 ../kiosk-extension（仓库里），其次 ~/mastersos-kiosk-extension（sync.sh 同步的位置）
 set -euo pipefail
@@ -236,6 +237,31 @@ if [ "$profile" = lab ]; then
 fi
 if [ -n "$kext_id" ]; then
 	args+=(--extra-tree="$kext_tree")
+fi
+# snapshot.ubuntu.com is often down (5xx, 401). The package lists of one snapshot never change, and apt checks every package
+# against them, so keep what was downloaded:
+# - packages: MASTERSOS_PACKAGE_CACHE (CI keeps this directory between runs) instead of mkosi's default /var/cache/mkosi;
+# - lists: once this snapshot's lists are in mkosi's metadata cache (they were fetched and verified on an earlier build of the
+#   same snapshot), reuse them and only download missing packages. Never in CI: a release build there starts from nothing
+#   and always fetches the signed lists itself, so a restored cache can never stand in for them.
+if [ -n "${MASTERSOS_PACKAGE_CACHE:-}" ]; then
+	mkdir -p "$MASTERSOS_PACKAGE_CACHE"
+	args+=(--package-cache-directory="$MASTERSOS_PACKAGE_CACHE")
+fi
+if [ "${GITHUB_ACTIONS:-}" != true ]; then
+	lists=$(compgen -G "$here/mkosi.cache/*~main.metadata.cache/lib/apt/lists" | head -n 1 || true)
+	have_lists=0
+	if [ -n "$lists" ]; then
+		have_lists=1
+		rel_name=$(sed -n 's/^Release=//p' "$here/mkosi.conf")
+		for suite in "$rel_name" "$rel_name-updates" "$rel_name-security"; do
+			sudo test -s "$lists/snapshot.ubuntu.com_ubuntu_${snapshot}_dists_${suite}_InRelease" || have_lists=0
+		done
+	fi
+	if [ "$have_lists" = 1 ]; then
+		echo "build.sh: package lists of snapshot $snapshot already cached, not fetched again"
+		args+=(--cache-only=metadata)
+	fi
 fi
 # 同一版本重建时 mkosi -ff 不会删掉上一次留下的分区文件（文件名带不同的 UUID，Task 1 实测），
 # 留着就会被 publish.sh 的通配一起发出去：先整个清掉
