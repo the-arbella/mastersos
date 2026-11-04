@@ -1,6 +1,6 @@
 # MastersOS 外观：品牌、开机画面、壁纸、登录页与桌面
 
-2026-11-04 · 状态：待批准（已过实施者视角审阅） · 规模：项目（镜像外观；agent 只碰 Dock 一行）
+2026-11-04 · 状态：已批准（用户 2026-11-04：按学生微调后直接实施） · 规模：项目（镜像外观；agent 只碰 Dock 一行）
 
 ## 1. 为什么
 
@@ -18,9 +18,13 @@ Ubuntu 转圈、Yaru 默认外观、登录页是一块深灰渐变、桌面没�
 
 - 一套 MastersOS 品牌：logo（彩色图块版、无底版、单色版）、文字标志、配色，源文件进库。
 - 开机：从 initrd 起就是品牌开机画面（黑底、发光的 M、细进度条），不再滚文字。
-- 壁纸：4K 夜间（默认）与白天两张，随深浅色切换，也出现在 设置 → 外观 里。
+- 壁纸：4K 白天（默认）与夜间两张，随深浅色切换，也出现在 设置 → 外观 里。
 - 登录页与锁屏：用壁纸做背景，毛玻璃卡片，左下角 MastersOS 标志；结构与行为不变。
-- 桌面：底部整宽半透明 Dock、半透明顶栏、强调色与品牌一致、默认深色；关于页显示 MastersOS logo。
+- 桌面：底部整宽半透明 Dock、半透明顶栏、强调色与品牌一致、默认浅色；关于页显示 MastersOS logo。
+
+**用户是学生**（用户 2026-11-04 提醒）。据此的微调（我的取舍）：教室白天光线亮、投影仪上深色看不清，夜色桌面对低年级显得暗沉，
+所以桌面默认**浅色模式 + 白天壁纸**（晨光，“新的一天”）；学生切到深色时换夜间壁纸。登录页仍用夜间壁纸，保留第一眼的产品质感。
+logo 与开机画面简单、温暖、不说教，不改。
 - 每一屏在 VM 上截图，与效果图对比，差的修到一致。
 
 **非目标**
@@ -58,7 +62,7 @@ Ubuntu 转圈、Yaru 默认外观、登录页是一块深灰渐变、桌面没�
 - **配色**：夜空 `#070818` / `#13113A` / `#3A1C4F`，地平线 `#7A2B55` → `#C4475A` → `#F07A55`，光 `#FFB35C` / `#F25A6A`。
   强调色取 GNOME 的 `orange`（最接近的一档；实施时在 VM 上比色，若 `red` 更接近渐变中段则改用它，记在提交里）。
 - **壁纸**：夜色，山谷间升起一道光，三层山丘被光照亮的那一侧更亮，天空里几圈很淡的椭圆光环向外扩散（“影响世界”），
-  细颗粒防色带。白天版同构图，天空蓝紫到暖杏（用户只看过夜间版：白天版在 VM 截图时单独请用户过目，我的取舍）。
+  细颗粒防色带。白天版同构图，天空蓝紫到暖杏，是桌面默认壁纸（2026-11-04 已放进效果图页；VM 截图时再请用户过目一次）。
 
 ## 4. 方案
 
@@ -105,7 +109,7 @@ Ubuntu 转圈、Yaru 默认外观、登录页是一块深灰渐变、桌面没�
 ### 5.3 GNOME 默认值（`90_mastersos.gschema.override`）
 
 - `org.gnome.desktop.background`：`picture-uri` 白天、`picture-uri-dark` 夜间，`picture-options='zoom'`。
-- `org.gnome.desktop.interface`：`color-scheme='prefer-dark'`，`accent-color` 见第 3 节。
+- `org.gnome.desktop.interface`：`color-scheme='default'`（浅色，见第 2 节的学生取舍），`accent-color` 见第 3 节。
 - `org.gnome.shell.extensions.dash-to-dock`：在已有的底部整宽布局上加 `transparency-mode='FIXED'`、
   `background-opacity` 约 0.45、`custom-background-color=true`、`background-color` 取夜空深色；agent 的
   `DOCK_LAYOUT`（`core/mastersos-agent/src/system/desktop.rs`）只写位置与尺寸，不写这些键，镜像默认值就生效。
