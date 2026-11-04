@@ -2618,4 +2618,43 @@ grep -qF 'MASTERSOS_PACKAGE_CACHE' "$wf" || {
 }
 [ "$r" = 0 ] && ok 55 "package cache: the build host reuses a snapshot's lists, CI keeps only packages between runs and verifies them against the signed index"
 
+# 56. The lab build host (lab/build-host.sh packages) installs every package the CI runner adds for mkosi (ci-runner-setup.sh):
+#     VM 121 lacked erofs-utils and its builds failed at "mkfs.erofs binary not available" after a full download, and its
+#     check lists mkfs.erofs so `build-host.sh check` reports it.
+r=0
+bh=$rel/lab/build-host.sh
+read -ra bh_pkgs <<<"$(sed -n 's/^packages=(\(.*\))$/\1/p' "$bh")"
+ci_pkgs=$(sed -n '/^sudo apt-get install -y -qq /,/[^\\]$/p' "$rel/ci-runner-setup.sh" | tr -d '\\' | tr ' \t' '\n\n' | grep -E '^[a-z0-9][a-z0-9.+-]+$' | grep -vxE 'sudo|apt-get|install')
+if [ -z "$ci_pkgs" ] || [ "${#bh_pkgs[@]}" = 0 ]; then
+	bad 56 "cannot read the package lists of ci-runner-setup.sh and lab/build-host.sh"
+	r=1
+fi
+for p in $ci_pkgs; do
+	printf '%s\n' "${bh_pkgs[@]}" | grep -qxF "$p" || {
+		bad 56 "lab/build-host.sh packages lacks $p (ci-runner-setup.sh installs it for mkosi)"
+		r=1
+	}
+done
+grep -qE '^commands=\(.* mkfs\.erofs( |\))' "$bh" || {
+	bad 56 "lab/build-host.sh check does not look for mkfs.erofs"
+	r=1
+}
+[ "$r" = 0 ] && ok 56 "lab build host installs every package the CI runner adds for mkosi"
+
+# 57. Plymouth two-step defaults UseAnimation to !UseProgressBar (plugin.c, "for compat. with older themes"): a section that turns
+#     the progress bar on without UseAnimation=true hides the throbber, and the 20261104.6 splash showed only the bar, no M.
+#     Every theme copy states UseAnimation in each section that shows the splash on boot, shutdown and reboot.
+r=0
+for f in "$rel/brand/mastersos.plymouth" "$rel/mkosi.extra/usr/share/plymouth/themes/mastersos/mastersos.plymouth" \
+	"$rel/mkosi.initrd.conf/mkosi.extra/usr/share/plymouth/themes/mastersos/mastersos.plymouth"; do
+	for s in boot-up shutdown reboot; do
+		v=$(awk -v s="[$s]" '$0 == s {in_s = 1; next} /^\[/ {in_s = 0} in_s && /^UseAnimation=/ {sub(/^UseAnimation=/, ""); print}' "$f")
+		[ "$v" = true ] || {
+			bad 57 "${f#"$rel"/} [$s] lacks UseAnimation=true (two-step hides the M when the progress bar is on)"
+			r=1
+		}
+	done
+done
+[ "$r" = 0 ] && ok 57 "boot splash: the M animation is on in every boot, shutdown and reboot section"
+
 exit $fail

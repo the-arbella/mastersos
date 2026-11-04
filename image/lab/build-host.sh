@@ -10,10 +10,10 @@ set -euo pipefail
 release_root=${MASTERSOS_RELEASE_ROOT:-/srv/mastersos/release}
 bucket=${MASTERSOS_RELEASE_BUCKET:-mastersos-os-111122223333}
 profile=${MASTERSOS_PUBLISH_PROFILE:-mastersos-publish}
-packages=(systemd-boot-tools systemd-ukify systemd-repart tpm2-tools jq zip unzip zstd age sbsigntool mtools dosfstools awscli git rustup rsync python3-pefile)
+packages=(systemd-boot-tools systemd-ukify systemd-repart tpm2-tools jq zip unzip zstd age sbsigntool mtools dosfstools awscli git rustup rsync python3-pefile bubblewrap cpio cryptsetup-bin e2fsprogs erofs-utils squashfs-tools systemd-container debian-archive-keyring ubuntu-keyring)
 mkosi_tag=v27.1
 mkosi_commit=ecf7f5702bb2052b7a69cab3fe7d37bc3b9ad77b # tags can move; this host handles signing keys
-commands=(mkosi systemd-repart tpm2_getcap sbsign jq zip unzip zstd age aws)
+commands=(mkosi systemd-repart tpm2_getcap sbsign jq zip unzip zstd age aws mkfs.erofs)
 PATH=$PATH:$HOME/.cargo/bin
 
 missing=0

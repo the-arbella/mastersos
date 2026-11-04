@@ -26,15 +26,18 @@ ProgressBarVerticalAlignment=.8
 MessageBelowAnimation=true
 
 [boot-up]
+UseAnimation=true
 UseEndAnimation=false
 UseProgressBar=true
 UseFirmwareBackground=false
 
 [shutdown]
+UseAnimation=true
 UseEndAnimation=false
 UseFirmwareBackground=false
 
 [reboot]
+UseAnimation=true
 UseEndAnimation=false
 UseFirmwareBackground=false
 
