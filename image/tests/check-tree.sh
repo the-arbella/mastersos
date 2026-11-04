@@ -2675,4 +2675,17 @@ grep -qE '^    focus\(\) \{' "$ld/setup.js" || {
 }
 [ "$r" = 0 ] && ok 58 "first-run language screen: the login dialog stays hidden when the greeter wakes from idle"
 
+# 59. GDM builds the login dialog and asks for the user name the stock way ("Username", a back arrow) before the extension is
+#     enabled, so the patched _askForUsernameAndBeginVerification only runs from the next reset on: on 20261104.6 every fresh
+#     greeter (boot, after the language screen) opened on GNOME's step until Escape. _adoptDialog resets a prompt that is not
+#     on our step (its hint is not text.email) to a new username step, the path Escape takes.
+r=0
+adopt=$(awk '/^    _adoptDialog\(dlg\) \{/ {on = 1} on {print} on && /^    \}$/ {exit}' "$ld/extension.js")
+if ! grep -qF 'hint_text !== this._text.email' <<<"$adopt" ||
+	! grep -qF 'reset({beginRequestType: AuthPrompt.BeginRequestType.PROVIDE_USERNAME})' <<<"$adopt"; then
+	bad 59 "extension.js _adoptDialog does not move a dialog that started on GNOME's username step to ours"
+	r=1
+fi
+[ "$r" = 0 ] && ok 59 "login: a fresh greeter opens on the MastersOS username step, not GNOME's"
+
 exit $fail

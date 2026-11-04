@@ -511,6 +511,12 @@ export default class MastersosLoginExtension extends Extension {
         fitList();
         this._monitorsId = Main.layoutManager.connect('monitors-changed', fitList);
 
+        // GDM builds the dialog and asks for the user name the stock way ("Username") before this extension is enabled, so
+        // the patched _askForUsernameAndBeginVerification only runs from the next reset on: start the username step anew.
+        if (prompt?._entry && prompt._entry.hint_text !== this._text.email &&
+            prompt.verificationStatus === AuthPrompt.AuthPromptStatus.NOT_VERIFYING)
+            prompt.reset({beginRequestType: AuthPrompt.BeginRequestType.PROVIDE_USERNAME});
+
         this._firstRun = !languageChosen();
         this._syncFirstRun();
     }
