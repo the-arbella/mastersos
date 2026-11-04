@@ -88,8 +88,8 @@ pub fn check_private(path: &Path) -> Result<()> {
 /// [`check_private`] on the opened file, so the file checked is the file read.
 pub(crate) fn open_private(path: &Path) -> Result<File> {
     let f = open(path)?;
-    if sys::not_private(&f, path)? {
-        bail!("{}", sys::too_open(&f, path));
+    if let Some(why) = sys::not_private(&f, path)? {
+        bail!("{why}");
     }
     Ok(f)
 }
@@ -99,7 +99,7 @@ pub(crate) fn open_private(path: &Path) -> Result<File> {
 /// [`KEY_FILE_NOTE`] for the caller to say, instead of a refusal.
 pub fn open_school_key(path: &Path) -> Result<(File, Option<&'static str>)> {
     let f = open(path)?;
-    let broad = sys::not_private(&f, path).unwrap_or(true);
+    let broad = !matches!(sys::not_private(&f, path), Ok(None));
     Ok((f, broad.then_some(KEY_FILE_NOTE)))
 }
 
@@ -197,16 +197,15 @@ mod sys {
     pub const CANNOT_HIDE_TYPING: &str =
         "Cannot hide typing in this terminal. Run this in another terminal, or pipe the input in.";
 
-    pub fn not_private(f: &File, path: &Path) -> Result<bool> {
-        Ok(meta(f, path)?.mode() & 0o077 != 0)
-    }
-
-    pub fn too_open(f: &File, path: &Path) -> String {
-        let mode = f.metadata().map_or(0, |m| m.mode() & 0o777);
-        format!(
-            "{p} has mode {mode:o}, so other users can read or change it; run: chmod 600 {p}",
-            p = path.display()
-        )
+    /// Why other users can read or change the file, or None when they cannot.
+    pub fn not_private(f: &File, path: &Path) -> Result<Option<String>> {
+        let mode = meta(f, path)?.mode() & 0o777;
+        Ok((mode & 0o077 != 0).then(|| {
+            format!(
+                "{p} has mode {mode:o}, so other users can read or change it; run: chmod 600 {p}",
+                p = path.display()
+            )
+        }))
     }
 
     pub fn is_link(_path: &Path, meta: &std::fs::Metadata) -> bool {
@@ -449,10 +448,23 @@ mod sys {
         Some(ace.add(offset) as PSID)
     }
 
-    /// Whether the file is open to other accounts: its owner is not the current user or
-    /// Administrators, it has no DACL, or an allow entry grants [`NOT_PRIVATE_RIGHTS`] to anyone
-    /// but the current user, SYSTEM and Administrators.
-    pub fn not_private(f: &File, path: &Path) -> Result<bool> {
+    /// Why the file is open to other accounts, or None when it is not: its owner is not the
+    /// current user or Administrators, it has no DACL, or an allow entry grants
+    /// [`NOT_PRIVATE_RIGHTS`] to anyone but the current user, SYSTEM and Administrators.
+    pub fn not_private(f: &File, path: &Path) -> Result<Option<String>> {
+        let foreign = || {
+            Some(format!(
+                "{} belongs to another account. Make a new one as yourself.",
+                path.display()
+            ))
+        };
+        let broad = || {
+            Some(format!(
+                "{} can be read or changed by other accounts. Keep it readable only by you \
+                 (SYSTEM and Administrators may stay).",
+                path.display()
+            ))
+        };
         let user = CurrentUser::get()?;
         let system = well_known(WinLocalSystemSid)?;
         let admins = well_known(WinBuiltinAdministratorsSid)?;
@@ -483,13 +495,16 @@ mod sys {
                 );
             }
             let _free = Local(sd);
-            if owner.is_null() || !may_own(owner) || dacl.is_null() {
-                return Ok(true);
+            if owner.is_null() || !may_own(owner) {
+                return Ok(foreign());
+            }
+            if dacl.is_null() {
+                return Ok(broad());
             }
             for i in 0..u32::from((*dacl).AceCount) {
                 let mut ace: *mut core::ffi::c_void = null_mut();
                 if GetAce(dacl, i, &mut ace) == 0 {
-                    return Ok(true);
+                    return Ok(broad());
                 }
                 let header = &*(ace as *const ACE_HEADER);
                 if u32::from(header.AceFlags) & INHERIT_ONLY_ACE != 0 {
@@ -513,18 +528,11 @@ mod sys {
                 match allowed_sid(ace as *const u8, kind) {
                     Some(sid) if may_access(sid) => {}
                     // Another account, or a compound ACE (impersonation) this code does not read.
-                    _ => return Ok(true),
+                    _ => return Ok(broad()),
                 }
             }
-            Ok(false)
+            Ok(None)
         }
-    }
-
-    pub fn too_open(_f: &File, path: &Path) -> String {
-        format!(
-            "{} can be read or changed by other accounts. Keep it readable only by you (SYSTEM and Administrators may stay).",
-            path.display()
-        )
     }
 
     /// A symbolic link or junction, by its reparse tag; other reparse points are files.

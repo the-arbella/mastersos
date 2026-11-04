@@ -59,21 +59,27 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # Git settings as environment, so every git call sees them (actions/checkout overrides HOME, which hides
+    # `git config --global`): image/ has paths NTFS cannot hold (systemd's `\x2d` escapes), which Git for Windows
+    # refuses in the tree unless protectNTFS is off; the sparse checkout below never writes them. The tests read
+    # docs and test vectors byte for byte, so no CRLF conversion.
+    env:
+      GIT_CONFIG_COUNT: 2
+      GIT_CONFIG_KEY_0: core.protectNTFS
+      GIT_CONFIG_VALUE_0: "false"
+      GIT_CONFIG_KEY_1: core.autocrlf
+      GIT_CONFIG_VALUE_1: "false"
     defaults:
       run:
         working-directory: core
         shell: bash
     steps:
-      # The tests read docs and test vectors byte for byte: no CRLF checkout on Windows
-      - run: git config --global core.autocrlf false
-        working-directory: .
-      # Only what the tests read: image/ has paths NTFS cannot hold (systemd's `\x2d` escapes); skills/ holds the
-      # settings reference that mastersos-bundle's spec test compares against
+      # Only what the tests read: core, and skills/ for the settings reference that mastersos-bundle's spec test
+      # compares against
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: |
             core
-            image/keys
             skills
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
