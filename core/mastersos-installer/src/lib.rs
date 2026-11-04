@@ -219,6 +219,7 @@ fn pick(tty: &mut dyn Tty, disks: Vec<Disk>) -> Result<Disk> {
         ));
     }
     loop {
+        tty.flush_input();
         let n = tty.prompt("Number: ")?;
         if let Some(d) = n
             .trim()
@@ -321,6 +322,8 @@ pub fn run_install_with(r: &dyn Runner, tty: &mut dyn Tty, env: &InstallEnv) -> 
         if let Some(a) = &advice {
             tty.say(a);
         }
+        // keys typed ahead (d held past the diagnostics window, an Enter during the checks) must not answer this
+        tty.flush_input();
         if tty
             .prompt("There are warnings above, type y to continue: ")?
             .trim()
@@ -337,6 +340,7 @@ pub fn run_install_with(r: &dyn Runner, tty: &mut dyn Tty, env: &InstallEnv) -> 
         Target::Choose(v) => pick(tty, v)?,
         Target::None => bail!("No suitable internal disk (>= 48 GiB, not USB)"),
     };
+    tty.flush_input();
     if tty.prompt(&confirm_text(&target, &seed, env.debug))?.trim() != "y" {
         bail!(CANCELLED);
     }

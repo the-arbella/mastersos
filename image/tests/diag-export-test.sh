@@ -126,6 +126,24 @@ ln -s "$tmp/elsewhere" "$(stick)/link"
 run_main sdb1 >/dev/null
 if [ -n "$(packages)" ] || [ -n "$(find "$tmp/elsewhere" -name 'mastersos-diag-*')" ]; then fail $t "wrote through a symlinked folder"; else ok $t; fi
 
+t=newline_name_stays_on_stick
+# a folder "x<newline>0 " holding out/seed.toml: split on newlines, find's line "2 <mnt>/x<newline>0 /out" becomes "0 /out",
+# which sorts first and names /out, outside the stick (where the container lets a test create it)
+new_root
+switch_on
+out=/diagtest-out-$$
+mkdir -p "$out" 2>/dev/null || out=
+evil="x
+0 "
+mkdir -p "$(stick)/$evil/${out#/}"
+echo 'x' >"$(stick)/$evil/${out#/}/seed.toml"
+[ -n "$out" ] || mkdir -p "$(stick)/$evil/outside"
+run_main sdb1 >/dev/null
+if [ -n "$out" ] && [ -n "$(find "$out" -name 'mastersos-diag-*')" ]; then fail $t "wrote outside the stick, into $out"
+elif [ -z "$(packages)" ]; then fail $t "no package next to the seed"
+else ok $t; fi
+[ -z "$out" ] || rm -rf "$out"
+
 t=other_fs_not_mounted
 new_root
 switch_on

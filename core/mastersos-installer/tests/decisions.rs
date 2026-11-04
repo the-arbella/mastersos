@@ -2550,3 +2550,23 @@ fn confirm_shows_diagnostics_only_when_debug() {
     assert!(confirm_text(&target(), &SeedFound::None, true).contains("Developer diagnostics: ON"));
     assert!(!confirm_text(&target(), &SeedFound::None, false).contains("Developer diagnostics"));
 }
+
+/// d held past the hidden window's 10 s cap: the d's typed ahead must not answer the warnings prompt (or any later one).
+#[test]
+fn held_keys_do_not_answer_the_prompts() {
+    let (tmp, r) = tpm_ok_machine("lsblk-single-nvme.json");
+    hw_db(tmp.path(), &[MS_2011, MS_2023]); // no Wi-Fi card: the warnings prompt comes first
+    let mut tty = FakeTty {
+        typed_ahead: vec!["dddddddd".into()],
+        answers: vec!["y".into(), "n".into()],
+        ..Default::default()
+    };
+    let e = install(&r, &mut tty, tmp.path(), Profile::Release).unwrap_err();
+    assert!(format!("{e:#}").contains("Cancelled"), "{e:#}");
+    let shown = tty.shown.join("\n");
+    assert!(
+        shown.contains("ERASES"),
+        "the held d's answered the warnings prompt: {shown}"
+    );
+    assert!(tty.answers.is_empty(), "{:?}", tty.answers);
+}

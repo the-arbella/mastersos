@@ -64,11 +64,16 @@ fs_type() { blkid -p -o value -s TYPE "/dev/$1" 2>/dev/null || true; }
 
 # find_seed_dir <mount point>: the folder of the install stick's seed (see the top); nothing and 1 when there is none
 find_seed_dir() {
-	local f
-	f=$(find "$1" -mindepth 1 -maxdepth 3 -type f \( -iname 'seed.toml' -o -iname 'seed-*.toml' \) -printf '%d %h\n' 2>/dev/null |
-		sort -k1,1n -k2 | head -n 1 | cut -d' ' -f2-)
+	local f real
+	# NUL-separated: a folder name may hold a newline (a crafted FAT image), which must not become a second line "0 /etc"
+	f=$(find "$1" -mindepth 1 -maxdepth 3 -type f \( -iname 'seed.toml' -o -iname 'seed-*.toml' \) -printf '%d %h\0' 2>/dev/null |
+		LC_ALL=C sort -z -k1,1n -k2 | head -z -n 1 | tr -d '\0')
 	[ -n "$f" ] || return 1
-	echo "$f"
+	f=${f#* }
+	# and never anything outside the stick
+	real=$(realpath -e -- "$f" 2>/dev/null) || return 1
+	case "$real/" in "$(realpath -e -- "$1")"/*) ;; *) return 1 ;; esac
+	printf '%s\n' "$f"
 }
 
 # pick_name <dir> <machine8> <stamp>: the first of <base>.tar.zst, <base>-2.tar.zst, ... that is not in <dir>

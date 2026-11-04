@@ -325,6 +325,7 @@ pub fn choose_seed(files: &[SeedFile], tty: &mut dyn Tty) -> Result<SeedFound> {
         }
     }
     loop {
+        tty.flush_input();
         let answer = tty.prompt("Choose a seed (number): ")?;
         if let Some(found) = answer
             .trim()
