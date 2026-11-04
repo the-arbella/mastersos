@@ -54,12 +54,31 @@ case ${HOME:-} in
 esac
 bindir=$HOME/.local/bin
 
+# HTTPS only (redirects too); plain http only for a release served by a test (MASTERSOS_RELEASE_BASE set)
+if [ -n "${MASTERSOS_RELEASE_BASE:-}" ]; then
+  curl_tls=
+  wget_tls=
+else
+  curl_tls="--proto =https --proto-redir =https --tlsv1.2"
+  # GNU wget; BusyBox wget has no such option (it is never asked for anything but the https URLs above)
+  wget_tls=
+  if wget --help 2>&1 | grep -q -- --https-only; then wget_tls=--https-only; fi
+  for url in "$base" "$api"; do
+    case $url in
+      https://*) ;;
+      *) die "only https:// addresses are used, not: $url" ;;
+    esac
+  done
+fi
+
 # fetch <url> <file>
 fetch() {
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL --retry 3 -o "$2" "$1"
+    # shellcheck disable=SC2086 # $curl_tls is a list of options
+    curl -fsSL --retry 3 $curl_tls -o "$2" "$1"
   elif command -v wget >/dev/null 2>&1; then
-    wget -q -O "$2" "$1"
+    # shellcheck disable=SC2086 # $wget_tls is a list of options
+    wget -q $wget_tls -O "$2" "$1"
   else
     die "needs curl or wget"
   fi
@@ -108,14 +127,29 @@ trap 'rm -rf "$tmp"' EXIT
 trap 'exit 1' HUP INT TERM
 
 if [ -z "$version" ]; then
-  fetch "$api" "$tmp/releases.json" || die "could not read the list of releases from $api"
-  # The list is newest first; the first cli-* tag is the newest command line release
-  version=$(tr ',' '\n' <"$tmp/releases.json" \
-    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\(cli-[0-9a-z]*\)".*/\1/p' | head -n 1)
+  # The list is newest first, 100 to a page; the first cli-* tag is the newest command line release. Image
+  # releases come in between, so read further pages until one has a cli-* tag or the list ends.
+  case $api in
+    *\?*) sep='&' ;;
+    *) sep='?' ;;
+  esac
+  page=1
+  while [ -z "$version" ] && [ "$page" -le 30 ]; do
+    fetch "$api${sep}page=$page" "$tmp/releases.json" \
+      || die "could not read the list of releases from $api. GitHub limits anonymous lookups; try again later or pass --version cli-<commit>"
+    grep -q '"tag_name"' "$tmp/releases.json" || break
+    version=$(tr ',' '\n' <"$tmp/releases.json" \
+      | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\(cli-[0-9a-z]*\)".*/\1/p' | head -n 1)
+    page=$((page + 1))
+  done
   [ -n "$version" ] || die "no cli-* release found at $api"
 fi
-printf '%s\n' "$version" | grep -Eq '^cli-[0-9a-z]+$' \
-  || die "the version must look like cli-0123456789ab (a release tag), not: $version"
+# A pattern on the whole value: a line-based grep would let "cli-x<newline>anything" through
+case $version in
+  cli- | cli-*[!0-9a-z]*) die "the version must look like cli-0123456789ab (a release tag), not: $version" ;;
+  cli-*) ;;
+  *) die "the version must look like cli-0123456789ab (a release tag), not: $version" ;;
+esac
 
 say "Installing MastersOS command line $version for $target"
 fetch "$base/$version/SHA256SUMS" "$tmp/SHA256SUMS" || die "could not download $base/$version/SHA256SUMS"

@@ -22,22 +22,29 @@ param(
     [string]$Version = $env:MASTERSOS_VERSION
 )
 
-# Errors throw instead of `exit`: run through `irm | iex`, exit would close IT's PowerShell window
-$ErrorActionPreference = 'Stop'
-Set-StrictMode -Version 3
-# Invoke-WebRequest in Windows PowerShell 5.1 is slow with its progress bar on
-$ProgressPreference = 'SilentlyContinue'
-# Windows PowerShell 5.1 may not offer TLS 1.2 by default
-[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+# Everything runs inside the function, so `irm | iex` leaves IT's PowerShell session as it was (preferences,
+# strict mode). Errors throw instead of `exit`: run through `irm | iex`, exit would close IT's window.
+function Install-MastersOS([string]$Version) {
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version 3
+    # Invoke-WebRequest in Windows PowerShell 5.1 is slow with its progress bar on
+    $ProgressPreference = 'SilentlyContinue'
+    # Windows PowerShell 5.1 may not offer TLS 1.2 by default (this one adds to the process's list, it removes nothing)
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-function Stop-Install([string]$Message) {
-    throw "mastersos install: $Message"
-}
+    function Stop-Install([string]$Message) {
+        throw "mastersos install: $Message"
+    }
 
-function Install-MastersOS {
     $repo = 'the-arbella/mastersos'
     $base = if ($env:MASTERSOS_RELEASE_BASE) { $env:MASTERSOS_RELEASE_BASE } else { "https://github.com/$repo/releases/download" }
     $api = if ($env:MASTERSOS_RELEASES_API) { $env:MASTERSOS_RELEASES_API } else { "https://api.github.com/repos/$repo/releases?per_page=100" }
+    # HTTPS only; plain http only for a release served by a test (MASTERSOS_RELEASE_BASE set)
+    foreach ($url in @($base, $api)) {
+        if ($url -notlike 'https://*' -and -not $env:MASTERSOS_RELEASE_BASE) {
+            Stop-Install "only https:// addresses are used, not: $url"
+        }
+    }
 
     # Only an x64 build: Windows 11 on ARM runs it through its x64 emulation
     $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
@@ -55,19 +62,27 @@ function Install-MastersOS {
 
     $version = $Version
     if (-not $version) {
-        try {
-            $releases = Invoke-RestMethod -UseBasicParsing -Uri $api
-        } catch {
-            Stop-Install "could not read the list of releases from ${api}: $($_.Exception.Message)"
+        # The list is newest first, 100 to a page; the first cli-* tag is the newest command line release.
+        # Image releases come in between, so read further pages until one has a cli-* tag or the list ends.
+        $sep = if ($api.Contains('?')) { '&' } else { '?' }
+        for ($page = 1; $page -le 30 -and -not $version; $page++) {
+            try {
+                $releases = @(Invoke-RestMethod -UseBasicParsing -Uri "$api${sep}page=$page")
+            } catch {
+                Stop-Install "could not read the list of releases from $api ($($_.Exception.Message)). GitHub limits anonymous lookups; try again later or pass -Version cli-<commit>"
+            }
+            # Windows PowerShell 5.1 hands a JSON array over as one object
+            $releases = @($releases | ForEach-Object { $_ })
+            if ($releases.Count -eq 0) { break }
+            $newest = @($releases | Where-Object { $_.tag_name -like 'cli-*' }) | Select-Object -First 1
+            if ($newest) { $version = [string]$newest.tag_name }
         }
-        # The list is newest first; the first cli-* tag is the newest command line release
-        $newest = @($releases | Where-Object { $_.tag_name -like 'cli-*' }) | Select-Object -First 1
-        if (-not $newest) {
+        if (-not $version) {
             Stop-Install "no cli-* release found at $api"
         }
-        $version = $newest.tag_name
     }
-    if ($version -cnotmatch '^cli-[0-9a-z]+$') {
+    # \A…\z: `$` would also match before a trailing newline
+    if ($version -cnotmatch '\Acli-[0-9a-z]+\z') {
         Stop-Install "the version must look like cli-0123456789ab (a release tag), not: $version"
     }
 
@@ -114,16 +129,19 @@ function Install-MastersOS {
         foreach ($name in $names) {
             Copy-Item -LiteralPath (Join-Path $unpacked $name) -Destination (Join-Path $dir "$name.new") -Force
         }
+        # Leftovers of earlier installs that were still running then
+        Get-ChildItem -LiteralPath $dir -Filter '*.old' -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
         foreach ($name in $names) {
             $path = Join-Path $dir $name
-            $old = "$path.old"
-            Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
-            # A running mastersos.exe (`mastersos mcp`) cannot be overwritten, but it can be renamed
+            # A running mastersos.exe (`mastersos mcp`) cannot be overwritten, but it can be renamed; the name is new
+            # every time, so a locked leftover can never stop the second program from being replaced
             if (Test-Path -LiteralPath $path) {
+                $old = "$path.$([Guid]::NewGuid().ToString('N')).old"
                 Move-Item -LiteralPath $path -Destination $old -Force
+                Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
             }
             Move-Item -LiteralPath "$path.new" -Destination $path -Force
-            Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
         }
     } finally {
         Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
@@ -161,4 +179,8 @@ function Install-MastersOS {
     Write-Output "Next: mastersos connect <your school's admin address>"
 }
 
-Install-MastersOS
+try {
+    Install-MastersOS -Version $Version
+} finally {
+    Remove-Item -LiteralPath Function:\Install-MastersOS -ErrorAction SilentlyContinue
+}

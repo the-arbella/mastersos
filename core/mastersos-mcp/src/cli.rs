@@ -26,15 +26,39 @@ const EXIT_CODES: &str = "Exit codes: 0 success; 1 failure (network, token, the 
     after_help = EXIT_CODES
 )]
 pub struct Cli {
-    /// Admin server address, for example https://school.os.khundavid.com (default: `server` in ~/.config/mastersos/config.toml)
+    // The defaults name the settings folder the way this platform writes it (spec 2026-11-04 §4.7)
+    /// Admin server address, for example https://school.os.khundavid.com
+    #[cfg_attr(
+        not(windows),
+        doc = "(default: `server` in ~/.config/mastersos/config.toml)"
+    )]
+    #[cfg_attr(
+        windows,
+        doc = r"(default: `server` in %APPDATA%\mastersos\config.toml)"
+    )]
     #[arg(long, global = true)]
     server: Option<String>,
     /// File holding IT's own token (read and draft scopes, not an AI token), never accepted on the
-    /// command line (default: `token_file` in the config file, else ~/.config/mastersos/token)
+    /// command line
+    #[cfg_attr(
+        not(windows),
+        doc = "(default: `token_file` in the config file, else ~/.config/mastersos/token)"
+    )]
+    #[cfg_attr(
+        windows,
+        doc = r"(default: `token_file` in the config file, else %APPDATA%\mastersos\token)"
+    )]
     #[arg(long, global = true)]
     token_file: Option<PathBuf>,
-    /// File holding the AI token that only `mastersos mcp` uses (default: `ai_token_file` in the
-    /// config file, else ~/.config/mastersos/ai-token)
+    /// File holding the AI token that only `mastersos mcp` uses
+    #[cfg_attr(
+        not(windows),
+        doc = "(default: `ai_token_file` in the config file, else ~/.config/mastersos/ai-token)"
+    )]
+    #[cfg_attr(
+        windows,
+        doc = r"(default: `ai_token_file` in the config file, else %APPDATA%\mastersos\ai-token)"
+    )]
     #[arg(long, global = true)]
     ai_token_file: Option<PathBuf>,
     /// Print the server's JSON instead of tables: for scripts and AI
@@ -51,7 +75,7 @@ enum Cmd {
         /// The admin server address, for example https://school.os.khundavid.com
         server_url: String,
     },
-    /// Save --server, --token-file and --ai-token-file to ~/.config/mastersos/config.toml, then test the connection
+    /// Save --server, --token-file and --ai-token-file to config.toml in the settings folder, then test the connection
     #[command(hide = true)]
     Setup,
     /// Start a local settings directory for a school that has published nothing yet, approved by the school keys given
@@ -1414,6 +1438,22 @@ pub(crate) async fn publish_to(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn help_names_this_platforms_settings_folder() {
+        use clap::CommandFactory;
+        let help = Cli::command().render_long_help().to_string();
+        let flat = help.split_whitespace().collect::<Vec<_>>().join(" ");
+        if cfg!(windows) {
+            assert!(flat.contains(r"%APPDATA%\mastersos\token"), "{help}");
+            assert!(!help.contains("~/.config"), "{help}");
+        } else {
+            assert!(flat.contains("~/.config/mastersos/token"), "{help}");
+            assert!(!help.contains("APPDATA"), "{help}");
+        }
+        assert!(flat.contains("ai-token)"), "{help}");
+        assert!(flat.contains("config.toml)"), "{help}");
+    }
 
     #[test]
     fn publish_takes_kit_or_key_and_repeated_reroute_approvals() {

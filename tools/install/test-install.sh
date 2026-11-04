@@ -62,10 +62,16 @@ else
   exit 2
 fi
 
-# The newest-release lookup reads the GitHub API's list; a fake list with an image release first
-cat >"$www/releases.json" <<EOF
+# The newest-release lookup pages through the GitHub API's list: page 1 holds only image releases
+cat >"$www/releases-1.json" <<EOF
 [
-  {"tag_name": "image-release-20261101.1", "draft": false},
+  {"tag_name": "image-release-20261102.1", "draft": false},
+  {"tag_name": "image-release-20261101.1", "draft": false}
+]
+EOF
+cat >"$www/releases-2.json" <<EOF
+[
+  {"tag_name": "image-release-20261031.1", "draft": false},
   {"tag_name": "$tag", "draft": false},
   {"tag_name": "cli-000000000000", "draft": false}
 ]
@@ -77,25 +83,22 @@ cp "$www/$tag"/* "$www/tampered/$tag/"
 awk '{ print "0000000000000000000000000000000000000000000000000000000000000000  " $2 }' \
   "$www/$tag/SHA256SUMS" >"$www/tampered/$tag/SHA256SUMS"
 
-port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
-python3 -m http.server --bind 127.0.0.1 --directory "$www" "$port" >"$tmp/server.log" 2>&1 &
+python3 -I "$here/fake-release.py" "$www" "$tmp/port" >"$tmp/server.log" 2>&1 &
 server_pid=$!
-base=http://127.0.0.1:$port
-# python, not curl: the installer must also work where only wget is there
-up() { python3 -c 'import sys, urllib.request; urllib.request.urlopen(sys.argv[1], timeout=2)' "$base/releases.json" 2>/dev/null; }
 for _ in $(seq 50); do
-  up && break
+  [ -s "$tmp/port" ] && break
   sleep 0.1
 done
-up || fail "the local release server did not start"
+[ -s "$tmp/port" ] || fail "the local release server did not start"
+base=http://127.0.0.1:$(cat "$tmp/port")
 
 # run_install <home> <log> [installer args...]: the installer as IT runs it (`curl … | sh -s -- …`);
-# release_base=<url> serves another copy of the release
+# release_base=<url> serves another copy of the release (empty: none, as for IT), releases_api=<url> another list
 run_install() {
   local home=$1 log=$2
   shift 2
   mkdir -p "$home"
-  HOME=$home MASTERSOS_RELEASE_BASE=${release_base:-$base} MASTERSOS_RELEASES_API=$base/releases.json \
+  HOME=$home MASTERSOS_RELEASE_BASE=${release_base-$base} MASTERSOS_RELEASES_API=${releases_api:-$base/releases?per_page=100} \
     sh -s -- "$@" <"$installer" >"$log" 2>&1
 }
 
@@ -114,7 +117,7 @@ pass "install --version $tag"
 run_install "$home" "$tmp/2.log" --version "$tag" || { cat "$tmp/2.log"; fail "reinstall"; }
 pass "reinstall over an existing copy"
 
-# 3. No version: the newest cli-* release in the list
+# 3. No version: the newest cli-* release in the list, on its second page
 home=$tmp/home3
 run_install "$home" "$tmp/3.log" || { cat "$tmp/3.log"; fail "install the newest"; }
 grep -qF "$tag" "$tmp/3.log" || { cat "$tmp/3.log"; fail "newest release was not $tag"; }
@@ -149,5 +152,33 @@ if run_install "$home" "$tmp/6.log" --version ../evil; then
 fi
 grep -q 'cli-' "$tmp/6.log" || { cat "$tmp/6.log"; fail "bad version: no hint"; }
 pass "bad version refused"
+
+# 7. A version with a newline in it: refused as a whole, not line by line
+home=$tmp/home7
+if run_install "$home" "$tmp/7.log" --version "$tag
+../evil"; then
+  cat "$tmp/7.log"
+  fail "version with a newline accepted"
+fi
+grep -q 'must look like' "$tmp/7.log" || { cat "$tmp/7.log"; fail "newline version: not refused as a bad version"; }
+[ ! -e "$home/.local/bin/mastersos" ] || fail "newline version: something was installed"
+pass "version with a newline refused"
+
+# 8. Without the test override, plain http is refused before anything is downloaded
+home=$tmp/home8
+if release_base='' run_install "$home" "$tmp/8.log"; then
+  cat "$tmp/8.log"
+  fail "http release list accepted without the override"
+fi
+grep -q 'only https://' "$tmp/8.log" || { cat "$tmp/8.log"; fail "http: no https message"; }
+pass "plain http refused without MASTERSOS_RELEASE_BASE"
+
+# 9. The release list cannot be read (GitHub's anonymous rate limit answers 403): a clear message
+home=$tmp/home9
+if releases_api=$base/no-such-list run_install "$home" "$tmp/9.log"; then
+  fail "unreadable release list accepted"
+fi
+grep -q 'GitHub limits anonymous lookups' "$tmp/9.log" || { cat "$tmp/9.log"; fail "list error: no rate-limit hint"; }
+pass "unreadable release list explained"
 
 echo "all install.sh tests passed"
