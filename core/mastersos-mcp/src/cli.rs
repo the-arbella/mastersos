@@ -154,10 +154,7 @@ struct ConfigFile {
 }
 
 fn config_dir() -> Result<PathBuf, OpError> {
-    let home = std::env::var_os("HOME")
-        .filter(|h| !h.is_empty())
-        .ok_or_else(|| OpError::Failed("HOME is not set".into()))?;
-    Ok(PathBuf::from(home).join(".config").join("mastersos"))
+    mastersos_sign::platform::config_dir("mastersos").map_err(fail)
 }
 
 fn load_config() -> Result<ConfigFile, OpError> {
@@ -370,8 +367,7 @@ async fn setup(
         ai_token_file: Some(ai_token_file.clone()),
     })
     .map_err(|e| OpError::Failed(format!("Could not write the config: {e}")))?;
-    std::fs::write(&path, text)
-        .map_err(|e| OpError::Failed(format!("Could not write {}: {e}", path.display())))?;
+    mastersos_sign::platform::write_private(&path, text.as_bytes()).map_err(fail)?;
     println!("Saved {}", path.display());
     for (file, wanted, what) in [
         (
@@ -411,20 +407,7 @@ async fn setup(
 
 /// The token file must be readable by its owner only.
 fn check_private(path: &Path) -> Result<(), OpError> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let meta = std::fs::metadata(path)
-            .map_err(|e| OpError::Failed(format!("Could not read {}: {e}", path.display())))?;
-        if meta.permissions().mode() & 0o077 != 0 {
-            return Err(OpError::Failed(format!(
-                "Other users can read the token file {p}; run: chmod 600 {p}",
-                p = path.display()
-            )));
-        }
-    }
-    let _ = path;
-    Ok(())
+    mastersos_sign::platform::check_private(path).map_err(fail)
 }
 
 async fn devices(api: &Api, out: &Out, c: DevicesCmd) -> Result<ExitCode, OpError> {
@@ -850,28 +833,14 @@ fn hash_password() -> Result<ExitCode, OpError> {
 }
 
 /// One line with echo off; fails when stdin is not a terminal.
-fn prompt_secret(text: &str) -> Result<String, OpError> {
-    use rustix::termios::{tcgetattr, tcsetattr, LocalModes, OptionalActions};
-    use std::io::{BufRead as _, Write as _};
-    eprint!("{text}");
-    std::io::stderr().flush().ok();
-    let stdin = std::io::stdin();
-    let saved = tcgetattr(&stdin).map_err(|_| {
-        OpError::Failed("stdin is not a terminal, so a password cannot be read safely".into())
-    })?;
-    let mut quiet = saved.clone();
-    quiet.local_modes.remove(LocalModes::ECHO);
-    tcsetattr(&stdin, OptionalActions::Flush, &quiet).map_err(fail)?;
-    let mut line = String::new();
-    let read = stdin.lock().read_line(&mut line);
-    // Echo comes back whether or not the read worked.
-    let restored = tcsetattr(&stdin, OptionalActions::Flush, &saved);
-    eprintln!();
-    restored.map_err(fail)?;
-    if read.map_err(fail)? == 0 {
-        return Err(OpError::Failed("input closed".into()));
+fn prompt_secret(text: &str) -> Result<zeroize::Zeroizing<String>, OpError> {
+    use std::io::IsTerminal as _;
+    if !std::io::stdin().is_terminal() {
+        return Err(OpError::Failed(
+            "stdin is not a terminal, so a password cannot be read safely".into(),
+        ));
     }
-    Ok(line.trim_end_matches(['\n', '\r']).to_owned())
+    mastersos_sign::platform::read_hidden_line(text).map_err(fail)
 }
 
 /// `publish --kit` / `--key`, read and checked (owner, mode 0600, contents) before anything is

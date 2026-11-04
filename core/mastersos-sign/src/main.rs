@@ -44,7 +44,7 @@ impl Server {
 
 #[derive(Args)]
 struct PinDir {
-    /// pin 存放目录，默认 ~/.config/mastersos-sign/
+    /// pin 存放目录，默认 $XDG_CONFIG_HOME/mastersos-sign/ 或 ~/.config/mastersos-sign/（Windows：%APPDATA%\mastersos-sign\）
     #[arg(long)]
     pin_dir: Option<PathBuf>,
 }
@@ -54,8 +54,8 @@ impl PinDir {
         if let Some(d) = &self.pin_dir {
             return Ok(d.clone());
         }
-        let home = std::env::var_os("HOME").context("没有 HOME：用 --pin-dir 指定 pin 目录")?;
-        Ok(Path::new(&home).join(".config").join("mastersos-sign"))
+        mastersos_sign::platform::config_dir("mastersos-sign")
+            .context("give the pin directory with --pin-dir")
     }
 }
 

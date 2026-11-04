@@ -147,10 +147,11 @@ fn read_snapshot(dir: &Path) -> Result<Snapshot> {
     })
 }
 
-/// Refuse a symlink (it could point at any file the user can read). A missing path is fine.
+/// Refuse a symlink, or on Windows any reparse point (it could point at any file the user can
+/// read). A missing path is fine.
 fn refuse_link(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
-        Ok(m) if m.file_type().is_symlink() => {
+        Ok(m) if mastersos_sign::platform::is_link(&m) => {
             bail!("{} is a symbolic link, which is refused", path.display())
         }
         Ok(_) => Ok(()),
@@ -232,28 +233,6 @@ fn read_members(dir: &Path, prefix: &str, out: &mut BTreeMap<String, Vec<u8>>) -
     Ok(())
 }
 
-/// Write a file that only the owner can read.
-fn write_private(path: &Path, text: &str) -> Result<()> {
-    use std::io::Write as _;
-    let mut opts = fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        opts.mode(0o600);
-    }
-    let mut f = opts
-        .open(path)
-        .with_context(|| format!("could not write {}", path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        f.set_permissions(fs::Permissions::from_mode(0o600))?;
-    }
-    f.write_all(text.as_bytes())?;
-    Ok(())
-}
-
 /// Replace the snapshot in `dir` (and nothing else in it) with the given content.
 fn write_snapshot(
     dir: &Path,
@@ -273,7 +252,7 @@ fn write_snapshot(
     }
     remove_if_exists(&dir.join(SECRETS))?;
     fs::write(dir.join(MANIFEST), manifest)?;
-    write_private(&dir.join(SECRETS), secrets_raw)?;
+    mastersos_sign::platform::write_private(&dir.join(SECRETS), secrets_raw.as_bytes())?;
     for (key, data) in files {
         let path = dir.join(key);
         if let Some(parent) = path.parent() {
@@ -913,6 +892,42 @@ mod tests {
         assert!(diff(&w).is_err());
     }
 
+    /// Spec §5.4: on NTFS a junction or symlink is refused where Unix refuses a symlink.
+    #[cfg(windows)]
+    #[test]
+    fn workdir_refuses_reparse_point() {
+        let t = tempfile::tempdir().unwrap();
+        let w = pulled(&t.path().join("school"));
+        // The state directory replaced by a junction (no privilege needed).
+        let state = t.path().join("moved-state");
+        std::fs::rename(w.root.join(".mastersos"), &state).unwrap();
+        let out = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(w.root.join(".mastersos"))
+            .arg(&state)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        let e = format!("{:#}", diff(&w).unwrap_err());
+        assert!(
+            e.contains(".mastersos") && e.contains("symbolic link"),
+            "{e}"
+        );
+        std::fs::remove_dir(w.root.join(".mastersos")).unwrap();
+        std::fs::rename(&state, w.root.join(".mastersos")).unwrap();
+        assert!(diff(&w).is_ok());
+        // manifest.toml replaced by a file symlink.
+        let target = t.path().join("target.txt");
+        std::fs::write(&target, "TOPSECRET-KEY").unwrap();
+        std::fs::remove_file(w.root.join("manifest.toml")).unwrap();
+        std::os::windows::fs::symlink_file(&target, w.root.join("manifest.toml")).unwrap();
+        let e = format!("{:#}", w.manifest().unwrap_err());
+        assert!(
+            e.contains("manifest.toml") && !e.contains("TOPSECRET"),
+            "{e}"
+        );
+    }
+
     #[test]
     fn pull_writes_split_layout() {
         let t = tempfile::tempdir().unwrap();
@@ -936,6 +951,10 @@ mod tests {
                     .mode();
                 assert_eq!(mode & 0o777, 0o600, "{p}");
             }
+        }
+        #[cfg(windows)]
+        for p in ["secrets.toml", ".mastersos/base/secrets.toml"] {
+            mastersos_sign::platform::check_private(&w.root.join(p)).unwrap();
         }
         assert!(!w.is_dirty().unwrap());
         // The base keeps the split form: no secret value anywhere under .mastersos/.

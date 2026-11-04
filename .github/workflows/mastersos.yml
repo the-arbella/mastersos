@@ -50,6 +50,31 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev pkg-config
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace --no-fail-fast
+  # The command lines school IT runs (mastersos, mastersos-sign) on macOS and Windows (spec 2026-11-04 §5.6);
+  # Linux runs them in the core job
+  cli-tests:
+    if: github.repository == 'the-arbella/mastersos' || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: core
+        shell: bash
+    steps:
+      # The tests read docs and test vectors byte for byte: no CRLF checkout on Windows
+      - run: git config --global core.autocrlf false
+        working-directory: .
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: "1.98"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: core
+      - run: cargo test -p mastersos-bundle -p mastersos-sign -p mastersos-mcp --no-fail-fast
   # Known vulnerabilities, licences and registries (core/deny.toml)
   deps:
     runs-on: ubuntu-latest

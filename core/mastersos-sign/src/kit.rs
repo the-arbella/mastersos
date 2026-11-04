@@ -57,9 +57,13 @@ fn parse(text: &str, from: &str) -> Result<Kit> {
     Kit::parse(text).with_context(|| format!("cannot read the recovery kit from {from}"))
 }
 
-/// Read a kit file (owner and mode checked as for key files).
+/// Read a school key (kit) file. Another owner is refused; access by other users only gets
+/// [`crate::platform::KEY_FILE_NOTE`] on stderr (a USB stick cannot keep a file private).
 pub fn load_kit(path: &Path) -> Result<Kit> {
-    let f = crate::open_private(path)?;
+    let (f, note) = crate::platform::open_school_key(path)?;
+    if let Some(note) = note {
+        eprintln!("{}: {note}", path.display());
+    }
     // Sized for the whole bounded read, so the buffer never reallocates while holding the kit.
     let mut text = Zeroizing::new(String::with_capacity(KIT_INPUT_MAX as usize + 1));
     f.take(KIT_INPUT_MAX)

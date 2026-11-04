@@ -7,14 +7,16 @@
 //!   由 nonce 按 `keyid::keyprobe_message` 自己拼，绝不签服务端给的 `message_b64`。
 //! - 私钥文件 0600、不覆盖已有文件，私钥不打印到终端、不进日志。
 //! - 服务端给的字符串一律经 [`safe`] 转义后才打印：控制序列藏不了行、伪造不了行。
-#![forbid(unsafe_code)]
+// Unsafe code only in `platform`, for the Windows API calls.
+#![cfg_attr(not(windows), forbid(unsafe_code))]
+#![cfg_attr(windows, deny(unsafe_code))]
 
 pub mod chain;
 pub mod kit;
+pub mod platform;
 pub mod safe;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::OpenOptions;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
@@ -292,25 +294,10 @@ fn key_from_pkcs8(pkcs8: &[u8]) -> Result<(Ed25519Signer, TrustKey)> {
     Ok((signer, tk))
 }
 
-/// 以 0600 新建文件写入私钥材料；文件已存在就拒绝。
+/// Write private key material to a new owner-only file ([`platform::create_private`]); an
+/// existing file is refused.
 fn write_secret(path: &Path, data: &[u8]) -> Result<()> {
-    let mut opts = OpenOptions::new();
-    opts.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    let mut f = opts.open(path).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::AlreadyExists {
-            anyhow!(
-                "{} already exists; refusing to overwrite it",
-                path.display()
-            )
-        } else {
-            anyhow!("cannot create {}: {e}", path.display())
-        }
-    })?;
+    let mut f = platform::create_private(path)?;
     let written = f.write_all(data).and_then(|()| f.sync_all());
     if let Err(e) = written {
         drop(f);
@@ -337,41 +324,10 @@ fn pem(pkcs8: &[u8]) -> String {
     s
 }
 
-/// Open a private key or kit file once, so the owner and mode checked are those of the file
-/// read. On unix it must belong to the current user and not be readable or writable by group or
-/// others, so another account can neither read nor swap it.
-pub(crate) fn open_private(path: &Path) -> Result<std::fs::File> {
-    let f = std::fs::File::open(path)
-        .with_context(|| format!("cannot open the key file {}", path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt as _;
-        let meta = f
-            .metadata()
-            .with_context(|| format!("cannot read the metadata of {}", path.display()))?;
-        let me = nix::unistd::getuid().as_raw();
-        if meta.uid() != me {
-            bail!(
-                "the key file {} belongs to uid {}, not to the current user (uid {me})",
-                path.display(),
-                meta.uid()
-            );
-        }
-        if meta.mode() & 0o077 != 0 {
-            bail!(
-                "the key file {} has mode {:o}, other accounts can read or write it: chmod 600 it first",
-                path.display(),
-                meta.mode() & 0o777
-            );
-        }
-    }
-    Ok(f)
-}
-
-/// 读钥匙文件（PEM 或裸 DER 的 PKCS#8），属主与权限见 [`open_private`]。
+/// 读钥匙文件（PEM 或裸 DER 的 PKCS#8），属主与权限见 [`platform::check_private`]。
 pub fn load_key(path: &Path) -> Result<(Ed25519Signer, TrustKey)> {
     use std::io::Read as _;
-    let mut f = open_private(path)?;
+    let mut f = platform::open_private(path)?;
     let mut data = Vec::new();
     f.read_to_end(&mut data)
         .with_context(|| format!("读钥匙文件 {} 失败", path.display()))?;

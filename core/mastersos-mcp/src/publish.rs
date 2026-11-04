@@ -1500,22 +1500,28 @@ mod tests {
         assert!(uploads(&s).await.is_empty());
     }
 
+    /// Spec §5.3: a school key file others can read (a FAT32 or exFAT USB stick) still loads,
+    /// with a note; a PKCS#8 key file stays strict.
     #[cfg(unix)]
     #[test]
-    fn loose_kit_file_is_refused_like_a_key_file() {
+    fn loose_kit_file_loads_but_loose_key_file_is_refused() {
         use std::os::unix::fs::PermissionsExt;
         let t = tempfile::tempdir().unwrap();
-        let (kit, _) = kit_file(t.path());
+        let (kit, expected) = kit_file(t.path());
         let key = t.path().join("rk.pem");
         mastersos_sign::keygen(&key).unwrap();
         for p in [&kit, &key] {
-            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o644)).unwrap();
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o777)).unwrap();
         }
-        let kit_err = format!("{:#}", SignWith::kit_file(&kit).err().unwrap());
+        let SignWith::Kit(loaded) = SignWith::kit_file(&kit).unwrap() else {
+            unreachable!()
+        };
+        assert_eq!(loaded.key_id(), expected.key_id());
         let key_err = format!("{:#}", SignWith::key_file(&key).err().unwrap());
-        for e in [&kit_err, &key_err] {
-            assert!(e.contains("has mode 644") && e.contains("chmod 600"), "{e}");
-        }
+        assert!(
+            key_err.contains("has mode 777") && key_err.contains("chmod 600"),
+            "{key_err}"
+        );
         // Not a kit at all.
         let junk = t.path().join("junk");
         std::fs::write(&junk, "hello").unwrap();

@@ -18,7 +18,6 @@ mastersos-bundle = { path = "../mastersos-bundle" }
 mastersos-sign = { path = "../mastersos-sign" }
 reqwest.workspace = true
 ring.workspace = true
-rustix.workspace = true
 rmcp.workspace = true
 schemars.workspace = true
 serde.workspace = true
@@ -26,6 +25,8 @@ serde_json.workspace = true
 similar.workspace = true
 tokio.workspace = true
 toml.workspace = true
+# hash-password: the typed password is wiped after use.
+zeroize.workspace = true
 # The IT maintenance account's password hash (itpass): yescrypt in crypt(3) form, as libxcrypt reads it.
 yescrypt = { version = "0.1", default-features = false, features = ["password-hash"] }
 
