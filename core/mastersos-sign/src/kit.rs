@@ -46,11 +46,7 @@ impl KitSummary {
 
 /// Generate a kit offline and write its text to `out` (0600; an existing file is refused).
 pub fn kit_new(out: &Path) -> Result<KitSummary> {
-    let kit = Kit::generate();
-    let mut text = kit.to_display();
-    text.push('\n');
-    write_secret(out, text.as_bytes())?;
-    Ok(KitSummary::of(&kit))
+    kit_new_in(out, None).map(|(summary, _)| summary)
 }
 
 /// The file name `kit new` gives a school key written into a directory:

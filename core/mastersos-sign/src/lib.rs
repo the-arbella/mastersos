@@ -857,14 +857,14 @@ pub async fn sign_pending_expecting(
     let digest = hex(&content_digest(&contents));
     if !digest.eq_ignore_ascii_case(p.digest_hex.trim()) {
         bail!(
-            "Check code mismatch: the downloaded content gives {digest} here, the server says {}. What the server gave is not what it will submit; not signing",
+            "Content fingerprint mismatch: the downloaded content gives {digest} here, the server says {}. What the server gave is not what it will submit; not signing",
             p.digest_hex
         );
     }
     if let Some(want) = expect_digest {
         if !digest.eq_ignore_ascii_case(want.trim()) {
             bail!(
-                "the pending bundle's digest is {digest}, but the content uploaded from this computer has digest {}: the server holds other content under this pending id; not signing",
+                "The upload's content fingerprint is {digest}, but the content uploaded from this computer has {}: the server holds other content under this upload id; not signing",
                 want.trim()
             );
         }
@@ -953,8 +953,8 @@ pub async fn sign_pending_expecting(
         writeln!(
             out,
             "This is the first version (R1g): machines verify it with its own trust. Check every \
-             fingerprint against what you hold, not against this server's pages: your recovery key's \
-             fingerprint as printed by `mastersos-sign keygen` / `register` (or on the printed kit), and \
+             fingerprint against what you hold, not against this server's pages: your school key's \
+             fingerprint as printed by `mastersos-sign keygen` / `register` (or on the printed school key), and \
              each passkey's fingerprint shown when it was registered on your device."
         )?;
         delta.print(out)?;
@@ -1015,7 +1015,8 @@ pub async fn sign_pending_expecting(
     print_server_notes(out, &p, &secret_values)?;
 
     // 6. 人工确认。
-    writeln!(out, "\nCheck code computed here: {digest}")?;
+    writeln!(out, "\nContent fingerprint computed here: {digest}")?;
+    writeln!(out, "Check code: {}", &digest[..8])?;
     let typed = ask(
         confirm,
         out,
@@ -1170,9 +1171,10 @@ pub async fn sign_heartbeat_at(
     )?;
     writeln!(
         out,
-        "Check code (first 16): {}",
+        "Content fingerprint (first 16 digits): {}",
         &statement.digest_hex[..16]
     )?;
+    writeln!(out, "Check code: {}", &statement.digest_hex[..8])?;
     writeln!(out, "issued_at:   {}", both_zones(statement.issued_at))?;
     writeln!(
         out,
@@ -1342,6 +1344,24 @@ pub async fn seed_check(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paper_copy_with_a_wrong_key_id_line_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let k = keygen(&dir.path().join("k.pem")).unwrap();
+        assert!(k.paper.contains(&format!("key id: {}", k.trust_key.id)));
+        // The copy as printed restores.
+        restore_from_paper(&k.paper, &dir.path().join("ok.pem")).unwrap();
+        // A key id line that names another key does not.
+        let wrong = k.paper.replace(
+            &format!("key id: {}", k.trust_key.id),
+            "key id: rk-00000000",
+        );
+        assert_ne!(wrong, k.paper);
+        let err = restore_from_paper(&wrong, &dir.path().join("bad.pem")).unwrap_err();
+        assert!(format!("{err:#}").contains("rk-00000000"), "{err:#}");
+        assert!(!dir.path().join("bad.pem").exists());
+    }
 
     fn verified(text: &str) -> Verified {
         Verified {

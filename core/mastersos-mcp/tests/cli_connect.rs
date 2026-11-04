@@ -133,6 +133,48 @@ async fn connect_refuses_token_without_draft() {
     assert!(!config_dir(home.path()).exists(), "nothing may be written");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn connect_refuses_token_with_more_rights() {
+    let s = server(json!({
+        "label": "cli:IT", "kind": "token", "scopes": ["read", "draft", "recovery"]
+    }))
+    .await;
+    let home = tempfile::tempdir().unwrap();
+    let out = run(s.uri(), home.path().to_owned(), "t\n").await;
+    assert!(!out.status.success());
+    assert!(!config_dir(home.path()).exists(), "nothing may be written");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("more rights than the command line needs")
+            && err.contains("nothing was saved"),
+        "{err}"
+    );
+}
+
+#[test]
+fn connect_rejects_the_global_server_flag() {
+    let home = tempfile::tempdir().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_mastersos"))
+        .args([
+            "connect",
+            "https://school.example",
+            "--server",
+            "https://other.example",
+        ])
+        .env("HOME", home.path())
+        .env("APPDATA", home.path())
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("takes the server address as its argument"),
+        "{err}"
+    );
+    assert!(!config_dir(home.path()).exists());
+}
+
 #[test]
 fn help_hides_setup_and_uses_school_key_words() {
     let out = Command::new(env!("CARGO_BIN_EXE_mastersos"))

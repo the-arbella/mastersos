@@ -100,7 +100,8 @@ fn load_key_arg(k: KeyArg, stdin: &std::io::Stdin) -> Result<Loaded> {
     match (k.key, k.school_key) {
         (Some(p), None) => Ok(Loaded::File(p)),
         (None, Some(p)) => Ok(Loaded::Kit(kit_arg(&p, stdin)?)),
-        _ => anyhow::bail!("give exactly one of --school-key and --key"),
+        (None, None) => anyhow::bail!("--school-key <FILE> is required"),
+        _ => anyhow::bail!("give only one of --school-key and --key"),
     }
 }
 
@@ -229,7 +230,8 @@ async fn run(cli: Cli) -> Result<()> {
                 mastersos_bundle::keyid::key_code(&k.key_id).unwrap_or(k.key_id)
             );
             println!("fingerprint: {}", k.fingerprint);
-            println!("school key:  {}", path.display());
+            let shown = std::path::absolute(&path).unwrap_or(path);
+            println!("school key:  {}", shown.display());
             println!(
                 "Print the school key file on paper and lock the printout away, register it with \
                  `mastersos-sign register --school-key <file>`, then move the file to a USB stick \

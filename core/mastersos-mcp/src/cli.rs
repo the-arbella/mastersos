@@ -211,6 +211,12 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         cmd,
     } = cli;
     if let Cmd::Connect { server_url } = &cmd {
+        if server.is_some() || ai_token_file.is_some() {
+            return Err(OpError::Failed(
+                "`mastersos connect` takes the server address as its argument (`mastersos connect <SERVER_URL>`); --server and --ai-token-file are not used here"
+                    .into(),
+            ));
+        }
         // Like setup: before the config file is read, so a broken one gets rewritten.
         return connect_school(server_url, token_file).await;
     }
@@ -454,6 +460,14 @@ async fn connect_school(
                 .into(),
         ));
     }
+    // The same check every later command applies to IT's token.
+    crate::check_scopes(&who, TokenUse::It).map_err(|e| match e {
+        crate::StartError::Refused(_) => OpError::Failed(
+            "This token has more rights than the command line needs. Create a token with read and draft only; nothing was saved"
+                .into(),
+        ),
+        other => OpError::Failed(other.to_string()),
+    })?;
     let school: String = who["school_name"]
         .as_str()
         .map(|n| {

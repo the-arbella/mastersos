@@ -127,5 +127,22 @@ fn sign_without_a_school_key_says_so() {
     ]);
     let t = text(&out);
     assert!(!out.status.success());
-    assert!(t.contains("--school-key"), "{t}");
+    assert!(t.contains("--school-key <FILE> is required"), "{t}");
+    assert!(!t.contains("--key"), "{t}");
+}
+
+#[test]
+fn kit_new_prints_an_absolute_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_mastersos-sign"))
+        .args(["kit", "new", "--out", "own.kit"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let t = text(&out);
+    assert!(out.status.success(), "{t}");
+    let line = t.lines().find(|l| l.starts_with("school key:")).unwrap();
+    let shown = std::path::Path::new(line["school key:".len()..].trim());
+    assert!(shown.is_absolute(), "{line}");
+    assert!(shown.ends_with("own.kit") && dir.path().join("own.kit").is_file());
 }

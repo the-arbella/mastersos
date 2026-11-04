@@ -1136,7 +1136,7 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(
-            err.contains("the server holds other content under this pending id"),
+            err.contains("the server holds other content under this upload id"),
             "{err}"
         );
         assert!(!s
