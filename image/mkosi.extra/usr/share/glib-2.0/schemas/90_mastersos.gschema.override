@@ -4,6 +4,17 @@
 [org.gnome.shell]
 favorite-apps=['google-chrome.desktop', 'org.gnome.Nautilus.desktop']
 
+# The Dock before (or without) a settings bundle, for every account: the same full-width bottom shelf mastersos-agent
+# writes (desktop.rs DOCK_LAYOUT), and no drives. Ubuntu's own default is a left Dock listing every volume, even the
+# machine's own unmounted partitions (the encrypted root, the seed partition) and the install stick.
+[org.gnome.shell.extensions.dash-to-dock]
+dock-position='BOTTOM'
+extend-height=true
+always-center-icons=true
+dock-fixed=true
+dash-max-icon-size=44
+show-mounts=false
+
 # The login screen has one entry and no user list (design 2026-11-03, login single field): people are found by typing.
 [org.gnome.login-screen]
 disable-user-list=true

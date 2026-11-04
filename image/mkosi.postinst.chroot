@@ -109,6 +109,16 @@ PY
 
 # GNOME 的默认值（gschema override，排在发行版的 00_/10_ 之后）：Dock 里放 Chrome（Task 9）。改了 override 要重新编译
 glib-compile-schemas /usr/share/glib-2.0/schemas
+# The override only takes if the dash-to-dock schema is in the global directory (the ubuntu-dock package): read it back.
+dget() { env -u DBUS_SESSION_BUS_ADDRESS GSETTINGS_BACKEND=memory HOME=/nonexistent XDG_CONFIG_HOME=/nonexistent gsettings get org.gnome.shell.extensions.dash-to-dock "$1"; }
+for kv in "dock-position='BOTTOM'" show-mounts=false extend-height=true; do
+	got=$(dget "${kv%%=*}") || { echo "postinst: dash-to-dock schema not found" >&2; exit 1; }
+	if [ "$got" != "${kv#*=}" ]; then
+		echo "postinst: dash-to-dock ${kv%%=*} default is $got (want ${kv#*=})" >&2
+		exit 1
+	fi
+done
+echo "postinst: Dock defaults: bottom, no drives"
 
 # gnome-shell extensions (phase B, Task 13): the quick-settings "managed by" line must load under the locked learning profile, where
 # disable-user-extensions=true switches the ordinary user-extension path off. Extensions listed in the session mode's JSON are not

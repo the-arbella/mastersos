@@ -215,6 +215,10 @@ fn desktop_mode_has_no_locks() {
     assert!(k.contains("lock-enabled=true"));
     assert!(k.contains("dock-position='BOTTOM'"), "{k}");
     assert!(
+        k.contains("dash-max-icon-size=44\nshow-mounts=false\n"),
+        "{k}"
+    );
+    assert!(
         !k.contains("lockdown")
             && !k.contains("media-keys")
             && !k.contains("disabled-extensions")
