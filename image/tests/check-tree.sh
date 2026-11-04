@@ -2112,7 +2112,7 @@ fi
 #     the agent's redirect filter equals the patch's redirect, and build.sh pins gnome-shell (the extension patches its private code).
 r=0
 le=$gs/extensions/mastersos-login@mastersos.org
-for f in area.js card.js people.js setup.js shelf.js strings.js; do
+for f in area.js brand.js card.js people.js setup.js shelf.js strings.js; do
 	[ -f "$le/$f" ] || {
 		bad 49 "$le/$f is missing"
 		r=1
@@ -2435,5 +2435,35 @@ grep -qx 'plymouth.enable=0' "$rel/installer/installer.cmdline" || {
 	r=1
 }
 [ "$r" = 0 ] && ok 52 "boot splash: mastersos two-step theme in the image and the initrd (identical), default theme, quiet splash, factory reset confirm quits plymouth, installer keeps plymouth off"
+
+# 53. Login screen and lock screen look (design 2026-11-04 visual identity §5.4–5.5): the login background is the night picture,
+#     both extensions put the MastersOS mark (class mastersos-brand-corner) in the top bar, no Google-blue focus ring is left in
+#     their styles, and the locked app's error page uses the brand colours.
+r=0
+gse=$ex/usr/share/gnome-shell/extensions
+lcss=$gse/mastersos-login@mastersos.org/stylesheet.css
+grep -qF 'background-image: url("file:///usr/share/backgrounds/mastersos/mastersos-night.jpg");' "$lcss" || {
+	bad 53 "$lcss: .mastersos-login-background has no night picture"
+	r=1
+}
+grep -qF 'background-size: cover;' "$lcss" || {
+	bad 53 "$lcss: the background is not background-size: cover"
+	r=1
+}
+for e in mastersos-login@mastersos.org mastersos-managed@mastersos.org; do
+	grep -qF "mastersos-brand-corner" "$gse/$e/extension.js" || {
+		bad 53 "$e does not add the MastersOS mark (mastersos-brand-corner)"
+		r=1
+	}
+	if grep -qiE '#8ab4f8|#0b57d0|#0842a0|#a8c7fa|138, 180, 248' "$gse/$e/stylesheet.css"; then
+		bad 53 "$e/stylesheet.css still has the old blue"
+		r=1
+	fi
+done
+grep -qF 'background: #090a16' "$ex/usr/share/mastersos/kiosk-error.html" || {
+	bad 53 "kiosk-error.html does not use the brand background #090a16"
+	r=1
+}
+[ "$r" = 0 ] && ok 53 "login and lock: night wallpaper background, MastersOS mark in the top bar of both, no old blue left, kiosk error page uses brand colours"
 
 exit $fail
