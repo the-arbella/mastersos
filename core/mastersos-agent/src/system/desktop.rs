@@ -302,6 +302,9 @@ pub fn render_dconf(
     if p.locked() {
         // Ubuntu Dock 里的回收站与外接盘点开就是文件管理器
         k.push_str("show-trash=false\nshow-mounts=false\n");
+    } else {
+        // No drives in any mode: Ubuntu's Dock lists every volume, the machine's own unmounted partitions included.
+        k.push_str("show-mounts=false\n");
     }
     (k, locks)
 }
