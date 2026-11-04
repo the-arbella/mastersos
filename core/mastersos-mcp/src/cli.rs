@@ -840,7 +840,17 @@ fn prompt_secret(text: &str) -> Result<zeroize::Zeroizing<String>, OpError> {
             "stdin is not a terminal, so a password cannot be read safely".into(),
         ));
     }
-    mastersos_sign::platform::read_hidden_line(text).map_err(fail)
+    mastersos_sign::platform::read_hidden_line(text).map_err(|e| {
+        if e.is::<mastersos_sign::platform::CannotHideTyping>() {
+            OpError::Failed(
+                "Cannot hide typing in this terminal, so a password cannot be read safely. \
+                 Run this in PowerShell or Command Prompt (Windows) or another terminal."
+                    .into(),
+            )
+        } else {
+            fail(e)
+        }
+    })
 }
 
 /// `publish --kit` / `--key`, read and checked (owner, mode 0600, contents) before anything is

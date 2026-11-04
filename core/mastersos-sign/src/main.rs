@@ -44,7 +44,7 @@ impl Server {
 
 #[derive(Args)]
 struct PinDir {
-    /// pin 存放目录，默认 $XDG_CONFIG_HOME/mastersos-sign/ 或 ~/.config/mastersos-sign/（Windows：%APPDATA%\mastersos-sign\）
+    /// pin 存放目录，默认 ~/.config/mastersos-sign/（Windows：%APPDATA%\mastersos-sign\）
     #[arg(long)]
     pin_dir: Option<PathBuf>,
 }

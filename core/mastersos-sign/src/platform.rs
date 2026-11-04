@@ -13,18 +13,15 @@ use zeroize::Zeroizing;
 /// FAT32 or exFAT cannot keep a file private.
 pub const KEY_FILE_NOTE: &str = "Make sure no other user can read this school key file. Keep it on a USB stick whenever you can.";
 
-/// The settings directory of `app` (`mastersos` or `mastersos-sign`): `$XDG_CONFIG_HOME/<app>`,
-/// else `~/.config/<app>` on macOS and Linux; `%APPDATA%\<app>` on Windows.
+/// The settings directory of `app` (`mastersos` or `mastersos-sign`): `~/.config/<app>` on macOS
+/// and Linux (XDG_CONFIG_HOME is ignored, so existing settings and pins never move);
+/// `%APPDATA%\<app>` on Windows.
 pub fn config_dir(app: &str) -> Result<PathBuf> {
     config_dir_from(app, |k| std::env::var_os(k))
 }
 
 #[cfg(not(windows))]
 fn config_dir_from(app: &str, var: impl Fn(&str) -> Option<OsString>) -> Result<PathBuf> {
-    // The XDG base directory spec: a relative value is ignored.
-    if let Some(x) = var("XDG_CONFIG_HOME").filter(|x| Path::new(x).is_absolute()) {
-        return Ok(PathBuf::from(x).join(app));
-    }
     let home = var("HOME")
         .filter(|h| !h.is_empty())
         .context("HOME is not set")?;
@@ -39,8 +36,8 @@ fn config_dir_from(app: &str, var: impl Fn(&str) -> Option<OsString>) -> Result<
     Ok(PathBuf::from(base).join(app))
 }
 
-/// Create a new file only the current user can read (mode 0600 on Unix; on Windows a DACL that
-/// grants only the current user and SYSTEM). An existing file is refused.
+/// Create a new file only the current user can read or change (mode 0600 on Unix; on Windows a
+/// protected DACL that grants only the current user and SYSTEM). An existing file is refused.
 pub fn create_private(path: &Path) -> Result<File> {
     sys::create_private(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::AlreadyExists {
@@ -80,8 +77,10 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Refuse a file other users can read or change (Unix: any group/other mode bit, or another
-/// owner; Windows: a DACL that grants read to Everyone, Users or Authenticated Users).
+/// Refuse a file other accounts can read or change. Unix: another owner, or any group/other mode
+/// bit. Windows: an owner other than the current user or Administrators, no DACL, or an allow
+/// entry that grants read, write or control of the file to anyone but the current user, SYSTEM
+/// and Administrators.
 pub fn check_private(path: &Path) -> Result<()> {
     open_private(path).map(drop)
 }
@@ -89,18 +88,18 @@ pub fn check_private(path: &Path) -> Result<()> {
 /// [`check_private`] on the opened file, so the file checked is the file read.
 pub(crate) fn open_private(path: &Path) -> Result<File> {
     let f = open(path)?;
-    if sys::others_can_read(&f, path)? {
+    if sys::not_private(&f, path)? {
         bail!("{}", sys::too_open(&f, path));
     }
     Ok(f)
 }
 
-/// Open a school key file. On Unix it must belong to the current user; access by other users
-/// (which a FAT32 or exFAT USB stick cannot prevent) gives [`KEY_FILE_NOTE`] for the caller to
-/// say, instead of a refusal.
+/// Open a school key file. On Unix it must belong to the current user. A file that fails the
+/// rest of [`check_private`] (which a FAT32 or exFAT USB stick cannot pass) gives
+/// [`KEY_FILE_NOTE`] for the caller to say, instead of a refusal.
 pub fn open_school_key(path: &Path) -> Result<(File, Option<&'static str>)> {
     let f = open(path)?;
-    let broad = sys::others_can_read(&f, path).unwrap_or(true);
+    let broad = sys::not_private(&f, path).unwrap_or(true);
     Ok((f, broad.then_some(KEY_FILE_NOTE)))
 }
 
@@ -110,14 +109,30 @@ fn open(path: &Path) -> Result<File> {
     Ok(f)
 }
 
-/// A symbolic link, or on Windows any reparse point (junctions included): never followed in a
-/// settings directory.
-pub fn is_link(meta: &std::fs::Metadata) -> bool {
-    sys::is_link(meta)
+/// Whether `path`, whose [`std::fs::symlink_metadata`] is `meta`, is a link that a settings
+/// directory never follows: a symbolic link; on Windows also a junction (mount point). Other
+/// Windows reparse points (OneDrive cloud files, deduplicated files) are ordinary files. A
+/// reparse point whose kind cannot be read counts as a link.
+pub fn is_link(path: &Path, meta: &std::fs::Metadata) -> bool {
+    sys::is_link(path, meta)
 }
 
+/// The terminal cannot turn off echo (on Windows: Git Bash and other terminals that are not a
+/// console), so a secret is not read from it.
+#[derive(Debug)]
+pub struct CannotHideTyping;
+
+impl std::fmt::Display for CannotHideTyping {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(sys::CANNOT_HIDE_TYPING)
+    }
+}
+
+impl std::error::Error for CannotHideTyping {}
+
 /// Read one line with echo off when stdin is a terminal; a plain line otherwise. The prompt goes
-/// to stderr. The line ending is removed.
+/// to stderr. The line ending is removed. A terminal that cannot hide typing gives
+/// [`CannotHideTyping`].
 pub fn read_hidden_line(prompt: &str) -> Result<Zeroizing<String>> {
     use std::io::{BufRead as _, IsTerminal as _};
     eprint!("{prompt}");
@@ -126,7 +141,7 @@ pub fn read_hidden_line(prompt: &str) -> Result<Zeroizing<String>> {
     // Sized so a typed secret does not make the buffer reallocate (and leave a copy behind).
     let mut line = Zeroizing::new(String::with_capacity(1024));
     let read = if stdin.is_terminal() {
-        let quiet = sys::EchoOff::new().context("cannot turn off echo on the terminal")?;
+        let quiet = sys::EchoOff::new().map_err(|_| CannotHideTyping)?;
         let read = stdin.lock().read_line(&mut line);
         // Echo comes back whether or not the read worked.
         drop(quiet);
@@ -179,7 +194,10 @@ mod sys {
         Ok(())
     }
 
-    pub fn others_can_read(f: &File, path: &Path) -> Result<bool> {
+    pub const CANNOT_HIDE_TYPING: &str =
+        "Cannot hide typing in this terminal. Run this in another terminal, or pipe the input in.";
+
+    pub fn not_private(f: &File, path: &Path) -> Result<bool> {
         Ok(meta(f, path)?.mode() & 0o077 != 0)
     }
 
@@ -191,7 +209,7 @@ mod sys {
         )
     }
 
-    pub fn is_link(meta: &std::fs::Metadata) -> bool {
+    pub fn is_link(_path: &Path, meta: &std::fs::Metadata) -> bool {
         meta.file_type().is_symlink()
     }
 
@@ -224,7 +242,7 @@ mod sys {
     use std::ffi::OsString;
     use std::fs::File;
     use std::os::windows::ffi::{OsStrExt as _, OsStringExt as _};
-    use std::os::windows::fs::MetadataExt as _;
+    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
     use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _};
     use std::path::Path;
     use std::ptr::null_mut;
@@ -240,13 +258,16 @@ mod sys {
     };
     use windows_sys::Win32::Security::{
         CreateWellKnownSid, EqualSid, GetAce, GetTokenInformation, TokenUser,
-        WinAuthenticatedUserSid, WinBuiltinUsersSid, WinWorldSid, ACCESS_ALLOWED_ACE, ACE_HEADER,
-        ACL, DACL_SECURITY_INFORMATION, INHERIT_ONLY_ACE, PSECURITY_DESCRIPTOR, PSID,
+        WinBuiltinAdministratorsSid, WinLocalSystemSid, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION,
+        INHERIT_ONLY_ACE, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
         SECURITY_ATTRIBUTES, SECURITY_MAX_SID_SIZE, TOKEN_QUERY, TOKEN_USER, WELL_KNOWN_SID_TYPE,
     };
     use windows_sys::Win32::Storage::FileSystem::{
-        CreateFileW, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
-        FILE_READ_DATA, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        CreateFileW, FileAttributeTagInfo, GetFileInformationByHandleEx, CREATE_NEW,
+        FILE_APPEND_DATA, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
+        FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        FILE_WRITE_DATA, WRITE_DAC, WRITE_OWNER,
     };
     use windows_sys::Win32::System::Console::{
         GetConsoleMode, GetStdHandle, SetConsoleMode, CONSOLE_MODE, ENABLE_ECHO_INPUT,
@@ -254,7 +275,30 @@ mod sys {
     };
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
-    const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
+    pub const CANNOT_HIDE_TYPING: &str = "Cannot hide typing in this terminal. Run this in PowerShell or Command Prompt, or pipe the token in.";
+
+    // ACE types that allow access (winnt.h).
+    const ACCESS_ALLOWED_ACE_TYPE: u8 = 0x0;
+    const ACCESS_ALLOWED_COMPOUND_ACE_TYPE: u8 = 0x4;
+    const ACCESS_ALLOWED_OBJECT_ACE_TYPE: u8 = 0x5;
+    const ACCESS_ALLOWED_CALLBACK_ACE_TYPE: u8 = 0x9;
+    const ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE: u8 = 0xB;
+    // Object ACEs: which of the two GUIDs before the SID are present.
+    const ACE_OBJECT_TYPE_PRESENT: u32 = 0x1;
+    const ACE_INHERITED_OBJECT_TYPE_PRESENT: u32 = 0x2;
+    // Reparse tags that are links (winnt.h).
+    const IO_REPARSE_TAG_MOUNT_POINT: u32 = 0xA000_0003;
+    const IO_REPARSE_TAG_SYMLINK: u32 = 0xA000_000C;
+
+    /// Rights that let another account read, change or take over the file.
+    const NOT_PRIVATE_RIGHTS: u32 = FILE_READ_DATA
+        | FILE_WRITE_DATA
+        | FILE_APPEND_DATA
+        | GENERIC_READ
+        | GENERIC_WRITE
+        | GENERIC_ALL
+        | WRITE_DAC
+        | WRITE_OWNER;
 
     /// Memory the system allocated with LocalAlloc, freed on drop.
     struct Local(*mut core::ffi::c_void);
@@ -276,44 +320,63 @@ mod sys {
         }
     }
 
-    /// The current user's SID in string form (S-1-5-21-…).
-    fn current_user_sid() -> std::io::Result<String> {
-        // SAFETY: plain Win32 calls; the token handle is closed below, the buffer outlives every
-        // pointer into it, and the string SID is freed by `Local`.
-        unsafe {
-            let mut token: HANDLE = null_mut();
-            check(OpenProcessToken(
-                GetCurrentProcess(),
-                TOKEN_QUERY,
-                &mut token,
-            ))?;
-            let mut len = 0u32;
-            GetTokenInformation(token, TokenUser, null_mut(), 0, &mut len);
-            // u64 elements: TOKEN_USER holds a pointer and must be aligned for it.
-            let mut buf = vec![0u64; (len as usize).div_ceil(8)];
-            let got = check(GetTokenInformation(
-                token,
-                TokenUser,
-                buf.as_mut_ptr().cast(),
-                len,
-                &mut len,
-            ));
-            CloseHandle(token);
-            got?;
-            let user = &*(buf.as_ptr() as *const TOKEN_USER);
-            let mut text: *mut u16 = null_mut();
-            check(ConvertSidToStringSidW(user.User.Sid, &mut text))?;
-            let _free = Local(text.cast());
-            let n = (0..).take_while(|&i| *text.add(i) != 0).count();
-            Ok(OsString::from_wide(std::slice::from_raw_parts(text, n))
-                .to_string_lossy()
-                .into_owned())
+    /// The process's TOKEN_USER (u64 elements: it holds a pointer and must be aligned for it).
+    struct CurrentUser(Vec<u64>);
+
+    impl CurrentUser {
+        fn get() -> std::io::Result<CurrentUser> {
+            // SAFETY: plain Win32 calls; the token handle is closed before returning, and the
+            // buffer is as large as GetTokenInformation asked for.
+            unsafe {
+                let mut token: HANDLE = null_mut();
+                check(OpenProcessToken(
+                    GetCurrentProcess(),
+                    TOKEN_QUERY,
+                    &mut token,
+                ))?;
+                let mut len = 0u32;
+                GetTokenInformation(token, TokenUser, null_mut(), 0, &mut len);
+                let mut buf = vec![0u64; (len as usize).div_ceil(8)];
+                let got = check(GetTokenInformation(
+                    token,
+                    TokenUser,
+                    buf.as_mut_ptr().cast(),
+                    len,
+                    &mut len,
+                ));
+                CloseHandle(token);
+                got?;
+                Ok(CurrentUser(buf))
+            }
+        }
+
+        /// Valid while `self` lives.
+        fn sid(&self) -> PSID {
+            // SAFETY: the buffer holds a TOKEN_USER whose SID points into the same buffer.
+            unsafe { (*(self.0.as_ptr() as *const TOKEN_USER)).User.Sid }
+        }
+
+        /// The SID in string form (S-1-5-21-…).
+        fn sid_string(&self) -> std::io::Result<String> {
+            // SAFETY: ConvertSidToStringSidW gives a NUL-terminated string, freed by `Local`.
+            unsafe {
+                let mut text: *mut u16 = null_mut();
+                check(ConvertSidToStringSidW(self.sid(), &mut text))?;
+                let _free = Local(text.cast());
+                let n = (0..).take_while(|&i| *text.add(i) != 0).count();
+                Ok(OsString::from_wide(std::slice::from_raw_parts(text, n))
+                    .to_string_lossy()
+                    .into_owned())
+            }
         }
     }
 
     pub fn create_private(path: &Path) -> std::io::Result<File> {
         // Protected (no inherited entries): full control for the current user and SYSTEM only.
-        let sddl = format!("D:P(A;;FA;;;{})(A;;FA;;;SY)", current_user_sid()?);
+        let sddl = format!(
+            "D:P(A;;FA;;;{})(A;;FA;;;SY)",
+            CurrentUser::get()?.sid_string()?
+        );
         let sddl: Vec<u16> = sddl.encode_utf16().chain(Some(0)).collect();
         let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
         // SAFETY: both strings are NUL-terminated and live across the calls; the descriptor is
@@ -348,7 +411,7 @@ mod sys {
         }
     }
 
-    /// Windows has no uid to compare: whoever can open the file is checked by its DACL.
+    /// The owner is judged with the DACL in [`not_private`].
     pub fn check_owner(_f: &File, _path: &Path) -> Result<()> {
         Ok(())
     }
@@ -362,24 +425,52 @@ mod sys {
         Ok(sid)
     }
 
-    /// Whether the file's DACL lets Everyone, Users or Authenticated Users read it (a missing
-    /// DACL lets everyone do everything).
-    pub fn others_can_read(f: &File, path: &Path) -> Result<bool> {
-        let broad = [WinWorldSid, WinBuiltinUsersSid, WinAuthenticatedUserSid]
-            .map(well_known)
-            .into_iter()
-            .collect::<std::io::Result<Vec<_>>>()?;
-        let read = FILE_READ_DATA | GENERIC_READ | GENERIC_ALL;
-        // SAFETY: GetSecurityInfo gives a DACL pointer into the descriptor, which `Local` frees
-        // after the loop; GetAce returns pointers into that DACL.
+    /// The SID of an allow ACE, or None for a layout this code does not read.
+    ///
+    /// # Safety
+    /// `ace` points at a valid ACE of one of the allow types.
+    unsafe fn allowed_sid(ace: *const u8, kind: u8) -> Option<PSID> {
+        // Header (4 bytes), then the access mask (4 bytes).
+        let mut offset = 8;
+        match kind {
+            ACCESS_ALLOWED_ACE_TYPE | ACCESS_ALLOWED_CALLBACK_ACE_TYPE => {}
+            ACCESS_ALLOWED_OBJECT_ACE_TYPE | ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE => {
+                let flags = std::ptr::read_unaligned(ace.add(8) as *const u32);
+                offset += 4;
+                if flags & ACE_OBJECT_TYPE_PRESENT != 0 {
+                    offset += 16;
+                }
+                if flags & ACE_INHERITED_OBJECT_TYPE_PRESENT != 0 {
+                    offset += 16;
+                }
+            }
+            _ => return None,
+        }
+        Some(ace.add(offset) as PSID)
+    }
+
+    /// Whether the file is open to other accounts: its owner is not the current user or
+    /// Administrators, it has no DACL, or an allow entry grants [`NOT_PRIVATE_RIGHTS`] to anyone
+    /// but the current user, SYSTEM and Administrators.
+    pub fn not_private(f: &File, path: &Path) -> Result<bool> {
+        let user = CurrentUser::get()?;
+        let system = well_known(WinLocalSystemSid)?;
+        let admins = well_known(WinBuiltinAdministratorsSid)?;
+        // SAFETY: EqualSid on valid SIDs: `user` and the arrays outlive every call.
+        let is = |sid: PSID, of: PSID| unsafe { EqualSid(sid, of) != 0 };
+        let may_own = |sid: PSID| is(sid, user.sid()) || is(sid, admins.as_ptr() as PSID);
+        let may_access = |sid: PSID| may_own(sid) || is(sid, system.as_ptr() as PSID);
+        // SAFETY: GetSecurityInfo gives owner and DACL pointers into the descriptor, which
+        // `Local` frees after the loop; GetAce returns pointers into that DACL.
         unsafe {
+            let mut owner: PSID = null_mut();
             let mut dacl: *mut ACL = null_mut();
             let mut sd: PSECURITY_DESCRIPTOR = null_mut();
             let rc = GetSecurityInfo(
                 f.as_raw_handle(),
                 SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION,
-                null_mut(),
+                OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                &mut owner,
                 null_mut(),
                 &mut dacl,
                 null_mut(),
@@ -392,27 +483,37 @@ mod sys {
                 );
             }
             let _free = Local(sd);
-            if dacl.is_null() {
+            if owner.is_null() || !may_own(owner) || dacl.is_null() {
                 return Ok(true);
             }
             for i in 0..u32::from((*dacl).AceCount) {
                 let mut ace: *mut core::ffi::c_void = null_mut();
                 if GetAce(dacl, i, &mut ace) == 0 {
-                    continue;
+                    return Ok(true);
                 }
                 let header = &*(ace as *const ACE_HEADER);
-                if header.AceType != ACCESS_ALLOWED_ACE_TYPE
-                    || u32::from(header.AceFlags) & INHERIT_ONLY_ACE != 0
-                {
+                if u32::from(header.AceFlags) & INHERIT_ONLY_ACE != 0 {
                     continue;
                 }
-                let allowed = &*(ace as *const ACCESS_ALLOWED_ACE);
-                if allowed.Mask & read == 0 {
+                let kind = header.AceType;
+                if !matches!(
+                    kind,
+                    ACCESS_ALLOWED_ACE_TYPE
+                        | ACCESS_ALLOWED_COMPOUND_ACE_TYPE
+                        | ACCESS_ALLOWED_OBJECT_ACE_TYPE
+                        | ACCESS_ALLOWED_CALLBACK_ACE_TYPE
+                        | ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE
+                ) {
                     continue;
                 }
-                let sid = &allowed.SidStart as *const u32 as PSID;
-                if broad.iter().any(|b| EqualSid(b.as_ptr() as PSID, sid) != 0) {
-                    return Ok(true);
+                let mask = std::ptr::read_unaligned((ace as *const u8).add(4) as *const u32);
+                if mask & NOT_PRIVATE_RIGHTS == 0 {
+                    continue;
+                }
+                match allowed_sid(ace as *const u8, kind) {
+                    Some(sid) if may_access(sid) => {}
+                    // Another account, or a compound ACE (impersonation) this code does not read.
+                    _ => return Ok(true),
                 }
             }
             Ok(false)
@@ -421,13 +522,41 @@ mod sys {
 
     pub fn too_open(_f: &File, path: &Path) -> String {
         format!(
-            "Other users can read {}; in the file's Properties > Security, remove every account but your own",
+            "{} can be read or changed by other accounts. Keep it readable only by you (SYSTEM and Administrators may stay).",
             path.display()
         )
     }
 
-    pub fn is_link(meta: &std::fs::Metadata) -> bool {
-        meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    /// A symbolic link or junction, by its reparse tag; other reparse points are files.
+    pub fn is_link(path: &Path, meta: &std::fs::Metadata) -> bool {
+        if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0 {
+            return false;
+        }
+        let Ok(f) = std::fs::OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
+        else {
+            return true;
+        };
+        let mut info = FILE_ATTRIBUTE_TAG_INFO {
+            FileAttributes: 0,
+            ReparseTag: 0,
+        };
+        // SAFETY: the buffer is a FILE_ATTRIBUTE_TAG_INFO of the size passed.
+        let ok = unsafe {
+            GetFileInformationByHandleEx(
+                f.as_raw_handle(),
+                FileAttributeTagInfo,
+                (&mut info as *mut FILE_ATTRIBUTE_TAG_INFO).cast(),
+                std::mem::size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
+            )
+        };
+        ok == 0
+            || matches!(
+                info.ReparseTag,
+                IO_REPARSE_TAG_SYMLINK | IO_REPARSE_TAG_MOUNT_POINT
+            )
     }
 
     /// Echo off on the console until dropped.
@@ -468,23 +597,27 @@ mod tests {
 
     #[cfg(not(windows))]
     #[test]
-    fn config_dir_uses_xdg_then_home() {
-        let both = [("XDG_CONFIG_HOME", "/x"), ("HOME", "/h")];
-        assert_eq!(
-            config_dir_from("mastersos", env(&both)).unwrap(),
-            Path::new("/x/mastersos")
-        );
-        // Unset, empty or relative XDG_CONFIG_HOME: ~/.config.
-        for xdg in [None, Some(""), Some("rel")] {
-            let mut vars = vec![("HOME", "/h")];
-            vars.extend(xdg.map(|x| ("XDG_CONFIG_HOME", x)));
-            assert_eq!(
-                config_dir_from("mastersos-sign", env(&vars)).unwrap(),
-                Path::new("/h/.config/mastersos-sign")
-            );
+    fn config_dir_uses_home_config() {
+        // XDG_CONFIG_HOME never moves existing settings or pins (spec §5.1).
+        for vars in [
+            &[("HOME", "/h")][..],
+            &[("XDG_CONFIG_HOME", "/x"), ("HOME", "/h")][..],
+        ] {
+            for app in ["mastersos", "mastersos-sign"] {
+                assert_eq!(
+                    config_dir_from(app, env(vars)).unwrap(),
+                    Path::new("/h/.config").join(app)
+                );
+            }
         }
-        let e = config_dir_from("mastersos", env(&[])).unwrap_err();
-        assert!(e.to_string().contains("HOME"), "{e}");
+        for vars in [
+            &[][..],
+            &[("HOME", "")][..],
+            &[("XDG_CONFIG_HOME", "/x")][..],
+        ] {
+            let e = config_dir_from("mastersos", env(vars)).unwrap_err();
+            assert!(e.to_string().contains("HOME"), "{e}");
+        }
     }
 
     #[cfg(windows)]
@@ -585,8 +718,11 @@ mod tests {
         std::fs::create_dir(&target).unwrap();
         let link = t.path().join("link");
         std::os::unix::fs::symlink(&target, &link).unwrap();
-        assert!(is_link(&std::fs::symlink_metadata(&link).unwrap()));
-        assert!(!is_link(&std::fs::symlink_metadata(&target).unwrap()));
+        assert!(is_link(&link, &std::fs::symlink_metadata(&link).unwrap()));
+        assert!(!is_link(
+            &target,
+            &std::fs::symlink_metadata(&target).unwrap()
+        ));
     }
 
     #[cfg(windows)]
@@ -597,16 +733,52 @@ mod tests {
         std::fs::create_dir(&target).unwrap();
         let link = t.path().join("link");
         mklink_junction(&link, &target);
-        assert!(is_link(&std::fs::symlink_metadata(&link).unwrap()));
-        assert!(!is_link(&std::fs::symlink_metadata(&target).unwrap()));
+        assert!(is_link(&link, &std::fs::symlink_metadata(&link).unwrap()));
+        assert!(!is_link(
+            &target,
+            &std::fs::symlink_metadata(&target).unwrap()
+        ));
+        // A plain file is not a link either.
+        let file = t.path().join("file");
+        std::fs::write(&file, "x").unwrap();
+        assert!(!is_link(&file, &std::fs::symlink_metadata(&file).unwrap()));
     }
 
-    /// Grant `BUILTIN\Users` read on `path` (by SID, so the system language does not matter).
     #[cfg(windows)]
-    fn grant_users_read(path: &Path) {
+    #[test]
+    fn windows_symlink_is_a_link() {
+        let t = tempfile::tempdir().unwrap();
+        let target = t.path().join("target.txt");
+        std::fs::write(&target, "x").unwrap();
+        let link = t.path().join("link.txt");
+        if !symlink_file_or_skip(&target, &link) {
+            return;
+        }
+        assert!(is_link(&link, &std::fs::symlink_metadata(&link).unwrap()));
+    }
+
+    /// Creating a symbolic link needs Developer Mode or administrator rights: without them the
+    /// test says so and skips.
+    #[cfg(windows)]
+    fn symlink_file_or_skip(target: &Path, link: &Path) -> bool {
+        const ERROR_PRIVILEGE_NOT_HELD: i32 = 1314;
+        match std::os::windows::fs::symlink_file(target, link) {
+            Ok(()) => true,
+            Err(e) if e.raw_os_error() == Some(ERROR_PRIVILEGE_NOT_HELD) => {
+                eprintln!("skipped: this account cannot create symbolic links");
+                false
+            }
+            Err(e) => panic!("cannot create {}: {e}", link.display()),
+        }
+    }
+
+    /// Grant `who` (a SID, so the system language does not matter) `rights` on `path`.
+    #[cfg(windows)]
+    fn icacls_grant(path: &Path, who: &str, rights: &str) {
         let out = std::process::Command::new("icacls")
             .arg(path)
-            .args(["/grant", "*S-1-5-32-545:(R)"])
+            .arg("/grant")
+            .arg(format!("*{who}:({rights})"))
             .output()
             .unwrap();
         assert!(out.status.success(), "{out:?}");
@@ -627,17 +799,28 @@ mod tests {
     #[test]
     fn windows_private_file_acl() {
         let t = tempfile::tempdir().unwrap();
-        let p = t.path().join("token");
+        // Users read, Everyone write: each makes the file not private.
+        for (who, rights) in [("S-1-5-32-545", "R"), ("S-1-1-0", "W")] {
+            let p = t.path().join(format!("token-{rights}"));
+            drop(create_private(&p).unwrap());
+            check_private(&p).unwrap();
+            assert_eq!(open_school_key(&p).unwrap().1, None);
+            icacls_grant(&p, who, rights);
+            let e = check_private(&p).unwrap_err().to_string();
+            assert!(
+                e.contains(&p.display().to_string()) && e.contains("other accounts"),
+                "{e}"
+            );
+            // A school key file with the same access still opens, with the note.
+            assert_eq!(open_school_key(&p).unwrap().1, Some(KEY_FILE_NOTE));
+            // write_private puts the owner-only access back.
+            write_private(&p, b"new").unwrap();
+            check_private(&p).unwrap();
+        }
+        // SYSTEM and Administrators may stay.
+        let p = t.path().join("admins");
         drop(create_private(&p).unwrap());
-        check_private(&p).unwrap();
-        assert_eq!(open_school_key(&p).unwrap().1, None);
-        grant_users_read(&p);
-        let e = check_private(&p).unwrap_err().to_string();
-        assert!(e.contains(&p.display().to_string()), "{e}");
-        // A school key file with the same access still opens, with the note.
-        assert_eq!(open_school_key(&p).unwrap().1, Some(KEY_FILE_NOTE));
-        // write_private puts the owner-only access back.
-        write_private(&p, b"new").unwrap();
+        icacls_grant(&p, "S-1-5-32-544", "F");
         check_private(&p).unwrap();
     }
 }

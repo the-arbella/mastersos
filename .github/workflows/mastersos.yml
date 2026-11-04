@@ -67,7 +67,14 @@ jobs:
       # The tests read docs and test vectors byte for byte: no CRLF checkout on Windows
       - run: git config --global core.autocrlf false
         working-directory: .
+      # Only what the tests read: image/ has paths NTFS cannot hold (systemd's `\x2d` escapes); skills/ holds the
+      # settings reference that mastersos-bundle's spec test compares against
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            core
+            image/keys
+            skills
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: "1.98"

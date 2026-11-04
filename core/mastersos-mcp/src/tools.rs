@@ -352,7 +352,7 @@ fn read_member(root: &Path, path: &str) -> anyhow::Result<String> {
         cur.push(part);
         let meta =
             std::fs::symlink_metadata(&cur).with_context(|| format!("There is no file {path}"))?;
-        if mastersos_sign::platform::is_link(&meta) {
+        if mastersos_sign::platform::is_link(&cur, &meta) {
             bail!("{path} goes through a link, which is refused");
         }
     }

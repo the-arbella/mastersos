@@ -147,11 +147,11 @@ fn read_snapshot(dir: &Path) -> Result<Snapshot> {
     })
 }
 
-/// Refuse a symlink, or on Windows any reparse point (it could point at any file the user can
-/// read). A missing path is fine.
+/// Refuse a symlink, or on Windows a junction (it could point at any file the user can read). A
+/// missing path is fine.
 fn refuse_link(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
-        Ok(m) if mastersos_sign::platform::is_link(&m) => {
+        Ok(m) if mastersos_sign::platform::is_link(path, &m) => {
             bail!("{} is a symbolic link, which is refused", path.display())
         }
         Ok(_) => Ok(()),
@@ -892,7 +892,7 @@ mod tests {
         assert!(diff(&w).is_err());
     }
 
-    /// Spec §5.4: on NTFS a junction or symlink is refused where Unix refuses a symlink.
+    /// Spec §5.4: on NTFS a junction or symbolic link is refused where Unix refuses a symlink.
     #[cfg(windows)]
     #[test]
     fn workdir_refuses_reparse_point() {
@@ -916,11 +916,19 @@ mod tests {
         std::fs::remove_dir(w.root.join(".mastersos")).unwrap();
         std::fs::rename(&state, w.root.join(".mastersos")).unwrap();
         assert!(diff(&w).is_ok());
-        // manifest.toml replaced by a file symlink.
+        // manifest.toml replaced by a file symlink: needs Developer Mode or administrator rights.
         let target = t.path().join("target.txt");
         std::fs::write(&target, "TOPSECRET-KEY").unwrap();
         std::fs::remove_file(w.root.join("manifest.toml")).unwrap();
-        std::os::windows::fs::symlink_file(&target, w.root.join("manifest.toml")).unwrap();
+        match std::os::windows::fs::symlink_file(&target, w.root.join("manifest.toml")) {
+            Ok(()) => {}
+            // ERROR_PRIVILEGE_NOT_HELD
+            Err(e) if e.raw_os_error() == Some(1314) => {
+                eprintln!("skipped the symlink half: this account cannot create symbolic links");
+                return;
+            }
+            Err(e) => panic!("{e}"),
+        }
         let e = format!("{:#}", w.manifest().unwrap_err());
         assert!(
             e.contains("manifest.toml") && !e.contains("TOPSECRET"),
