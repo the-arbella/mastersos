@@ -959,10 +959,15 @@ pub fn add_trusted_key(manifest_text: &str, key: &TrustKey, recipient: &str) -> 
     let code = shown_code(&key.id);
     let trusted = {
         let (aot, moved) = trust_aot(&mut doc)?;
-        let there = aot.iter().any(|t| {
-            table_str(t, "public_key") == Some(key.public_key.as_str())
-                || table_str(t, "id") == Some(key.id.as_str())
-        });
+        if aot.iter().any(|t| {
+            table_str(t, "id") == Some(key.id.as_str())
+                && table_str(t, "public_key") != Some(key.public_key.as_str())
+        }) {
+            bail!("manifest.toml already has a school key {code} that does not match this file. Check which file is the right one.");
+        }
+        let there = aot
+            .iter()
+            .any(|t| table_str(t, "public_key") == Some(key.public_key.as_str()));
         if !there {
             let mut t = trust_table(key);
             if let Some(p) = moved {
@@ -992,6 +997,9 @@ pub struct Removed {
     pub key_id: String,
     /// Whether a recipient commented with the key's code was removed too.
     pub recipient_removed: bool,
+    /// The recipients left without a `# school key <code>` comment: one of them may have
+    /// belonged to the removed key.
+    pub unmarked: Vec<String>,
 }
 
 /// Remove the school key with this key code (with or without its dash) and the recipient whose
@@ -1040,6 +1048,7 @@ pub fn remove_school_key(manifest_text: &str, code: &str) -> Result<Removed> {
         table_str(&removed, "id").unwrap_or_default().to_owned()
     };
     let mut recipient_removed = false;
+    let mut unmarked = Vec::new();
     if let Some(school) = doc
         .get_mut("school")
         .and_then(toml_edit::Item::as_table_mut)
@@ -1051,6 +1060,11 @@ pub fn remove_school_key(manifest_text: &str, code: &str) -> Result<Removed> {
             let before = list.len();
             list.retain(|v| recipient_tag(v).as_deref() != Some(want.as_str()));
             recipient_removed = list.len() != before;
+            unmarked = list
+                .iter()
+                .filter(|v| recipient_tag(v).is_none())
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect();
             if recipient_removed {
                 finish_recipients(school);
             }
@@ -1060,46 +1074,13 @@ pub fn remove_school_key(manifest_text: &str, code: &str) -> Result<Removed> {
         text: doc.to_string(),
         key_id,
         recipient_removed,
+        unmarked,
     })
 }
 
 /// [`remove_school_key`], the text only.
 pub fn remove_trusted_key(manifest_text: &str, code: &str) -> Result<String> {
     Ok(remove_school_key(manifest_text, code)?.text)
-}
-
-/// The recipients in `[school].escrow_recipients`, each with the key code its comment names.
-pub fn recipients(manifest_text: &str) -> Result<Vec<(String, Option<String>)>> {
-    let doc = parse_doc(manifest_text)?;
-    let list = doc
-        .get("school")
-        .and_then(|s| s.get("escrow_recipients"))
-        .and_then(toml_edit::Item::as_array);
-    Ok(list
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| Some((v.as_str()?.to_owned(), recipient_tag(v))))
-                .collect()
-        })
-        .unwrap_or_default())
-}
-
-/// Remove one recipient from `[school].escrow_recipients`.
-pub fn remove_recipient(manifest_text: &str, recipient: &str) -> Result<String> {
-    let mut doc = parse_doc(manifest_text)?;
-    if let Some(school) = doc
-        .get_mut("school")
-        .and_then(toml_edit::Item::as_table_mut)
-    {
-        if let Some(list) = school
-            .get_mut("escrow_recipients")
-            .and_then(toml_edit::Item::as_array_mut)
-        {
-            list.retain(|v| v.as_str() != Some(recipient));
-            finish_recipients(school);
-        }
-    }
-    Ok(doc.to_string())
 }
 
 #[cfg(test)]
@@ -1716,19 +1697,28 @@ mod tests {
         let r = remove_school_key(&text, &code_of(2)).unwrap();
         assert!(!r.recipient_removed);
         assert_eq!(r.key_id, b.0.id);
+        // Nothing ties a recipient to the key: both stay, listed for IT.
+        assert_eq!(r.unmarked, [a.1.clone(), b.1.clone()]);
         assert_eq!(
-            recipients(&r.text).unwrap(),
-            [(a.1.clone(), None), (b.1.clone(), None)]
+            parsed(&r.text),
+            (vec![a.0.clone()], vec![a.1.clone(), b.1.clone()])
         );
-        let done = remove_recipient(&r.text, &b.1).unwrap();
-        assert_eq!(parsed(&done), (vec![a.0.clone()], vec![a.1.clone()]));
-        assert!(done.contains("# keep"), "{done}");
+        assert!(r.text.contains("# keep"), "{}", r.text);
+        let done = r.text;
         // Adding to the inline list marks the new recipient with its code.
         let c = school_key(3);
         let added = add_trusted_key(&done, &c.0, &c.1).unwrap();
-        assert_eq!(
-            recipients(&added).unwrap()[1],
-            (c.1.clone(), Some(code_of(3)))
+        assert!(
+            added.contains(&format!("# school key {}\n    \"{}\"", code_of(3), c.1)),
+            "{added}"
+        );
+        // A different key under an id already there is refused.
+        let mut other = school_key(4).0;
+        other.id = a.0.id.clone();
+        let err = add_trusted_key(&added, &other, &school_key(4).1).unwrap_err();
+        assert!(
+            err.to_string().contains("does not match this file"),
+            "{err}"
         );
         assert_eq!(normalize_key_code(" 11D9-03eb "), Some("11d9-03eb".into()));
         assert_eq!(normalize_key_code("11d903e"), None);

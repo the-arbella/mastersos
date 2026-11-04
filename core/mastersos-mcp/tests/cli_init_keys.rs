@@ -246,10 +246,13 @@ async fn init_refuses_key_registered_with_another_public_key() {
 #[test]
 fn init_requires_school_key() {
     let home = tempfile::tempdir().unwrap();
-    let o = mastersos(home.path(), &["init".as_ref(), "school".as_ref()]);
+    let dir = home.path().join("school");
+    let o = mastersos(home.path(), &["init".as_ref(), dir.as_os_str()]);
     assert!(!o.status.success());
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(err.contains("--school-key"), "{err}");
+    assert!(err.contains("signing page"), "{err}");
+    assert!(!dir.exists(), "nothing may be created");
 }
 
 /// A folder made by `init` trusting `a`.
@@ -384,4 +387,44 @@ async fn keys_list_marks_local_trust() {
     assert_eq!(ra.last().unwrap(), "yes", "{ra:?}");
     assert_eq!(row(&code(&b)).last().unwrap(), "no", "{out}");
     plain_words(&out);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn keys_remove_keeps_unmarked_recipients_and_needs_no_server() {
+    let t = tempfile::tempdir().unwrap();
+    let (pa, a) = school_key(t.path(), "a.key");
+    let (pb, b) = school_key(t.path(), "b.key");
+    let s = server(&[&a, &b]).await;
+    let home = connected_home(&s.uri());
+    let dir = folder_with(home.path(), t.path(), &pa).await;
+    let o = run(home.path(), args(&[&"keys", &"add", &pb, &"--dir", &dir])).await;
+    assert!(o.status.success(), "{:?}", text(&o));
+    // Written by hand: nothing ties b's recipient to b any more.
+    let m = std::fs::read_to_string(dir.join("manifest.toml")).unwrap();
+    let tag = format!("# school key {}", code(&b));
+    assert!(m.contains(&tag), "{m}");
+    std::fs::write(dir.join("manifest.toml"), m.replace(&tag, "# by hand")).unwrap();
+    // No config and no token: the command never asks the server.
+    let empty = tempfile::tempdir().unwrap();
+    drop(s);
+    let o = run(
+        empty.path(),
+        args(&[&"keys", &"remove", &code(&b), &"--dir", &dir]),
+    )
+    .await;
+    let (out, err) = text(&o);
+    assert!(o.status.success(), "{out}{err}");
+    let (trust, recipients) = manifest(&dir);
+    assert_eq!(trust, [a.trust_key()]);
+    assert_eq!(recipients, [a.escrow_recipient(), b.escrow_recipient()]);
+    assert!(out.contains("could not match"), "{out}");
+    assert!(out.contains(&b.escrow_recipient()), "{out}");
+    assert!(out.contains("by hand"), "{out}");
+    assert!(!out.contains(&a.escrow_recipient()), "a's is marked: {out}");
+    let abs = std::path::absolute(&dir).unwrap().display().to_string();
+    plain_words(
+        &out.replace("already trusted", "")
+            .replace(&abs, "")
+            .replace(&b.escrow_recipient(), ""),
+    );
 }

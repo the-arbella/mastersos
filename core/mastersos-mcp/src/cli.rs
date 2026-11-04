@@ -59,12 +59,7 @@ enum Cmd {
         /// The directory to create (it must be empty or not exist)
         dir: PathBuf,
         /// A school key file; give it once for each school key (two is good). Make school keys on the admin site's signing page first
-        #[arg(
-            long = "school-key",
-            alias = "kit",
-            value_name = "FILE",
-            required = true
-        )]
+        #[arg(long = "school-key", alias = "kit", value_name = "FILE")]
         school_key: Vec<PathBuf>,
     },
     /// Download the latest published settings (verified against the pinned keys) into a local directory
@@ -268,11 +263,13 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
             // Wrong sizes are refused before the config, the token or the network is touched.
             logo_body(login, icon)?;
         }
-        Cmd::Keys(KeysCmd::Remove { code, dir }) => {
-            // Done offline when the recipient is marked with the key code.
-            if let Some(done) = remove_key_offline(dir.as_deref(), code)? {
-                return Ok(done);
-            }
+        // Only the local manifest.toml changes, and nothing from the server decides what.
+        Cmd::Keys(KeysCmd::Remove { code, dir }) => return keys_remove(dir.as_deref(), code),
+        Cmd::Init { school_key, .. } if school_key.is_empty() => {
+            return Err(OpError::Failed(
+                "mastersos init needs a school key file: --school-key <FILE>. Make school keys on the admin site's signing page first."
+                    .into(),
+            ))
         }
         _ => {}
     }
@@ -328,7 +325,7 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         | Cmd::Pull { .. }
         | Cmd::Publish { .. }
         | Cmd::Logo(_)
-        | Cmd::Keys(KeysCmd::Add { .. } | KeysCmd::Remove { .. }) => TokenUse::It,
+        | Cmd::Keys(KeysCmd::Add { .. }) => TokenUse::It,
         _ => TokenUse::Any,
     };
     let api = connect(&server, &token_file, wanted)
@@ -340,7 +337,8 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         | Cmd::Connect { .. }
         | Cmd::Mcp { .. }
         | Cmd::Check { .. }
-        | Cmd::Diff { .. } => {
+        | Cmd::Diff { .. }
+        | Cmd::Keys(KeysCmd::Remove { .. }) => {
             unreachable!("handled above")
         }
         Cmd::Init { dir, .. } => init_dir(&api, &server, &token_file, &dir, &school_keys).await,
@@ -371,9 +369,6 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         Cmd::Keys(KeysCmd::List { dir }) => keys_list(&api, &out, dir.as_deref()).await,
         Cmd::Keys(KeysCmd::Add { dir, .. }) => {
             keys_add(&api, &server, dir.as_deref(), &school_keys).await
-        }
-        Cmd::Keys(KeysCmd::Remove { code, dir }) => {
-            keys_remove(&api, &server, dir.as_deref(), &code).await
         }
         Cmd::HashPassword => unreachable!("handled above"),
         Cmd::Logo(LogoCmd::Upload { login, icon }) => {
@@ -903,8 +898,6 @@ struct ListedKey {
 #[derive(Deserialize)]
 struct ListedRecipient {
     recipient: String,
-    #[serde(default)]
-    bound_key_id: String,
 }
 
 async fn get_list<T: serde::de::DeserializeOwned>(
@@ -1004,57 +997,26 @@ async fn keys_add(
     Ok(ExitCode::SUCCESS)
 }
 
-fn print_removed(w: &Workdir, code: &str, text: &str, recipient: bool) -> Result<(), OpError> {
-    let path = absolute(&w.root.join("manifest.toml"))?;
-    println!("Removed school key {code} from {}.", path.display());
-    if !recipient {
-        println!("manifest.toml had no disk-unlocking entry for this key; nothing else changed.");
-    }
-    println!("{}", trusted_line(text)?);
-    println!("{PUBLISH_NEXT}");
-    Ok(())
-}
-
-/// `keys remove` without the network, when the recipient is marked with the key code: `None`
-/// when the server must say which recipient belongs to the key.
-fn remove_key_offline(dir: Option<&Path>, code: &str) -> Result<Option<ExitCode>, OpError> {
+/// `mastersos keys remove <KEY CODE>`: offline. The disk-unlocking entry goes only when its
+/// `# school key <code>` comment ties it to the key; entries without one are listed for IT.
+fn keys_remove(dir: Option<&Path>, code: &str) -> Result<ExitCode, OpError> {
     let w = Workdir::open(dir.unwrap_or_else(|| Path::new("."))).map_err(fail)?;
     let r = workdir::remove_school_key(&w.manifest().map_err(fail)?, code).map_err(fail)?;
-    if !r.recipient_removed {
-        return Ok(None);
-    }
     w.write_manifest(&r.text).map_err(fail)?;
-    print_removed(&w, &workdir::shown_code(&r.key_id), &r.text, true)?;
-    Ok(Some(ExitCode::SUCCESS))
-}
-
-/// `keys remove` for a recipient without the key code beside it (written by hand): the
-/// recipient the server registered for that key is removed, when it is in the list and not
-/// marked as another key's.
-async fn keys_remove(
-    api: &Api,
-    server: &str,
-    dir: Option<&Path>,
-    code: &str,
-) -> Result<ExitCode, OpError> {
-    let (w, _) = keys_dir(api, server, dir).await?;
-    let r = workdir::remove_school_key(&w.manifest().map_err(fail)?, code).map_err(fail)?;
+    let path = absolute(&w.root.join("manifest.toml"))?;
     let shown = workdir::shown_code(&r.key_id);
-    let listed: Vec<ListedRecipient> = get_list(api, "escrow-recipients").await?;
-    let local = workdir::recipients(&r.text).map_err(fail)?;
-    let mut text = r.text;
-    let mut removed = false;
-    for l in listed.iter().filter(|l| l.bound_key_id == r.key_id) {
-        let unmarked = local
-            .iter()
-            .any(|(rec, tag)| *rec == l.recipient && tag.is_none());
-        if unmarked {
-            text = workdir::remove_recipient(&text, &l.recipient).map_err(fail)?;
-            removed = true;
+    println!("Removed school key {shown} from {}.", path.display());
+    if !r.recipient_removed && !r.unmarked.is_empty() {
+        println!(
+            "manifest.toml has disk-unlocking entries (under [school]) that this command could not match to {shown}:"
+        );
+        for u in &r.unmarked {
+            println!("  {u}");
         }
+        println!("Remove the one that belonged to {shown} by hand.");
     }
-    w.write_manifest(&text).map_err(fail)?;
-    print_removed(&w, &shown, &text, removed)?;
+    println!("{}", trusted_line(&r.text)?);
+    println!("{PUBLISH_NEXT}");
     Ok(ExitCode::SUCCESS)
 }
 
