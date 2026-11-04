@@ -484,7 +484,7 @@ async fn first_use(
         .context("The latest manifest cannot be read")?;
     writeln!(
         out,
-        "This computer has not checked {} before. The server's latest is version {latest}; it trusts these keys:",
+        "This computer has not checked {} before. The server's latest is version {latest}; it names these keys as the ones computers accept:",
         api.host()
     )?;
     print_trust(out, &m.trust)?;

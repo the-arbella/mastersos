@@ -53,38 +53,79 @@ fn hex(b: &[u8]) -> String {
 
 /// The content digest of an upload body (lower-case hex), as the server computes it.
 fn digest_of(upload: &Value) -> String {
+    hex(&content_digest(&contents_of(upload)))
+}
+
+/// What the test server holds: every upload, and the archive of every published version.
+#[derive(Default)]
+struct Held {
+    uploads: Vec<Value>,
+    archives: Vec<Vec<u8>>,
+}
+
+/// An honest server for one school: it keeps each upload as pending bundle `p-<version>`,
+/// publishes it with the signature committed, and serves the published versions back.
+#[derive(Clone, Default)]
+struct School(Arc<Mutex<Held>>);
+
+impl School {
+    fn upload(&self, version: u64) -> Value {
+        self.0.lock().unwrap().uploads[version as usize - 1].clone()
+    }
+}
+
+fn contents_of(upload: &Value) -> Contents {
     let files = upload["files"]
         .as_object()
         .unwrap()
         .iter()
         .map(|(p, b)| (p.clone(), STANDARD.decode(b.as_str().unwrap()).unwrap()))
         .collect::<BTreeMap<_, _>>();
-    hex(&content_digest(&Contents {
+    Contents {
         manifest_text: upload["manifest_text"].as_str().unwrap().to_owned(),
         files,
-    }))
+    }
 }
 
-/// The server keeps the uploaded bundle and serves it back as the pending bundle, files too.
-#[derive(Clone, Default)]
-struct Pending(Arc<Mutex<Option<Value>>>);
-
-impl Respond for Pending {
+impl Respond for School {
     fn respond(&self, r: &Request) -> ResponseTemplate {
-        if r.method.as_str() == "POST" {
+        let mut held = self.0.lock().unwrap();
+        let p = r.url.path().to_owned();
+        let post = r.method.as_str() == "POST";
+        if p == "/v1/admin/versions" {
+            let vs: Vec<Value> = (1..=held.archives.len())
+                .map(|v| json!({ "version": v }))
+                .collect();
+            return ResponseTemplate::new(200).set_body_json(vs);
+        }
+        if let Some(v) = p
+            .strip_prefix("/v1/admin/versions/")
+            .and_then(|rest| rest.strip_suffix("/archive"))
+        {
+            let v: usize = v.parse().unwrap();
+            return ResponseTemplate::new(200).set_body_bytes(held.archives[v - 1].clone());
+        }
+        if post && p == "/v1/admin/publish/pending" {
             let up: Value = serde_json::from_slice(&r.body).unwrap();
             let digest = digest_of(&up);
-            *self.0.lock().unwrap() = Some(up);
+            held.uploads.push(up);
+            let v = held.uploads.len();
             return ResponseTemplate::new(200).set_body_json(json!({
-                "pending_id": "p-1", "version": 1, "digest_hex": digest, "lints": []
+                "pending_id": format!("p-{v}"), "version": v, "digest_hex": digest, "lints": []
             }));
         }
-        let up = self.0.lock().unwrap().clone().expect("uploaded first");
-        if let Some(file) = r
-            .url
-            .path()
-            .strip_prefix("/v1/admin/publish/pending/p-1/files/")
-        {
+        let rest = p.strip_prefix("/v1/admin/publish/pending/p-").unwrap();
+        let (v, tail) = rest.split_once('/').unwrap_or((rest, ""));
+        let v: usize = v.parse().unwrap();
+        let up = held.uploads[v - 1].clone();
+        if post && tail == "commit" {
+            let body: Value = serde_json::from_slice(&r.body).unwrap();
+            let sig: SignatureFile = serde_json::from_value(body["signature"].clone()).unwrap();
+            let archive = mastersos_bundle::assemble(&contents_of(&up), &sig).unwrap();
+            held.archives.push(archive);
+            return ResponseTemplate::new(200).set_body_json(json!({ "version": v }));
+        }
+        if let Some(file) = tail.strip_prefix("files/") {
             let b = up["files"][file].as_str().unwrap();
             return ResponseTemplate::new(200).set_body_bytes(STANDARD.decode(b).unwrap());
         }
@@ -95,7 +136,7 @@ impl Respond for Pending {
             .map(|p| json!({ "path": p }))
             .collect();
         ResponseTemplate::new(200).set_body_json(json!({
-            "pending_id": "p-1", "version": 1, "digest_hex": digest_of(&up),
+            "pending_id": format!("p-{v}"), "version": v, "digest_hex": digest_of(&up),
             "manifest_text": up["manifest_text"], "files": files
         }))
     }
@@ -103,7 +144,7 @@ impl Respond for Pending {
 
 /// A school that has published nothing, with `kit` registered; the check-in commit answers
 /// `checkin_status`.
-async fn server(kit: &Kit, checkin_status: u16) -> (MockServer, Pending) {
+async fn server(kit: &Kit, checkin_status: u16) -> (MockServer, School) {
     let s = MockServer::start().await;
     let get = |p: &str, body: Value| {
         Mock::given(method("GET"))
@@ -122,7 +163,6 @@ async fn server(kit: &Kit, checkin_status: u16) -> (MockServer, Pending) {
     )
     .mount(&s)
     .await;
-    get("/v1/admin/versions", json!([])).mount(&s).await;
     let tk = kit.trust_key();
     get(
         "/v1/admin/signing-keys",
@@ -147,22 +187,13 @@ async fn server(kit: &Kit, checkin_status: u16) -> (MockServer, Pending) {
     )
     .mount(&s)
     .await;
-    let pending = Pending::default();
-    Mock::given(method("POST"))
-        .and(path("/v1/admin/publish/pending"))
-        .respond_with(pending.clone())
-        .mount(&s)
-        .await;
-    Mock::given(method("GET"))
-        .and(path_regex("^/v1/admin/publish/pending/p-1(/files/.*)?$"))
-        .respond_with(pending.clone())
-        .mount(&s)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/v1/admin/publish/pending/p-1/commit"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "version": 1 })))
-        .mount(&s)
-        .await;
+    let school = School::default();
+    Mock::given(path_regex(
+        "^/v1/admin/(versions(/[0-9]+/archive)?|publish/pending(/p-[0-9]+(/commit|/files/.*)?)?)$",
+    ))
+    .respond_with(school.clone())
+    .mount(&s)
+    .await;
     let checkin = if checkin_status == 204 {
         ResponseTemplate::new(204)
     } else {
@@ -175,7 +206,7 @@ async fn server(kit: &Kit, checkin_status: u16) -> (MockServer, Pending) {
         .respond_with(checkin)
         .mount(&s)
         .await;
-    (s, pending)
+    (s, school)
 }
 
 /// Run `mastersos` with `stdin` as its input.
@@ -220,10 +251,6 @@ async fn folder(home: &Path, t: &Path, key: &Path) -> PathBuf {
     dir
 }
 
-async fn uploaded(p: &Pending) -> Value {
-    p.0.lock().unwrap().clone().expect("uploaded")
-}
-
 async fn checkins(s: &MockServer) -> Vec<Value> {
     s.received_requests()
         .await
@@ -234,15 +261,32 @@ async fn checkins(s: &MockServer) -> Vec<Value> {
         .collect()
 }
 
-/// Words IT does not need to see on a normal publish. The diff shows manifest.toml as it is
-/// (`escrow_recipients`, `issued_at`), so only the words outside the file are checked for those.
-fn plain_words(out: &str) {
-    let lower = out.to_lowercase();
+/// Words IT does not need to see on a normal publish. The diff shows lines of manifest.toml as
+/// they are (`[[trust]]`, `escrow_recipients`, `issued_at`): lines that are a line of one of
+/// `manifests` after their diff mark are left out; every other line is checked.
+fn plain_words(out: &str, manifests: &[String]) {
+    let file_lines: std::collections::BTreeSet<&str> =
+        manifests.iter().flat_map(|m| m.lines()).collect();
+    let shown: Vec<&str> = out
+        .lines()
+        .filter(|l| {
+            let body = l.get(1..).unwrap_or("");
+            let mark = l.starts_with(['+', '-', ' ']);
+            !(mark && file_lines.contains(body))
+                && !l.starts_with("--- v")
+                && !l.starts_with("+++ v")
+        })
+        .collect();
+    let shown = shown.join("\n");
+    // "Trusted keys" is the plain label; any other "trust" is not.
+    let lower = shown.to_lowercase().replace("trusted keys", "");
     for w in [
         "heartbeat",
         "digest",
         "kit",
-        "escrow recipient",
+        "trust",
+        "escrow",
+        "recipient",
         "luks",
         "(r1g)",
         "(r5)",
@@ -251,26 +295,37 @@ fn plain_words(out: &str) {
         "not_after",
         "check-in",
     ] {
-        assert!(!lower.contains(w), "{w}: {out}");
+        assert!(!lower.contains(w), "{w}: {shown}");
     }
+}
+
+/// manifest.toml of `dir` as it is now.
+fn manifest(dir: &Path) -> String {
+    std::fs::read_to_string(dir.join("manifest.toml")).unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn publish_with_school_key_signs_checkin() {
     let t = tempfile::tempdir().unwrap();
     let (key, kit) = school_key(t.path());
-    let (s, pending) = server(&kit, 204).await;
+    let (s, school) = server(&kit, 204).await;
     let home = connected_home(&s.uri());
     let dir = folder(home.path(), t.path(), &key).await;
     let o = run(
         home.path(),
         args(&[&"publish", &dir, &"--school-key", &key]),
-        "1\ntrust\n",
+        "1\nyes\n",
     )
     .await;
     let (out, err) = text(&o);
     assert!(o.status.success(), "{out}{err}");
-    let digest = digest_of(&uploaded(&pending).await);
+    let digest = digest_of(&school.upload(1));
+    // The first version adds the school key: the second question, in plain words.
+    assert!(
+        out.contains("changes which school keys computers accept and who can unlock their disks")
+            && out.contains("type yes: "),
+        "{out}"
+    );
     // In this order: the check, the check code, the published version.
     // The new folder has one warning (no administrator yet), listed above the line.
     let checked = out
@@ -282,7 +337,8 @@ async fn publish_with_school_key_signs_checkin() {
     let published = out.find("Published version 1").expect(&out);
     assert!(checked < code && code < published, "{out}");
     assert!(!out.contains(&digest), "only the check code: {out}");
-    plain_words(&out);
+    plain_words(&out, &[manifest(&dir)]);
+    plain_words(&err, &[]);
     assert!(!err.contains(STALE), "{err}");
 
     // Exactly one check-in, for the version and content just published, signed by the school key.
@@ -301,7 +357,7 @@ async fn publish_with_school_key_signs_checkin() {
 async fn publish_heartbeat_failure_keeps_version() {
     let t = tempfile::tempdir().unwrap();
     let (key, kit) = school_key(t.path());
-    let (s, _pending) = server(&kit, 500).await;
+    let (s, _) = server(&kit, 500).await;
     let home = connected_home(&s.uri());
     let dir = folder(home.path(), t.path(), &key).await;
     let o = run(
@@ -316,8 +372,8 @@ async fn publish_heartbeat_failure_keeps_version() {
     assert!(err.contains(STALE), "{err}");
     // Only that sentence: not the server's error, not the cryptography.
     assert!(!err.contains("database down"), "{err}");
-    plain_words(&out);
-    plain_words(&err);
+    plain_words(&out, &[manifest(&dir)]);
+    plain_words(&err, &[]);
     assert_eq!(checkins(&s).await.len(), 1);
 }
 
@@ -325,13 +381,13 @@ async fn publish_heartbeat_failure_keeps_version() {
 async fn publish_without_key_prints_link_and_check_code() {
     let t = tempfile::tempdir().unwrap();
     let (key, kit) = school_key(t.path());
-    let (s, pending) = server(&kit, 204).await;
+    let (s, school) = server(&kit, 204).await;
     let home = connected_home(&s.uri());
     let dir = folder(home.path(), t.path(), &key).await;
     let o = run(home.path(), args(&[&"publish", &dir]), "").await;
     let (out, err) = text(&o);
     assert!(o.status.success(), "{out}{err}");
-    let digest = digest_of(&uploaded(&pending).await);
+    let digest = digest_of(&school.upload(1));
     let short = &digest[..8];
     let link = format!("https://sign.example/#school=alpha&sid={SID}&op=commit&pending=p-1");
     let checked = out
@@ -347,7 +403,7 @@ async fn publish_without_key_prints_link_and_check_code() {
         ))
         .expect(&out);
     assert!(checked < code && code < wait && wait < compare, "{out}");
-    plain_words(&out);
+    plain_words(&out.replace(&link, ""), &[]);
     assert!(!out.replace(&link, "").contains("pending"), "{out}");
     // Nothing signed here, no check-in.
     assert!(checkins(&s).await.is_empty());
@@ -393,4 +449,57 @@ async fn json_publish_reports_the_checkin() {
     assert!(v["checkin_error"].as_str().is_some(), "{v}");
     assert!(v.get("checkin_until").is_none(), "{v}");
     assert!(err.contains(STALE), "{err}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn publish_later_version_signs_its_checkin() {
+    // Version 2 goes through the history check from the record version 1 left on this computer.
+    let t = tempfile::tempdir().unwrap();
+    let (key, kit) = school_key(t.path());
+    let (s, school) = server(&kit, 204).await;
+    let home = connected_home(&s.uri());
+    let dir = folder(home.path(), t.path(), &key).await;
+    let o = run(
+        home.path(),
+        args(&[&"publish", &dir, &"--school-key", &key]),
+        "1\nyes\n",
+    )
+    .await;
+    let (out, err) = text(&o);
+    assert!(o.status.success(), "{out}{err}");
+    let v1 = manifest(&dir);
+    let edited = v1.replace("name = \"Ungrouped\"", "name = \"Everyone\"");
+    assert_ne!(edited, v1);
+    std::fs::write(dir.join("manifest.toml"), edited).unwrap();
+
+    // The trusted keys do not change: only the version number is asked for.
+    let o = run(
+        home.path(),
+        args(&[&"publish", &dir, &"--school-key", &key]),
+        "2\n",
+    )
+    .await;
+    let (out, err) = text(&o);
+    assert!(o.status.success(), "{out}{err}");
+    let digest = digest_of(&school.upload(2));
+    let code = out
+        .find(&format!("Check code: {}", &digest[..8]))
+        .expect(&out);
+    let published = out.find("Published version 2").expect(&out);
+    assert!(code < published, "{out}");
+    assert!(
+        out.contains("The trusted keys are the same as in version 1."),
+        "{out}"
+    );
+    plain_words(&out, &[v1, manifest(&dir)]);
+    plain_words(&err, &[]);
+    assert!(!err.contains(STALE), "{err}");
+
+    let c = checkins(&s).await;
+    assert_eq!(c.len(), 2, "{c:?}");
+    let statement: HeartbeatStatement = serde_json::from_value(c[1]["statement"].clone()).unwrap();
+    let signature: SignatureFile = serde_json::from_value(c[1]["signature"].clone()).unwrap();
+    assert_eq!(statement.version, 2);
+    assert_eq!(statement.digest_hex, digest);
+    verify_statement(&statement, &signature, &[kit.trust_key()]).unwrap();
 }

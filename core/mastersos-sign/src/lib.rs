@@ -957,7 +957,7 @@ pub async fn sign_pending_expecting(
     if genesis {
         writeln!(
             out,
-            "This is the first version: computers will trust exactly these keys. Check each key code \
+            "This is the first version: computers will accept settings approved only by these keys. Check each key code \
              and fingerprint against the paper copy of your school key, not against this server's pages."
         )?;
     } else if delta.is_empty() {
@@ -1033,9 +1033,10 @@ pub async fn sign_pending_expecting(
         let typed = ask(
             confirm,
             out,
-            "This version changes the keys computers trust or the disk-unlocking recipient (see the changes above). If that is right, type trust: ",
+            "This version changes which school keys computers accept and who can unlock their disks (see the changes above). If that is right, type yes: ",
         )?;
-        if typed != "trust" {
+        // `trust` was the word asked for before; old scripts still send it.
+        if typed != "yes" && typed != "trust" {
             bail!("The change of trusted keys or disk unlocking was not confirmed; cancelled, nothing was approved");
         }
     }
