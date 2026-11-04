@@ -2597,10 +2597,25 @@ if grep -A6 'actions/cache/' "$wf" | grep -qE '^\s+path:.*mkosi\.cache'; then
 	bad 55 "mastersos-image.yml must not cache mkosi.cache (the package lists) for a release build"
 	r=1
 fi
+# The restored cache is verified against the signed index before the build, and the verifier does what it says
+order=$(grep -nE 'actions/cache/restore@|name: Verify the package cache|name: Build$' "$wf" | cut -d: -f1 | tr '\n' ' ')
+read -r o_restore o_verify o_build _ <<<"$order"
+if [ -z "${o_build:-}" ] || ! [ "$o_restore" -lt "$o_verify" ] || ! [ "$o_verify" -lt "$o_build" ]; then
+	bad 55 "mastersos-image.yml must verify the restored package cache (ci-verify-package-cache.py) between restore and Build"
+	r=1
+fi
+grep -qF 'image/ci-verify-package-cache.py' "$wf" || {
+	bad 55 "mastersos-image.yml does not run image/ci-verify-package-cache.py"
+	r=1
+}
+if ! out=$(bash "$rel/tests/verify-package-cache-test.sh" 2>&1); then
+	bad 55 "verify-package-cache-test: $out"
+	r=1
+fi
 grep -qF 'MASTERSOS_PACKAGE_CACHE' "$wf" || {
 	bad 55 "mastersos-image.yml does not hand the package cache to build.sh (MASTERSOS_PACKAGE_CACHE)"
 	r=1
 }
-[ "$r" = 0 ] && ok 55 "package cache: the build host reuses a snapshot's lists, CI keeps only packages between runs"
+[ "$r" = 0 ] && ok 55 "package cache: the build host reuses a snapshot's lists, CI keeps only packages between runs and verifies them against the signed index"
 
 exit $fail

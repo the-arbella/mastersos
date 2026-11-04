@@ -46,8 +46,8 @@ jobs:
             echo "MASTERSOS_SNAPSHOT=$snapshot"
             echo "MASTERSOS_PACKAGE_CACHE=$RUNNER_TEMP/mkosi-packages"
           } >>"$GITHUB_ENV"
-      # snapshot.ubuntu.com is often down (5xx, 401). Only the downloaded packages are kept between runs (apt checks each one
-      # against the snapshot's signed lists, which every run fetches itself); the lists and mkosi.cache are never cached.
+      # snapshot.ubuntu.com is often down (5xx, 401). Only the downloaded packages are kept between runs, each checked against
+      # the snapshot's signed index before the build (next step); the lists and mkosi.cache are never cached.
       - name: Restore the package cache
         # A cache problem never stops a release build
         continue-on-error: true
@@ -67,6 +67,10 @@ jobs:
           base64 -d <<<"$MASTERSOS_RELEASE_KEYS_AGE_B64" >"$age_file"
           python3 -I image/ci-load-release-keys.py "$age_file"
           rm -f "$age_file"
+      # apt takes a cached .deb whose size matches without checking its hash: keep only packages whose SHA256 is in the
+      # snapshot's signed index (gpgv with the Ubuntu archive keyring); when the index cannot be verified, drop them all
+      - name: Verify the package cache
+        run: python3 -I image/ci-verify-package-cache.py "$MASTERSOS_PACKAGE_CACHE" "$MASTERSOS_SNAPSHOT" "$(sed -n 's/^Release=//p' image/mkosi.conf)"
       - name: Build
         run: |
           # A retry keeps the package cache and only fetches what is missing; wait longer each time for the snapshot host
