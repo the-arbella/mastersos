@@ -2455,10 +2455,10 @@ if grep -qE '^KernelCommandLine=.*plymouth\.ignore-serial-consoles' "$rel/mkosi.
 	bad 52 "mkosi.profiles/lab.conf must not hide the serial console from Plymouth (acceptance answers prompts over serial)"
 	r=1
 fi
-grep -qF -- '--kernel-command-line=plymouth.ignore-serial-consoles' "$rel/build.sh" && grep -qF 'MASTERSOS_LAB_SPLASH' "$rel/build.sh" || {
+if ! grep -qF -- '--kernel-command-line=plymouth.ignore-serial-consoles' "$rel/build.sh" || ! grep -qF 'MASTERSOS_LAB_SPLASH' "$rel/build.sh"; then
 	bad 52 "build.sh has no MASTERSOS_LAB_SPLASH=1 switch for the screenshot build"
 	r=1
-}
+fi
 grep -qx 'plymouth.enable=0' "$rel/installer/installer.cmdline" || {
 	bad 52 "installer.cmdline must keep plymouth.enable=0"
 	r=1
