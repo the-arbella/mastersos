@@ -1,8 +1,10 @@
 #!/bin/bash
 # diag-setup (developer diagnostics switch, docs/specs/2026-11-03-diagnostics-design.md), run locally and in CI, no VM:
 #   bash image/tests/diag-setup-test.sh
-# The switch is /var/lib/mastersos-seed/debug.conf; with it the script writes /run/mastersos/diag.env, the NetworkManager
-# logging drop-in and Enable=true in /etc/gdm3/custom.conf's [debug] section; without it nothing changes.
+# The switch is /var/lib/mastersos-diag/enabled (encrypted root); with it the script writes /run/mastersos/diag.env, the
+# NetworkManager logging drop-in and Enable=true in /etc/gdm3/custom.conf's [debug] section; without it nothing changes.
+# "adopt" (first boot) turns the installer's marker /var/lib/mastersos-seed/debug-install into that switch; on any other boot
+# a marker on the seed partition is deleted and never trusted.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -26,10 +28,15 @@ fail() {
 # fresh root with the package's custom.conf
 new_root() {
 	rm -rf "$tmp/r"
-	mkdir -p "$tmp/r/var/lib/mastersos-seed" "$tmp/r/etc/gdm3" "$tmp/r/run"
+	mkdir -p "$tmp/r/var/lib/mastersos-seed" "$tmp/r/var/lib" "$tmp/r/etc/gdm3" "$tmp/r/run"
 	cp "$fixture" "$tmp/r/etc/gdm3/custom.conf"
 }
-run() { MASTERSOS_DIAG_ROOT=$tmp/r bash "$script"; }
+run() { MASTERSOS_DIAG_ROOT=$tmp/r bash "$script" "$@"; }
+switch_on() {
+	mkdir -p "$tmp/r/var/lib/mastersos-diag"
+	: >"$tmp/r/var/lib/mastersos-diag/enabled"
+}
+marker=var/lib/mastersos-seed/debug-install
 
 want_env='MASTERSOS_LOG_LEVEL=debug
 MASTERSOS_DIAG_AUTHD_ARGS=-vv
@@ -53,7 +60,7 @@ else ok $t; fi
 
 t=switch_on_writes_env_and_nm
 new_root
-: >"$tmp/r/var/lib/mastersos-seed/debug.conf"
+switch_on
 run
 if [ "$(cat "$tmp/r/run/mastersos/diag.env" 2>/dev/null)" != "$want_env" ]; then
 	fail $t "diag.env: $(cat "$tmp/r/run/mastersos/diag.env" 2>&1)"
@@ -75,7 +82,7 @@ fi
 
 t=gdm_no_debug_section
 new_root
-: >"$tmp/r/var/lib/mastersos-seed/debug.conf"
+switch_on
 printf '[daemon]\nWaylandEnable=true\n' >"$tmp/r/etc/gdm3/custom.conf"
 run
 if [ "$(enable_lines "$tmp/r/etc/gdm3/custom.conf")" != 1 ] || ! grep -q '^WaylandEnable=true$' "$tmp/r/etc/gdm3/custom.conf"; then
@@ -91,10 +98,51 @@ fi
 t=symlink_switch_is_off
 new_root
 : >"$tmp/target"
-ln -s "$tmp/target" "$tmp/r/var/lib/mastersos-seed/debug.conf"
+mkdir -p "$tmp/r/var/lib/mastersos-diag"
+ln -s "$tmp/target" "$tmp/r/var/lib/mastersos-diag/enabled"
 run
 if [ -e "$tmp/r/run/mastersos/diag.env" ]; then
 	fail $t "a symlink turned the switch on"
+else ok $t; fi
+
+t=adopt_moves_marker
+new_root
+: >"$tmp/r/$marker"
+run adopt
+if [ -e "$tmp/r/$marker" ]; then fail $t "marker left on the seed partition"
+elif [ ! -f "$tmp/r/var/lib/mastersos-diag/enabled" ] || [ -L "$tmp/r/var/lib/mastersos-diag/enabled" ]; then fail $t "switch not created"
+elif [ "$(stat -c %a "$tmp/r/var/lib/mastersos-diag")" != 700 ]; then fail $t "folder mode $(stat -c %a "$tmp/r/var/lib/mastersos-diag")"
+else ok $t; fi
+
+t=adopt_refused_after_factory_reset
+new_root
+: >"$tmp/r/$marker"
+echo '{}' >"$tmp/r/var/lib/mastersos-seed/identity.json"
+run adopt
+if [ -e "$tmp/r/var/lib/mastersos-diag/enabled" ]; then fail $t "a factory reset turned the switch on"
+elif [ -e "$tmp/r/$marker" ]; then fail $t "marker not removed"
+else ok $t; fi
+
+t=adopt_without_marker_noop
+new_root
+run adopt
+if [ -e "$tmp/r/var/lib/mastersos-diag" ]; then fail $t "created the switch folder without a marker"; else ok $t; fi
+
+t=adopt_symlink_marker_ignored
+new_root
+: >"$tmp/target"
+ln -s "$tmp/target" "$tmp/r/$marker"
+run adopt
+if [ -e "$tmp/r/var/lib/mastersos-diag/enabled" ]; then fail $t "a symlinked marker turned the switch on"
+elif [ -L "$tmp/r/$marker" ] || [ ! -e "$tmp/target" ]; then fail $t "marker link not removed, or its target touched"
+else ok $t; fi
+
+t=planted_marker_removed_not_adopted
+new_root
+: >"$tmp/r/$marker"
+run
+if [ -e "$tmp/r/$marker" ]; then fail $t "marker not removed"
+elif [ -e "$tmp/r/var/lib/mastersos-diag/enabled" ] || [ -e "$tmp/r/run/mastersos/diag.env" ]; then fail $t "a planted marker turned diagnostics on"
 else ok $t; fi
 
 echo "$((n - fails))/$n passed"

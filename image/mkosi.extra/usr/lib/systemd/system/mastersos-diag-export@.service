@@ -1,5 +1,5 @@
 # Developer diagnostics (docs/specs/2026-11-03-diagnostics-design.md): pulled in by 91-mastersos-diag.rules when a vfat or
-# exfat USB stick appears on a machine with the switch /var/lib/mastersos-seed/debug.conf; %i is the kernel device name
+# exfat USB stick appears on a machine with the switch /var/lib/mastersos-diag/enabled; %i is the kernel device name
 # (sdb1). Writes the diagnostics package to the stick and unmounts it. BindsTo: pulling the stick stops the unit, and the
 # script's trap removes the staging folder and the mount point.
 [Unit]

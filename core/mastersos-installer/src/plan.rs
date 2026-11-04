@@ -276,7 +276,7 @@ fn gib(bytes: u64) -> u64 {
 }
 
 /// The confirm screen: target disk model and size, and whether there is a seed (with a seed: `server_url` and the group). Only `y` continues.
-pub fn confirm_text(target: &Disk, seed: &SeedFound) -> String {
+pub fn confirm_text(target: &Disk, seed: &SeedFound, debug: bool) -> String {
     let model = target.model.as_deref().unwrap_or("(unknown model)");
     let mut t = format!(
         "This ERASES the whole disk and installs MastersOS\n  {} ({model}, {} GiB)\n",
@@ -298,6 +298,10 @@ pub fn confirm_text(target: &Disk, seed: &SeedFound) -> String {
             ));
         }
         _ => t.push_str("No seed: will be installed as an unmanaged personal computer\n"),
+    }
+    // d was held in the hidden window at the start: the one place that shows it worked
+    if debug {
+        t.push_str("Developer diagnostics: ON\n");
     }
     t.push_str("Type y to continue, anything else cancels: ");
     t

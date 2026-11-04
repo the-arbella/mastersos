@@ -1,18 +1,21 @@
 #!/bin/bash
 # ExecStart of mastersos-diag-export@<device>.service (developer diagnostics, docs/specs/2026-11-03-diagnostics-design.md):
-# a vfat or exfat USB stick was plugged in. Only when the switch /var/lib/mastersos-seed/debug.conf is there (a regular file),
-# the stick is mounted (nosuid,nodev,noexec) under /run/mastersos-diag/<device> and gets
+# a vfat or exfat USB partition appeared. Only when the switch /var/lib/mastersos-diag/enabled is there (a regular file, on the
+# encrypted root; the first boot after a "hold d" install creates it), and only for the type blkid probes now (vfat or exfat,
+# mounted with that -t, nosuid,nodev,noexec,nosymfollow under /run/mastersos-diag/<device>). The package goes next to the
+# install stick's seed: the first folder holding seed.toml or seed-*.toml (any case) at the partition's root or one or two
+# levels below, shallowest first, then by path; symlinked folders are not followed. No seed: unmounted, nothing written (a
+# student's stick, the stick's other partitions). The package is
 #   mastersos-diag-<first 8 of machine-id>-<UTC YYYYMMDDTHHMMSSZ>[-N].tar.zst
 # written as <name>.partial and renamed once complete, so a file with the final name is always whole. Then sync and unmount;
-# the stick can be pulled. Without the switch nothing is mounted or written (udev also checks it, but a stick present at boot
-# may be seen before the seed partition is mounted).
+# the stick can be pulled. Its name does not end in .toml, so the installer never takes it for a seed.
 # Sensitive data is not filtered out: this is a developer tool, its packages never go into the repository. Home folders are
 # not collected (their logs are in the journal). Each command runs at most DIAG_CMD_TIMEOUT (20) seconds: a wedged
 # NetworkManager must not stop the export. The journal dumps get DIAG_JOURNAL_TIMEOUT (300) seconds: with debug logging a
 # boot is easily a million lines, journalctl prints oldest first, and a cut would lose the newest lines, the incident itself. MASTERSOS_DIAG_ROOT prefixes the files read (tests/diag-export-test.sh only).
 set -euo pipefail
 R=${MASTERSOS_DIAG_ROOT:-}
-switch=$R/var/lib/mastersos-seed/debug.conf
+switch=$R/var/lib/mastersos-diag/enabled
 staging=
 mnt=
 mounted=
@@ -54,6 +57,23 @@ copy_tree() {
 	else
 		echo "$2 missing" >>"$staging/commands.txt"
 	fi
+}
+
+# fs_type <device>: the type blkid probes on the device itself (not udev's cached value)
+fs_type() { blkid -p -o value -s TYPE "/dev/$1" 2>/dev/null || true; }
+
+# find_seed_dir <mount point>: the folder of the install stick's seed (see the top); nothing and 1 when there is none
+find_seed_dir() {
+	local f real
+	# NUL-separated: a folder name may hold a newline (a crafted FAT image), which must not become a second line "0 /etc"
+	f=$(find "$1" -mindepth 1 -maxdepth 3 -type f \( -iname 'seed.toml' -o -iname 'seed-*.toml' \) -printf '%d %h\0' 2>/dev/null |
+		LC_ALL=C sort -z -k1,1n -k2 | head -z -n 1 | tr -d '\0')
+	[ -n "$f" ] || return 1
+	f=${f#* }
+	# and never anything outside the stick
+	real=$(realpath -e -- "$f" 2>/dev/null) || return 1
+	case "$real/" in "$(realpath -e -- "$1")"/*) ;; *) return 1 ;; esac
+	printf '%s\n' "$f"
 }
 
 # pick_name <dir> <machine8> <stamp>: the first of <base>.tar.zst, <base>-2.tar.zst, ... that is not in <dir>
@@ -151,22 +171,35 @@ main() {
 		say "developer diagnostics are off, /dev/$dev is not touched"
 		return 0
 	fi
+	local type dir
+	type=$(fs_type "$dev")
+	case "$type" in
+	vfat | exfat) ;;
+	*)
+		say "/dev/$dev is '${type:-unknown}', not vfat or exfat: not mounted"
+		return 0
+		;;
+	esac
 	trap cleanup EXIT
 	trap 'exit 143' TERM INT
 	mnt=$R/run/mastersos-diag/$dev
 	mkdir -p "$mnt"
-	mount -o nosuid,nodev,noexec "/dev/$dev" "$mnt"
+	mount -t "$type" -o nosuid,nodev,noexec,nosymfollow "/dev/$dev" "$mnt"
 	mounted=1
+	if ! dir=$(find_seed_dir "$mnt") || [ -L "$dir" ]; then
+		say "no seed on /dev/$dev: nothing written"
+		return 0
+	fi
 	staging=$(mktemp -d "$R/var/tmp/mastersos-diag.XXXXXX")
 	say "collecting for /dev/$dev"
 	collect
 	machine=$(head -c 8 "$R/etc/machine-id" 2>/dev/null) || machine=
 	[ -n "$machine" ] || machine=unknown
 	stamp=$(date -u +%Y%m%dT%H%M%SZ)
-	name=$(pick_name "$mnt" "$machine" "$stamp")
-	pack "$staging" "$mnt" "$name" || rc=$?
+	name=$(pick_name "$dir" "$machine" "$stamp")
+	pack "$staging" "$dir" "$name" || rc=$?
 	if [ "$rc" = 0 ]; then
-		say "wrote $name to /dev/$dev; it can be unplugged"
+		say "wrote ${dir#"$mnt"}/$name to /dev/$dev; it can be unplugged once unmounted"
 	else
 		say "writing to /dev/$dev failed (stick full or read-only?); nothing was left on it"
 	fi
