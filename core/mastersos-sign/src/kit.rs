@@ -53,8 +53,53 @@ pub fn kit_new(out: &Path) -> Result<KitSummary> {
     Ok(KitSummary::of(&kit))
 }
 
+/// The file name `kit new` gives a school key written into a directory:
+/// `<slug>-school-key-<code8>.kit`, or `school-key-<code8>.kit` without a usable school name.
+/// `<code8>` is the key code without its dash.
+pub fn school_key_file_name(school: Option<&str>, key_id: &str) -> String {
+    let code8 = mastersos_bundle::keyid::key_code(key_id)
+        .unwrap_or_default()
+        .replace('-', "");
+    let slug: String = school
+        .unwrap_or("")
+        .chars()
+        .map(|c| c.to_ascii_lowercase())
+        .map(|c| {
+            if c.is_ascii_lowercase() || c.is_ascii_digit() {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .split('-')
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if slug.is_empty() {
+        format!("school-key-{code8}.kit")
+    } else {
+        format!("{slug}-school-key-{code8}.kit")
+    }
+}
+
+/// `kit new --out <FILE|DIR> [--school <slug>]`: when `out` is an existing directory the file is
+/// named by [`school_key_file_name`]. Returns the summary and the path written.
+pub fn kit_new_in(out: &Path, school: Option<&str>) -> Result<(KitSummary, std::path::PathBuf)> {
+    let kit = Kit::generate();
+    let path = if out.is_dir() {
+        out.join(school_key_file_name(school, &kit.key_id()))
+    } else {
+        out.to_path_buf()
+    };
+    let mut text = kit.to_display();
+    text.push('\n');
+    write_secret(&path, text.as_bytes())?;
+    Ok((KitSummary::of(&kit), path))
+}
+
 fn parse(text: &str, from: &str) -> Result<Kit> {
-    Kit::parse(text).with_context(|| format!("cannot read the recovery kit from {from}"))
+    Kit::parse(text).with_context(|| format!("cannot read the school key from {from}"))
 }
 
 /// Read a school key (kit) file. Another owner is refused; access by other users only gets
@@ -78,9 +123,9 @@ pub fn read_kit(input: &mut dyn BufRead) -> Result<Kit> {
     input
         .take(KIT_INPUT_MAX)
         .read_line(&mut line)
-        .context("cannot read the recovery kit from stdin")?;
+        .context("cannot read the school key from stdin")?;
     if line.trim().is_empty() {
-        bail!("no recovery kit on stdin");
+        bail!("no school key on stdin");
     }
     parse(&line, "stdin")
 }
@@ -101,10 +146,7 @@ pub async fn ensure_registered(api: &Api, tk: &TrustKey) -> Result<()> {
         .iter()
         .any(|k| k.kind == "recovery" && k.key_id == tk.id && k.fingerprint == fp)
     {
-        bail!(
-            "this kit is not a registered recovery key of {}",
-            api.host()
-        );
+        bail!("this school key is not registered with {}", api.host());
     }
     Ok(())
 }
@@ -276,9 +318,49 @@ pub async fn escrow_read(
             }
             Err(_) => writeln!(
                 out,
-                "{head}  not sealed to this kit (recipients {fp}){suspicious}"
+                "{head}  not sealed to this school key (recipients {fp}){suspicious}"
             )?,
         }
     }
     Ok(opened)
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+
+    #[test]
+    fn file_name_uses_slug_and_key_code() {
+        assert_eq!(
+            school_key_file_name(Some("Alpha School!"), "rk-11d903eb"),
+            "alpha-school-school-key-11d903eb.kit"
+        );
+        assert_eq!(
+            school_key_file_name(None, "rk-11d903eb"),
+            "school-key-11d903eb.kit"
+        );
+        assert_eq!(
+            school_key_file_name(Some("  ?? "), "rk-11d903eb"),
+            "school-key-11d903eb.kit"
+        );
+    }
+
+    #[test]
+    fn new_in_a_directory_names_the_file_and_never_overwrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let (s, path) = kit_new_in(dir.path(), Some("alpha")).unwrap();
+        let code8 = mastersos_bundle::keyid::key_code(&s.key_id)
+            .unwrap()
+            .replace('-', "");
+        assert_eq!(
+            path,
+            dir.path().join(format!("alpha-school-key-{code8}.kit"))
+        );
+        assert!(path.is_file());
+        // A file path is used as given, and an existing file is refused.
+        let own = dir.path().join("own.kit");
+        let (_, p2) = kit_new_in(&own, None).unwrap();
+        assert_eq!(p2, own);
+        assert!(kit_new_in(&own, None).is_err());
+    }
 }

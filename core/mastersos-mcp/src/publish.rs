@@ -329,7 +329,7 @@ async fn precheck_signer(
     if let SignWith::Kit(_) = s.key {
         mastersos_sign::kit::ensure_registered(&api, &tk)
             .await
-            .context("Not uploaded: the recovery kit cannot sign for this school")?;
+            .context("Not uploaded: the school key cannot sign for this school")?;
     }
     Ok(api)
 }
@@ -1472,7 +1472,7 @@ mod tests {
         let (r, _) = publish_with_kit(&s, &w, kit, t.path(), "").await;
         let err = format!("{:#}", r.unwrap_err());
         assert!(err.starts_with("Not uploaded"), "{err}");
-        assert!(err.contains("not a registered recovery key"), "{err}");
+        assert!(err.contains("not registered with"), "{err}");
         assert!(uploads(&s).await.is_empty());
     }
 

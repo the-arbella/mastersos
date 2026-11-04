@@ -60,6 +60,16 @@ fn slug(label: &str) -> String {
     out.trim_end_matches('-').to_owned()
 }
 
+/// 学校钥匙的钥匙码：`rk-11d903eb` → `11d9-03eb`（id 的 8 位十六进制，4-4 分组）；不是 `rk-` 的 id 没有钥匙码。
+pub fn key_code(key_id: &str) -> Option<String> {
+    let hex = key_id.strip_prefix("rk-")?;
+    if hex.len() < 8 || !hex.is_char_boundary(8) || !hex[..8].bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    Some(format!("{}-{}", &hex[..4], &hex[4..8]))
+}
+
 /// 登记探针所签的消息：`b"mastersos-keyprobe-v1\n" || nonce`。
 pub fn keyprobe_message(nonce: &[u8]) -> Vec<u8> {
     let mut msg = KEYPROBE_PREFIX.to_vec();
@@ -122,6 +132,15 @@ mod tests {
         assert_eq!(id, format!("rk-{}", h()));
         assert_eq!(id.len(), 3 + 8);
         assert_ne!(recovery_key_id(b"other"), id);
+    }
+
+    #[test]
+    fn key_code_groups_first_eight() {
+        assert_eq!(key_code("rk-11d903eb").as_deref(), Some("11d9-03eb"));
+        assert_eq!(key_code("rk-11d903eb99").as_deref(), Some("11d9-03eb"));
+        assert_eq!(key_code("pk-x"), None);
+        assert_eq!(key_code("rk-11d9"), None);
+        assert_eq!(key_code("rk-zzzzzzzz"), None);
     }
 
     #[test]

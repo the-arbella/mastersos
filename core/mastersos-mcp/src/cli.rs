@@ -46,7 +46,13 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Connect this computer to a school's admin server: paste the token from the Command line page; it is checked, then saved with the server address
+    Connect {
+        /// The admin server address, for example https://school.os.khundavid.com
+        server_url: String,
+    },
     /// Save --server, --token-file and --ai-token-file to ~/.config/mastersos/config.toml, then test the connection
+    #[command(hide = true)]
     Setup,
     /// Start a local settings directory for a school that has published nothing yet
     Init {
@@ -86,15 +92,15 @@ enum Cmd {
         #[arg(long, conflicts_with = "section")]
         full: bool,
     },
-    /// Publish the local settings directory: check, fill in secrets, stamp, upload, then sign with --kit (or --key) or print the signing page link
+    /// Publish the local settings directory: check, fill in secrets, stamp, upload, then sign with --school-key or print the signing page link
     Publish {
         /// The settings directory (default: the current directory)
         dir: Option<PathBuf>,
-        /// The recovery kit file (MASTERSKIT1…, mode 0600): verify and sign on this computer. Without --kit or --key, IT signs on the signing page with the recovery kit (a registered Passkey is optional there)
-        #[arg(long, value_name = "FILE")]
+        /// The school key file (keep it on a USB stick; only you should be able to read it): check and approve on this computer. Without it, you approve on the signing page
+        #[arg(long = "school-key", alias = "kit", value_name = "FILE")]
         kit: Option<PathBuf>,
-        /// A PKCS#8 recovery key file (mode 0600) instead of the kit
-        #[arg(long, value_name = "FILE", conflicts_with = "kit")]
+        /// A PKCS#8 key file instead of the school key (kept for old scripts)
+        #[arg(long, value_name = "FILE", conflicts_with = "kit", hide = true)]
         key: Option<PathBuf>,
         /// IT approves that secret NAME may go to its changed network (`secret_rerouted`); give it once per rerouted secret. Without it publish refuses. Never passed by an AI
         #[arg(long = "allow-reroute", value_name = "NAME")]
@@ -204,6 +210,10 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         json,
         cmd,
     } = cli;
+    if let Cmd::Connect { server_url } = &cmd {
+        // Like setup: before the config file is read, so a broken one gets rewritten.
+        return connect_school(server_url, token_file).await;
+    }
     if let Cmd::Setup = cmd {
         // Before the config file is read: setup is how a broken one gets rewritten.
         return setup(server, token_file, ai_token_file).await;
@@ -274,7 +284,11 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         .map_err(|e| OpError::Failed(e.to_string()))?;
     let out = Out { json };
     match cmd {
-        Cmd::Setup | Cmd::Mcp { .. } | Cmd::Check { .. } | Cmd::Diff { .. } => {
+        Cmd::Setup
+        | Cmd::Connect { .. }
+        | Cmd::Mcp { .. }
+        | Cmd::Check { .. }
+        | Cmd::Diff { .. } => {
             unreachable!("handled above")
         }
         Cmd::Init { dir } => init_dir(&api, &server, &token_file, &dir).await,
@@ -306,7 +320,7 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
             let text = api.send(Req::get(&["v1", "admin", "signing-keys"])).await?;
             out.print(&text, |v| {
                 table(
-                    &["KEY ID", "KIND", "ALGORITHM", "LABEL", "IN TRUST"],
+                    &["KEY ID", "KIND", "ALGORITHM", "LABEL", "TRUSTED"],
                     rows(v, &["key_id", "kind", "alg", "label", "in_published_trust"]),
                 )
             });
@@ -383,7 +397,7 @@ async fn setup(
     ] {
         if !file.exists() {
             println!(
-                "Next: save {what} to {} and run `chmod 600` on that file.",
+                "Next: save {what} to {}; only you should be able to read that file.",
                 file.display()
             );
             continue;
@@ -402,6 +416,83 @@ async fn setup(
         );
     }
     println!("Never give an AI the token file {}.", token_file.display());
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `mastersos connect <SERVER_URL>`: ask for the token without echo, check it with `whoami`, then
+/// save the token and `config.toml` (owner only). Nothing is written when the token is refused.
+async fn connect_school(
+    server_url: &str,
+    token_file: Option<PathBuf>,
+) -> Result<ExitCode, OpError> {
+    let base = check_server(server_url).map_err(|e| OpError::Failed(e.to_string()))?;
+    let token =
+        mastersos_sign::platform::read_hidden_line("Paste the token from the Command line page: ")
+            .map_err(fail)?;
+    let token = token.trim();
+    if token.is_empty() {
+        return Err(OpError::Failed("No token was entered".into()));
+    }
+    let api = Api::new(server_url, token).map_err(|e| OpError::Failed(e.to_string()))?;
+    let who = crate::whoami(&api)
+        .await
+        .map_err(|e| OpError::Failed(e.to_string()))?;
+    if crate::is_ai_token(&who) {
+        return Err(OpError::Failed(
+            "This token is for an AI tool. Paste the token from the Command line page instead; nothing was saved"
+                .into(),
+        ));
+    }
+    let has = |name: &str| {
+        who["scopes"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|s| s.as_str() == Some(name)))
+    };
+    if !has("read") || !has("draft") {
+        return Err(OpError::Failed(
+            "This token cannot read and edit settings. Create a new token on the Command line page; nothing was saved"
+                .into(),
+        ));
+    }
+    let school: String = who["school_name"]
+        .as_str()
+        .map(|n| {
+            n.chars()
+                .filter(|c| !c.is_control())
+                .take(64)
+                .collect::<String>()
+        })
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or_else(|| base.host_str().unwrap_or_default().to_owned());
+
+    let dir = config_dir()?;
+    let token_path = match token_file {
+        Some(p) => std::path::absolute(&p)
+            .map_err(|e| OpError::Failed(format!("Bad token file path {}: {e}", p.display())))?,
+        None => dir.join("token"),
+    };
+    let config_path = dir.join("config.toml");
+    // Keep the AI token file of an earlier setup; a broken old config is replaced.
+    let ai_token_file = load_config().ok().and_then(|c| c.ai_token_file);
+    let text = toml::to_string(&ConfigFile {
+        server: Some(server_url.trim_end_matches('/').to_owned()),
+        token_file: Some(token_path.clone()),
+        ai_token_file,
+    })
+    .map_err(|e| OpError::Failed(format!("Could not write the settings: {e}")))?;
+    for p in [&token_path, &config_path] {
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                OpError::Failed(format!("Could not create {}: {e}", parent.display()))
+            })?;
+        }
+    }
+    mastersos_sign::platform::write_private(&token_path, format!("{token}\n").as_bytes())
+        .map_err(fail)?;
+    mastersos_sign::platform::write_private(&config_path, text.as_bytes()).map_err(fail)?;
+    println!("Connected to {school}.");
+    println!("Token saved in {}", token_path.display());
+    println!("Settings saved in {}", config_path.display());
     Ok(ExitCode::SUCCESS)
 }
 
@@ -857,7 +948,9 @@ fn prompt_secret(text: &str) -> Result<zeroize::Zeroizing<String>, OpError> {
 /// uploaded. Clap already refuses both at once.
 fn signer(kit: Option<&Path>, key: Option<&Path>) -> Result<Option<SignWith>, OpError> {
     match (kit, key) {
-        (Some(_), Some(_)) => Err(OpError::Failed("give --kit or --key, not both".into())),
+        (Some(_), Some(_)) => Err(OpError::Failed(
+            "give --school-key or --key, not both".into(),
+        )),
         (Some(p), None) => SignWith::kit_file(p).map(Some).map_err(fail),
         (None, Some(p)) => SignWith::key_file(p).map(Some).map_err(fail),
         (None, None) => Ok(None),
@@ -1035,6 +1128,20 @@ mod tests {
         assert!(signer(None, None).unwrap().is_none());
         let missing = signer(Some(Path::new("/nonexistent/school.kit")), None);
         assert!(missing.is_err());
+    }
+
+    #[test]
+    fn kit_kit_alias_still_works() {
+        let cli = Cli::try_parse_from(["mastersos", "publish", "--kit", "f"]).unwrap();
+        let Cmd::Publish { kit, .. } = cli.cmd else {
+            panic!("not publish");
+        };
+        assert_eq!(kit, Some(PathBuf::from("f")));
+        let cli = Cli::try_parse_from(["mastersos", "publish", "--school-key", "g"]).unwrap();
+        let Cmd::Publish { kit, .. } = cli.cmd else {
+            panic!("not publish");
+        };
+        assert_eq!(kit, Some(PathBuf::from("g")));
     }
 
     #[test]
