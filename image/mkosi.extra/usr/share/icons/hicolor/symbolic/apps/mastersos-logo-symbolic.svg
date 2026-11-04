@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- MastersOS logo, symbolic (one colour, GTK recolours #bebebe): quick settings fallback and other 16 px places.
+     Same M and light as logo.svg, built from filled shapes only (no strokes) so symbolic recolouring is exact. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 100 100">
+  <g fill="#bebebe">
+    <rect x="12" y="16" width="12" height="70" rx="6"/>
+    <rect x="76" y="16" width="12" height="70" rx="6"/>
+    <rect x="-6" y="-6" width="43.24" height="12" rx="6" transform="translate(18 22) rotate(50.19)"/>
+    <rect x="-6" y="-6" width="43.24" height="12" rx="6" transform="translate(82 22) rotate(129.81)"/>
+    <circle cx="50" cy="61" r="11"/>
+  </g>
+</svg>

@@ -1,0 +1,52 @@
+<!doctype html>
+<!-- MastersOS wallpaper generator (design 2026-11-04 visual identity §3). ?m=day|night; 1920x1200 CSS px, render.sh renders it
+     at device scale 2 (3840x2400). Light rising in the valley between three hills, faint rings spreading from it, fine grain
+     against banding. -->
+<html><head><meta charset="utf-8">
+<style>html,body{margin:0;width:1920px;height:1200px;overflow:hidden}svg{display:block}</style></head><body>
+<script>
+const mode=new URLSearchParams(location.search).get('m')||'night';
+const T={
+ night:{sky:[['0','#070818'],['.38','#13113a'],['.62','#3a1c4f'],['.78','#7a2b55'],['.9','#c4475a'],['1','#f07a55']],
+   sun:['#fff3dc','#ffc27a','#ff7a5a'], bloom:'#ff9a5a', bloomOp:.75, haze:'#ff8a7a', ring:'#ffd6a8', ringOp:.16,
+   h:[['#4a2350','#2a1438'],['#2a1236','#170a24'],['#130a1f','#0b0614']], rim:'#ffb07a', grain:.06},
+ day:{sky:[['0','#4f6fd0'],['.35','#8ea2e6'],['.6','#c9b4e0'],['.78','#f2bfc0'],['.9','#ffd1a8'],['1','#ffe2b8']],
+   sun:['#ffffff','#fff0d0','#ffc890'], bloom:'#fff0d6', bloomOp:.9, haze:'#ffe6d0', ring:'#ffffff', ringOp:.22,
+   h:[['#a7a3dc','#8d86c8'],['#7a70b8','#6458a3'],['#4a3f86','#372e6c']], rim:'#fff4e0', grain:.045}
+}[mode];
+const HZ=760; // y of the light on the horizon
+const stops=a=>a.map(([o,c])=>`<stop offset="${o}" stop-color="${c}"/>`).join('');
+document.body.innerHTML=`<svg width="1920" height="1200" viewBox="0 0 1920 1200">
+<defs>
+ <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">${stops(T.sky.map(([o,c])=>[o*0.85+'',c]))}<stop offset="1" stop-color="${T.sky[T.sky.length-1][1]}"/></linearGradient>
+ <radialGradient id="bloom" cx="960" cy="${HZ}" r="900" gradientUnits="userSpaceOnUse" gradientTransform="translate(960 ${HZ}) scale(1 .5) translate(-960 -${HZ})">
+   <stop offset="0" stop-color="${T.bloom}" stop-opacity="${T.bloomOp}"/><stop offset=".25" stop-color="${T.bloom}" stop-opacity="${T.bloomOp*.45}"/><stop offset=".6" stop-color="${T.haze}" stop-opacity=".12"/><stop offset="1" stop-color="${T.haze}" stop-opacity="0"/></radialGradient>
+ <radialGradient id="sun" cx="960" cy="${HZ}" r="70" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="${T.sun[0]}"/><stop offset=".45" stop-color="${T.sun[1]}"/><stop offset="1" stop-color="${T.sun[2]}" stop-opacity="0"/></radialGradient>
+ <radialGradient id="beam" cx="960" cy="${HZ}" r="420" gradientUnits="userSpaceOnUse" gradientTransform="translate(960 ${HZ}) scale(.3 1) translate(-960 -${HZ})">
+   <stop offset="0" stop-color="${T.sun[1]}" stop-opacity=".22"/><stop offset=".7" stop-color="${T.sun[1]}" stop-opacity=".04"/><stop offset="1" stop-color="${T.sun[1]}" stop-opacity="0"/></radialGradient>
+ <radialGradient id="ringfade" cx="960" cy="${HZ}" r="1100" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="${T.ring}" stop-opacity="${T.ringOp}"/><stop offset="1" stop-color="${T.ring}" stop-opacity="0"/></radialGradient>
+ ${T.h.map((h,i)=>`<linearGradient id="h${i}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${h[0]}"/><stop offset="1" stop-color="${h[1]}"/></linearGradient>`).join('')}
+ <radialGradient id="rimfade" cx="960" cy="${HZ}" r="700" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="${T.rim}" stop-opacity=".9"/><stop offset="1" stop-color="${T.rim}" stop-opacity="0"/></radialGradient>
+ <radialGradient id="lit" cx="960" cy="${HZ}" r="1000" gradientUnits="userSpaceOnUse" gradientTransform="translate(960 ${HZ}) scale(1 .42) translate(-960 -${HZ})"><stop offset="0" stop-color="${T.rim}" stop-opacity=".55"/><stop offset=".45" stop-color="${T.rim}" stop-opacity=".14"/><stop offset="1" stop-color="${T.rim}" stop-opacity="0"/></radialGradient>
+ <linearGradient id="haze" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${T.haze}" stop-opacity=".12"/><stop offset=".25" stop-color="${T.haze}" stop-opacity="0"/></linearGradient>
+ <filter id="b8"><feGaussianBlur stdDeviation="8"/></filter>
+ <filter id="b2"><feGaussianBlur stdDeviation="1.4"/></filter>
+ <filter id="grain" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency=".85" numOctaves="2" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/></filter>
+</defs>
+<rect width="1920" height="1200" fill="url(#sky)"/>
+<rect width="1920" height="1200" fill="url(#bloom)"/>
+<rect width="1920" height="1200" fill="url(#beam)"/>
+<g fill="none" stroke="url(#ringfade)" filter="url(#b2)">
+ ${[180,330,520,760,1050].map((r,i)=>`<ellipse cx="960" cy="${HZ}" rx="${r*1.9}" ry="${r}" stroke-width="${1.6}"/>`).join('')}
+</g>
+<circle cx="960" cy="${HZ}" r="70" fill="url(#sun)" filter="url(#b8)"/>
+<!-- far, mid and near hills; the valley opens where the light rises -->
+<path id="p0" d="M0 800 C260 742 520 720 760 748 C860 760 910 772 960 772 C1010 772 1060 760 1160 746 C1400 714 1660 736 1920 790 V1200 H0Z" fill="url(#h0)"/><path d="M0 800 C260 742 520 720 760 748 C860 760 910 772 960 772 C1010 772 1060 760 1160 746 C1400 714 1660 736 1920 790 V1200 H0Z" fill="url(#lit)" opacity=".5"/><path d="M0 800 C260 742 520 720 760 748 C860 760 910 772 960 772 C1010 772 1060 760 1160 746 C1400 714 1660 736 1920 790 V1200 H0Z" fill="url(#haze)"/>
+<path d="M0 800 C260 742 520 720 760 748 C860 760 910 772 960 772 C1010 772 1060 760 1160 746 C1400 714 1660 736 1920 790" fill="none" stroke="url(#rimfade)" stroke-width="2" filter="url(#b2)"/>
+<path d="M0 900 C240 846 470 828 700 852 C820 864 900 876 990 872 C1180 862 1300 830 1500 828 C1680 826 1800 846 1920 872 V1200 H0Z" fill="url(#h1)"/><path d="M0 900 C240 846 470 828 700 852 C820 864 900 876 990 872 C1180 862 1300 830 1500 828 C1680 826 1800 846 1920 872 V1200 H0Z" fill="url(#lit)" opacity=".35"/><path d="M0 900 C240 846 470 828 700 852 C820 864 900 876 990 872 C1180 862 1300 830 1500 828 C1680 826 1800 846 1920 872 V1200 H0Z" fill="url(#haze)"/>
+<path d="M0 900 C240 846 470 828 700 852 C820 864 900 876 990 872 C1180 862 1300 830 1500 828 C1680 826 1800 846 1920 872" fill="none" stroke="url(#rimfade)" stroke-width="1.5" opacity=".6" filter="url(#b2)"/>
+<path d="M0 1010 C300 1000 600 990 900 1010 C1200 1030 1560 1000 1920 1018 V1200 H0Z" fill="url(#h2)"/><path d="M0 1010 C300 1000 600 990 900 1010 C1200 1030 1560 1000 1920 1018 V1200 H0Z" fill="url(#lit)" opacity=".18"/>
+<rect width="1920" height="1200" filter="url(#grain)" opacity="${T.grain}" style="mix-blend-mode:overlay"/>
+</svg>`;
+</script>
+</body></html>

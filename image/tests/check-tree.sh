@@ -278,8 +278,10 @@ done
 # 10. 试验网的更新源（VM 161 的 http://192.168.x.x）只许出现在 lab profile、lab 工具与文档里：
 #     进正式镜像的树（mkosi.conf、mkosi.extra、mkosi.initrd.conf、finalize、postinst）一处都不许有
 lab_re='192\.168\.[0-9]+\.[0-9]+|http://'
+# The SVG namespace (xmlns="http://www.w3.org/2000/svg") is a name, not a fetch: drop it before matching.
 hits=$(grep -rnE --exclude-dir=keys -- "$lab_re" "$rel/mkosi.conf" "$rel/mkosi.extra" "$rel/mkosi.repart" \
-	"$rel/mkosi.finalize" "$rel/mkosi.postinst.chroot" "$rel/mkosi.initrd.conf" 2>/dev/null || true)
+	"$rel/mkosi.finalize" "$rel/mkosi.postinst.chroot" "$rel/mkosi.initrd.conf" 2>/dev/null |
+	sed 's#xmlns="http://www\.w3\.org/2000/svg"##g' | grep -E -- "$lab_re" || true)
 if [ -n "$hits" ]; then
 	bad 10 "正式镜像的树里出现了试验网地址或 http://："
 	printf '%s\n' "$hits" | sed 's/^/    /' >&2
@@ -2259,5 +2261,83 @@ BANNER
 	r=1
 fi
 [ "$r" = 0 ] && ok 50 "language: polkit limited to the two actions, localed can write the keymap, every pack and locale in the image, catalogues present"
+
+# 51. MastersOS brand assets (design 2026-11-04 visual identity §5.1): both wallpapers are 3840x2400, the logo exists at every size
+#     (each PNG's side equals its directory), the scalable and symbolic SVGs are XML, the background properties point at the day
+#     (light) and night (dark) wallpapers, every file:// path in the GNOME defaults exists in the tree, and the rendered assets
+#     together stay under 15 MiB.
+r=0
+if ! why=$(python3 -I - "$ex" 2>&1 <<'BRAND'
+import os, re, struct, sys
+import xml.etree.ElementTree as ET
+ex = sys.argv[1]
+def size(path):
+    b = open(path, "rb").read()
+    if b[:8] == b"\x89PNG\r\n\x1a\n":
+        return struct.unpack(">II", b[16:24])
+    if b[:2] == b"\xff\xd8":
+        i = 2
+        while i < len(b):
+            if b[i] != 0xFF:
+                break
+            m = b[i + 1]
+            ln = struct.unpack(">H", b[i + 2:i + 4])[0]
+            if m in (0xC0, 0xC1, 0xC2):
+                h, w = struct.unpack(">HH", b[i + 5:i + 9])
+                return w, h
+            i += 2 + ln
+    raise ValueError(f"{path}: not a PNG or JPEG")
+errs = []
+bg = f"{ex}/usr/share/backgrounds/mastersos"
+total = 0
+for name in ("mastersos-day.jpg", "mastersos-night.jpg"):
+    f = f"{bg}/{name}"
+    if not os.path.isfile(f):
+        errs.append(f"missing {f}")
+        continue
+    total += os.path.getsize(f)
+    if size(f) != (3840, 2400):
+        errs.append(f"{f} is {size(f)}, want (3840, 2400)")
+icons = f"{ex}/usr/share/icons/hicolor"
+for n in (16, 24, 32, 48, 64, 128, 256, 512):
+    f = f"{icons}/{n}x{n}/apps/mastersos-logo.png"
+    if not os.path.isfile(f):
+        errs.append(f"missing {f}")
+        continue
+    total += os.path.getsize(f)
+    if size(f) != (n, n):
+        errs.append(f"{f} is {size(f)}, want ({n}, {n})")
+for f in (f"{icons}/scalable/apps/mastersos-logo.svg", f"{icons}/symbolic/apps/mastersos-logo-symbolic.svg",
+          f"{ex}/usr/share/mastersos/brand/wordmark-light.svg"):
+    try:
+        ET.parse(f)
+        total += os.path.getsize(f)
+    except Exception as e:
+        errs.append(f"{f}: {e}")
+props = f"{ex}/usr/share/gnome-background-properties/mastersos.xml"
+try:
+    w = ET.parse(props).getroot().find("wallpaper")
+    want = {"filename": "/usr/share/backgrounds/mastersos/mastersos-day.jpg",
+            "filename-dark": "/usr/share/backgrounds/mastersos/mastersos-night.jpg"}
+    for k, v in want.items():
+        got = w.findtext(k) if w is not None else None
+        if got != v:
+            errs.append(f"{props}: {k} is {got!r}, want {v!r}")
+except Exception as e:
+    errs.append(f"{props}: {e}")
+over = f"{ex}/usr/share/glib-2.0/schemas/90_mastersos.gschema.override"
+for u in re.findall(r"file://(/[^'\"]+)", open(over).read()):
+    if not os.path.isfile(ex + u):
+        errs.append(f"{over} refers to {u}, not in the tree")
+if total > 15 * 1024 * 1024:
+    errs.append(f"brand assets are {total} bytes, over 15 MiB")
+if errs:
+    sys.exit("; ".join(errs))
+BRAND
+); then
+	bad 51 "brand: $why"
+	r=1
+fi
+[ "$r" = 0 ] && ok 51 "brand: wallpapers 3840x2400, logo at every size, background properties, total under 15 MiB"
 
 exit $fail
