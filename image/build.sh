@@ -13,6 +13,7 @@
 #   MASTERSOS_KEYS         lab 的钥匙目录，默认 ~/mastersos-keys：--profile lab 用 lab/ 下的 db.key/crt（Secure Boot 与 verity）、
 #                       pcr.key/crt（PCR 签名）（keyset.sh，Ruling 19）；lab-local/：试验用户的口令哈希与 authorized_keys。
 #                       正式构建的同名一套只从 tmpfs 读（keyset_priv release，先 keys-load.sh，见 docs/key-ceremony.md）。钥匙永不入库。
+#   MASTERSOS_LAB_SPLASH   1：lab 的截图构建，Plymouth 不管串口、屏幕上出真正的开机画面（提示只能在屏幕上答）；默认 0（串口答提示）
 #   MASTERSOS_CORE         core 的位置；默认 ../core（仓库里），其次 ~/mastersos-core（sync.sh 同步的位置）
 #   MASTERSOS_KIOSK_EXT_SRC  考试扩展的源码；默认 ../kiosk-extension（仓库里），其次 ~/mastersos-kiosk-extension（sync.sh 同步的位置）
 set -euo pipefail
@@ -227,6 +228,11 @@ args=(
 )
 if [ "$profile" = lab ]; then
 	args+=(--profile=lab --extra-tree="$lab_local")
+	# Screenshot build: Plymouth ignores the serial console and shows the real splash on screen; prompts are then answered on the
+	# VM's screen (qm sendkey), not over serial (mkosi.profiles/lab.conf)
+	if [ "${MASTERSOS_LAB_SPLASH:-0}" = 1 ]; then
+		args+=(--kernel-command-line=plymouth.ignore-serial-consoles)
+	fi
 fi
 if [ -n "$kext_id" ]; then
 	args+=(--extra-tree="$kext_tree")
@@ -308,6 +314,22 @@ for f in usr/lib/mastersos/ventoy-attach usr/lib/systemd/system/mastersos-ventoy
 	usr/lib/systemd/system/initrd.target.wants/mastersos-ventoy-attach.service; do
 	grep -qx -- "$f" <<<"$initrd_list" || missing+=("$f")
 done
+# Boot splash (design 2026-11-04 visual identity §5.2): plymouthd with our theme as the default, the two-step module, the text
+# plugin and at least one font (without them the recovery key prompt draws nothing), and the ask-password agent that sends
+# systemd's password prompts to Plymouth
+for f in usr/sbin/plymouthd usr/bin/plymouth usr/share/plymouth/plymouthd.defaults \
+	usr/share/plymouth/themes/mastersos/mastersos.plymouth usr/share/plymouth/themes/mastersos/throbber-0001.png \
+	usr/lib/systemd/system/systemd-ask-password-plymouth.path \
+	usr/lib/systemd/system/sysinit.target.wants/plymouth-start.service \
+	usr/lib/systemd/system/initrd-switch-root.target.wants/plymouth-start.service; do
+	grep -qx -- "$f" <<<"$initrd_list" || missing+=("$f (boot splash)")
+done
+for l in two-step.so label-pango.so; do
+	grep -qE "/plymouth/${l//./\\.}\$" <<<"$initrd_list" || missing+=("$l (boot splash)")
+done
+grep -qE '^usr/share/fonts/.+\.(ttf|otf)$' <<<"$initrd_list" || missing+=("a font under usr/share/fonts (boot splash text)")
+splash_theme=$(zstd -dc "$out/initrd.cpio.zst" | cpio -i --quiet --to-stdout usr/share/plymouth/plymouthd.defaults 2>/dev/null || true)
+grep -qx 'Theme=mastersos' <<<"$splash_theme" || missing+=("Theme=mastersos in the initrd's plymouthd.defaults")
 # the initrd's own profile file (mkosi.initrd.conf/mkosi.profiles/lab/): usr-repair's lab-fail-verify hook only works with
 # "lab" there, so a release initrd must not have it
 initrd_profile=$(zstd -dc "$out/initrd.cpio.zst" | cpio -i --quiet --to-stdout usr/lib/mastersos/profile 2>/dev/null || true)
@@ -515,6 +537,7 @@ commit=$(cat "$here/.build-commit" 2>/dev/null || git -C "$here" rev-parse HEAD 
 	echo "version=$version"
 	echo "profile=${profile:-release}"
 	echo "broken=${broken:-}"
+	if [ "$profile" = lab ]; then echo "lab_splash=${MASTERSOS_LAB_SPLASH:-0}"; fi
 	echo "git_commit=$commit"
 	echo "Snapshot=$snapshot"
 	echo "mkosi=$(mkosi --version)"

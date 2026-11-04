@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE wallpapers SYSTEM "gnome-wp-list.dtd">
+<!-- MastersOS wallpaper in Settings > Appearance: the day picture in light style, the night picture in dark style. -->
+<wallpapers>
+  <wallpaper deleted="false">
+    <name>MastersOS</name>
+    <filename>/usr/share/backgrounds/mastersos/mastersos-day.jpg</filename>
+    <filename-dark>/usr/share/backgrounds/mastersos/mastersos-night.jpg</filename-dark>
+    <options>zoom</options>
+    <shade_type>solid</shade_type>
+    <pcolor>#13113a</pcolor>
+    <scolor>#070818</scolor>
+  </wallpaper>
+</wallpapers>

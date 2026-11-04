@@ -15,6 +15,7 @@ VERSION_ID="$VERSION_ID"
 VERSION_CODENAME=$VERSION_CODENAME
 IMAGE_ID=MastersOS
 IMAGE_VERSION=${IMAGE_VERSION:-dev}
+LOGO=mastersos-logo
 OSR
 
 # 登录提示 5 分钟没人输入就超时（S1）
@@ -109,8 +110,9 @@ PY
 
 # GNOME 的默认值（gschema override，排在发行版的 00_/10_ 之后）：Dock 里放 Chrome（Task 9）。改了 override 要重新编译
 glib-compile-schemas /usr/share/glib-2.0/schemas
-# The override only takes if the dash-to-dock schema is in the global directory (the ubuntu-dock package): read it back.
-dget() { env -u DBUS_SESSION_BUS_ADDRESS GSETTINGS_BACKEND=memory HOME=/nonexistent XDG_CONFIG_HOME=/nonexistent gsettings get org.gnome.shell.extensions.dash-to-dock "$1"; }
+# The override only takes if the dash-to-dock schema is in the global directory (the ubuntu-dock package): read it back as
+# the Ubuntu session sees it (XDG_CURRENT_DESKTOP=ubuntu:GNOME), where Ubuntu's [schema:ubuntu] defaults apply.
+dget() { env -u DBUS_SESSION_BUS_ADDRESS XDG_CURRENT_DESKTOP=ubuntu:GNOME GSETTINGS_BACKEND=memory HOME=/nonexistent XDG_CONFIG_HOME=/nonexistent gsettings get org.gnome.shell.extensions.dash-to-dock "$1"; }
 for kv in "dock-position='BOTTOM'" show-mounts=false extend-height=true; do
 	got=$(dget "${kv%%=*}") || { echo "postinst: dash-to-dock schema not found" >&2; exit 1; }
 	if [ "$got" != "${kv#*=}" ]; then
@@ -118,7 +120,34 @@ for kv in "dock-position='BOTTOM'" show-mounts=false extend-height=true; do
 		exit 1
 	fi
 done
-echo "postinst: Dock defaults: bottom, no drives"
+# The rest of the look (design 2026-11-04 visual identity §5.3): translucent Dock, light style, the day and night pictures
+dget transparency-mode | grep -qx "'FIXED'" || { echo "postinst: dash-to-dock transparency-mode is not FIXED" >&2; exit 1; }
+gget() { env -u DBUS_SESSION_BUS_ADDRESS XDG_CURRENT_DESKTOP=ubuntu:GNOME GSETTINGS_BACKEND=memory HOME=/nonexistent XDG_CONFIG_HOME=/nonexistent gsettings get "$1" "$2"; }
+for kv in "org.gnome.desktop.background picture-uri 'file:///usr/share/backgrounds/mastersos/mastersos-day.jpg'" \
+	"org.gnome.desktop.background picture-uri-dark 'file:///usr/share/backgrounds/mastersos/mastersos-night.jpg'" \
+	"org.gnome.desktop.interface color-scheme 'default'" \
+	"org.gnome.desktop.interface accent-color 'orange'"; do
+	read -r schema key want <<<"$kv"
+	got=$(gget "$schema" "$key")
+	if [ "$got" != "$want" ]; then
+		echo "postinst: $schema $key default is $got (want $want)" >&2
+		exit 1
+	fi
+done
+for f in /usr/share/backgrounds/mastersos/mastersos-day.jpg /usr/share/backgrounds/mastersos/mastersos-night.jpg; do
+	test -f "$f" || { echo "postinst: $f missing" >&2; exit 1; }
+done
+# The logo PNGs went in after the hicolor package built its cache: rebuild it so the about page and the shell find them
+# (always: a missing tool fails the build rather than leave a stale cache that hides mastersos-logo)
+gtk-update-icon-cache -f -q /usr/share/icons/hicolor
+echo "postinst: Dock defaults: bottom, no drives, translucent; light style; MastersOS wallpapers"
+# Boot splash (design 2026-11-04 visual identity §5.2): our theme is the default and two-step, which it uses, is installed
+grep -qx 'Theme=mastersos' /usr/share/plymouth/plymouthd.defaults || { echo "postinst: plymouthd.defaults does not choose mastersos" >&2; exit 1; }
+test -f /usr/share/plymouth/themes/mastersos/mastersos.plymouth || { echo "postinst: mastersos Plymouth theme missing" >&2; exit 1; }
+ls /usr/lib/*/plymouth/two-step.so >/dev/null 2>&1 || { echo "postinst: Plymouth two-step module missing" >&2; exit 1; }
+for f in capslock.png keyboard.png keymap-render.png; do
+	test -f "/usr/share/plymouth/themes/mastersos/$f" || { echo "postinst: Plymouth theme picture $f does not resolve" >&2; exit 1; }
+done
 
 # gnome-shell extensions (phase B, Task 13): the quick-settings "managed by" line must load under the locked learning profile, where
 # disable-user-extensions=true switches the ordinary user-extension path off. Extensions listed in the session mode's JSON are not

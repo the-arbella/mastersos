@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- MastersOS logo, tile version (design 2026-11-04 visual identity §3). Master for every logo PNG: render.sh renders each
+     size from this file. The two strokes of the M point at the light where they would meet. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#262B42"/>
+      <stop offset="1" stop-color="#11131F"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.22"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.08"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="50%" cy="63%" r="42%">
+      <stop offset="0" stop-color="#FF9A4D" stop-opacity="0.62"/>
+      <stop offset="0.5" stop-color="#F0566E" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#F0566E" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="core" cx="50%" cy="42%" r="60%">
+      <stop offset="0" stop-color="#FFF1D6"/>
+      <stop offset="0.45" stop-color="#FFB35C"/>
+      <stop offset="1" stop-color="#F25A6A"/>
+    </radialGradient>
+    <radialGradient id="glow">
+      <stop offset="0.55" stop-color="#FFB35C" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#FFB35C" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="100" height="100" rx="23" fill="url(#tile)"/>
+  <rect x="0.5" y="0.5" width="99" height="99" rx="22.5" fill="none" stroke="url(#rim)"/>
+  <rect width="100" height="100" rx="23" fill="url(#halo)"/>
+  <path d="M23 74V30l18 21M77 74V30L59 51" fill="none" stroke="#FFFFFF" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="50" cy="62" r="13" fill="url(#glow)"/>
+  <circle cx="50" cy="62" r="8.5" fill="url(#core)"/>
+</svg>

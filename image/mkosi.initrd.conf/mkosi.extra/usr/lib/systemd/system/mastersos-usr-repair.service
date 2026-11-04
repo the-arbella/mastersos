@@ -15,6 +15,9 @@ Description=MastersOS: check and repair the /usr slot from the golden copy (init
 DefaultDependencies=no
 ConditionPathExists=/sys/firmware/efi/efivars
 After=systemd-udevd.service systemd-udev-trigger.service
+# Ordering only: the script picks Plymouth or the console with plymouth --ping, so Plymouth must be up before it asks (when
+# the splash started later it would cover the "do not power off" text for the whole repair).
+After=plymouth-start.service
 Before=systemd-veritysetup@usr.service sysusr-usr.mount initrd-usr-fs.target
 Conflicts=shutdown.target
 Before=shutdown.target

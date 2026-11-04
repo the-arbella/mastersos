@@ -278,8 +278,10 @@ done
 # 10. 试验网的更新源（VM 161 的 http://192.168.x.x）只许出现在 lab profile、lab 工具与文档里：
 #     进正式镜像的树（mkosi.conf、mkosi.extra、mkosi.initrd.conf、finalize、postinst）一处都不许有
 lab_re='192\.168\.[0-9]+\.[0-9]+|http://'
+# The SVG namespace (xmlns="http://www.w3.org/2000/svg") is a name, not a fetch: drop it before matching.
 hits=$(grep -rnE --exclude-dir=keys -- "$lab_re" "$rel/mkosi.conf" "$rel/mkosi.extra" "$rel/mkosi.repart" \
-	"$rel/mkosi.finalize" "$rel/mkosi.postinst.chroot" "$rel/mkosi.initrd.conf" 2>/dev/null || true)
+	"$rel/mkosi.finalize" "$rel/mkosi.postinst.chroot" "$rel/mkosi.initrd.conf" 2>/dev/null |
+	sed 's#xmlns="http://www\.w3\.org/2000/svg"##g' | grep -E -- "$lab_re" || true)
 if [ -n "$hits" ]; then
 	bad 10 "正式镜像的树里出现了试验网地址或 http://："
 	printf '%s\n' "$hits" | sed 's/^/    /' >&2
@@ -2110,7 +2112,7 @@ fi
 #     the agent's redirect filter equals the patch's redirect, and build.sh pins gnome-shell (the extension patches its private code).
 r=0
 le=$gs/extensions/mastersos-login@mastersos.org
-for f in area.js card.js people.js setup.js shelf.js strings.js; do
+for f in area.js brand.js card.js people.js setup.js shelf.js strings.js; do
 	[ -f "$le/$f" ] || {
 		bad 49 "$le/$f is missing"
 		r=1
@@ -2259,5 +2261,317 @@ BANNER
 	r=1
 fi
 [ "$r" = 0 ] && ok 50 "language: polkit limited to the two actions, localed can write the keymap, every pack and locale in the image, catalogues present"
+
+# 51. MastersOS brand assets (design 2026-11-04 visual identity §5.1): both wallpapers are 3840x2400, the logo exists at every size
+#     (each PNG's side equals its directory), the scalable and symbolic SVGs are XML, the background properties point at the day
+#     (light) and night (dark) wallpapers, every file:// path in the GNOME defaults exists in the tree, and the rendered assets
+#     together stay under 15 MiB.
+r=0
+if ! why=$(python3 -I - "$ex" 2>&1 <<'BRAND'
+import os, re, struct, sys
+import xml.etree.ElementTree as ET
+ex = sys.argv[1]
+def size(path):
+    b = open(path, "rb").read()
+    if b[:8] == b"\x89PNG\r\n\x1a\n":
+        return struct.unpack(">II", b[16:24])
+    if b[:2] == b"\xff\xd8":
+        i = 2
+        while i < len(b):
+            if b[i] != 0xFF:
+                break
+            m = b[i + 1]
+            ln = struct.unpack(">H", b[i + 2:i + 4])[0]
+            if m in (0xC0, 0xC1, 0xC2):
+                h, w = struct.unpack(">HH", b[i + 5:i + 9])
+                return w, h
+            i += 2 + ln
+    raise ValueError(f"{path}: not a PNG or JPEG")
+errs = []
+bg = f"{ex}/usr/share/backgrounds/mastersos"
+total = 0
+for name in ("mastersos-day.jpg", "mastersos-night.jpg"):
+    f = f"{bg}/{name}"
+    if not os.path.isfile(f):
+        errs.append(f"missing {f}")
+        continue
+    total += os.path.getsize(f)
+    if size(f) != (3840, 2400):
+        errs.append(f"{f} is {size(f)}, want (3840, 2400)")
+icons = f"{ex}/usr/share/icons/hicolor"
+for n in (16, 24, 32, 48, 64, 128, 256, 512):
+    f = f"{icons}/{n}x{n}/apps/mastersos-logo.png"
+    if not os.path.isfile(f):
+        errs.append(f"missing {f}")
+        continue
+    total += os.path.getsize(f)
+    if size(f) != (n, n):
+        errs.append(f"{f} is {size(f)}, want ({n}, {n})")
+for f in (f"{icons}/scalable/apps/mastersos-logo.svg", f"{icons}/symbolic/apps/mastersos-logo-symbolic.svg",
+          f"{ex}/usr/share/mastersos/brand/wordmark-light.svg"):
+    try:
+        ET.parse(f)
+        total += os.path.getsize(f)
+    except Exception as e:
+        errs.append(f"{f}: {e}")
+props = f"{ex}/usr/share/gnome-background-properties/mastersos.xml"
+try:
+    w = ET.parse(props).getroot().find("wallpaper")
+    want = {"filename": "/usr/share/backgrounds/mastersos/mastersos-day.jpg",
+            "filename-dark": "/usr/share/backgrounds/mastersos/mastersos-night.jpg"}
+    for k, v in want.items():
+        got = w.findtext(k) if w is not None else None
+        if got != v:
+            errs.append(f"{props}: {k} is {got!r}, want {v!r}")
+except Exception as e:
+    errs.append(f"{props}: {e}")
+over = f"{ex}/usr/share/glib-2.0/schemas/90_mastersos.gschema.override"
+for u in re.findall(r"file://(/[^'\"]+)", open(over).read()):
+    if not os.path.isfile(ex + u):
+        errs.append(f"{over} refers to {u}, not in the tree")
+text = open(over).read()
+for want in ("[org.gnome.desktop.background]",
+             "picture-uri='file:///usr/share/backgrounds/mastersos/mastersos-day.jpg'",
+             "picture-uri-dark='file:///usr/share/backgrounds/mastersos/mastersos-night.jpg'",
+             "picture-options='zoom'", "[org.gnome.desktop.interface]", "color-scheme='default'", "accent-color=",
+             "transparency-mode='FIXED'", "background-opacity=", "custom-background-color=true", "background-color="):
+    if want not in text:
+        errs.append(f"{over} lacks {want}")
+# Ubuntu's own defaults are desktop-specific ([schema:ubuntu], 10_ubuntu-dock and 10_ubuntu-settings), and those beat every
+# plain [schema] override whatever the file order: each section here must have a :ubuntu twin with the same keys.
+sections, cur = {}, None
+for line in text.splitlines():
+    m = re.match(r"^\[([^\]]+)\]$", line.strip())
+    if m:
+        cur = m.group(1)
+        sections.setdefault(cur, [])
+    elif cur and "=" in line and not line.lstrip().startswith("#"):
+        sections[cur].append(line.strip())
+for name, keys in sections.items():
+    if name.endswith(":ubuntu") or name == "org.gnome.login-screen":
+        continue
+    twin = sections.get(name + ":ubuntu")
+    if twin != keys:
+        errs.append(f"{over}: [{name}] has no identical [{name}:ubuntu] (the Ubuntu session would use Ubuntu's values)")
+post = open(os.path.join(os.path.dirname(ex), "mkosi.postinst.chroot")).read()
+if 'XDG_CURRENT_DESKTOP=ubuntu:GNOME' not in post:
+    errs.append("mkosi.postinst.chroot: the defaults are not read back as the Ubuntu session sees them (XDG_CURRENT_DESKTOP=ubuntu:GNOME)")
+if "LOGO=mastersos-logo" not in post:
+    errs.append("mkosi.postinst.chroot: os-release has no LOGO=mastersos-logo")
+if total > 15 * 1024 * 1024:
+    errs.append(f"brand assets are {total} bytes, over 15 MiB")
+if errs:
+    sys.exit("; ".join(errs))
+BRAND
+); then
+	bad 51 "brand: $why"
+	r=1
+fi
+[ "$r" = 0 ] && ok 51 "brand: wallpapers 3840x2400, logo at every size, background properties, GNOME defaults (light, wallpapers, translucent Dock), about logo, total under 15 MiB"
+
+# 52. Boot splash (design 2026-11-04 visual identity §5.2): the mastersos two-step theme is in the image and in the initrd, the two
+#     copies identical (the initrd is built from packages and does not see mkosi.extra); both trees make it the default theme; the
+#     kernel command line has quiet and splash; the factory reset confirmation (it reads the keyboard in the initrd) quits Plymouth
+#     first; the initrd gets Plymouth with the text label plugin (the recovery key prompt needs it); the installer keeps Plymouth off.
+r=0
+th=usr/share/plymouth/themes/mastersos
+ix=$rel/mkosi.initrd.conf/mkosi.extra
+if [ ! -f "$ex/$th/mastersos.plymouth" ]; then
+	bad 52 "$ex/$th/mastersos.plymouth missing"
+	r=1
+else
+	for k in 'ModuleName=two-step' "ImageDir=/$th" 'BackgroundStartColor=0x090a16' 'UseProgressBar=true' 'MessageBelowAnimation=true'; do
+		grep -qxF -- "$k" "$ex/$th/mastersos.plymouth" || {
+			bad 52 "mastersos.plymouth lacks $k"
+			r=1
+		}
+	done
+	for f in throbber-0001.png entry.png bullet.png lock.png; do
+		[ -f "$ex/$th/$f" ] || {
+			bad 52 "theme lacks $f"
+			r=1
+		}
+	done
+	# Plymouth's own keyboard pictures, linked from plymouth-theme-spinner (installed in both trees; postinst checks they resolve)
+	for f in capslock.png keyboard.png keymap-render.png; do
+		[ "$(readlink "$ex/$th/$f" 2>/dev/null)" = "../spinner/$f" ] || {
+			bad 52 "theme's $f should link to ../spinner/$f"
+			r=1
+		}
+	done
+	if ! diff -r --no-dereference "$ex/$th" "$ix/$th" >/dev/null 2>&1; then
+		bad 52 "the theme in mkosi.extra and in mkosi.initrd.conf/mkosi.extra differ"
+		r=1
+	fi
+fi
+for t in "$ex" "$ix"; do
+	grep -qx 'Theme=mastersos' "$t/usr/share/plymouth/plymouthd.defaults" 2>/dev/null || {
+		bad 52 "$t/usr/share/plymouth/plymouthd.defaults should have Theme=mastersos"
+		r=1
+	}
+done
+cmp -s "$ex/usr/share/plymouth/plymouthd.defaults" "$ix/usr/share/plymouth/plymouthd.defaults" || {
+	bad 52 "the two plymouthd.defaults differ"
+	r=1
+}
+for w in quiet splash; do
+	sed -n '/^KernelCommandLine=/,/^[^[:space:]]/p' "$rel/mkosi.conf" | grep -qE "^[[:space:]]+$w$" || {
+		bad 52 "mkosi.conf KernelCommandLine lacks $w"
+		r=1
+	}
+done
+for pkg in plymouth plymouth-label plymouth-theme-spinner; do
+	grep -qx "Packages=$pkg" "$rel/mkosi.initrd.conf/mkosi.conf" || {
+		bad 52 "mkosi.initrd.conf/mkosi.conf lacks Packages=$pkg"
+		r=1
+	}
+done
+# The confirmation asks through systemd-ask-password. Once Plymouth runs, the console agent's path unit was skipped at boot
+# (ConditionPathExists=!/run/plymouth/pid) and the Plymouth agent has no daemon after the quit: hand the questions back to the
+# console agent, or nobody can answer (and the recovery key prompt after keep_data hangs until emergency).
+frc=$ix/usr/lib/systemd/system/mastersos-factory-reset-confirm.service
+for k in 'ExecStartPre=-/usr/bin/plymouth --wait quit' \
+	'ExecStartPre=-/usr/bin/systemctl --no-block stop systemd-ask-password-plymouth.path systemd-ask-password-plymouth.service' \
+	'ExecStartPre=-/usr/bin/systemctl --no-block start systemd-ask-password-console.path'; do
+	grep -qxF -- "$k" "$frc" || {
+		bad 52 "mastersos-factory-reset-confirm.service lacks $k"
+		r=1
+	}
+done
+# The initrd failure message must not sit behind the splash (upstream's emergency.service quits Plymouth; our drop-in empties
+# ExecStartPre= and must put the quit back).
+grep -qxF 'ExecStartPre=-/usr/bin/plymouth --wait quit' "$ix/usr/lib/systemd/system/emergency.service.d/50-mastersos-reboot.conf" || {
+	bad 52 "emergency.service.d/50-mastersos-reboot.conf does not quit Plymouth before its message"
+	r=1
+}
+# usr-repair decides between Plymouth and the console with plymouth --ping: Plymouth must already be up when it asks
+grep -qE '^After=.*\bplymouth-start\.service\b' "$ix/usr/lib/systemd/system/mastersos-usr-repair.service" || {
+	bad 52 "mastersos-usr-repair.service is not ordered after plymouth-start.service"
+	r=1
+}
+# Lab: with the serial console, Plymouth uses its text mode, which shows the prompts on ttyS0 and reads answers there (the
+# acceptance scripts answer over serial). Only a screenshot build (MASTERSOS_LAB_SPLASH=1) adds plymouth.ignore-serial-consoles.
+if grep -qE '^KernelCommandLine=.*plymouth\.ignore-serial-consoles' "$rel/mkosi.profiles/lab.conf"; then
+	bad 52 "mkosi.profiles/lab.conf must not hide the serial console from Plymouth (acceptance answers prompts over serial)"
+	r=1
+fi
+grep -qF -- '--kernel-command-line=plymouth.ignore-serial-consoles' "$rel/build.sh" && grep -qF 'MASTERSOS_LAB_SPLASH' "$rel/build.sh" || {
+	bad 52 "build.sh has no MASTERSOS_LAB_SPLASH=1 switch for the screenshot build"
+	r=1
+}
+grep -qx 'plymouth.enable=0' "$rel/installer/installer.cmdline" || {
+	bad 52 "installer.cmdline must keep plymouth.enable=0"
+	r=1
+}
+[ "$r" = 0 ] && ok 52 "boot splash: mastersos two-step theme in the image and the initrd (identical), default theme, quiet splash, factory reset confirm quits plymouth, installer keeps plymouth off"
+
+# 53. Login screen and lock screen look (design 2026-11-04 visual identity §5.4–5.5): the login background is the night picture,
+#     both extensions put the MastersOS mark (class mastersos-brand-corner) in the top bar, no Google-blue focus ring is left in
+#     their styles, and the locked app's error page uses the brand colours.
+r=0
+gse=$ex/usr/share/gnome-shell/extensions
+lcss=$gse/mastersos-login@mastersos.org/stylesheet.css
+grep -qF 'background-image: url("file:///usr/share/backgrounds/mastersos/mastersos-night.jpg");' "$lcss" || {
+	bad 53 "$lcss: .mastersos-login-background has no night picture"
+	r=1
+}
+grep -qF 'background-size: cover;' "$lcss" || {
+	bad 53 "$lcss: the background is not background-size: cover"
+	r=1
+}
+for e in mastersos-login@mastersos.org mastersos-managed@mastersos.org; do
+	grep -qF "mastersos-brand-corner" "$gse/$e/extension.js" || {
+		bad 53 "$e does not add the MastersOS mark (mastersos-brand-corner)"
+		r=1
+	}
+	if grep -qiE '#8ab4f8|#0b57d0|#0842a0|#a8c7fa|138, 180, 248' "$gse/$e/stylesheet.css"; then
+		bad 53 "$e/stylesheet.css still has the old blue"
+		r=1
+	fi
+done
+# The desktop runs the ubuntu session mode (parentMode user), so currentMode alone never matches; the overview keeps GNOME's bar
+mext=$gse/mastersos-managed@mastersos.org
+grep -qF "Main.sessionMode.parentMode === 'user'" "$mext/extension.js" || {
+	bad 53 "mastersos-managed: the translucent top bar only checks currentMode === 'user' (the desktop's mode is ubuntu)"
+	r=1
+}
+grep -qF '#panel.mastersos-panel:overview' "$mext/stylesheet.css" || {
+	bad 53 "mastersos-managed/stylesheet.css: the overview's top bar is not left as GNOME has it"
+	r=1
+}
+# The mark is small and at 85 % opacity (design §5.4)
+for f in "$gse/mastersos-login@mastersos.org/brand.js" "$mext/extension.js"; do
+	grep -qF 'opacity: 217' "$f" || {
+		bad 53 "$f: the MastersOS mark is not at 85 % opacity (opacity: 217)"
+		r=1
+	}
+done
+grep -qF 'background: #090a16' "$ex/usr/share/mastersos/kiosk-error.html" || {
+	bad 53 "kiosk-error.html does not use the brand background #090a16"
+	r=1
+}
+[ "$r" = 0 ] && ok 53 "login and lock: night wallpaper background, MastersOS mark in the top bar of both, no old blue left, kiosk error page uses brand colours"
+
+# 54. Look details (final review minors, design 2026-11-04 visual identity): white text on every solid button background in the
+#     login styles reads at 4.5:1 or more (WCAG AA); no background-position keyword St does not know; the school card's
+#     background is darkened like the username step; the icon cache rebuild cannot be skipped; the splash's English-only titles
+#     are marked as such; the MastersOS mark (code and styles) is the same in both extensions; build.sh checks that the initrd
+#     really starts Plymouth (its wants links).
+r=0
+if ! why=$(python3 -I - "$gse" "$rel" 2>&1 <<'LOOK'
+import re, sys
+gse, rel = sys.argv[1], sys.argv[2]
+errs = []
+def lum(h):
+    c = [int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+    c = [x / 12.92 if x <= 0.03928 else ((x + 0.055) / 1.055) ** 2.4 for x in c]
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+css = {e: open(f"{gse}/{e}/stylesheet.css").read() for e in ("mastersos-login@mastersos.org", "mastersos-managed@mastersos.org")}
+for sel, body in re.findall(r"([^{}]+)\{([^}]*)\}", css["mastersos-login@mastersos.org"]):
+    fg = re.search(r"(?<![-\w])color:\s*#([0-9a-fA-F]{6})", body)
+    bg = re.search(r"background-color:\s*#([0-9a-fA-F]{6})", body)
+    if fg and bg and fg.group(1).lower() == "ffffff":
+        ratio = (1.05) / (lum(bg.group(1)) + 0.05)
+        if ratio < 4.5:
+            errs.append(f"{sel.strip()}: white on #{bg.group(1)} is {ratio:.2f}:1, under 4.5:1")
+for e, text in css.items():
+    if re.search(r"background-position:\s*(center|top|bottom|left|right)", text):
+        errs.append(f"{e}/stylesheet.css: St's background-position takes lengths only")
+login = css["mastersos-login@mastersos.org"]
+if ".mastersos-card-scrim-shade" not in login or "mastersos-card-scrim-shade" not in open(f"{gse}/mastersos-login@mastersos.org/card.js").read():
+    errs.append("the school card's background has no darkening layer (mastersos-card-scrim-shade)")
+def rule(text, name):
+    m = re.search(r"(^|\n)" + re.escape(name) + r"\s*\{[^}]*\}", text)
+    return m.group(0).strip() if m else None
+for name in (".mastersos-brand-corner", ".mastersos-brand-wordmark"):
+    a, b = rule(login, name), rule(css["mastersos-managed@mastersos.org"], name)
+    if not a or a != b:
+        errs.append(f"{name} differs between the two extensions' styles")
+def brand(text):
+    m = re.search(r"function brandMark\(\) \{.*?\n\}", text, re.S)
+    return m.group(0) if m else None
+a = brand(open(f"{gse}/mastersos-login@mastersos.org/brand.js").read())
+b = brand(open(f"{gse}/mastersos-managed@mastersos.org/extension.js").read())
+if not a or a.replace("export ", "") != b:
+    errs.append("brandMark() differs between mastersos-login/brand.js and mastersos-managed/extension.js")
+post = open(f"{rel}/mkosi.postinst.chroot").read()
+if "command -v gtk-update-icon-cache" in post or not re.search(r"^gtk-update-icon-cache -f -q /usr/share/icons/hicolor$", post, re.M):
+    errs.append("mkosi.postinst.chroot: gtk-update-icon-cache must always run (a stale cache hides mastersos-logo)")
+ply = open(f"{rel}/brand/mastersos.plymouth").read()
+if "English only" not in ply:
+    errs.append("brand/mastersos.plymouth: the fixed titles are not marked English only")
+build = open(f"{rel}/build.sh").read()
+for f in ("usr/lib/systemd/system/sysinit.target.wants/plymouth-start.service",
+          "usr/lib/systemd/system/initrd-switch-root.target.wants/plymouth-start.service"):
+    if f not in build:
+        errs.append(f"build.sh does not check the initrd for {f}")
+if errs:
+    sys.exit("; ".join(errs))
+LOOK
+); then
+	bad 54 "look: $why"
+	r=1
+fi
+[ "$r" = 0 ] && ok 54 "look details: white button text at 4.5:1, St-valid background-position, darkened card background, icon cache always rebuilt, English-only splash titles marked, one MastersOS mark in both extensions, initrd starts Plymouth"
 
 exit $fail

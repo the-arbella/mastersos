@@ -159,6 +159,11 @@ export class LoginCard {
             style_class: 'mastersos-card-scrim',
             x: mon.x, y: mon.y, width: mon.width, height: mon.height,
         });
+        // The same darkening as the username step (.login-dialog), which the screen shield hides while the card shows
+        this._scrim.add_child(new St.Widget({
+            style_class: 'mastersos-card-scrim-shade',
+            width: mon.width, height: mon.height,
+        }));
         global.window_group.insert_child_below(this._scrim, null);
 
         this._frame = new St.BoxLayout({

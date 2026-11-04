@@ -1,0 +1,7 @@
+# MastersOS: the distribution defaults (resolute's plymouth package) plus the boot splash theme (design 2026-11-04 visual
+# identity §5.2). The same file is in the image and in the initrd tree; check-tree item 52 keeps them equal.
+[Daemon]
+Theme=mastersos
+ShowDelay=0
+DeviceTimeout=8
+UseSimpledrm=1

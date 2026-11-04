@@ -31,6 +31,7 @@ import * as LoginDialog from 'resource:///org/gnome/shell/gdm/loginDialog.js';
 import * as SystemActions from 'resource:///org/gnome/shell/misc/systemActions.js';
 
 import {loginArea} from './area.js';
+import {addBrandMark} from './brand.js';
 import {LoginCard} from './card.js';
 import {LanguageScreen, languageChosen, restartGreeter} from './setup.js';
 import {matchPeople, preselect} from './people.js';
@@ -159,6 +160,12 @@ export default class MastersosLoginExtension extends Extension {
         this._managed = name ? fmt(this._text.managed, name) : null;
         this._localeManaged = localeManaged(b);
         this._card = new LoginCard(this._text);
+        try {
+            this._brand = addBrandMark(); // mastersos-brand-corner
+        } catch (e) {
+            this._brand = null;
+            log(`mastersos-login: adding the MastersOS mark failed: ${e.message ?? e}`);
+        }
         try {
             this._patchGreeter();
         } catch (e) {
@@ -884,6 +891,8 @@ export default class MastersosLoginExtension extends Extension {
     }
 
     disable() {
+        this._brand?.destroy();
+        this._brand = null;
         if (this._pollId) {
             GLib.source_remove(this._pollId);
             this._pollId = 0;

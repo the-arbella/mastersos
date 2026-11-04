@@ -27,7 +27,7 @@
 }
 
 .mastersos-pill:focus {
-    box-shadow: inset 0 0 0 2px #8ab4f8;
+    box-shadow: inset 0 0 0 2px #ffb35c;
 }
 
 .mastersos-pill-content {
@@ -43,16 +43,54 @@
     margin-right: 10px;
 }
 
+/* The night picture behind the login screen and the sign-in card (design 2026-11-04 visual identity §5.4). */
 .mastersos-login-background,
 .mastersos-card-scrim {
+    background-color: #070818;
+    background-image: url("file:///usr/share/backgrounds/mastersos/mastersos-night.jpg");
+    background-size: cover;
+}
+
+/* A soft darkening over the picture keeps white text readable at the top and around the shelf. The school card hides the
+   login dialog with the rest of the screen shield, so its background carries the same darkening as a layer of its own. */
+.login-dialog,
+.mastersos-card-scrim-shade {
     background-gradient-direction: vertical;
-    background-gradient-start: #20252e;
-    background-gradient-end: #14171d;
+    background-gradient-start: rgba(7, 8, 26, 0.40);
+    background-gradient-end: rgba(7, 8, 26, 0.55);
+}
+
+/* The username step as a frosted card: translucent night blue, a fine light edge, soft shadow. */
+.login-dialog .login-dialog-prompt-layout {
+    background-color: rgba(20, 18, 40, 0.48);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 24px;
+    padding: 32px 36px 24px 36px;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.35);
+}
+
+.login-dialog .login-dialog-prompt-entry:focus {
+    border-color: rgba(255, 190, 130, 0.75);
+    box-shadow: 0 0 0 3px rgba(255, 154, 77, 0.22);
+}
+
+/* The MastersOS mark at the start of the top bar (login screen; the lock screen's is mastersos-managed's). */
+.mastersos-brand-corner {
+    spacing: 8px;
+    padding: 0 10px;
+}
+
+.mastersos-brand-wordmark {
+    background-image: url("file:///usr/share/mastersos/brand/wordmark-light.svg");
+    background-size: contain;
+    background-repeat: no-repeat;
+    width: 82px;
+    height: 20px;
 }
 
 .mastersos-card {
     background-color: #ffffff;
-    border-radius: 16px;
+    border-radius: 20px;
     color: #1f1f1f;
     box-shadow: 0 8px 32px 4px rgba(0, 0, 0, 0.5);
 }
@@ -81,23 +119,23 @@
 }
 
 .mastersos-card-cancel:focus {
-    box-shadow: inset 0 0 0 2px #8ab4f8;
+    box-shadow: inset 0 0 0 2px #ffb35c;
 }
 
 .mastersos-login-link {
-    color: #a8c7fa;
+    color: #ffcf9a;
     font-size: 10.5pt;
     padding: 6px 8px;
     border-radius: 8px;
 }
 
 .mastersos-login-link:hover {
-    color: #d3e3fd;
+    color: #ffe6c8;
     background-color: rgba(255, 255, 255, 0.08);
 }
 
 .mastersos-login-link:focus {
-    box-shadow: inset 0 0 0 2px #8ab4f8;
+    box-shadow: inset 0 0 0 2px #ffb35c;
 }
 
 .mastersos-login-refusal {
@@ -112,7 +150,8 @@
 
 .mastersos-notice-retry,
 .mastersos-setup-continue {
-    background-color: #0b57d0;
+    /* #b8512e: white text at 4.9:1 (WCAG AA); the lighter brand orange #d9653b is only 3.6:1 */
+    background-color: #b8512e;
     color: #ffffff;
     border-radius: 18px;
     padding: 8px 24px;
@@ -121,12 +160,12 @@
 
 .mastersos-notice-retry:hover,
 .mastersos-setup-continue:hover {
-    background-color: #0842a0;
+    background-color: #9c4426;
 }
 
 .mastersos-notice-retry:focus,
 .mastersos-setup-continue:focus {
-    box-shadow: inset 0 0 0 2px #8ab4f8;
+    box-shadow: inset 0 0 0 2px #ffb35c;
 }
 
 .mastersos-setup {
@@ -167,11 +206,11 @@
 }
 
 .mastersos-setup-item:focus {
-    box-shadow: inset 0 0 0 2px #8ab4f8;
+    box-shadow: inset 0 0 0 2px #ffb35c;
 }
 
 .mastersos-setup-item:checked {
-    background-color: #0b57d0;
+    background-color: #b8512e;
     color: #ffffff;
 }
 
@@ -197,7 +236,7 @@
 }
 
 .mastersos-person:selected {
-    background-color: rgba(138, 180, 248, 0.28);
+    background-color: rgba(255, 179, 92, 0.26);
 }
 
 .mastersos-person-content {

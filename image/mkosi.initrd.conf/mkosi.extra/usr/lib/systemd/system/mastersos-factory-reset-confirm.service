@@ -39,4 +39,12 @@ RemainAfterExit=yes
 # The reason the data is kept (unusable TPM, no escrowed recovery key yet ...) must reach the person at the screen, not only
 # the journal.
 StandardOutput=journal+console
+# The questions are asked on the console, and the boot splash covers it: quit Plymouth first. The questions go through
+# systemd-ask-password, and with Plymouth running at boot the console agent's path unit was skipped
+# (ConditionPathExists=!/run/plymouth/pid), while the Plymouth agent has no daemon once it quits: hand every question from here
+# on (these two, and the recovery key prompt of systemd-cryptsetup@root that follows when the data is kept) to the console
+# agent. Typed text stays visible on the console, as before Plymouth was in the initrd.
+ExecStartPre=-/usr/bin/plymouth --wait quit
+ExecStartPre=-/usr/bin/systemctl --no-block stop systemd-ask-password-plymouth.path systemd-ask-password-plymouth.service
+ExecStartPre=-/usr/bin/systemctl --no-block start systemd-ask-password-console.path
 ExecStart=/usr/lib/mastersos/factory-reset-confirm

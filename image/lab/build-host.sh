@@ -10,7 +10,7 @@ set -euo pipefail
 release_root=${MASTERSOS_RELEASE_ROOT:-/srv/mastersos/release}
 bucket=${MASTERSOS_RELEASE_BUCKET:-mastersos-os-111122223333}
 profile=${MASTERSOS_PUBLISH_PROFILE:-mastersos-publish}
-packages=(systemd-boot-tools systemd-repart tpm2-tools jq zip unzip zstd age sbsigntool mtools dosfstools awscli git rustup rsync python3-pefile)
+packages=(systemd-boot-tools systemd-ukify systemd-repart tpm2-tools jq zip unzip zstd age sbsigntool mtools dosfstools awscli git rustup rsync python3-pefile)
 mkosi_tag=v27.1
 mkosi_commit=ecf7f5702bb2052b7a69cab3fe7d37bc3b9ad77b # tags can move; this host handles signing keys
 commands=(mkosi systemd-repart tpm2_getcap sbsign jq zip unzip zstd age aws)
@@ -30,6 +30,8 @@ check() {
 	if [ "$(git -C "$HOME/mkosi" rev-parse HEAD 2>/dev/null)" = "$mkosi_commit" ]; then report ok "mkosi at $mkosi_tag"; else report MISSING "$HOME/mkosi at $mkosi_commit"; fi
 	if command -v rustup >/dev/null; then report ok "command rustup"; else report MISSING "command rustup"; fi
 	if [ -x /usr/lib/systemd/systemd-measure ]; then report ok "systemd-measure"; else report MISSING "/usr/lib/systemd/systemd-measure"; fi
+	# build.sh's ukify wrapper execs this path (systemd-ukify; the CI runner installs it in ci-runner-setup.sh)
+	if [ -f /usr/lib/systemd/ukify ]; then report ok "ukify"; else report MISSING "/usr/lib/systemd/ukify (systemd-ukify)"; fi
 	if [ -d "$HOME/mastersos-keys/lab" ]; then report ok "lab keys directory"; else report MISSING "lab keys directory ~/mastersos-keys/lab"; fi
 	if [ -d "$release_root" ]; then report ok "release root $release_root"; else report MISSING "release root $release_root"; fi
 	if [ -z "$(swapon --noheadings 2>/dev/null)" ]; then report ok "no swap (keys-load.sh requires it)"; else report MISSING "swap must be off for release keys"; fi

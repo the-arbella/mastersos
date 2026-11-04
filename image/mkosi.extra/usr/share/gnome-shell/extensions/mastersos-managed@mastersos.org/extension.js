@@ -61,15 +61,34 @@ function readBranding() {
     }
 }
 
+// The MastersOS mark at the start of the top bar while the screen is locked, and a translucent top bar in the session
+// (design 2026-11-04 visual identity §5.4–5.5). The login screen's mark is mastersos-login's; same class names.
+function brandMark() {
+    // Small and at 85 % opacity (design 2026-11-04 visual identity §5.4); St's CSS has no opacity, so the actor carries it
+    const box = new St.BoxLayout({style_class: 'mastersos-brand-corner', y_align: Clutter.ActorAlign.CENTER, reactive: false, opacity: 217});
+    box.add_child(new St.Icon({icon_name: 'mastersos-logo', icon_size: 20, y_align: Clutter.ActorAlign.CENTER}));
+    box.add_child(new St.Bin({style_class: 'mastersos-brand-wordmark', y_align: Clutter.ActorAlign.CENTER}));
+    return box;
+}
+
 export default class MastersosManagedExtension extends Extension {
     enable() {
         this._item = null;
+        this._brand = null;
+        this._modeId = 0;
+        try {
+            this._syncLook();
+            this._modeId = Main.sessionMode.connect('updated', () => this._syncLook());
+        } catch (e) {
+            log(`mastersos-managed: look: ${e.message ?? e}`);
+        }
         syncKeyboard();
         if (isSchoolAccount(GLib.get_user_name())) {
             this._lock = new LockToGreeter();
             this._lock.enable();
-            this._stayWhileLocked();
         }
+        // Every account keeps this extension while locked: the lock screen shows the MastersOS mark (_syncLook)
+        this._stayWhileLocked();
         try {
             const b = readBranding();
             const name = cleanText(b?.school_name, 100);
@@ -84,14 +103,16 @@ export default class MastersosManagedExtension extends Extension {
             box.set_style('padding: 8px 16px; spacing: 8px;');
             // logo_icon is the 40 x 40 quick menu icon (shown at 20 px, 40 px on HiDPI); the
             // 96 px high sign-in logo in `logo` is GDM's and is not used here.
+            let schoolIcon = null;
             if (typeof b.logo_icon === 'string' && b.logo_icon) {
                 const file = Gio.File.new_for_path(b.logo_icon);
                 if (file.query_exists(null)) {
-                    const icon = new St.Icon({icon_size: 20});
-                    icon.gicon = new Gio.FileIcon({file});
-                    box.add_child(icon);
+                    schoolIcon = new St.Icon({icon_size: 20});
+                    schoolIcon.gicon = new Gio.FileIcon({file});
                 }
             }
+            // Without the school's icon, the MastersOS one (symbolic, follows the menu's colour)
+            box.add_child(schoolIcon ?? new St.Icon({icon_name: 'mastersos-logo-symbolic', icon_size: 20}));
             box.add_child(new St.Label({
                 text: fmt(STRINGS[pickLang()].managed, name),
                 y_align: Clutter.ActorAlign.CENTER,
@@ -119,7 +140,35 @@ export default class MastersosManagedExtension extends Extension {
         };
     }
 
+    // Locked: the mark in the top bar. In the session: the translucent bar. Elsewhere (overview styles, login) nothing.
+    _syncLook() {
+        const panel = Main.panel;
+        if (!panel)
+            return;
+        const locked = Main.sessionMode.currentMode === 'unlock-dialog';
+        if (locked && !this._brand && panel._leftBox) {
+            this._brand = brandMark();
+            panel._leftBox.insert_child_at_index(this._brand, 0);
+        } else if (!locked && this._brand) {
+            this._brand.destroy();
+            this._brand = null;
+        }
+        // The desktop runs the ubuntu mode (ubuntu.json, parentMode user): currentMode alone is never 'user' there
+        const mode = Main.sessionMode;
+        if (mode.currentMode === 'user' || Main.sessionMode.parentMode === 'user')
+            panel.add_style_class_name('mastersos-panel');
+        else
+            panel.remove_style_class_name('mastersos-panel');
+    }
+
     disable() {
+        if (this._modeId) {
+            Main.sessionMode.disconnect(this._modeId);
+            this._modeId = 0;
+        }
+        this._brand?.destroy();
+        this._brand = null;
+        Main.panel?.remove_style_class_name('mastersos-panel');
         if (this._modeExtensions) {
             delete Main.extensionManager._getModeExtensions;
             this._modeExtensions = null;

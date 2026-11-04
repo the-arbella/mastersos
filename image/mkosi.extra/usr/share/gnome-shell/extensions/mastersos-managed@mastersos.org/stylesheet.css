@@ -3,3 +3,27 @@
     padding: 8px 16px;
     spacing: 8px;
 }
+
+/* The MastersOS mark at the start of the top bar while locked (design 2026-11-04 visual identity §5.4). */
+.mastersos-brand-corner {
+    spacing: 8px;
+    padding: 0 10px;
+}
+
+.mastersos-brand-wordmark {
+    background-image: url("file:///usr/share/mastersos/brand/wordmark-light.svg");
+    background-size: contain;
+    background-repeat: no-repeat;
+    width: 82px;
+    height: 20px;
+}
+
+/* A translucent top bar over the wallpaper in the user session (§5.5). */
+#panel.mastersos-panel {
+    background-color: rgba(8, 8, 20, 0.55);
+}
+
+/* The overview keeps GNOME's own (transparent) bar: same specificity as #panel:overview and loaded later, so say it again. */
+#panel.mastersos-panel:overview {
+    background-color: transparent;
+}
