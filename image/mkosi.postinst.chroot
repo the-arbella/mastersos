@@ -142,6 +142,13 @@ if command -v gtk-update-icon-cache >/dev/null 2>&1; then
 	gtk-update-icon-cache -f -q /usr/share/icons/hicolor
 fi
 echo "postinst: Dock defaults: bottom, no drives, translucent; light style; MastersOS wallpapers"
+# Boot splash (design 2026-11-04 visual identity §5.2): our theme is the default and two-step, which it uses, is installed
+grep -qx 'Theme=mastersos' /usr/share/plymouth/plymouthd.defaults || { echo "postinst: plymouthd.defaults does not choose mastersos" >&2; exit 1; }
+test -f /usr/share/plymouth/themes/mastersos/mastersos.plymouth || { echo "postinst: mastersos Plymouth theme missing" >&2; exit 1; }
+ls /usr/lib/*/plymouth/two-step.so >/dev/null 2>&1 || { echo "postinst: Plymouth two-step module missing" >&2; exit 1; }
+for f in capslock.png keyboard.png keymap-render.png; do
+	test -f "/usr/share/plymouth/themes/mastersos/$f" || { echo "postinst: Plymouth theme picture $f does not resolve" >&2; exit 1; }
+done
 
 # gnome-shell extensions (phase B, Task 13): the quick-settings "managed by" line must load under the locked learning profile, where
 # disable-user-extensions=true switches the ordinary user-extension path off. Extensions listed in the session mode's JSON are not

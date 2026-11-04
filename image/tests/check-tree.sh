@@ -2369,4 +2369,71 @@ BRAND
 fi
 [ "$r" = 0 ] && ok 51 "brand: wallpapers 3840x2400, logo at every size, background properties, GNOME defaults (light, wallpapers, translucent Dock), about logo, total under 15 MiB"
 
+# 52. Boot splash (design 2026-11-04 visual identity §5.2): the mastersos two-step theme is in the image and in the initrd, the two
+#     copies identical (the initrd is built from packages and does not see mkosi.extra); both trees make it the default theme; the
+#     kernel command line has quiet and splash; the factory reset confirmation (it reads the keyboard in the initrd) quits Plymouth
+#     first; the initrd gets Plymouth with the text label plugin (the recovery key prompt needs it); the installer keeps Plymouth off.
+r=0
+th=usr/share/plymouth/themes/mastersos
+ix=$rel/mkosi.initrd.conf/mkosi.extra
+if [ ! -f "$ex/$th/mastersos.plymouth" ]; then
+	bad 52 "$ex/$th/mastersos.plymouth missing"
+	r=1
+else
+	for k in 'ModuleName=two-step' "ImageDir=/$th" 'BackgroundStartColor=0x090a16' 'UseProgressBar=true' 'MessageBelowAnimation=true'; do
+		grep -qxF -- "$k" "$ex/$th/mastersos.plymouth" || {
+			bad 52 "mastersos.plymouth lacks $k"
+			r=1
+		}
+	done
+	for f in throbber-0001.png entry.png bullet.png lock.png; do
+		[ -f "$ex/$th/$f" ] || {
+			bad 52 "theme lacks $f"
+			r=1
+		}
+	done
+	# Plymouth's own keyboard pictures, linked from plymouth-theme-spinner (installed in both trees; postinst checks they resolve)
+	for f in capslock.png keyboard.png keymap-render.png; do
+		[ "$(readlink "$ex/$th/$f" 2>/dev/null)" = "../spinner/$f" ] || {
+			bad 52 "theme's $f should link to ../spinner/$f"
+			r=1
+		}
+	done
+	if ! diff -r --no-dereference "$ex/$th" "$ix/$th" >/dev/null 2>&1; then
+		bad 52 "the theme in mkosi.extra and in mkosi.initrd.conf/mkosi.extra differ"
+		r=1
+	fi
+fi
+for t in "$ex" "$ix"; do
+	grep -qx 'Theme=mastersos' "$t/usr/share/plymouth/plymouthd.defaults" 2>/dev/null || {
+		bad 52 "$t/usr/share/plymouth/plymouthd.defaults should have Theme=mastersos"
+		r=1
+	}
+done
+cmp -s "$ex/usr/share/plymouth/plymouthd.defaults" "$ix/usr/share/plymouth/plymouthd.defaults" || {
+	bad 52 "the two plymouthd.defaults differ"
+	r=1
+}
+for w in quiet splash; do
+	sed -n '/^KernelCommandLine=/,/^[^[:space:]]/p' "$rel/mkosi.conf" | grep -qE "^[[:space:]]+$w$" || {
+		bad 52 "mkosi.conf KernelCommandLine lacks $w"
+		r=1
+	}
+done
+for pkg in plymouth plymouth-label plymouth-theme-spinner; do
+	grep -qx "Packages=$pkg" "$rel/mkosi.initrd.conf/mkosi.conf" || {
+		bad 52 "mkosi.initrd.conf/mkosi.conf lacks Packages=$pkg"
+		r=1
+	}
+done
+grep -qx 'ExecStartPre=-/usr/bin/plymouth quit' "$ix/usr/lib/systemd/system/mastersos-factory-reset-confirm.service" || {
+	bad 52 "mastersos-factory-reset-confirm.service does not quit Plymouth first"
+	r=1
+}
+grep -qx 'plymouth.enable=0' "$rel/installer/installer.cmdline" || {
+	bad 52 "installer.cmdline must keep plymouth.enable=0"
+	r=1
+}
+[ "$r" = 0 ] && ok 52 "boot splash: mastersos two-step theme in the image and the initrd (identical), default theme, quiet splash, factory reset confirm quits plymouth, installer keeps plymouth off"
+
 exit $fail

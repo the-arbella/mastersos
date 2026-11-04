@@ -308,6 +308,20 @@ for f in usr/lib/mastersos/ventoy-attach usr/lib/systemd/system/mastersos-ventoy
 	usr/lib/systemd/system/initrd.target.wants/mastersos-ventoy-attach.service; do
 	grep -qx -- "$f" <<<"$initrd_list" || missing+=("$f")
 done
+# Boot splash (design 2026-11-04 visual identity §5.2): plymouthd with our theme as the default, the two-step module, the text
+# plugin and at least one font (without them the recovery key prompt draws nothing), and the ask-password agent that sends
+# systemd's password prompts to Plymouth
+for f in usr/sbin/plymouthd usr/bin/plymouth usr/share/plymouth/plymouthd.defaults \
+	usr/share/plymouth/themes/mastersos/mastersos.plymouth usr/share/plymouth/themes/mastersos/throbber-0001.png \
+	usr/lib/systemd/system/systemd-ask-password-plymouth.path; do
+	grep -qx -- "$f" <<<"$initrd_list" || missing+=("$f (boot splash)")
+done
+for l in two-step.so label-pango.so; do
+	grep -qE "/plymouth/${l//./\\.}\$" <<<"$initrd_list" || missing+=("$l (boot splash)")
+done
+grep -qE '^usr/share/fonts/.+\.(ttf|otf)$' <<<"$initrd_list" || missing+=("a font under usr/share/fonts (boot splash text)")
+splash_theme=$(zstd -dc "$out/initrd.cpio.zst" | cpio -i --quiet --to-stdout usr/share/plymouth/plymouthd.defaults 2>/dev/null || true)
+grep -qx 'Theme=mastersos' <<<"$splash_theme" || missing+=("Theme=mastersos in the initrd's plymouthd.defaults")
 # the initrd's own profile file (mkosi.initrd.conf/mkosi.profiles/lab/): usr-repair's lab-fail-verify hook only works with
 # "lab" there, so a release initrd must not have it
 initrd_profile=$(zstd -dc "$out/initrd.cpio.zst" | cpio -i --quiet --to-stdout usr/lib/mastersos/profile 2>/dev/null || true)

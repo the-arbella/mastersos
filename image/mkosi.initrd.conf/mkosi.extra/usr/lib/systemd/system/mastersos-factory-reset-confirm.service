@@ -39,4 +39,6 @@ RemainAfterExit=yes
 # The reason the data is kept (unusable TPM, no escrowed recovery key yet ...) must reach the person at the screen, not only
 # the journal.
 StandardOutput=journal+console
+# The questions are asked on the console, and the boot splash covers it: quit Plymouth first (as mastersos-firstrun does).
+ExecStartPre=-/usr/bin/plymouth quit
 ExecStart=/usr/lib/mastersos/factory-reset-confirm

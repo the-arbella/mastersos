@@ -1,0 +1,67 @@
+[Plymouth Theme]
+Name=MastersOS
+Description=MastersOS boot splash: the M with its light breathing over a thin progress bar (design 2026-11-04 visual identity §5.2).
+ModuleName=two-step
+
+[two-step]
+Font=Sans 12
+TitleFont=Sans Light 24
+ImageDir=/usr/share/plymouth/themes/mastersos
+DialogHorizontalAlignment=.5
+DialogVerticalAlignment=.5
+TitleHorizontalAlignment=.5
+TitleVerticalAlignment=.3
+HorizontalAlignment=.5
+VerticalAlignment=.45
+Transition=none
+TransitionDuration=0.0
+BackgroundStartColor=0x090a16
+BackgroundEndColor=0x090a16
+ProgressBarBackgroundColor=0x262838
+ProgressBarForegroundColor=0xffb35c
+ProgressBarWidth=220
+ProgressBarHeight=3
+ProgressBarHorizontalAlignment=.5
+ProgressBarVerticalAlignment=.8
+MessageBelowAnimation=true
+
+[boot-up]
+UseEndAnimation=false
+UseProgressBar=true
+UseFirmwareBackground=false
+
+[shutdown]
+UseEndAnimation=false
+UseFirmwareBackground=false
+
+[reboot]
+UseEndAnimation=false
+UseFirmwareBackground=false
+
+[updates]
+SuppressMessages=true
+ProgressBarShowPercentComplete=true
+UseProgressBar=true
+Title=Installing updates
+SubTitle=Do not turn off your computer
+
+[system-upgrade]
+SuppressMessages=true
+ProgressBarShowPercentComplete=true
+UseProgressBar=true
+Title=Upgrading the system
+SubTitle=Do not turn off your computer
+
+[firmware-upgrade]
+SuppressMessages=true
+ProgressBarShowPercentComplete=true
+UseProgressBar=true
+Title=Upgrading firmware
+SubTitle=Do not turn off your computer
+
+[system-reset]
+SuppressMessages=true
+ProgressBarShowPercentComplete=true
+UseProgressBar=true
+Title=Resetting the system
+SubTitle=Do not turn off your computer

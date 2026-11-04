@@ -80,4 +80,34 @@ mkdir -p "$icons/scalable/apps" "$icons/symbolic/apps"
 cp "$here/logo.svg" "$icons/scalable/apps/mastersos-logo.svg"
 cp "$here/logo-symbolic.svg" "$icons/symbolic/apps/mastersos-logo-symbolic.svg"
 
+# Boot splash (Plymouth two-step): throbber frames, the password field, bullet and lock. The same theme goes into the
+# initrd's tree, which is built from packages and does not see mkosi.extra (check-tree item 52 keeps the copies equal).
+frames=72
+th=$ex/usr/share/plymouth/themes/mastersos
+it=$here/../mkosi.initrd.conf/mkosi.extra/usr/share/plymouth/themes/mastersos
+mkdir -p "$th"
+rm -f "$th"/throbber-*.png
+crop() { # crop <page.png> <w> <h> <out.png>
+	python3 -c 'import sys
+from PIL import Image
+Image.open(sys.argv[1]).convert("RGBA").crop((0, 0, int(sys.argv[2]), int(sys.argv[3]))).save(sys.argv[4], optimize=True)' "$@"
+}
+for i in $(seq 0 $((frames - 1))); do
+	shot "file://$here/splash.html?p=frame&i=$i&of=$frames" 500 500 1 "$work/frame.png"
+	crop "$work/frame.png" 160 160 "$th/$(printf 'throbber-%04d.png' $((i + 1)))"
+done
+for piece in entry:320:44 bullet:12:12 lock:24:28; do
+	IFS=: read -r name w h <<<"$piece"
+	shot "file://$here/splash.html?p=$name" 500 500 1 "$work/$name.png"
+	crop "$work/$name.png" "$w" "$h" "$th/$name.png"
+done
+# The keyboard layout and caps lock pictures are Plymouth's own (plymouth-theme-spinner, installed in both trees)
+for f in capslock.png keyboard.png keymap-render.png; do
+	ln -sfn "../spinner/$f" "$th/$f"
+done
+cp "$here/mastersos.plymouth" "$th/mastersos.plymouth"
+rm -rf "$it"
+mkdir -p "$(dirname "$it")"
+cp -a "$th" "$it"
+
 echo "render.sh: done"

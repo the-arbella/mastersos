@@ -1,0 +1,29 @@
+<!doctype html>
+<!-- MastersOS boot splash pieces for Plymouth (design 2026-11-04 visual identity §5.2), rendered by render.sh.
+     ?p=frame&i=<n>&of=<count>: one throbber frame, the M with its light breathing (160x160, transparent);
+     ?p=entry: the password field (320x44); ?p=bullet: one typed character (12x12); ?p=lock: the prompt's lock (24x28). -->
+<html><head><meta charset="utf-8"><style>html,body{margin:0;background:transparent}svg{display:block}</style></head><body>
+<script>
+const q = new URLSearchParams(location.search), p = q.get('p');
+let svg = '';
+if (p === 'frame') {
+  const t = Number(q.get('i')) / Number(q.get('of'));
+  const a = 0.5 - 0.5 * Math.cos(2 * Math.PI * t); // 0 → 1 → 0 over one cycle
+  const glowR = 17 + 9 * a, glowO = 0.35 + 0.65 * a, coreR = 10.5 + 1 * a;
+  svg = `<svg width="160" height="160" viewBox="0 0 100 100">
+   <defs>
+    <radialGradient id="core" cx="50%" cy="42%" r="60%"><stop offset="0" stop-color="#FFF1D6"/><stop offset=".45" stop-color="#FFB35C"/><stop offset="1" stop-color="#F25A6A"/></radialGradient>
+    <radialGradient id="glow"><stop offset=".3" stop-color="#FFB35C" stop-opacity=".55"/><stop offset="1" stop-color="#FFB35C" stop-opacity="0"/></radialGradient>
+   </defs>
+   <circle cx="50" cy="61" r="${glowR}" fill="url(#glow)" opacity="${glowO}"/>
+   <path d="M18 80V22l20 24M82 80V22L62 46" fill="none" stroke="#fff" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+   <circle cx="50" cy="61" r="${coreR}" fill="url(#core)"/></svg>`;
+} else if (p === 'entry') {
+  svg = `<svg width="320" height="44"><rect x=".5" y=".5" width="319" height="43" rx="12" fill="#ffffff" fill-opacity=".10" stroke="#ffbe82" stroke-opacity=".75"/></svg>`;
+} else if (p === 'bullet') {
+  svg = `<svg width="12" height="12"><circle cx="6" cy="6" r="4.5" fill="#ffffff"/></svg>`;
+} else if (p === 'lock') {
+  svg = `<svg width="24" height="28" viewBox="0 0 24 28"><path d="M7 12V8a5 5 0 0 1 10 0v4" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/><rect x="3" y="12" width="18" height="14" rx="3.5" fill="#fff"/><circle cx="12" cy="19" r="2" fill="#090a16"/></svg>`;
+}
+document.body.innerHTML = svg;
+</script></body></html>
