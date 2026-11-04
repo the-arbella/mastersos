@@ -2,18 +2,128 @@
 
 [English](README.en.md)
 
-教育笔记本系统：不可变的 Ubuntu 镜像，加上设备端的设置 agent、安装器和签名工具。设备上只应用学校钥匙签过的设置包。
+教育笔记本系统：不可变的 Ubuntu 镜像，加上设备端的设置 agent、安装器和签名工具。设备上只应用学校钥匙批准过的设置包。
 管理这些设备的云服务不开源，这里没有它的代码。
 
 `core/` 是 Rust workspace：
 
-- `mastersos-bundle`：设置包的清单、打包、签名与验签（Ed25519 与 passkey 的 WebAuthn 断言）、心跳、发布前 lint。
+- `mastersos-bundle`：设置包的清单、打包、签名与验签（Ed25519；旧的 WebAuthn 签名只验不产）、每月确认（心跳）、发布前 lint。
 - `mastersos-agent`：机器上拉取、验签、应用设置的服务；另有恢复密钥托管与 TPM 槽（`luks`）、Chrome sysext（`mastersos-agent chrome`）、开机快速应用（`apply-local`）。
 - `mastersos-mcp`：给 AI 与人用的 `mastersos` 命令行（`mastersos mcp` 子命令是 stdio 的只读 MCP 服务）。设置在本地目录里编辑，命令行负责 pull、check、diff、publish；AI 只改文件，不能发布。
-- `mastersos-sign`：学校恢复钥匙的命令行。它在本地验链后签名，trust 的变化只能经它签。
+- `mastersos-sign`：学校钥匙的命令行（做钥匙、登记、在另一台电脑上批准、读磁盘恢复码）。它在本地验链后签名。
 - `mastersos-installer`：U 盘安装器（tty 上的纯文本流程）与未受管机器的首次开机建用户（`mastersos-firstrun`）。
 
 系统镜像在 `image/`（mkosi），见 `image/README.md`；给 IT 的装机说明在 `image/docs/install.md`。
+
+## Getting started for school IT (macOS, Linux, Windows)
+
+You need the address of your school's admin site, an admin account there, and a USB stick. The words used below
+are explained in [docs/glossary.md](docs/glossary.md).
+
+### 1. Install the command line
+
+The installers put `mastersos` and `mastersos-sign` in your own user folder: no administrator rights, no `sudo`.
+They check the download against the release's `SHA256SUMS` before installing anything, and print where they
+installed.
+
+**macOS and Linux** (Terminal):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/the-arbella/mastersos/master/tools/install/install.sh | sh
+```
+
+This installs into `~/.local/bin`. If that folder is not on your `PATH` yet, the installer prints the line to add;
+then open a new terminal. A given release: `… | sh -s -- --version cli-0123456789ab`.
+
+**Windows** (PowerShell, not as administrator):
+
+```powershell
+irm https://raw.githubusercontent.com/the-arbella/mastersos/master/tools/install/install.ps1 | iex
+```
+
+This installs into `%LOCALAPPDATA%\Programs\mastersos` and adds that folder to your user `PATH`; open a new
+PowerShell window afterwards. A given release:
+`& ([scriptblock]::Create((irm https://raw.githubusercontent.com/the-arbella/mastersos/master/tools/install/install.ps1))) -Version cli-0123456789ab`.
+
+Check it with `mastersos --version`. Releases are tagged `cli-<commit>`; without a version the installers take the
+newest one. macOS builds are not notarized yet; installed this way they run without a warning.
+
+### 2. Connect to your school
+
+On the admin site, open the **Command line** page and create a token. Then:
+
+```bash
+mastersos connect https://<your school's admin address>
+```
+
+Paste the token when asked (it is not shown, and never goes on the command line). `connect` checks it and prints
+where it saved it:
+
+| | macOS, Linux | Windows |
+|---|---|---|
+| token and settings (`config.toml`) | `~/.config/mastersos/` | `%APPDATA%\mastersos\` |
+| what `mastersos-sign` has checked | `~/.config/mastersos-sign/` | `%APPDATA%\mastersos-sign\` |
+
+Only your user account can read these files.
+
+### 3. Make two school keys
+
+A **school key** is a small file, plus a printed copy, that approves settings for every computer and can unlock
+their disks. Make two on the admin site's **signing page**, and save each file to a USB stick. The file name ends in
+the key's **key code**, for example `myschool-school-key-11d903eb.kit`; the same code (`11d9-03eb`) is on the printed
+copy and on the **School keys** page. Keep the printed copies and the second stick in separate safe places.
+
+A USB stick formatted exFAT or FAT32 cannot keep the file private. `mastersos` then says: `Make sure no other user
+can read this school key file. Keep it on a USB stick whenever you can.` Do that, and it works.
+
+### 4. Start the settings folder
+
+For a school that has published nothing yet, give both school keys:
+
+```bash
+# macOS
+mastersos init ./school --school-key /Volumes/USB/myschool-school-key-11d903eb.kit --school-key /Volumes/USB2/myschool-school-key-7c42a915.kit
+# Linux
+mastersos init ./school --school-key /media/$USER/USB/myschool-school-key-11d903eb.kit --school-key /media/$USER/USB2/myschool-school-key-7c42a915.kit
+```
+
+```powershell
+# Windows
+mastersos init .\school --school-key E:\myschool-school-key-11d903eb.kit --school-key F:\myschool-school-key-7c42a915.kit
+```
+
+`init` prints the folder's full path and `Trusted keys: 11d9-03eb, 7c42-a915`: computers will accept settings
+approved with either key. For a school that has published before, use `mastersos pull ./school` instead.
+
+### 5. Change, check, publish
+
+Edit `school/manifest.toml` (or let an AI assistant do it, see `skills/mastersos-admin/`), then:
+
+```bash
+mastersos check ./school      # on this computer, no network
+mastersos diff ./school       # what changes since the last pull
+mastersos publish ./school --school-key <school key file>
+```
+
+`publish` prints `Checked: no problems`, the **check code** (`Check code: a1b2c3d4`) and `Published version N`.
+Without `--school-key` it uploads only and prints `Waiting for approval: open <link>`: open that page, load the school
+key file there, and compare the check code on the page with the one `publish` printed. Afterwards run
+`mastersos pull ./school`.
+
+Computers want a **monthly check-in** ("nothing new; what you have is current"). `publish --school-key` does it for
+you; if you have not published for a while, the admin site reminds you and does it on the signing page.
+
+### 6. Add or remove a school key
+
+```bash
+cd ./school                               # or add --dir ./school to each keys command
+mastersos keys list                       # key code, label, registered date, trusted here or not
+mastersos keys add <new school key file>  # made on the signing page first
+mastersos keys remove 11d9-03eb           # never the last one
+mastersos publish --school-key <a school key that is already trusted>
+```
+
+`keys add` and `keys remove` change only the local `manifest.toml`; computers take the change once you publish it.
 
 ## 测试
 
@@ -27,57 +137,64 @@ cd core && cargo test --workspace
 
 ## 命令行与 MCP：本地目录里改设置
 
+IT 的上手步骤（安装、连接、学校钥匙、第一版、发布）见上面英文的 **Getting started for school IT**；词汇表在
+`docs/glossary.md`（学校钥匙、钥匙码、核对码、每月确认、装机文件）。这一节是实现细节。
+
 设置不在服务端存草稿：IT 把已发布的版本拉成一个本地目录，人或 AI 在里面改 `manifest.toml`，本地检查、看差异，最后由 IT 发布。
 
 ```bash
-mastersos init ./school          # 新学校：用模板建目录（已发布过的学校用 pull）
+mastersos connect https://<学校的管理地址>     # 粘贴「Command line」页的 token：不回显，检查后与地址一起存下
+mastersos init ./school --school-key <学校钥匙文件> [--school-key <第二把>]   # 新学校；已发布过的学校用 pull
 mastersos pull ./school          # 下载最新已发布版本，沿版本链验签，拆成目录
 $EDITOR ./school/manifest.toml   # 或让 AI 改；新密码网络写 psk = "secret:<名字>"，值由 IT 填进 secrets.toml
 mastersos check ./school && mastersos diff ./school     # 本地，不联网；check 有错误退出码 2
-mastersos publish ./school --kit school.kit   # 用恢复钥匙包在本机验链、签名并 commit（任何一台电脑，有 kit 文件就行）
-mastersos publish ./school                    # 不带 --kit/--key：只上传并打印签名页链接，IT 在页上载入恢复钥匙包签
-                                              # （登记过 passkey 的也可以用 passkey，可选），签完再跑 mastersos pull
+mastersos publish ./school --school-key <学校钥匙文件>   # 在本机验链、批准并发布，顺带完成每月确认
+mastersos publish ./school       # 不带 --school-key：只上传，打印签名页链接与核对码，IT 在签名页载入学校钥匙批准，之后 mastersos pull
 ```
 
-目录里：`mastersos.toml`（学校主机与 `base_version`）、`manifest.toml`（秘密只写引用）、`secrets.toml`（0600，git 忽略，秘密的值）、
+目录里：`mastersos.toml`（学校主机与 `base_version`）、`manifest.toml`（秘密只写引用）、`secrets.toml`（只有本人可读，git 忽略，秘密的值）、
 `files/`、`.mastersos/base/`（pull 下来的原样，`diff` 用）。base 是目录里的普通文件，谁都改得动，所以 `check`、`diff`、`publish`
-用它之前先核对：`base_version > 0` 时 base（秘密填回、连同文件）的内容摘要必须等于本机 pin（`~/.config/mastersos/pins/<主机>.toml`，
+用它之前先核对：`base_version > 0` 时 base（秘密填回、连同文件）的内容摘要必须等于本机 pin（配置目录下的 `pins/<主机>.toml`，
 在目录之外）为这一版记下的摘要；`base_version = 0` 时 base 必须是空的。对不上就拒绝，提示用 `mastersos pull --force` 恢复。
-本机签名发布后 base 换成盖了 `version`、`issued_at` 的那份，目录里没改过的 `manifest.toml` 也一起更新。`pull` 在目录有未发布改动时拒绝覆盖，除非 `--force`；
+本机批准发布后 base 换成盖了 `version`、`issued_at` 的那份，目录里没改过的 `manifest.toml` 也一起更新。`pull` 在目录有未发布改动时拒绝覆盖，除非 `--force`；
 `--version N` 只取本机验证过的旧版本。`publish` 先 `check`，在本地合成（引用换成值，写 `version`、`issued_at`、学校名），
-上传成待签名包；服务端拒收（base 之后已有人发布、阻断检查不过）就停并显示原因。
+上传成等待批准的包；服务端拒收（base 之后已有人发布、阻断检查不过）就停并显示原因。
 
-`publish` 的签名钥匙：
+配置目录：macOS 与 Linux 是 `~/.config/mastersos/`（不看 `XDG_CONFIG_HOME`），Windows 是 `%APPDATA%\mastersos\`；`mastersos-sign`
+的 pin 在 `~/.config/mastersos-sign/` 或 `%APPDATA%\mastersos-sign\`。命令行打印的路径都是绝对路径、用本平台的写法。
 
-- `--kit <文件>`：恢复钥匙包（`MASTERSKIT1…`，`mastersos-sign kit new` 生成）。文件必须属于当前用户、权限 0600，否则拒绝
-  （与 `--key` 同样的检查）。上传之前先确认这把钥匙在目录的 `[[trust]]` 里、并且是服务端登记过的恢复钥匙，不满足就什么都不上传。
-  之后走 `mastersos-sign` 同一条签名路径（`SigningKey::Kit`）：本地验链、对照上传时本地算的摘要、键入版本号确认、签名并 commit。
-  第一版（R1g）也用它签。
-- `--key <文件>`：PKCS#8 恢复钥匙文件，与 `--kit` 二选一。
+受信钥匙（`[[trust]]` 与 `[school].escrow_recipients`）只从 IT 手里的学校钥匙文件来，不复制粘贴，也不从服务端取：
+
+- `init <目录> --school-key <文件>`（可重复，必需）：在本机读每个学校钥匙文件，算出它的受信钥匙（`rk-…`）与磁盘解锁的收件人（age），
+  先确认两样都已在本校登记，再写进新的 `manifest.toml`，打印 `Trusted keys: 11d9-03eb, 7c42-a915`。
+- `keys add <文件>` / `keys remove <钥匙码>`：只改本地 `manifest.toml`（不碰服务端），之后用一把已受信的学校钥匙 `publish`。
+  不许删掉最后一把。`keys list` 列钥匙码、标签、登记日期，以及已发布版本与本地目录是否信任它。
+
+`publish` 的参数：
+
+- `--school-key <文件>`（旧名 `--kit` 仍可用，不再写进帮助）：学校钥匙文件（`MASTERSKIT1…`）。放在 exFAT/FAT32 的 U 盘上时
+  权限表达不了，只警告 `Make sure no other user can read this school key file. Keep it on a USB stick whenever you can.`，不拒绝
+  （token 文件与 `secrets.toml` 仍然严格）。上传之前先确认这把钥匙受信、并且在服务端登记过，不满足就什么都不上传。
+  之后走 `mastersos-sign` 同一条签名路径：本地验链、对照上传时本地算的摘要、键入版本号确认、签名并 commit；成功后静默签一次
+  30 天的每月确认（心跳），失败不撤销发布，只打印 `Computers may soon show "settings may be out of date". Open the admin site to fix it.`
+  输出依次是 `Checked: no problems`、`Check code: a1b2c3d4`、`Published version N`。
 - `--allow-reroute=<秘密名>`（可重复）：见下面的 `secret_rerouted`，只由 IT 给，给之前先跑 `mastersos diff` 看清秘密要被发到哪里。
 
-其他子命令：`mastersos devices list|show`、`keys list`（服务端的机器与已登记钥匙，供手写 `[[device]]` 与 `trust`）、
-`hash-password`（不回显读口令，输出 IT 账号的哈希，写进 `secrets.toml`）、`logo upload <登录页.png> <图标.png>`、`spec`、`setup`。
-`--json` 给脚本与 AI 用。
+其他子命令：`mastersos devices list|show`、`keys list|add|remove`、`hash-password`（不回显读口令，输出 IT 账号的哈希，写进
+`secrets.toml`）、`logo upload <登录页.png> <图标.png>`、`spec`。`--json` 给脚本与 AI 用。旧的 `setup` 留给旧脚本，不在帮助里。
 
 `mastersos mcp --dir <目录>` 是 stdio 的 MCP 服务，只读：`read_manifest`、`list_files`、`read_file`、`check`、`diff`、`devices_list`、
 `device_show`、`keys_list`、`spec`。没有写工具，也不碰 `secrets.toml`、合成出的包和签名；AI 用自己的文件工具改 `manifest.toml` 与 `files/`。
 
-`setup` 与服务端 token：两个 token 文件，分开放。
+两个 token 文件，分开放（都在配置目录里，只有本人可读）：
 
-- **IT 自己的 token**（`token_file`，默认 `~/.config/mastersos/token`）：命令行的 `init`、`pull`、`publish`、`logo upload`、
-  `keys list`、`devices` 用它。它是 read + draft 范围的 API token，向运营者要，或在管理页建。`init`、`pull`、`publish`、
-  `logo upload` 拒绝 AI token（`whoami` 的 label 以 `ai:` 开头的）：AI token 读到的秘密是 `"<kept>"`，也不能签名。
-- **AI token**（`ai_token_file`，默认 `~/.config/mastersos/ai-token`，`--ai-token-file` 可改）：只给 `mastersos mcp` 用，
-  学校管理员在管理页「AI tools」建。`mastersos mcp` 拒绝不是 AI token 的 token（退出码 2）。**绝不要把 IT 的 token 文件交给 AI。**
+- **IT 自己的 token**（`token`）：`mastersos connect` 存下。命令行的 `init`、`pull`、`publish`、`logo upload`、`keys`、`devices` 用它。
+  它是 read + draft 范围的 API token，在管理页的「Command line」页建。`connect`、`init`、`pull`、`publish`、`logo upload`
+  拒绝 AI token（`whoami` 的 label 以 `ai:` 开头的）：AI token 读到的秘密是 `"<kept>"`，也不能批准。
+- **AI token**（`ai-token`，`--ai-token-file` 可改）：只给 `mastersos mcp` 用，学校管理员在管理页「AI tools」建。
+  `mastersos mcp` 拒绝不是 AI token 的 token（退出码 2）。**绝不要把 IT 的 token 文件交给 AI。**
 
-```bash
-mastersos setup --server https://mastersos.school.ac.th --token-file /path/to/it.token --ai-token-file /path/to/ai.token
-```
-
-`setup` 把地址与两个文件的路径存进 `~/.config/mastersos/config.toml`（两个文件权限都必须是 0600），已有的文件逐个试连。
-
-- token 只从文件读，不接受命令行明文。AI 用的 token 只能读机器与状态，不能下载包，不能读待签名包。
+- token 只从文件或不回显的输入读，不接受命令行明文。AI 用的 token 只能读机器与状态，不能下载包，不能读等待批准的包。
 - token 带 read、draft 以外的范围（`publish`、`keys` ……）时：`mastersos mcp` 以退出码 2 结束，其他子命令以 1 结束。
 - 退出码：0 成功；1 失败（网络、认证、服务端拒绝）；2 `check` 有 error。
 - 秘密（Wi-Fi 的 `psk`、`password`、`client_key`、`client_key_password`，IT 账号的 `password_hash`）在 `manifest.toml` 里是 `secret:<名字>` 引用。
@@ -88,27 +205,29 @@ mastersos setup --server https://mastersos.school.ac.th --token-file /path/to/it
   值和网络都是 base 里没有的（新网络），算改道。只有还没发布过的第一版不比。`check` 末尾醒目列出这些秘密，
   `--json` 的结果里是 `rerouted_secrets`（与 MCP 的 `check` 同一形状）。`publish` 遇到它就拒绝、什么都不上传，除非 IT 先跑
   `mastersos diff` 核对，再对每个改道的秘密都给 `--allow-reroute=<名字>`（可重复；给错名字不算），
-  例如 `mastersos publish ./school --kit school.kit --allow-reroute=lab-corp-password`。
+  例如 `mastersos publish ./school --school-key school.kit --allow-reroute=lab-corp-password`。
   只有 IT 能下这个决定：MCP 没有发布工具，也没有任何参数能传它，AI 从不替 IT 传。
 - `publish` 上传前先打印本地检查的全部警告。
-- AI 不改 trust：`trust` 照 `manifest.toml` 写的，发布不自动填；trust 的变化只能由 IT 用恢复钥匙经 `mastersos-sign` 签。
+- AI 不改受信钥匙：受信钥匙只由 IT 用 `init`、`keys add`、`keys remove` 从学校钥匙文件写，发布时用学校钥匙批准。
 
 ### 装命令行与 skill
+
+`tools/install/install.sh`（macOS、Linux，装到 `~/.local/bin`）与 `tools/install/install.ps1`（Windows，装到
+`%LOCALAPPDATA%\Programs\mastersos` 并加进用户 `PATH`）从本仓库的 GitHub release 下载本机的包，先对照 `SHA256SUMS` 核对
+SHA-256 再安装，不要管理员权限。release 由 `.github/workflows/cli-release.yml` 手动构建（输入 `ref`；勾上 `publish` 才建
+`cli-<12 位提交>` 的 tag 与 release），五个目标：`aarch64-apple-darwin`、`x86_64-apple-darwin`、`x86_64-unknown-linux-musl`、
+`aarch64-unknown-linux-musl`、`x86_64-pc-windows-msvc`。每次运行都在三个系统上用刚构建的包、经本机假 release
+（`MASTERSOS_RELEASE_BASE`）跑 `tools/install/test-install.sh` / `test-install.ps1`：装上的 `mastersos --version` 能跑，
+篡改过的 `SHA256SUMS` 什么都不装。安装脚本的测试在本地也能跑：`bash tools/install/test-install.sh`（桩程序）。
 
 运营者命令行（`cloud school …`）看不到也撤销不了 AI token（运营者角色只有 SELECT）。出了泄漏时的杠杆有两个：
 把建 token 的人从该校 `admins` 里删掉（他建的所有 token 随之失效，加回来又生效），或者让管理员在管理页 `/ai` 撤销。
 
-IT 把自己的 read + draft token 存进 `~/.config/mastersos/token`（权限 0600）。学校管理员在管理页「AI tools」建 AI token
-（30/90/180 天过期，建它的人不再是管理员就失效；管理页会把这样的 token 标成「未生效」，但它仍占 10 个名额直到撤销或过期），存进
-`~/.config/mastersos/ai-token`（权限 0600），只给 `mastersos mcp` 用。然后：
-
 ```bash
-curl -fsSL https://os.khundavid.com/downloads/mastersos/install.sh | sh     # 装 mastersos 与 skill（删掉旧的 mastersos-mcp）
-mastersos setup --server https://<school>.os.khundavid.com
 claude mcp add mastersos -- mastersos mcp --dir ./school     # 可选：只给需要 MCP 的客户端
 ```
 
-skill 在 `skills/mastersos-admin/`（装到 `~/.claude/skills/mastersos-admin/`）：在 IT 给的本地目录里改 `manifest.toml`、跑 `check` 与 `diff`、给人看差异，
+skill 在 `skills/mastersos-admin/`（复制到 `~/.claude/skills/mastersos-admin/`）：在 IT 给的本地目录里改 `manifest.toml`、跑 `check` 与 `diff`、给人看差异，
 不读 `secrets.toml` 与合成出的包，改完请 IT `mastersos publish`；红线写在 `SKILL.md`。`reference/settings-reference.md` 是 `core/mastersos-bundle/docs/manifest-spec.md` 的逐字副本，改了规范要重新复制
 （`skill_reference_matches_spec` 测试会红）；`reference/recipes.md` 的每个 TOML 块由 `skill_recipes_parse` 检查。
 
@@ -206,125 +325,90 @@ kiosk PWA），同时联系厂商取得长期支持（设计 `docs/superpowers/s
 `publish.sh <版本> beta` 之后要在同一次操作里接着发 `chrome` 并同步到 S3——否则 beta 机器重启进新镜像时更新源上还没有扩展，锁定会话没有
 「退出」按钮（第一次正式发布尤其如此，见 `image/docs/update-channels.md`「第一次正式发布的顺序」）。
 
-## 签名：恢复钥匙包与 passkey
+## 批准与学校钥匙
 
-服务端没有签名钥匙（云端设计裁定 8）：每一版都由学校的钥匙签，trust 也由学校自己列，服务端从不替草稿填 trust。
+服务端没有签名钥匙（云端设计裁定 8）：每一版都由学校钥匙批准（签名），受信钥匙也由学校自己列，服务端从不替草稿写受信钥匙。
 
-**恢复钥匙包是唯一必需的签名钥匙，passkey 可选**（2026-11-03 裁定）：IT 在任何一台电脑上有 kit 文件就能签，
-命令行 `mastersos publish --kit <文件>`，或在签名页载入恢复钥匙包。
+**学校钥匙是唯一的签名钥匙**（2026-11-04 起 IT 的流程里没有 passkey）：一个小文件加一份打印件，批准每台电脑的设置，
+也能解开它们的磁盘。IT 在任何一台电脑上有这个文件就能批准：命令行 `mastersos publish --school-key <文件>`，或在签名页载入它。
+在签名页上做学校钥匙（文件名 `<学校>-school-key-<钥匙码>.kit`，打印件上有同一个钥匙码），每个文件放一根 U 盘，建议做两把、分开放。
+`mastersos-bundle` 与 agent 仍然验旧的 `webauthn-es256` 签名（没有在用的学校，以后再删），只是不再产生新的。
 
-学校钥匙有两种，都写进 trust：
+### 网页批准与 `mastersos-sign` 的分工
 
-- **passkey**：只在云的签名页上登记和使用（管理页面的「钥匙」「发布」与心跳都只给打开签名页的链接，概览与钥匙页顶部常驻
-  「Signing happens only on <签名源>」），私钥留在认证器里。passkey 绑在云的签名源（rp_id 是 `sign_origin` 的 host，各校共用）上，
-  学校换管理域名不影响 passkey；只有签名源本身搬家时，才要在新签名源上登记 passkey，再用恢复钥匙签一版把它加进 trust。
-  - 同步型 passkey 的私钥跟着 IT 的 Apple 或 Google 账号走。钥匙页会标出「同步型」。
-  - 签名页在 https 的签名源上；只有本机演示用 `http://localhost`。
-- **恢复钥匙包**：Ed25519 恢复钥匙（与托管钥匙同出一个 kit），必需。用 `mastersos-sign kit new` 生成、登记；签名用
-  `mastersos publish --kit`、`mastersos-sign --kit` 或签名页的「载入恢复钥匙包」。kit 文件随用随带、用完收好（0600）。
-  trust 里至少要有一把恢复钥匙（R6）。
-
-### 网页签名与 `mastersos-sign` 的分工
-
-- **签名页**：每一版（包括第一版和 trust、托管收件人有变化的版本）都可以「载入恢复钥匙包」签；trust 与收件人都没变化的日常发布，
-  登记过 passkey 的也可以用 passkey 签（可选）。签名页下载待发布的每个文件、自己算摘要；从上一版的归档里读出 trust 与托管收件人
-  自己比对，和服务端说的对不上就按变化处理；签名用的消息在本地重建，不签服务端给的字节。
-  签名页的心跳续签目前只支持 passkey；只有恢复钥匙包时，页面给出 `mastersos-sign heartbeat --kit <文件>` 命令照着跑。
-  **网页签名信任的是发出签名页的云**（横幅写明构建号与签名源）：怀疑签名页被换过时，改用 `mastersos-sign`。
-- **`mastersos-sign`**：不信任服务端。签名前，它从本机 pin 住的那一版起，逐版取回服务端发布过的每一版原始包，像 agent 一样验签。
-  差异、摘要、trust 的增删都在本地算，服务端给的差异和 lint 只作参考。**trust 的任何变化都只能经它、用恢复钥匙签**
-  （服务端拒收 passkey 签的 trust 变化）。
+- **签名页**：每一版（包括第一版与受信钥匙、磁盘解锁收件人有变化的版本）都可以载入学校钥匙批准。签名页下载等待批准的每个文件、
+  自己算摘要，显示核对码（摘要的前 8 位）给 IT 与 `mastersos publish` 打印的对照；从上一版的归档里读出受信钥匙与收件人自己比对，
+  和服务端说的对不上就按变化处理；签名用的消息在本地重建，不签服务端给的字节。
+  **网页批准信任的是发出签名页的云**（横幅写明构建号与签名源）：怀疑签名页被换过时，改用命令行。
+- **`mastersos publish --school-key` 与 `mastersos-sign`**：不信任服务端。批准前从本机 pin 住的那一版起，逐版取回服务端发布过的
+  每一版原始包，像 agent 一样验签。差异、摘要、受信钥匙的增删都在本地算，服务端给的差异和 lint 只作参考。
 
 ### `mastersos-sign` 命令
 
+IT 平时只用 `mastersos`；`mastersos-sign` 给在另一台电脑上批准、读磁盘恢复码等进阶用途。`--school-key`（旧名 `--kit`）读学校钥匙文件，
+`--school-key -` 从标准输入的第一行读（要用管道或重定向：在终端里直接粘贴会回显）。
+
 ```bash
-cd core && cargo build -p mastersos-sign && S=$PWD/target/debug/mastersos-sign
-
-# 生成。私钥与纸面备份都是 0600，不覆盖已有文件，私钥不打印到终端
-$S keygen --out rk.key                  # 另写 rk.key.paper.txt：打印出来锁进柜子，然后删掉这个文件
-
-# 登记要 keys 范围：请运营者临时发一把（cloud school token create --scope keys），登记完让运营者删掉
-# （cloud school token delete）。删掉之后一分钟内服务就不再认它。
-$S register --server https://mastersos.school.ac.th --token-file keys.token --key rk.key --label "柜子里的恢复钥匙"
-rm rk.key                               # 平时离线：电脑上不留私钥
-
-# 要签名时从纸面备份临时还原，签完再删。sign / heartbeat / seed-check / verify 只要 read + draft 范围的 token
-$S restore-from-paper --paper paper.txt --out rk.key
-$S sign --server https://mastersos.school.ac.th --token-file draft.token --key rk.key --pending <id>   # <id>: printed by `mastersos publish`
-rm rk.key
-
+S=mastersos-sign
+# 离线做一把学校钥匙：写进只有本人可读的新文件（已存在就拒绝），终端只打印钥匙码与指纹，不打印钥匙本身。
+# --out 是目录时文件名为 <学校>-school-key-<钥匙码>.kit
+$S kit new --out /Volumes/USB --school myschool
+# 登记学校钥匙与它的磁盘解锁收件人（要 keys 范围的临时 token，登记完删掉）；已登记过的只提示、不报错，中途失败可以原样再跑
+$S register --server https://<slug>.os.khundavid.com --token-file keys.token --school-key /Volumes/USB/myschool-school-key-11d903eb.kit --label "IT 的第一把"
+# 批准一个等待批准的上传（<id> 由 mastersos publish 打印）：先核对这把钥匙是本校登记过的，不是就退出 1
+$S sign --server https://<slug>.os.khundavid.com --token-file draft.token --school-key <文件> --pending <id>
 # 只验链，不签名
-$S verify --server https://mastersos.school.ac.th --token-file draft.token
-
-# 装机前核对种子：种子的 trust 与 min_version 要等于本地验证过的最新版
-$S seed-check --server https://mastersos.school.ac.th --token-file draft.token seed.toml
-
-# 续签心跳（每次发布之后，以及每个月一次）：版本与摘要取自本地验证过的最新版，
-# issued_at 是本机现在的时间，--days 取 1 到 31，默认 30。本机时钟要准，与服务端差 10 分钟以上会被拒
-$S heartbeat --server https://mastersos.school.ac.th --token-file draft.token --key rk.key --days 30
+$S verify --server https://<slug>.os.khundavid.com --token-file draft.token
+# 装机前核对装机文件：它的受信钥匙与 min_version 要等于本地验证过的最新版
+$S seed-check --server https://<slug>.os.khundavid.com --token-file draft.token seed.toml
+# 每月确认（心跳）：版本与摘要取自本地验证过的最新版，--days 取 1 到 31，默认 30。本机时钟要准，与服务端差 10 分钟以上会被拒。
+# mastersos publish --school-key 每次发布都顺带做，长期没发布时管理网站会提醒，这条命令只留给进阶用途
+$S heartbeat --server https://<slug>.os.khundavid.com --token-file draft.token --school-key <文件> --days 30
+# 读一台电脑托管的磁盘恢复码：取回密文、在本机用学校钥匙解开（token 要 read + recovery，服务端每次都留审计）
+$S escrow-read --server https://<slug>.os.khundavid.com --token-file recovery.token --school-key <文件> --device <device_id>
 ```
 
-**恢复钥匙包**：一个 32 字节主密钥，导出 Ed25519 恢复钥匙（`rk-…`，进 trust）和 age 的托管钥匙
+`keygen` 与 `restore-from-paper`（旧的 PKCS#8 钥匙与纸面备份）、`--key` 仍可用，但不在帮助里。
+
+**学校钥匙文件**：一个 32 字节主密钥，导出 Ed25519 的受信钥匙（`rk-…`，进 `[[trust]]`）和 age 的磁盘解锁收件人
 （`age1…`，进 `[school].escrow_recipients`）。文字形式是 `MASTERSKIT1…`（bech32m），抄错一个字符、混写大小写都会被拒，
-不会悄悄变成另一把钥匙。`sign`、`heartbeat`、`register` 都可以用 `--kit <文件>` 代替 `--key`（`--kit -` 从标准输入的第一行读）。
-`--kit -` 要用管道或重定向喂进去（`--kit - < usb/school.kit`）：在终端里直接敲或粘贴，kit 会回显在屏幕上。
+不会悄悄变成另一把钥匙。钥匙码是 key id 的前 8 位十六进制，4-4 分组（`11d9-03eb`）。
 
-```bash
-# 离线生成：kit 写进 0600 的新文件（已存在就拒绝），终端只打印 key id、指纹与托管收件人，不打印 kit 本身
-$S kit new --out school.kit
-# 登记恢复钥匙与它的托管收件人（keys 范围）：kit 对本校新发的探针 nonce 签名绑定收件人；已登记过的两样都只提示、不报错，
-# 所以中途失败可以原样再跑一次
-$S register --server https://<slug>.os.khundavid.com --token-file keys.token --kit school.kit --label "IT 的 kit"
-# 签名、续签心跳：先核对这份 kit 是这一校登记过的恢复钥匙，不是就报
-# "this kit is not a registered recovery key of <主机>" 并退出 1
-$S sign --server https://<slug>.os.khundavid.com --token-file draft.token --kit school.kit
-# 读一台机器托管的 LUKS 恢复密钥：取回密文、在本机用 kit 解开（token 要 read + recovery，服务端每次都留审计）
-$S escrow-read --server https://<slug>.os.khundavid.com --token-file recovery.token --kit school.kit --device <device_id>
-```
-
-- **第一版（R1g）**：还没发布过时 `mastersos-sign sign` 没有链可验：它打印第一版自己的整份 trust，要 IT 逐把对照指纹、键入版本号 `1` 与 `trust`，
-  再用恢复钥匙签。**指纹要与自己手里的对照**（`keygen` / `register` 打印的恢复钥匙指纹、纸面备份，登记 passkey 时设备上显示的指纹），
-  不要与这台服务端的页面对照。签名的恢复钥匙必须登记过、而且在这一版的 trust 里；服务端也用这一版自己的 trust 验。签完 pin 在第 1 版。
-  本机已经有这台服务端的 pin 时，服务端却说什么都没发布过，`mastersos-sign` 拒绝签（可能是回滚或换了服务端），报出 pin 文件的路径；
+- **第一版（R1g）**：还没发布过时没有链可验：`publish` / `sign` 打印第一版自己的整份受信钥匙，要 IT 逐把对照钥匙码与指纹、键入版本号 `1`
+  与 `yes`（旧的 `trust` 也收），再用学校钥匙签。**要与自己手里的对照**（打印件、`kit new` / `register` 打印的），不要与这台服务端的页面对照。
+  签名的学校钥匙必须登记过、而且受信；服务端也用这一版自己的受信钥匙验。签完 pin 在第 1 版。
+  本机已经有这台服务端的 pin 时，服务端却说什么都没发布过，拒绝签（可能是回滚或换了服务端），报出 pin 文件的路径；
   确知服务端是有意重建的，才删掉那个文件。pin 只会沿着验过的链往前走：版本不升、或不是从磁盘上那个 pin 验过来的，一律不写。
-- **pin 与首次信任**：第一次对某台服务端用 `mastersos-sign` 时，本机还没有记录。它打印最新版 trust 里每把钥匙的指纹，
-  要求 IT 与钥匙页、种子开头的指纹对照后输入 `yes`，然后把 `(版本, trust)` 记进 `~/.config/mastersos-sign/<主机>.toml`（地址带端口时写成 `<主机>_<端口>.toml`）
-  （用 `--pin-dir` 可以改位置）。之后每一次都从这一版往下验，验过的最新版成为新的 pin。
-  pin 按 `--server` 解析后的「主机[:端口]」命名：主机名转小写、默认端口去掉，路径不算。同一台服务端换一种写法
-  （IP 与域名、别名主机名、显式写出非默认端口）会被当成另一台、重新走首次信任，所以每次都用同一个地址。
-  写 pin 时先对 `<pin>.lock` 加独占的 `flock`，在锁里比对磁盘上的 pin 再写：两个 `mastersos-sign` 同时对同一台服务端运行，
-  后到的那个比对不过就拒绝，不会互相覆盖。新 pin 先写进一个独占新建的临时文件、fsync、改名，再 fsync 目录。
-- 签名时要键入版本号确认。这一版改了 trust 时，还要再键入一行 `trust`。
-
-### 第一版与 trust 的变化
-
-1. 在网页登记 passkey，建议在不同设备上登记两把。用临时 `keys` token 经 `mastersos-sign register` 登记恢复钥匙，登记完删掉这个 token。
-2. 在本地目录的 `manifest.toml` 里把 `[[trust]]` 写成登记过的钥匙（`mastersos keys list` 可查），`mastersos init <目录>` → 编辑（`[[trust]]` 列出这把恢复钥匙）→ `mastersos publish --kit school.kit`（或 `--key rk.key`）：`base_version = 0` 时 `publish` 走 `mastersos_sign::sign_pending` 的第一版（R1g）分支，打印整份 trust，要 IT 对照指纹、键入版本号 `1` 与 `trust`，用恢复钥匙签并 commit（也可以单独用 `mastersos-sign sign --pending <id>`）。
-   发布第一版之前没有种子可下载（`GET /v1/admin/seed` 回 409 `no_published_version`）。
-3. 之后的日常发布照样用恢复钥匙包签（`mastersos publish --kit`，或签名页载入 kit）；登记过 passkey 的，也可以在签名页用它签。每次发布之后续签一次心跳。trust 的变化只能用恢复钥匙经 `mastersos-sign` 签。
+  发布第一版之前没有装机文件可下载（`GET /v1/admin/seed` 回 409 `no_published_version`）。
+- **pin 与首次信任**：第一次对某台服务端批准时，本机还没有记录。它打印最新版受信钥匙的指纹，要求 IT 与自己的打印件对照后输入 `yes`，
+  然后把 `(版本, trust)` 记进 `mastersos-sign` 的配置目录下的 `<主机>.toml`（地址带端口时写成 `<主机>_<端口>.toml`；`--pin-dir` 可以改位置）。
+  之后每一次都从这一版往下验，验过的最新版成为新的 pin。pin 按 `--server` 解析后的「主机[:端口]」命名：主机名转小写、默认端口去掉，
+  路径不算。同一台服务端换一种写法（IP 与域名、别名主机名、显式写出非默认端口）会被当成另一台、重新走首次信任，所以每次都用同一个地址。
+  写 pin 时先对 `<pin>.lock` 加独占锁，在锁里比对磁盘上的 pin 再写：两个进程同时对同一台服务端运行，后到的那个比对不过就拒绝。
+  新 pin 先写进一个独占新建的临时文件、fsync、改名，再 fsync 目录。
+- 批准时要键入版本号确认。这一版改了受信钥匙或磁盘解锁收件人时，先用白话说明哪些学校钥匙被接受、谁能解锁磁盘，再键入 `yes`。
 
 服务端守着这几条规则：
 
-- 第一版只收新 trust 里一把登记过的恢复钥匙的签名，并用新 trust 本身验（R1g）。「必须是恢复钥匙」这一半只由服务端与
-  `mastersos-sign` 守：机器只认种子里的 trust，分不出钥匙的种类，第一版由 trust 里的 passkey 签它也会收（这不多给任何能力：
-  同一把 passkey 本来就能签第二版）。
-- 新 trust 里的每把钥匙都必须在本服务端登记过（R2）。
-- 签名所用的钥匙必须还在新 trust 里（R5）。
-- trust 里至少要有一把恢复钥匙（R6）。
-- trust 变化不接受 passkey 签名（R7）。
+- 第一版只收新受信钥匙里一把登记过的学校钥匙的签名，并用新受信钥匙本身验（R1g）。
+- 新受信钥匙里的每把都必须在本服务端登记过（R2）。
+- 签名所用的钥匙必须还在新的受信钥匙里（R5）。
+- 受信钥匙里至少要有一把学校钥匙（R6）。
+- 受信钥匙的变化不接受旧 passkey 的签名（R7）。
 
 风险：
 
-- 所有 passkey 与恢复钥匙都丢失时，只能逐台重刷。
-- 新机器的种子是「首次信任」：服务器被攻破期间下载的种子，信任的是攻击者。种子开头的指纹用 `mastersos-sign seed-check` 核对。
-- 网页签名信任发出页面的服务器，见上一节。
+- 所有学校钥匙（文件与打印件）都丢失时，只能逐台重刷。
+- 新电脑的装机文件是「首次信任」：服务器被攻破期间下载的装机文件，信任的是攻击者。用 `mastersos-sign seed-check` 核对。
+- 网页批准信任发出页面的服务器，见上一节。
 
-### 心跳
+### 每月确认
 
-心跳是「第 v 版仍是最新，到 T 为止」的签名。下面任一条成立时，机器显示「设置可能过期」：
+每月确认（心跳）是「第 v 版仍是最新，到 T 为止」的签名。下面任一条成立时，电脑显示「设置可能过期」：
 
 - 7 天没联系上服务器。
-- 现在已经过了「接受这一版 + 7 天」与「心跳到期」两者中较晚的那个时刻。
+- 现在已经过了「接受这一版 + 7 天」与「每月确认到期」两者中较晚的那个时刻。
 
-心跳说有更新的版本、而机器立即重拉仍拿不到时，机器回报「有更新被扣住」。**心跳的有效期就是服务端扣住更新、
-而机器看不出来的最长时间。** 服务端从不自签心跳，由 IT 签，最长 31 天（按签发时刻算；机器容许签发时刻比本机快 1 天，所以从机器的角度看最多约 32 天）：用 `mastersos-sign heartbeat --kit <文件>`（签名页在只有 kit 时也给出这条命令），或者登记过 passkey 的，用网页的「用 passkey 续签」。
+每月确认说有更新的版本、而电脑立即重拉仍拿不到时，电脑回报「有更新被扣住」。**每月确认的有效期就是服务端扣住更新、
+而电脑看不出来的最长时间。** 服务端从不自签，由 IT 的学校钥匙签，最长 31 天（按签发时刻算；电脑容许签发时刻比本机快 1 天，所以从电脑的角度看最多约 32 天）：
+`mastersos publish --school-key` 每次发布都顺带签 30 天；长期没发布时，管理网站首页提醒，在签名页用学校钥匙文件完成。

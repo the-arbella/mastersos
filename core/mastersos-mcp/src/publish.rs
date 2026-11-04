@@ -4,7 +4,11 @@
 //! computer ([`mastersos_sign::sign_pending_expecting`]); without one, the signing page link is
 //! returned for IT to open and sign with the recovery kit (or a Passkey, where one is registered).
 //! Either way the content digest is computed here from what was uploaded and must equal the
-//! server's, and only that digest is signed.
+//! server's, and only that digest is signed. Its first 8 characters are the check code IT sees.
+//!
+//! After signing here, the monthly check-in (the heartbeat statement) for exactly the version and
+//! digest just published is signed too ([`mastersos_sign::checkin_after_publish`]); IT is told
+//! about it only when it fails, and the version stays published either way.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
@@ -72,10 +76,26 @@ pub struct SignOpts<'a> {
     pub pin_dir: &'a Path,
 }
 
+/// How long the check-in signed after a publish lasts.
+pub const CHECKIN_DAYS: i64 = 30;
+
+/// The monthly check-in signed after a publish here.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CheckIn {
+    /// Computers treat the version as current until then.
+    Until(DateTime<Utc>),
+    /// Not signed or not accepted: why (for `--json` only; people get one plain sentence).
+    Failed(String),
+}
+
+/// What people read when the check-in after a publish fails.
+pub const CHECKIN_FAILED_TEXT: &str =
+    "Computers may soon show \"settings may be out of date\". Open the admin site to fix it.";
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum PublishOutcome {
     /// Signed here and accepted: this is the new version, and the directory's base now is it.
-    Published(u64),
+    Published { version: u64, checkin: CheckIn },
     /// Uploaded, not signed: IT opens `url` and signs with the recovery kit (or a registered
     /// Passkey, except for the first version), then runs `mastersos pull`.
     NeedsSigning {
@@ -92,16 +112,16 @@ pub enum PublishOutcome {
 /// How many characters of the digest are printed: as many as the signing page shows.
 pub const DIGEST_SHOWN: usize = 8;
 
-/// The lines printed after a pending bundle is uploaded but not signed here.
-pub fn needs_signing_text(url: &str, pending_id: &str, version: u64, digest_hex: &str) -> String {
-    let short = &digest_hex[..digest_hex.len().min(DIGEST_SHOWN)];
-    let how = if version == 1 {
-        format!("Uploaded pending bundle {pending_id} (version 1, the first). Nothing is published yet: sign it with your recovery kit on this page:\n{url}")
-    } else {
-        format!("Uploaded pending bundle {pending_id} (version {version}). Nothing is published yet: IT signs it with the recovery kit on this page (a Passkey is optional, if one is registered):\n{url}")
-    };
+/// The check code: the first [`DIGEST_SHOWN`] characters of the content digest.
+pub fn check_code(digest_hex: &str) -> &str {
+    &digest_hex[..digest_hex.len().min(DIGEST_SHOWN)]
+}
+
+/// The lines printed after the settings are uploaded but not approved here.
+pub fn needs_signing_text(url: &str, digest_hex: &str) -> String {
+    let code = check_code(digest_hex);
     format!(
-        "{how}\nDigest, first {DIGEST_SHOWN} characters: {short}\nCheck that the signing page shows the same digest before you sign; if it differs, do not sign.\nAfter signing in the browser, run `mastersos pull` to update your base."
+        "Waiting for approval: open {url}\nCompare the check code on that page with {code}. If it differs, do not approve.\nAfter approving, run `mastersos pull` to bring this folder up to date."
     )
 }
 
@@ -319,9 +339,11 @@ async fn precheck_signer(
     if let Ok(m) = Manifest::parse(manifest_text) {
         if !m.trust.contains(&tk) {
             bail!(
-                "Not uploaded: the signing key {} is not in [[trust]] of {}. Devices accept only keys in trust, and a version cannot remove the key that signs it",
-                tk.id,
-                root.display()
+                "Not uploaded: {} is not among the trusted keys in {}. Computers accept only trusted keys, and a school key cannot approve its own removal",
+                mastersos_sign::key_line(&tk),
+                std::path::absolute(root.join("manifest.toml"))
+                    .unwrap_or_else(|_| root.join("manifest.toml"))
+                    .display()
             );
         }
     }
@@ -329,9 +351,45 @@ async fn precheck_signer(
     if let SignWith::Kit(_) = s.key {
         mastersos_sign::kit::ensure_registered(&api, &tk)
             .await
-            .context("Not uploaded: the recovery kit cannot sign for this school")?;
+            .context("Not uploaded: the school key cannot sign for this school")?;
     }
     Ok(api)
+}
+
+/// The line after the checks (errors would have stopped the publish): how many warnings are
+/// listed above it. Notes (info) are not problems.
+fn checked_line(local: &[Lint], server: &[Value]) -> String {
+    let warnings = local
+        .iter()
+        .filter(|l| l.level == LintLevel::Warning)
+        .count()
+        + server.iter().filter(|l| l["level"] == "warning").count();
+    match warnings {
+        0 => "Checked: no problems".to_owned(),
+        1 => "Checked: no errors, 1 warning (above)".to_owned(),
+        n => format!("Checked: no errors, {n} warnings (above)"),
+    }
+}
+
+/// The monthly check-in for version `version` with content digest `digest`, whose stamped
+/// manifest is `manifest_text` (its trusted keys are what computers check the check-in with).
+async fn checkin(
+    api: &mastersos_sign::Api,
+    key: &SignWith,
+    version: u64,
+    digest: &[u8; 32],
+    manifest_text: &str,
+) -> Result<DateTime<Utc>> {
+    let trust = Manifest::parse(manifest_text)?.trust;
+    mastersos_sign::checkin_after_publish(
+        api,
+        &key.signing(),
+        version,
+        digest,
+        &trust,
+        CHECKIN_DAYS,
+    )
+    .await
 }
 
 /// `allow_reroute` holds the secret names IT approved with `--allow-reroute`: every secret a
@@ -418,10 +476,11 @@ pub async fn publish(
     };
     // The digest is computed here over exactly what is uploaded: the server's must equal it, and
     // only this digest is signed (here) or shown to compare (on the signing page).
-    let local_digest = hex(&content_digest(&Contents {
+    let digest = content_digest(&Contents {
         manifest_text: stamped.clone(),
         files: files.clone(),
-    }));
+    });
+    let local_digest = hex(&digest);
     let body = json!({
         "manifest_text": stamped,
         "files": files.iter().map(|(p, b)| (p.clone(), STANDARD.encode(b))).collect::<BTreeMap<String, String>>(),
@@ -481,8 +540,9 @@ pub async fn publish(
         .eq_ignore_ascii_case(&local_digest)
     {
         bail!(
-            "the server reports digest {} for the upload, but its content has digest {local_digest} as computed here: the server does not hold what was uploaded. Nothing was signed; do not sign pending bundle {} on the signing page",
-            prepared.digest_hex.trim(),
+            "the server reports check code {} for the upload, but this computer computed {}: the server does not hold what was uploaded. Nothing was approved; do not approve upload {} on the signing page",
+            check_code(prepared.digest_hex.trim()),
+            check_code(&local_digest),
             prepared.pending_id
         );
     }
@@ -501,6 +561,8 @@ pub async fn publish(
         .map(|l| clean_lint(l, &snap.secrets))
         .collect();
     print_server_lints(out, &warnings)?;
+    writeln!(out, "{}", checked_line(&lints, &warnings))?;
+    writeln!(out, "Check code: {}", check_code(&local_digest))?;
     match (sign, sign_api) {
         (Some(s), Some(sign_api)) => {
             let v = mastersos_sign::sign_pending_expecting(
@@ -513,8 +575,24 @@ pub async fn publish(
                 out,
             )
             .await?;
-            w.mark_published(v, &stamped_refs)?;
-            Ok(PublishOutcome::Published(v))
+            // The version and digest just signed and committed, with that version's trust:
+            // nothing is fetched to decide what the check-in says. It goes before this folder's
+            // own bookkeeping, so a published version always gets its check-in.
+            let checkin = match checkin(&sign_api, s.key, v, &digest, &stamped).await {
+                Ok(until) => CheckIn::Until(until),
+                Err(e) => CheckIn::Failed(format!("{e:#}")),
+            };
+            if let Err(e) = w.mark_published(v, &stamped_refs) {
+                let also = match &checkin {
+                    CheckIn::Failed(_) => format!(" {CHECKIN_FAILED_TEXT}"),
+                    CheckIn::Until(_) => String::new(),
+                };
+                bail!("Published version {v}, but this folder could not record it: {e:#}.{also}");
+            }
+            Ok(PublishOutcome::Published {
+                version: v,
+                checkin,
+            })
         }
         _ => Ok(PublishOutcome::NeedsSigning {
             url: sign_link(&cfg, &meta.server, &prepared.pending_id),
@@ -770,7 +848,7 @@ mod tests {
             } else {
                 assert!(
                     stdout.contains("The local check:")
-                        && stdout.contains("Uploaded pending bundle p-1")
+                        && stdout.contains("Waiting for approval: open ")
                 );
                 assert!(stderr.is_empty(), "{stderr}");
             }
@@ -1006,48 +1084,58 @@ mod tests {
             .contains("version = 1"));
         let PublishOutcome::NeedsSigning {
             url,
-            pending_id,
             version,
             digest_hex,
+            ..
         } = got
         else {
             panic!("not uploaded for signing: {got:?}");
         };
         assert_eq!(version, 1);
         assert_eq!(digest_hex, digest_of(&up[0]));
-        let text = needs_signing_text(&url, &pending_id, version, &digest_hex);
+        let text = needs_signing_text(&url, &digest_hex);
         assert!(
-            text.contains("sign it with your recovery kit on this page"),
+            text.contains(&format!("Waiting for approval: open {url}\n")),
             "{text}"
         );
-        assert!(text.contains(&url), "{text}");
         assert!(text.contains(&digest_hex[..8]), "{text}");
         assert!(!text.contains(&digest_hex), "only 8 characters: {text}");
         assert_eq!(w.meta().unwrap().base_version, 0);
     }
 
     #[test]
-    fn later_versions_name_the_kit_first_and_the_digest() {
-        let text = needs_signing_text("https://sign.example/#x", "p-1", 5, "0123456789abcdef");
+    fn checked_line_says_no_problems_only_without_warnings() {
+        assert_eq!(checked_line(&[], &[]), "Checked: no problems");
+        let warn = Lint::new(LintLevel::Warning, "no_admins", "x");
+        assert_eq!(
+            checked_line(std::slice::from_ref(&warn), &[]),
+            "Checked: no errors, 1 warning (above)"
+        );
+        let server = vec![json!({ "level": "warning" }), json!({ "level": "info" })];
+        assert_eq!(
+            checked_line(std::slice::from_ref(&warn), &server),
+            "Checked: no errors, 2 warnings (above)"
+        );
+        let info = Lint::new(LintLevel::Info, "note", "x");
+        assert_eq!(checked_line(&[info], &[]), "Checked: no problems");
+    }
+
+    #[test]
+    fn waiting_text_gives_the_link_and_the_check_code() {
+        let text = needs_signing_text("https://sign.example/#x", "0123456789abcdef");
         assert!(
-            text.contains("IT signs it with the recovery kit on this page"),
+            text.starts_with("Waiting for approval: open https://sign.example/#x\n"),
             "{text}"
         );
         assert!(
-            text.contains(
-                "(a Passkey is optional, if one is registered):\nhttps://sign.example/#x"
-            ),
-            "{text}"
-        );
-        assert!(
-            text.contains("Digest, first 8 characters: 01234567\n"),
-            "{text}"
-        );
-        assert!(
-            text.contains("signing page shows the same digest"),
+            text.contains("Compare the check code on that page with 01234567."),
             "{text}"
         );
         assert!(text.contains("mastersos pull"), "{text}");
+        let lower = text.to_lowercase();
+        for w in ["digest", "kit", "pending", "passkey"] {
+            assert!(!lower.contains(w), "{w}: {text}");
+        }
     }
 
     #[tokio::test]
@@ -1066,7 +1154,7 @@ mod tests {
         let w = workdir(&t.path().join("school"));
         let err = run(&s, &w).await.unwrap_err().to_string();
         assert!(err.contains("does not hold what was uploaded"), "{err}");
-        assert!(err.contains("do not sign pending bundle p-1"), "{err}");
+        assert!(err.contains("do not approve upload p-1"), "{err}");
         assert!(Workdir::uploaded_unchanged(&w.root).unwrap().is_none());
         assert_eq!(w.meta().unwrap().base_version, 4);
     }
@@ -1136,7 +1224,7 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(
-            err.contains("the server holds other content under this pending id"),
+            err.contains("the server holds other content under this upload id"),
             "{err}"
         );
         assert!(!s
@@ -1384,7 +1472,10 @@ mod tests {
         let kit = SignWith::kit_file(&kit_path).unwrap();
         // The version number, then `trust`: the first version adds every key of its trust.
         let (r, out) = publish_with_kit(&s, &w, kit, t.path(), "1\ntrust\n").await;
-        assert_eq!(r.unwrap(), PublishOutcome::Published(1), "{out}");
+        assert!(
+            matches!(r.unwrap(), PublishOutcome::Published { version: 1, .. }),
+            "{out}"
+        );
         assert_eq!(w.meta().unwrap().base_version, 1);
         // The new base is the published version as signed: it matches the pin the signing just
         // recorded, and the directory (unchanged since the upload) carries the stamp too.
@@ -1450,7 +1541,10 @@ mod tests {
         .unwrap();
         let key = SignWith::key_file(&key).unwrap();
         let (r, out) = publish_with_kit(&s, &w, key, t.path(), "1\ntrust\n").await;
-        assert_eq!(r.unwrap(), PublishOutcome::Published(1), "{out}");
+        assert!(
+            matches!(r.unwrap(), PublishOutcome::Published { version: 1, .. }),
+            "{out}"
+        );
         let w = w.with_pins(t.path().join("pins"));
         w.verify_base().unwrap();
         assert!(!w.is_dirty().unwrap());
@@ -1472,7 +1566,7 @@ mod tests {
         let (r, _) = publish_with_kit(&s, &w, kit, t.path(), "").await;
         let err = format!("{:#}", r.unwrap_err());
         assert!(err.starts_with("Not uploaded"), "{err}");
-        assert!(err.contains("not a registered recovery key"), "{err}");
+        assert!(err.contains("not registered with"), "{err}");
         assert!(uploads(&s).await.is_empty());
     }
 
@@ -1496,26 +1590,32 @@ mod tests {
         let kit = SignWith::kit_file(&kit_path).unwrap();
         let (r, _) = publish_with_kit(&s, &w, kit, t.path(), "").await;
         let err = r.unwrap_err().to_string();
-        assert!(err.contains("is not in [[trust]]"), "{err}");
+        assert!(err.contains("is not among the trusted keys in"), "{err}");
         assert!(uploads(&s).await.is_empty());
     }
 
+    /// Spec §5.3: a school key file others can read (a FAT32 or exFAT USB stick) still loads,
+    /// with a note; a PKCS#8 key file stays strict.
     #[cfg(unix)]
     #[test]
-    fn loose_kit_file_is_refused_like_a_key_file() {
+    fn loose_kit_file_loads_but_loose_key_file_is_refused() {
         use std::os::unix::fs::PermissionsExt;
         let t = tempfile::tempdir().unwrap();
-        let (kit, _) = kit_file(t.path());
+        let (kit, expected) = kit_file(t.path());
         let key = t.path().join("rk.pem");
         mastersos_sign::keygen(&key).unwrap();
         for p in [&kit, &key] {
-            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o644)).unwrap();
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o777)).unwrap();
         }
-        let kit_err = format!("{:#}", SignWith::kit_file(&kit).err().unwrap());
+        let SignWith::Kit(loaded) = SignWith::kit_file(&kit).unwrap() else {
+            unreachable!()
+        };
+        assert_eq!(loaded.key_id(), expected.key_id());
         let key_err = format!("{:#}", SignWith::key_file(&key).err().unwrap());
-        for e in [&kit_err, &key_err] {
-            assert!(e.contains("has mode 644") && e.contains("chmod 600"), "{e}");
-        }
+        assert!(
+            key_err.contains("has mode 777") && key_err.contains("chmod 600"),
+            "{key_err}"
+        );
         // Not a kit at all.
         let junk = t.path().join("junk");
         std::fs::write(&junk, "hello").unwrap();

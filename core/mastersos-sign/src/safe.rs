@@ -81,7 +81,7 @@ pub fn field(s: &str) -> String {
     let mut out = String::new();
     escape_into(&mut out, head, false, true);
     if let Some(n) = total {
-        out.push_str(&format!("…（截断，共 {n} 字符）"));
+        out.push_str(&format!("... (cut; {n} characters)"));
     }
     out
 }
@@ -117,7 +117,7 @@ fn lines(s: &str, escape: bool) -> String {
             out.push_str(head);
         }
         if let Some(n) = total {
-            out.push_str(&format!("…（本行截断，共 {n} 字符）"));
+            out.push_str(&format!("... (line cut; {n} characters)"));
         }
     }
     out
@@ -270,11 +270,14 @@ mod tests {
         let long = "x".repeat(FIELD_MAX + 50);
         let f = field(&long);
         assert!(f.starts_with(&"x".repeat(FIELD_MAX)));
-        assert!(f.contains(&format!("共 {} 字符", FIELD_MAX + 50)), "{f}");
+        assert!(
+            f.contains(&format!("(cut; {} characters)", FIELD_MAX + 50)),
+            "{f}"
+        );
         let t = text(&format!("short\n{}\nend", "y".repeat(LINE_MAX + 1)));
         assert!(t.starts_with("short\n"));
         assert!(t.ends_with("\nend"), "{t}");
-        assert!(t.contains("本行截断"));
+        assert!(t.contains("(line cut; "));
     }
 
     #[test]

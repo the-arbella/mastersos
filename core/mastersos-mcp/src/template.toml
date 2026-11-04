@@ -12,3 +12,8 @@ login_methods = ["local"]
 id = "default"
 name = "Ungrouped"
 config = "default"
+
+# Trusted keys: computers accept new settings only when one of these school keys approved them.
+# `mastersos init` fills them in from the school key files, with each key's disk-unlocking
+# recipient under [school].escrow_recipients. Change them with `mastersos keys add <FILE>` and
+# `mastersos keys remove <KEY CODE>`, then publish with a school key that is already trusted.

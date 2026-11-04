@@ -30,17 +30,18 @@ The settings file can also carry files (`files/…`, such as wallpapers or icons
 ### Edit, check, Publish
 
 1. The settings are a **local directory** that IT keeps: `mastersos pull <dir>` downloads the latest
-   published Version into it (`mastersos init <dir>` starts one for a new school). You (or an AI
-   assistant) edit `manifest.toml` there, and add files under `files/`. The server holds no draft.
+   published Version into it (`mastersos init <dir> --school-key <file>` starts one for a new school and
+   writes the trusted keys from the school key files). You (or an AI assistant) edit `manifest.toml` there, and
+   add files under `files/`. The server holds no draft.
 2. `mastersos check` **checks** the directory on your computer and lists its **Issues**. An Issue has a level:
    - **error**: blocks Publish;
    - **warning**: shown, does not block (`secret_rerouted` blocks until IT approves it);
    - **info**: reports the current state (for example a Chrome update pause), not a problem.
 3. When there are no errors, `mastersos publish` builds the next **Version** from the directory (it puts the
-   secrets in) and uploads it; IT signs it with the **Recovery kit**, on the computer
-   (`--kit <file>`) or on the signing page (a **Passkey** there is optional). Devices accept only Versions signed by a key in
-   **trust**, and only Versions newer than the one they have. Afterwards `mastersos pull` takes the published
-   Version as the new base.
+   secrets in) and uploads it; IT approves it with a **school key**, on the computer
+   (`mastersos publish --school-key <file>`) or on the signing page. Devices accept only Versions signed by one of
+   the **trusted keys** (`[[trust]]`), and only Versions newer than the one they have. Afterwards `mastersos pull`
+   takes the published Version as the new base.
 
 Some keys are written for you; do not write them by hand:
 
@@ -48,9 +49,9 @@ Some keys are written for you; do not write them by hand:
 |---|---|
 | `format` | `mastersos init` / `pull` (the lowest the text needs); leave it as it is |
 | `version`, `issued_at` | `mastersos publish`, when it builds the Version |
-| `[[trust]]` | you, from `mastersos keys list` (registered signing keys); IT changes it and signs with a recovery key |
+| `[[trust]]` | `mastersos init` / `mastersos keys add` / `mastersos keys remove`, from the school key files IT holds; never by hand |
 | `[school] id` | `mastersos init` / `pull`: the school's id; do not change it |
-| `[school] escrow_recipients` | the signing page, when recovery-kit escrow is set up |
+| `[school] escrow_recipients` | `mastersos init` / `keys add` / `keys remove`, with `[[trust]]` (disk unlocking) |
 | `[school] name` | `mastersos publish`, from the school's name |
 | `[school] logo_sha256`, `logo_icon_sha256` | IT, pasted from the output of `mastersos logo upload` |
 | `it_account` `password_hash` | a `secret:` reference; IT puts the hash (`mastersos hash-password`) in `secrets.toml` |
@@ -1817,8 +1818,8 @@ a binding signature of a Recovery kit key in this trust.
 **Why:** Devices would encrypt their disk recovery keys to a key the school never proved it holds.
 <!-- /prompt:omit -->
 
-**How to fix:** register the recipient with the Recovery kit it belongs to (signing page, or
-`mastersos-sign register --kit`), or remove it. Needs the school's registered keys, so there is no
+**How to fix:** register the school key it belongs to (signing page, or
+`mastersos-sign register --school-key`), or remove it with `mastersos keys remove`. Needs the school's registered keys, so there is no
 standalone example.
 
 ### `escrow_recipients_invalid`

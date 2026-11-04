@@ -7,14 +7,16 @@
 //!   由 nonce 按 `keyid::keyprobe_message` 自己拼，绝不签服务端给的 `message_b64`。
 //! - 私钥文件 0600、不覆盖已有文件，私钥不打印到终端、不进日志。
 //! - 服务端给的字符串一律经 [`safe`] 转义后才打印：控制序列藏不了行、伪造不了行。
-#![forbid(unsafe_code)]
+// Unsafe code only in `platform`, for the Windows API calls.
+#![cfg_attr(not(windows), forbid(unsafe_code))]
+#![cfg_attr(windows, deny(unsafe_code))]
 
 pub mod chain;
 pub mod kit;
+pub mod platform;
 pub mod safe;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::OpenOptions;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
@@ -101,9 +103,9 @@ pub fn pin_name_for(server: &str) -> Result<String> {
 impl Api {
     pub fn new(server: &str, token: String) -> Result<Api> {
         let base = reqwest::Url::parse(server)
-            .with_context(|| format!("服务器地址不是合法的 URL：{server}"))?;
+            .with_context(|| format!("The server address is not a valid URL: {server}"))?;
         if !matches!(base.scheme(), "http" | "https") || base.host_str().is_none() {
-            bail!("服务器地址要是 https://主机[:端口]：{server}");
+            bail!("The server address must be https://host[:port]: {server}");
         }
         // http 会把 token 明文送上网络；只有本机回环（测试、本机演示）可以。
         let host = base.host_str().unwrap_or_default();
@@ -114,11 +116,11 @@ impl Api {
                 .parse::<std::net::IpAddr>()
                 .is_ok_and(|ip| ip.is_loopback());
         if base.scheme() == "http" && !loopback {
-            bail!("服务器地址必须是 https://（http 只允许 localhost / 127.0.0.1 / ::1）：{server}");
+            bail!("The server address must be https:// (http is only allowed for localhost / 127.0.0.1 / ::1): {server}");
         }
         let token = token.trim().to_owned();
         if token.is_empty() {
-            bail!("token 为空");
+            bail!("The token is empty");
         }
         Ok(Api {
             base,
@@ -130,7 +132,7 @@ impl Api {
     /// token 从文件读（去掉首尾空白）。
     pub fn from_token_file(server: &str, token_file: &Path) -> Result<Api> {
         let token = std::fs::read_to_string(token_file)
-            .with_context(|| format!("读 token 文件 {} 失败", token_file.display()))?;
+            .with_context(|| format!("Could not read the token file {}", token_file.display()))?;
         Api::new(server, token)
     }
 
@@ -147,7 +149,7 @@ impl Api {
     fn url(&self, segments: &[&str]) -> reqwest::Url {
         let mut u = self.base.clone();
         {
-            let mut p = u.path_segments_mut().expect("http(s) 的 URL 都有路径");
+            let mut p = u.path_segments_mut().expect("an http(s) URL has a path");
             p.pop_if_empty();
             for s in segments {
                 p.push(s);
@@ -162,7 +164,7 @@ impl Api {
             .bearer_auth(&self.token)
             .send()
             .await
-            .with_context(|| format!("{what}：连不上服务端"))?;
+            .with_context(|| format!("{what}: cannot reach the server"))?;
         let status = res.status();
         if status.is_success() {
             return Ok(res);
@@ -178,7 +180,7 @@ impl Api {
             .and_then(|j| {
                 let e = &j["error"];
                 Some(format!(
-                    "{}（{}）",
+                    "{} ({})",
                     safe::field(e["message"].as_str()?),
                     safe::field(e["code"].as_str().unwrap_or(""))
                 ))
@@ -187,7 +189,7 @@ impl Api {
         Err(ServerError {
             status: status.as_u16(),
             code,
-            text: format!("{what}：服务端回 {status}：{detail}"),
+            text: format!("{what}: the server answered {status}: {detail}"),
         }
         .into())
     }
@@ -196,7 +198,7 @@ impl Api {
         let res = self.send(self.client.get(self.url(segments)), what).await?;
         res.json()
             .await
-            .with_context(|| format!("{what}：响应不是预期的 JSON"))
+            .with_context(|| format!("{what}: the response is not the expected JSON"))
     }
 
     async fn post_json<T: DeserializeOwned>(
@@ -212,7 +214,7 @@ impl Api {
         let res = self.send(req, what).await?;
         res.json()
             .await
-            .with_context(|| format!("{what}：响应不是预期的 JSON"))
+            .with_context(|| format!("{what}: the response is not the expected JSON"))
     }
 
     async fn get_bytes(&self, segments: &[&str], what: &str) -> Result<Vec<u8>> {
@@ -220,7 +222,7 @@ impl Api {
         Ok(res
             .bytes()
             .await
-            .with_context(|| format!("{what}：读响应失败"))?
+            .with_context(|| format!("{what}: could not read the response"))?
             .to_vec())
     }
 
@@ -238,7 +240,7 @@ impl Api {
             version: u64,
         }
         let vs: Vec<V> = self
-            .get_json(&["v1", "admin", "versions"], "取版本列表")
+            .get_json(&["v1", "admin", "versions"], "list versions")
             .await?;
         Ok(vs.iter().map(|v| v.version).max().unwrap_or(0))
     }
@@ -248,7 +250,7 @@ impl Api {
         let vs = v.to_string();
         self.get_bytes(
             &["v1", "admin", "versions", &vs, "archive"],
-            &format!("取第 {v} 版的包"),
+            &format!("fetch the package of version {v}"),
         )
         .await
     }
@@ -285,32 +287,17 @@ fn key_from_pkcs8(pkcs8: &[u8]) -> Result<(Ed25519Signer, TrustKey)> {
     let probe = Ed25519Signer::from_pkcs8("", pkcs8)?;
     let raw = STANDARD
         .decode(probe.trust_key().public_key)
-        .expect("trust_key 的公钥是本库编的 base64");
+        .expect("the trust key public key is base64 made by this crate");
     let id = keyid::recovery_key_id(&raw);
     let signer = Ed25519Signer::from_pkcs8(&id, pkcs8)?;
     let tk = signer.trust_key();
     Ok((signer, tk))
 }
 
-/// 以 0600 新建文件写入私钥材料；文件已存在就拒绝。
+/// Write private key material to a new owner-only file ([`platform::create_private`]); an
+/// existing file is refused.
 fn write_secret(path: &Path, data: &[u8]) -> Result<()> {
-    let mut opts = OpenOptions::new();
-    opts.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    let mut f = opts.open(path).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::AlreadyExists {
-            anyhow!(
-                "{} already exists; refusing to overwrite it",
-                path.display()
-            )
-        } else {
-            anyhow!("cannot create {}: {e}", path.display())
-        }
-    })?;
+    let mut f = platform::create_private(path)?;
     let written = f.write_all(data).and_then(|()| f.sync_all());
     if let Err(e) = written {
         drop(f);
@@ -329,7 +316,7 @@ fn pem(pkcs8: &[u8]) -> String {
     let b64 = STANDARD.encode(pkcs8);
     let mut s = format!("{PEM_BEGIN}\n");
     for chunk in b64.as_bytes().chunks(64) {
-        s.push_str(std::str::from_utf8(chunk).expect("base64 是 ASCII"));
+        s.push_str(std::str::from_utf8(chunk).expect("base64 is ASCII"));
         s.push('\n');
     }
     s.push_str(PEM_END);
@@ -337,44 +324,13 @@ fn pem(pkcs8: &[u8]) -> String {
     s
 }
 
-/// Open a private key or kit file once, so the owner and mode checked are those of the file
-/// read. On unix it must belong to the current user and not be readable or writable by group or
-/// others, so another account can neither read nor swap it.
-pub(crate) fn open_private(path: &Path) -> Result<std::fs::File> {
-    let f = std::fs::File::open(path)
-        .with_context(|| format!("cannot open the key file {}", path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt as _;
-        let meta = f
-            .metadata()
-            .with_context(|| format!("cannot read the metadata of {}", path.display()))?;
-        let me = nix::unistd::getuid().as_raw();
-        if meta.uid() != me {
-            bail!(
-                "the key file {} belongs to uid {}, not to the current user (uid {me})",
-                path.display(),
-                meta.uid()
-            );
-        }
-        if meta.mode() & 0o077 != 0 {
-            bail!(
-                "the key file {} has mode {:o}, other accounts can read or write it: chmod 600 it first",
-                path.display(),
-                meta.mode() & 0o777
-            );
-        }
-    }
-    Ok(f)
-}
-
-/// 读钥匙文件（PEM 或裸 DER 的 PKCS#8），属主与权限见 [`open_private`]。
+/// 读钥匙文件（PEM 或裸 DER 的 PKCS#8），属主与权限见 [`platform::check_private`]。
 pub fn load_key(path: &Path) -> Result<(Ed25519Signer, TrustKey)> {
     use std::io::Read as _;
-    let mut f = open_private(path)?;
+    let mut f = platform::open_private(path)?;
     let mut data = Vec::new();
     f.read_to_end(&mut data)
-        .with_context(|| format!("读钥匙文件 {} 失败", path.display()))?;
+        .with_context(|| format!("Could not read the key file {}", path.display()))?;
     let der = match std::str::from_utf8(&data) {
         Ok(text) if text.trim_start().starts_with(PEM_BEGIN) => {
             let body: String = text
@@ -387,38 +343,39 @@ pub fn load_key(path: &Path) -> Result<(Ed25519Signer, TrustKey)> {
                 .collect();
             STANDARD
                 .decode(body)
-                .with_context(|| format!("{} 不是合法的 PEM", path.display()))?
+                .with_context(|| format!("{} is not a valid PEM file", path.display()))?
         }
         _ => data,
     };
-    key_from_pkcs8(&der).with_context(|| format!("{} 不是 Ed25519 的 PKCS#8 私钥", path.display()))
+    key_from_pkcs8(&der)
+        .with_context(|| format!("{} is not an Ed25519 PKCS#8 private key", path.display()))
 }
 
 fn paper(tk: &TrustKey, pkcs8: &[u8], date: &str) -> String {
     let b64 = STANDARD.encode(pkcs8);
     let mut s = String::new();
-    s.push_str("MastersOS 恢复钥匙 · 纸面备份\n");
+    s.push_str("MastersOS school key - paper copy\n");
     s.push_str("==========================\n");
-    s.push_str(&format!("生成日期：{date}\n"));
-    s.push_str(&format!("key id：{}\n", tk.id));
-    s.push_str(&format!("指纹：{}\n", trust_fingerprint(tk)));
-    s.push_str(&format!("公钥：{}\n\n", tk.public_key));
-    s.push_str("私钥（PKCS#8，base64；4 字符一组，每行 48 字符）：\n");
+    s.push_str(&format!("Created: {date}\n"));
+    s.push_str(&format!("key id: {}\n", tk.id));
+    s.push_str(&format!("Fingerprint: {}\n", trust_fingerprint(tk)));
+    s.push_str(&format!("Public key: {}\n\n", tk.public_key));
+    s.push_str("Private key (PKCS#8, base64; groups of 4 characters, 48 per line):\n");
     s.push_str(PAPER_BEGIN);
     s.push('\n');
     for line in b64.as_bytes().chunks(PAPER_LINE) {
         let groups: Vec<&str> = line
             .chunks(PAPER_GROUP)
-            .map(|g| std::str::from_utf8(g).expect("base64 是 ASCII"))
+            .map(|g| std::str::from_utf8(g).expect("base64 is ASCII"))
             .collect();
         s.push_str(&groups.join(" "));
         s.push('\n');
     }
     s.push_str(PAPER_END);
-    s.push_str("\n\n恢复步骤：\n");
-    s.push_str("1. 在可信的电脑上把上面 BEGIN 到 END 的几行（连同这两行）照抄进一个文本文件，空格与换行无所谓。\n");
-    s.push_str("2. 运行 mastersos-sign restore-from-paper --paper <文本文件> --out <钥匙文件>，核对打印的 key id 与指纹和本页一致。\n");
-    s.push_str("3. 签完立即删除钥匙文件与文本文件，本页锁回柜子。\n");
+    s.push_str("\n\nHow to restore:\n");
+    s.push_str("1. On a trusted computer, copy the lines from BEGIN to END above (including those two lines) into a text file. Spaces and line breaks do not matter.\n");
+    s.push_str("2. Run mastersos-sign restore-from-paper --paper <text file> --out <key file> and check that the printed key id and fingerprint match this page.\n");
+    s.push_str("3. After signing, delete the key file and the text file at once and lock this page away.\n");
     s
 }
 
@@ -446,22 +403,25 @@ pub fn restore_from_paper(paper_text: &str, out: &Path) -> Result<TrustKey> {
             let len = lines[start..]
                 .iter()
                 .position(|l| *l == end)
-                .ok_or_else(|| anyhow!("纸面备份里有 {PAPER_BEGIN} 却没有 {PAPER_END}"))?;
+                .ok_or_else(|| anyhow!("The paper copy has {PAPER_BEGIN} but no {PAPER_END}"))?;
             lines[start + 1..start + len].concat()
         }
         None => lines.concat(),
     };
-    let pkcs8 = STANDARD
-        .decode(&body)
-        .context("私钥部分不是合法的 base64：检查是否抄错（0/O、1/l/I）")?;
-    let (_, tk) =
-        key_from_pkcs8(&pkcs8).context("私钥部分不是合法的 Ed25519 PKCS#8：检查是否抄错")?;
-    let written_id = lines
-        .iter()
-        .find_map(|l| l.strip_prefix("keyid：").map(str::to_owned));
+    let pkcs8 = STANDARD.decode(&body).context(
+        "The private key part is not valid base64: check for copying mistakes (0/O, 1/l/I)",
+    )?;
+    let (_, tk) = key_from_pkcs8(&pkcs8).context(
+        "The private key part is not a valid Ed25519 PKCS#8 key: check for copying mistakes",
+    )?;
+    let written_id = lines.iter().find_map(|l| {
+        l.strip_prefix("keyid:")
+            .or_else(|| l.strip_prefix("keyid："))
+            .map(str::to_owned)
+    });
     if let Some(id) = written_id {
         if id != tk.id {
-            bail!("还原出的钥匙是 {}，纸上写的是 {id}：私钥部分有抄错", tk.id);
+            bail!("The restored key is {}, but the paper says {id}: the private key part was copied wrongly", tk.id);
         }
     }
     write_secret(out, pem(&pkcs8).as_bytes())?;
@@ -530,14 +490,17 @@ pub async fn register(api: &Api, key: impl Into<SigningKey<'_>>, label: &str) ->
         .post_json(
             &["v1", "admin", "signing-keys", "probe"],
             None,
-            "要登记探针",
+            "get the registration probe",
         )
         .await?;
     let nonce = STANDARD
         .decode(&probe.nonce_b64)
-        .context("探针的 nonce 不是合法的 base64")?;
+        .context("The probe nonce is not valid base64")?;
     if nonce.len() != 32 {
-        bail!("探针的 nonce 应为 32 字节，服务端给了 {} 字节", nonce.len());
+        bail!(
+            "The probe nonce should be 32 bytes, the server gave {}",
+            nonce.len()
+        );
     }
     let msg = keyid::keyprobe_message(&nonce);
     let signature = SignatureFile {
@@ -560,11 +523,15 @@ pub async fn register(api: &Api, key: impl Into<SigningKey<'_>>, label: &str) ->
         "signature": signature,
     });
     let r: Registered = api
-        .post_json(&["v1", "admin", "signing-keys"], Some(&body), "登记钥匙")
+        .post_json(
+            &["v1", "admin", "signing-keys"],
+            Some(&body),
+            "register the key",
+        )
         .await?;
     if r.key_id != tk.id {
         bail!(
-            "服务端登记的 key_id 是 {}，本地按公钥算出的是 {}：不一致",
+            "The server registered key_id {}, but the public key gives {} here: they differ",
             safe::field(&r.key_id),
             tk.id
         );
@@ -572,7 +539,7 @@ pub async fn register(api: &Api, key: impl Into<SigningKey<'_>>, label: &str) ->
     let fp = trust_fingerprint(&tk);
     if r.fingerprint != fp {
         bail!(
-            "服务端给的指纹是 {}，本地算出的是 {fp}：不一致",
+            "The server gave fingerprint {}, but this computer computed {fp}: they differ",
             safe::field(&r.fingerprint)
         );
     }
@@ -585,14 +552,19 @@ pub(crate) fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
+/// One trusted key for people: the school key's key code (or the id of another kind of key), its
+/// full fingerprint, and the site a passkey belongs to.
 pub fn key_line(k: &TrustKey) -> String {
-    format!(
-        "{}  {}  {}  rp_id={}",
-        safe::field(&k.id),
-        k.alg.as_str(),
-        trust_fingerprint(k),
-        k.rp_id.as_deref().map_or("-".to_owned(), safe::field)
-    )
+    let name = match mastersos_bundle::keyid::key_code(&k.id) {
+        Some(code) => format!("school key {code}"),
+        None => format!("key {}", safe::field(&k.id)),
+    };
+    let site = k
+        .rp_id
+        .as_deref()
+        .map(|r| format!("  (passkey for {})", safe::field(r)))
+        .unwrap_or_default();
+    format!("{name}  fingerprint {}{site}", trust_fingerprint(k))
 }
 
 pub(crate) fn print_trust(out: &mut dyn Write, trust: &[TrustKey]) -> Result<()> {
@@ -640,14 +612,14 @@ impl<'a> TrustDelta<'a> {
 
     pub fn print(&self, out: &mut dyn Write) -> Result<()> {
         for k in &self.added {
-            writeln!(out, "    + 新增  {}", key_line(k))?;
+            writeln!(out, "    + added    {}", key_line(k))?;
         }
         for k in &self.removed {
-            writeln!(out, "    - 移除  {}", key_line(k))?;
+            writeln!(out, "    - removed  {}", key_line(k))?;
         }
         for (o, n) in &self.modified {
-            writeln!(out, "    ~ 改动  {}", key_line(o))?;
-            writeln!(out, "         →  {}", key_line(n))?;
+            writeln!(out, "    ~ changed  {}", key_line(o))?;
+            writeln!(out, "           ->  {}", key_line(n))?;
         }
         Ok(())
     }
@@ -659,7 +631,7 @@ pub(crate) fn ask(confirm: &mut dyn BufRead, out: &mut dyn Write, prompt: &str) 
     out.flush()?;
     let mut line = String::new();
     if confirm.read_line(&mut line)? == 0 {
-        bail!("没有读到输入，已取消");
+        bail!("No input was read; cancelled");
     }
     Ok(line.trim().to_owned())
 }
@@ -699,10 +671,10 @@ fn print_local_diff(
 ) -> Result<SecretValues> {
     use mastersos_bundle::secret_ref::split;
     let old_v = format!("v{}", old.version);
-    let new_v = format!("v{new_version}（待签）");
+    let new_v = format!("v{new_version} (waiting for approval)");
     writeln!(
         out,
-        "\n== 本地算出的差异（第 {} 版 → 第 {new_version} 版）==",
+        "\n== Differences computed on this computer (version {} -> version {new_version}) ==",
         old.version
     )?;
     let mut values = None;
@@ -720,9 +692,9 @@ fn print_local_diff(
                 .header(&old_v, &new_v)
                 .to_string();
             if text.is_empty() {
-                writeln!(out, "manifest.toml：没有变化")?;
+                writeln!(out, "manifest.toml: no changes")?;
             } else {
-                writeln!(out, "manifest.toml：")?;
+                writeln!(out, "manifest.toml:")?;
                 write!(out, "{}", safe::cap_lines(&text))?;
             }
             let names: BTreeSet<&String> = old_secrets.keys().chain(new_secrets.keys()).collect();
@@ -745,7 +717,7 @@ fn print_local_diff(
             values = Some(v);
         }
         _ if old.contents.manifest_text == new.manifest_text => {
-            writeln!(out, "manifest.toml：没有变化")?;
+            writeln!(out, "manifest.toml: no changes")?;
         }
         _ => writeln!(
             out,
@@ -760,13 +732,13 @@ fn print_local_diff(
         match of.get(path) {
             None => writeln!(
                 out,
-                "  + 新增文件 {p}（{} 字节，sha256 {}…）",
+                "  + added file {p} ({} bytes, sha256 {}...)",
                 b.len(),
                 short(b)
             )?,
             Some(o) if o != b => writeln!(
                 out,
-                "  ~ 改动文件 {p}（{} → {} 字节，sha256 {}… → {}…）",
+                "  ~ changed file {p} ({} -> {} bytes, sha256 {}... -> {}...)",
                 o.len(),
                 b.len(),
                 short(o),
@@ -780,7 +752,7 @@ fn print_local_diff(
         if !nf.contains_key(path) {
             writeln!(
                 out,
-                "  - 删除文件 {}（{} 字节）",
+                "  - removed file {} ({} bytes)",
                 safe::field(path),
                 b.len()
             )?;
@@ -788,7 +760,7 @@ fn print_local_diff(
         }
     }
     if !any {
-        writeln!(out, "文件：没有变化")?;
+        writeln!(out, "Files: no changes")?;
     }
     Ok(values)
 }
@@ -803,7 +775,7 @@ fn hide_values(s: &str, values: &[String]) -> String {
 fn print_server_notes(out: &mut dyn Write, p: &Pending, secrets: &SecretValues) -> Result<()> {
     writeln!(
         out,
-        "\n== 服务端说明（仅供参考：不是将要签名的内容，以上面本地算出的为准）=="
+        "\n== The server's notes (for information only; go by the differences computed on this computer above) =="
     )?;
     // The server's `manifest_diff` is not printed: it holds the real secret values, and a
     // multi-line or escaped one cannot be hidden reliably in its text. The local diff above
@@ -814,7 +786,7 @@ fn print_server_notes(out: &mut dyn Write, p: &Pending, secrets: &SecretValues) 
             for l in ls {
                 writeln!(
                     out,
-                    "  [{}] {}：{}",
+                    "  [{}] {}: {}",
                     safe::field(l["level"].as_str().unwrap_or("?")),
                     safe::field(l["code"].as_str().unwrap_or("?")),
                     safe::field(
@@ -824,7 +796,7 @@ fn print_server_notes(out: &mut dyn Write, p: &Pending, secrets: &SecretValues) 
                 )?;
             }
         }
-        _ => writeln!(out, "  （没有 lint）")?,
+        _ => writeln!(out, "  (no warnings)")?,
     }
     Ok(())
 }
@@ -862,7 +834,7 @@ pub async fn sign_pending_expecting(
     let p: Pending = api
         .get_json(
             &["v1", "admin", "publish", "pending", pending],
-            "取待发布内容",
+            "fetch the upload",
         )
         .await?;
 
@@ -870,14 +842,17 @@ pub async fn sign_pending_expecting(
     let mut files = BTreeMap::new();
     for f in &p.files {
         check_member_path(&f.path)
-            .with_context(|| format!("待发布内容里有不安全的路径：{}", safe::field(&f.path)))?;
+            .with_context(|| format!("The upload has an unsafe path: {}", safe::field(&f.path)))?;
         let mut segs = vec!["v1", "admin", "publish", "pending", &p.pending_id, "files"];
         segs.extend(f.path.split('/'));
         let bytes = api
-            .get_bytes(&segs, &format!("下载待发布文件 {}", safe::field(&f.path)))
+            .get_bytes(
+                &segs,
+                &format!("download upload file {}", safe::field(&f.path)),
+            )
             .await?;
         if files.insert(f.path.clone(), bytes).is_some() {
-            bail!("待发布内容的文件列表里 {} 出现了两次", safe::field(&f.path));
+            bail!("The upload lists {} twice", safe::field(&f.path));
         }
     }
     let contents = Contents {
@@ -887,14 +862,14 @@ pub async fn sign_pending_expecting(
     let digest = hex(&content_digest(&contents));
     if !digest.eq_ignore_ascii_case(p.digest_hex.trim()) {
         bail!(
-            "摘要不一致：本地按下载的内容算出 {digest}，服务端说是 {}。服务端给的内容与它要提交的不是同一份，不签",
+            "Content fingerprint mismatch: the downloaded content gives {digest} here, the server says {}. What the server gave is not what it will submit; not signing",
             p.digest_hex
         );
     }
     if let Some(want) = expect_digest {
         if !digest.eq_ignore_ascii_case(want.trim()) {
             bail!(
-                "the pending bundle's digest is {digest}, but the content uploaded from this computer has digest {}: the server holds other content under this pending id; not signing",
+                "The upload's content fingerprint is {digest}, but the content uploaded from this computer has {}: the server holds other content under this upload id; not signing",
                 want.trim()
             );
         }
@@ -903,7 +878,7 @@ pub async fn sign_pending_expecting(
     let present: BTreeSet<String> = contents.files.keys().cloned().collect();
     manifest
         .validate(&present)
-        .context("待发布内容机器会拒收（清单校验不过），不签")?;
+        .context("Computers would reject this upload (the manifest check fails); not signing")?;
 
     // 2. 本地逐版验链。Nothing published yet: there is no chain. The first version (R1g) is
     //    verified with its own trust, and that whole trust counts as added, so the human checks
@@ -916,9 +891,9 @@ pub async fn sign_pending_expecting(
         // trust it chose, and reset the local anchor to its chain.
         if let Some(pin) = chain::load_pin(&pin_file)? {
             bail!(
-                "the server reports nothing published, but version {} was verified here (pin {}): \
-                 possible rollback or wrong server; not signing. Delete that pin file only if you \
-                 are sure the server was reset on purpose",
+                "the server reports nothing published, but version {} was checked on this computer \
+                 before ({}): the server may have been rolled back, or this is the wrong server; \
+                 nothing was approved. Delete that file only if you are sure the server was reset on purpose",
                 pin.version,
                 pin_file.display()
             );
@@ -948,7 +923,7 @@ pub async fn sign_pending_expecting(
     let next = verified.latest + 1;
     if manifest.version != next || p.version != next {
         bail!(
-            "待发布内容是第 {} 版（服务端标的是第 {} 版），而本地验证到的最新版是第 {} 版：应当是第 {next} 版，不签",
+            "The upload is version {} (the server labels it version {}), but the latest version verified here is {}: it should be version {next}; not signing",
             manifest.version,
             p.version,
             verified.latest
@@ -956,15 +931,15 @@ pub async fn sign_pending_expecting(
     }
     if !verified.trust.contains(&me) {
         bail!(
-            "这把钥匙（{}）不在本地验证过的第 {} 版 trust 里：机器不认它的签名",
+            "This key ({}) is not among the trusted keys of version {} verified here: computers would not accept its signature",
             key_line(&me),
             verified.version
         );
     }
     if !manifest.trust.contains(&me) {
         bail!(
-            "新 trust 里没有这把钥匙（{}）：签名者不能把自己移出 trust（R5），要移除它请用另一把留下的钥匙签",
-            me.id
+            "The new trusted keys do not include this key ({}): a key cannot approve its own removal; approve that with another school key that stays",
+            key_line(&me)
         );
     }
 
@@ -974,7 +949,7 @@ pub async fn sign_pending_expecting(
     // 5. 完整 trust 与增删改。
     writeln!(
         out,
-        "\n== 第 {next} 版的完整 trust（共 {} 把；机器从这一版起只认这些钥匙）==",
+        "\n== All trusted keys of version {next} ({} in total; from this version on, computers accept only these keys) ==",
         manifest.trust.len()
     )?;
     print_trust(out, &manifest.trust)?;
@@ -982,24 +957,25 @@ pub async fn sign_pending_expecting(
     if genesis {
         writeln!(
             out,
-            "This is the first version (R1g): machines verify it with its own trust. Check every \
-             fingerprint against what you hold, not against this server's pages: your recovery key's \
-             fingerprint as printed by `mastersos-sign keygen` / `register` (or on the printed kit), and \
-             each passkey's fingerprint shown when it was registered on your device."
+            "This is the first version: computers will accept settings approved only by these keys. Check each key code \
+             and fingerprint against the paper copy of your school key, not against this server's pages."
         )?;
-        delta.print(out)?;
     } else if delta.is_empty() {
-        writeln!(out, "trust 与第 {} 版相同。", verified.version)?;
+        writeln!(
+            out,
+            "The trusted keys are the same as in version {}.",
+            verified.version
+        )?;
     } else {
         writeln!(
             out,
-            "trust 有变化（相对本地验证过的第 {} 版）：",
+            "The trusted keys change (compared with version {} verified here):",
             verified.version
         )?;
         delta.print(out)?;
         writeln!(
             out,
-            "请逐把对照钥匙页上的指纹：多出一把不认识的钥匙，就等于把机器交给了它。"
+            "Compare each fingerprint with the School keys page: an unknown extra key hands every computer to whoever holds it."
         )?;
     }
 
@@ -1017,8 +993,8 @@ pub async fn sign_pending_expecting(
     if recipients_change {
         writeln!(
             out,
-            "Escrow recipients change (against version {} that machines run; they will seal their \
-             LUKS recovery keys to these):",
+            "Disk unlocking changes (against version {} that computers run; computers will keep \
+             their disk recovery codes for these school keys):",
             verified.version
         )?;
         for r in &base_recipients {
@@ -1033,27 +1009,35 @@ pub async fn sign_pending_expecting(
         }
         writeln!(
             out,
-            "Check every added recipient against your kits: an unknown one receives the machines' \
-             recovery keys."
+            "Each added line must come from one of your school keys: an unknown one could unlock \
+             the computers' disks."
         )?;
     }
 
     print_server_notes(out, &p, &secret_values)?;
 
-    // 6. 人工确认。
-    writeln!(out, "\n本地算出的摘要：{digest}")?;
-    let typed = ask(confirm, out, &format!("输入版本号 {next} 确认签名："))?;
+    // 6. 人工确认。The caller that passed `expect_digest` printed the check code already.
+    if expect_digest.is_none() {
+        writeln!(out, "\nContent fingerprint computed here: {digest}")?;
+        writeln!(out, "Check code: {}", &digest[..8])?;
+    }
+    let typed = ask(
+        confirm,
+        out,
+        &format!("Type the version number {next} to approve it: "),
+    )?;
     if typed != next.to_string() {
-        bail!("输入的版本号「{typed}」与待签的第 {next} 版不符，已取消，没有签名");
+        bail!("The version number you typed ({typed}) does not match version {next}; cancelled, nothing was approved");
     }
     if !delta.is_empty() || recipients_change {
         let typed = ask(
             confirm,
             out,
-            "这一版改变了机器信任的钥匙或托管收件人（见上面的增删）。确认无误请再输入 trust：",
+            "This version changes which school keys computers accept and who can unlock their disks (see the changes above). If that is right, type yes: ",
         )?;
-        if typed != "trust" {
-            bail!("没有确认 trust 或托管收件人的变化，已取消，没有签名");
+        // `trust` was the word asked for before; old scripts still send it.
+        if typed != "yes" && typed != "trust" {
+            bail!("The change of trusted keys or disk unlocking was not confirmed; cancelled, nothing was approved");
         }
     }
 
@@ -1071,7 +1055,9 @@ pub async fn sign_pending_expecting(
         &verified.trust,
         (!genesis).then_some(verified.version),
     )
-    .context("签好的包本地自检不过：机器会拒收，不提交")?;
+    .context(
+        "The signed package fails the local self-check: computers would reject it; not submitting",
+    )?;
     #[derive(Deserialize)]
     struct Committed {
         version: u64,
@@ -1081,12 +1067,12 @@ pub async fn sign_pending_expecting(
         .post_json(
             &["v1", "admin", "publish", "pending", &p.pending_id, "commit"],
             Some(&body),
-            "提交签名",
+            "submit the signature",
         )
         .await?;
     if c.version != next {
         bail!(
-            "服务端说发布成了第 {} 版，签的是第 {next} 版：pin 不前进，请运行 mastersos-sign verify 重新核对",
+            "The server says version {} was published, but version {next} was approved here: run `mastersos-sign verify` to check the server again",
             c.version
         );
     }
@@ -1105,7 +1091,6 @@ pub async fn sign_pending_expecting(
             verified: history,
         },
     )?;
-    writeln!(out, "已签名并发布第 {next} 版，pin 前进到第 {next} 版。")?;
     Ok(next)
 }
 
@@ -1115,7 +1100,7 @@ pub async fn sign_pending_expecting(
 fn both_zones(secs: i64) -> String {
     match chrono::DateTime::from_timestamp(secs, 0) {
         Some(t) => format!(
-            "{}（本地）/ {}",
+            "{} (local) / {}",
             t.with_timezone(&chrono::Local)
                 .format("%Y-%m-%d %H:%M:%S %:z"),
             t.format("%Y-%m-%d %H:%M:%S UTC")
@@ -1154,7 +1139,7 @@ pub async fn sign_heartbeat_at(
     out: &mut dyn Write,
 ) -> Result<()> {
     if !(1..=MAX_HEARTBEAT_DAYS).contains(&days) {
-        bail!("--days 要在 1 到 {MAX_HEARTBEAT_DAYS} 之间（心跳最长 {MAX_HEARTBEAT_DAYS} 天）");
+        bail!("--days must be between 1 and {MAX_HEARTBEAT_DAYS} (a monthly check-in lasts at most {MAX_HEARTBEAT_DAYS} days)");
     }
     let mut out = safe::SafeWriter::new(out);
     let out: &mut dyn Write = &mut out;
@@ -1162,7 +1147,7 @@ pub async fn sign_heartbeat_at(
     let verified = chain::verify_chain(api, pin_dir, confirm, out).await?;
     if !verified.trust.contains(&me) {
         bail!(
-            "这把钥匙（{}）不在本地验证过的第 {} 版 trust 里：机器不认它签的心跳",
+            "This key ({}) is not among the trusted keys of version {} verified here: computers would not accept its check-in",
             key_line(&me),
             verified.version
         );
@@ -1176,32 +1161,36 @@ pub async fn sign_heartbeat_at(
     };
     statement.check()?;
 
-    writeln!(out, "\n== 续签心跳（内容由本机从验证过的版本算出）==")?;
     writeln!(
         out,
-        "版本：      第 {} 版（本地验证过的最新版）",
+        "\n== Monthly check-in (computed on this computer from the verified version) =="
+    )?;
+    writeln!(
+        out,
+        "Version:     {} (the latest verified here)",
         statement.version
     )?;
-    writeln!(out, "摘要前 16 位：{}", &statement.digest_hex[..16])?;
-    writeln!(out, "issued_at： {}", both_zones(statement.issued_at))?;
+    writeln!(out, "Content fingerprint: {}", statement.digest_hex)?;
+    writeln!(out, "Check code: {}", &statement.digest_hex[..8])?;
+    writeln!(out, "issued_at:   {}", both_zones(statement.issued_at))?;
     writeln!(
         out,
-        "not_after： {}（{days} 天）",
+        "not_after:  {} ({days} days)",
         both_zones(statement.not_after)
     )?;
     writeln!(
         out,
-        "到期之前，机器把第 {} 版当作最新设置；服务端在这段时间里扣住新版本，机器看不出来。",
+        "Until it expires, computers treat version {} as the latest settings; if the server holds back a newer version meanwhile, computers cannot tell.",
         statement.version
     )?;
     let typed = ask(
         confirm,
         out,
-        &format!("输入版本号 {} 确认签名：", statement.version),
+        &format!("Type the version number {} to sign: ", statement.version),
     )?;
     if typed != statement.version.to_string() {
         bail!(
-            "输入的版本号「{typed}」与第 {} 版不符，已取消，没有签名",
+            "The version number you typed ({typed}) does not match version {}; cancelled, nothing was signed",
             statement.version
         );
     }
@@ -1218,21 +1207,96 @@ pub async fn sign_heartbeat_at(
         signature: signature.clone(),
     }
     .to_toml();
-    verify_heartbeat(&text, &verified.trust)
-        .context("签好的心跳本地自检不过：机器会拒收，不提交")?;
+    verify_heartbeat(&text, &verified.trust).context(
+        "The signed check-in fails the local self-check: computers would reject it; not submitting",
+    )?;
     api.post_no_content(
         &["v1", "admin", "heartbeat", "commit"],
         &json!({ "statement": statement, "signature": signature }),
-        "提交心跳",
+        "submit the check-in",
     )
     .await?;
     writeln!(
         out,
-        "已续签第 {} 版的心跳，到 {} 为止。",
+        "Monthly check-in signed for version {}, valid until {}.",
         statement.version,
         both_zones(statement.not_after)
     )?;
     Ok(())
+}
+
+/// The monthly check-in for the version `mastersos publish` has just approved, signed without a
+/// prompt: `version` and `digest` are what the caller verified, signed and saw committed, and
+/// `trust` is that version's trusted keys (what computers verify the check-in with). Nothing is
+/// fetched to decide what to sign. The statement lasts `days` days from now; it is checked here the
+/// way a computer checks it, then sent to `heartbeat/commit` (the server's `heartbeat/prepare` is
+/// not used, as in [`sign_heartbeat_at`]). Prints nothing; returns the end of the check-in.
+pub async fn checkin_after_publish(
+    api: &Api,
+    key: &SigningKey<'_>,
+    version: u64,
+    digest: &[u8; 32],
+    trust: &[TrustKey],
+    days: i64,
+) -> Result<chrono::DateTime<chrono::Utc>> {
+    checkin_after_publish_at(api, key, version, digest, trust, days, chrono::Utc::now()).await
+}
+
+/// [`checkin_after_publish`] with `issued_at = now`.
+pub async fn checkin_after_publish_at(
+    api: &Api,
+    key: &SigningKey<'_>,
+    version: u64,
+    digest: &[u8; 32],
+    trust: &[TrustKey],
+    days: i64,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<chrono::DateTime<chrono::Utc>> {
+    if !(1..=MAX_HEARTBEAT_DAYS).contains(&days) {
+        bail!("a monthly check-in lasts 1 to {MAX_HEARTBEAT_DAYS} days, not {days}");
+    }
+    // The caller checked the key against the server when it published; no second round trip.
+    let (signer, me) = load_signer(api, *key, true).await?;
+    if !trust.contains(&me) {
+        bail!(
+            "This key ({}) is not among the trusted keys of version {version}",
+            key_line(&me)
+        );
+    }
+    let issued_at = now.timestamp();
+    let statement = HeartbeatStatement {
+        version,
+        digest_hex: hex(digest),
+        issued_at,
+        not_after: issued_at + days * 86_400,
+    };
+    statement.check()?;
+    let signature = SignatureFile {
+        key_id: me.id.clone(),
+        alg: KeyAlg::Ed25519,
+        sig: STANDARD.encode(signer.sign(&heartbeat_message(&statement))),
+        authenticator_data: None,
+        client_data_json: None,
+    };
+    let text = Heartbeat {
+        statement: statement.clone(),
+        signature: signature.clone(),
+    }
+    .to_toml();
+    let checked = verify_heartbeat(&text, trust).context(
+        "The signed check-in fails the local self-check: computers would reject it; not submitting",
+    )?;
+    if checked != statement {
+        bail!("The check-in read back differs from the one signed; not submitting");
+    }
+    api.post_no_content(
+        &["v1", "admin", "heartbeat", "commit"],
+        &json!({ "statement": statement, "signature": signature }),
+        "submit the monthly check-in",
+    )
+    .await?;
+    chrono::DateTime::from_timestamp(statement.not_after, 0)
+        .context("the check-in's end is out of range")
 }
 
 // —— 种子核对 ——
@@ -1276,12 +1340,12 @@ pub async fn seed_check(
     let out: &mut dyn Write = &mut out;
     if !chain::pin_path(pin_dir, api).exists() {
         bail!(
-            "还没有 {} 的 pin：先运行 mastersos-sign verify，对照钥匙页确认一次 trust 指纹",
+            "There is no pin for {} yet: run mastersos-sign verify first and compare the fingerprints with the School keys page",
             api.host()
         );
     }
     let verified = chain::verify_chain(api, pin_dir, &mut std::io::empty(), out).await?;
-    let seed = Seed::parse(seed_text).context("种子不是合法的 TOML")?;
+    let seed = Seed::parse(seed_text).context("The install file is not valid TOML")?;
     let mut problems: Vec<String> = Vec::new();
     // The strict Wi-Fi checks parsing leaves out; the message never carries a secret.
     if let Err(e) = seed.validate() {
@@ -1296,16 +1360,16 @@ pub async fn seed_check(
         let mut buf = Vec::new();
         delta.print(&mut buf)?;
         problems.push(format!(
-            "种子的 trust 与本地验证过的第 {} 版不同（+ 是种子多出的，- 是种子缺的）：\n{}",
+            "The trusted keys in the install file differ from version {} verified here (+ is extra in the install file, - is missing from it):\n{}",
             verified.version,
             String::from_utf8_lossy(&buf).trim_end()
         ));
     }
     if seed.min_version != Some(verified.version) {
         problems.push(format!(
-            "种子的 min_version 是 {}，应为最新版本 {}",
+            "The install file's min_version is {}, it should be the latest version {}",
             seed.min_version
-                .map_or("（没有）".to_owned(), |v| v.to_string()),
+                .map_or("(none)".to_owned(), |v| v.to_string()),
             verified.version
         ));
     }
@@ -1316,11 +1380,11 @@ pub async fn seed_check(
         .map(|k| (k.id.replace(['\r', '\n'], " "), trust_fingerprint(k)))
         .collect();
     if header != expected {
-        let mut s = String::from("种子开头注释的指纹与种子的 trust 对不上：\n    注释：");
+        let mut s = String::from("The fingerprints in the comment at the top of the install file do not match its trusted keys:\n    comment:");
         for (id, fp) in &header {
             s.push_str(&format!("\n      {}  {}", safe::field(id), safe::field(fp)));
         }
-        s.push_str("\n    按 trust 算：");
+        s.push_str("\n    computed from the keys:");
         for (id, fp) in &expected {
             s.push_str(&format!("\n      {}  {}", safe::field(id), safe::field(fp)));
         }
@@ -1330,7 +1394,7 @@ pub async fn seed_check(
     if problems.is_empty() {
         writeln!(
             out,
-            "种子与本地验证过的第 {} 版一致：trust {} 把、min_version = {}。",
+            "The install file matches version {} verified here: {} trusted keys, min_version = {}.",
             verified.version,
             seed.trust.len(),
             verified.version
@@ -1338,16 +1402,37 @@ pub async fn seed_check(
         print_trust(out, &seed.trust)?;
         return Ok(());
     }
-    writeln!(out, "种子与本地验证过的内容不一致：")?;
+    writeln!(
+        out,
+        "The install file does not match what was verified here:"
+    )?;
     for p in &problems {
         writeln!(out, "  * {p}")?;
     }
-    bail!("种子与本地验证过的 trust / 版本不一致：不要用它装机器")
+    bail!("The install file does not match the verified trusted keys / version: do not use it to install computers")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paper_copy_with_a_wrong_key_id_line_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let k = keygen(&dir.path().join("k.pem")).unwrap();
+        assert!(k.paper.contains(&format!("key id: {}", k.trust_key.id)));
+        // The copy as printed restores.
+        restore_from_paper(&k.paper, &dir.path().join("ok.pem")).unwrap();
+        // A key id line that names another key does not.
+        let wrong = k.paper.replace(
+            &format!("key id: {}", k.trust_key.id),
+            "key id: rk-00000000",
+        );
+        assert_ne!(wrong, k.paper);
+        let err = restore_from_paper(&wrong, &dir.path().join("bad.pem")).unwrap_err();
+        assert!(format!("{err:#}").contains("rk-00000000"), "{err:#}");
+        assert!(!dir.path().join("bad.pem").exists());
+    }
 
     fn verified(text: &str) -> Verified {
         Verified {

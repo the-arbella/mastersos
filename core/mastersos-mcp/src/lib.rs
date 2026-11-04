@@ -303,13 +303,23 @@ pub fn is_ai_token(who: &Value) -> bool {
         .is_some_and(|l| l.starts_with(AI_TOKEN_LABEL_PREFIX))
 }
 
+/// The default AI token file, as this platform writes it.
+fn default_ai_token_file() -> String {
+    match mastersos_sign::platform::config_dir("mastersos") {
+        Ok(d) => d.join("ai-token").display().to_string(),
+        Err(_) if cfg!(windows) => r"%APPDATA%\mastersos\ai-token".to_owned(),
+        Err(_) => "~/.config/mastersos/ai-token".to_owned(),
+    }
+}
+
 /// The token's kind against what the command needs.
 pub fn check_kind(who: &Value, wanted: TokenUse, token_file: &Path) -> Result<(), StartError> {
     let label = escape(who["label"].as_str().unwrap_or("?"));
     match wanted {
         TokenUse::Ai if !is_ai_token(who) => Err(StartError::Refused(format!(
-            "The token in {} is not an AI token ({label}); `mastersos mcp` only runs with an AI token. Create one under AI tools on the school's admin page, save it to the ai_token_file (default ~/.config/mastersos/ai-token) and never give an AI IT's own token file",
-            token_file.display()
+            "The token in {} is not an AI token ({label}); `mastersos mcp` only runs with an AI token. Create one under AI tools on the school's admin page, save it to the ai_token_file (default {}) and never give an AI IT's own token file",
+            token_file.display(),
+            default_ai_token_file()
         ))),
         TokenUse::It if is_ai_token(who) => Err(StartError::Refused(format!(
             "The token in {} is an AI token ({label}); this command needs IT's own token (an API token with read and draft scopes from your operator or the admin web page) in the token_file",

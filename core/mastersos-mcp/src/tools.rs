@@ -84,7 +84,7 @@ pub const TOOLS: &[Tool] = &[
     Tool {
         name: "keys_list",
         kind: Kind::Server,
-        description: "The signing keys registered for the school: key_id, kind (passkey or recovery), alg, label, and whether each is in the latest published trust (in_published_trust). No parameters.",
+        description: "The school keys registered for the school: key_id (its first 8 hex digits are the key code), kind, alg, label, and whether each is one of the trusted keys of the latest published version (in_published_trust). No parameters.",
     },
     Tool {
         name: "spec",
@@ -352,7 +352,7 @@ fn read_member(root: &Path, path: &str) -> anyhow::Result<String> {
         cur.push(part);
         let meta =
             std::fs::symlink_metadata(&cur).with_context(|| format!("There is no file {path}"))?;
-        if meta.file_type().is_symlink() {
+        if mastersos_sign::platform::is_link(&cur, &meta) {
             bail!("{path} goes through a link, which is refused");
         }
     }

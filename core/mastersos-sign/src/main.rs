@@ -1,4 +1,4 @@
-//! `mastersos-sign` 命令行：只做参数解析，逻辑都在库里。
+//! The `mastersos-sign` command line: argument parsing only; the logic is in the library.
 #![forbid(unsafe_code)]
 
 use std::path::{Path, PathBuf};
@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use mastersos_bundle::kit::Kit;
 use mastersos_sign::kit::{
-    escrow_read, is_already_registered, kit_new, load_kit, read_kit, register_escrow_recipient,
+    escrow_read, is_already_registered, kit_new_in, load_kit, read_kit, register_escrow_recipient,
 };
 use mastersos_sign::{
     chain, keygen, register, restore_from_paper, seed_check, sign_heartbeat, sign_pending, Api,
@@ -18,7 +18,7 @@ use mastersos_sign::{
 #[command(
     name = "mastersos-sign",
     version,
-    about = "MastersOS 学校恢复钥匙：生成、纸面备份、登记，本地验链后签名发布"
+    about = "MastersOS school key: create it, register it, and approve settings on this computer after checking the whole history locally"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -27,11 +27,11 @@ struct Cli {
 
 #[derive(Args)]
 struct Server {
-    /// 管理服务端地址，例如 https://mastersos.school.ac.th
+    /// Admin server address, for example https://mastersos.school.ac.th
     #[arg(long)]
     server: String,
-    /// 存 token 的文件（token 不接受命令行明文）。sign / heartbeat / seed-check / verify 要 read + draft；
-    /// register 要 keys。
+    /// File holding the token (a token is never accepted on the command line). `sign`, `heartbeat`,
+    /// `seed-check` and `verify` need read + draft; `register` needs keys.
     #[arg(long)]
     token_file: PathBuf,
 }
@@ -44,7 +44,7 @@ impl Server {
 
 #[derive(Args)]
 struct PinDir {
-    /// pin 存放目录，默认 ~/.config/mastersos-sign/
+    /// Where the pins are kept (default: ~/.config/mastersos-sign/; Windows: %APPDATA%\mastersos-sign\)
     #[arg(long)]
     pin_dir: Option<PathBuf>,
 }
@@ -54,24 +54,24 @@ impl PinDir {
         if let Some(d) = &self.pin_dir {
             return Ok(d.clone());
         }
-        let home = std::env::var_os("HOME").context("没有 HOME：用 --pin-dir 指定 pin 目录")?;
-        Ok(Path::new(&home).join(".config").join("mastersos-sign"))
+        mastersos_sign::platform::config_dir("mastersos-sign")
+            .context("give the pin directory with --pin-dir")
     }
 }
 
-/// The signing key: a PKCS#8 key file or a recovery kit (exactly one).
+/// The signing key: the school key file (or, hidden, a PKCS#8 key file); exactly one.
 #[derive(Args)]
-#[group(required = true, multiple = false)]
+#[group(multiple = false)]
 struct KeyArg {
-    /// PKCS#8 recovery key file (`keygen`, `restore-from-paper`)
-    #[arg(long)]
+    /// A PKCS#8 key file (kept for old scripts)
+    #[arg(long, hide = true)]
     key: Option<PathBuf>,
-    /// Recovery kit file (0600), or `-` to read the kit from the first line of stdin
-    #[arg(long)]
-    kit: Option<PathBuf>,
+    /// The school key file (keep it on a USB stick; only you should be able to read it), or `-` to read it from the first line of stdin
+    #[arg(long = "school-key", alias = "kit", value_name = "FILE")]
+    school_key: Option<PathBuf>,
 }
 
-/// A loaded `--key` / `--kit`.
+/// A loaded `--key` / `--school-key`.
 enum Loaded {
     File(PathBuf),
     Kit(Kit),
@@ -86,7 +86,7 @@ impl Loaded {
     }
 }
 
-/// A kit file, or `-` for the first line of stdin.
+/// A school key file, or `-` for the first line of stdin.
 fn kit_arg(p: &Path, stdin: &std::io::Stdin) -> Result<Kit> {
     if p.as_os_str() == "-" {
         read_kit(&mut stdin.lock())
@@ -95,76 +95,84 @@ fn kit_arg(p: &Path, stdin: &std::io::Stdin) -> Result<Kit> {
     }
 }
 
-/// Read `--kit`; `--key` stays a path.
+/// Read `--school-key`; `--key` stays a path.
 fn load_key_arg(k: KeyArg, stdin: &std::io::Stdin) -> Result<Loaded> {
-    match (k.key, k.kit) {
+    match (k.key, k.school_key) {
         (Some(p), None) => Ok(Loaded::File(p)),
         (None, Some(p)) => Ok(Loaded::Kit(kit_arg(&p, stdin)?)),
-        _ => anyhow::bail!("give exactly one of --key and --kit"),
+        (None, None) => anyhow::bail!("--school-key <FILE> is required"),
+        _ => anyhow::bail!("Give --school-key once."),
     }
 }
 
 #[derive(Subcommand)]
 enum KitCmd {
-    /// Generate a recovery kit offline into --out (0600, never overwritten); prints only its
-    /// key id, fingerprint and escrow recipient
+    /// Create a school key on this computer, without the network. It is never written over an
+    /// existing file. Prints only its key code and fingerprint.
     New {
+        /// The file to write, or an existing directory (the file is then named
+        /// `<school>-school-key-<key code>.kit`)
         #[arg(long)]
         out: PathBuf,
+        /// A short school name for the file name, such as `alpha`
+        #[arg(long)]
+        school: Option<String>,
     },
 }
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Recovery kit (one master secret: the recovery key and the escrow key)
+    /// The school key file
     #[command(subcommand)]
     Kit(KitCmd),
-    /// Read a machine's escrowed LUKS recovery keys and open them locally with the kit (token
-    /// needs read + recovery; every read is audited)
+    /// Unlock a computer's disk: open its stored recovery keys on this computer with the school
+    /// key (the token needs read + recovery; every read is recorded)
     EscrowRead {
         #[command(flatten)]
         server: Server,
-        /// Recovery kit file (0600), or `-` for stdin
-        #[arg(long)]
-        kit: PathBuf,
-        /// The machine's device_id
+        /// The school key file (keep it on a USB stick; only you should be able to read it), or `-` for stdin
+        #[arg(long = "school-key", alias = "kit", value_name = "FILE")]
+        school_key: PathBuf,
+        /// The computer's device_id
         #[arg(long)]
         device: String,
     },
-    /// 生成恢复钥匙：私钥写进 --out（0600），纸面备份写进 --paper（0600）去打印
+    /// Create an old-style PKCS#8 key with a paper copy (kept for old scripts)
+    #[command(hide = true)]
     Keygen {
         #[arg(long)]
         out: PathBuf,
-        /// 纸面备份文件，默认 <out>.paper.txt
+        /// The paper copy file (default: <out>.paper.txt)
         #[arg(long)]
         paper: Option<PathBuf>,
     },
-    /// 从纸面备份临时还原私钥（签完就删）
+    /// Restore an old-style PKCS#8 key from its paper copy (kept for old scripts)
+    #[command(hide = true)]
     RestoreFromPaper {
-        /// 照抄纸面备份的文本文件
+        /// The text file copied from the paper copy
         #[arg(long)]
         paper: PathBuf,
         #[arg(long)]
         out: PathBuf,
     },
-    /// 用登记探针把恢复钥匙登记到服务端（要一个临时的 keys token）
+    /// Register the school key with the server (needs a temporary token with the keys scope)
     Register {
         #[command(flatten)]
         server: Server,
         #[command(flatten)]
         key: KeyArg,
-        /// 给人看的名字
+        /// A name people will recognise
         #[arg(long)]
         label: String,
     },
-    /// 本地逐版验证服务端发布过的版本（首次使用时对照指纹记下 pin）
+    /// Check every published version on this computer (the first time, you confirm the key fingerprints)
     Verify {
         #[command(flatten)]
         server: Server,
         #[command(flatten)]
         pin_dir: PinDir,
     },
-    /// 本地验链、算差异，确认后用恢复钥匙签名发布
+    /// Check the history and the changes on this computer, then approve the upload with the school key
     Sign {
         #[command(flatten)]
         server: Server,
@@ -176,7 +184,7 @@ enum Cmd {
         #[arg(long)]
         pending: String,
     },
-    /// 本地验链后为最新版续签心跳（学校钥匙模式下每次发布之后、以及每个月）
+    /// Monthly check-in: confirm to every computer that the latest settings are current
     Heartbeat {
         #[command(flatten)]
         server: Server,
@@ -184,17 +192,17 @@ enum Cmd {
         pin_dir: PinDir,
         #[command(flatten)]
         key: KeyArg,
-        /// 有效期天数，1 到 31
+        /// How many days the check-in lasts, 1 to 31
         #[arg(long, default_value_t = 30)]
         days: i64,
     },
-    /// 用本地验证过的 trust 与版本核对一份种子
+    /// Compare an install file with the keys and version verified on this computer
     SeedCheck {
         #[command(flatten)]
         server: Server,
         #[command(flatten)]
         pin_dir: PinDir,
-        /// 种子文件
+        /// The install file
         seed: PathBuf,
     },
 }
@@ -202,8 +210,8 @@ enum Cmd {
 #[tokio::main]
 async fn main() {
     if let Err(e) = run(Cli::parse()).await {
-        // 错误里可能带服务端给的字符串：一样转义。
-        eprintln!("错误：{}", mastersos_sign::safe::text(&format!("{e:#}")));
+        // An error may hold strings from the server: escape them as well.
+        eprintln!("Error: {}", mastersos_sign::safe::text(&format!("{e:#}")));
         std::process::exit(1);
     }
 }
@@ -212,24 +220,30 @@ async fn run(cli: Cli) -> Result<()> {
     let stdin = std::io::stdin();
     let mut out = std::io::stdout();
     match cli.cmd {
-        Cmd::Kit(KitCmd::New { out: path }) => {
-            let k = kit_new(&path)?;
-            println!("key id:      {}", k.key_id);
-            println!("fingerprint: {}", k.fingerprint);
-            println!("recipient:   {}", k.recipient);
-            println!("kit:         {} (0600)", path.display());
+        Cmd::Kit(KitCmd::New {
+            out: out_arg,
+            school,
+        }) => {
+            let (k, path) = kit_new_in(&out_arg, school.as_deref())?;
             println!(
-                "Print the kit file on paper and lock the printout away, register it with \
-                 `mastersos-sign register --kit`, then move the file to a USB stick and delete it from \
-                 this computer."
+                "key code:    {}",
+                mastersos_bundle::keyid::key_code(&k.key_id).unwrap_or(k.key_id)
+            );
+            println!("fingerprint: {}", k.fingerprint);
+            let shown = std::path::absolute(&path).unwrap_or(path);
+            println!("school key:  {}", shown.display());
+            println!(
+                "Print the school key file on paper and lock the printout away, register it with \
+                 `mastersos-sign register --school-key <file>`, then move the file to a USB stick \
+                 and delete it from this computer."
             );
         }
         Cmd::EscrowRead {
             server,
-            kit,
+            school_key,
             device,
         } => {
-            let kit = kit_arg(&kit, &stdin)?;
+            let kit = kit_arg(&school_key, &stdin)?;
             let n = escrow_read(&server.api()?, &kit, &device, &mut out).await?;
             println!("{n} recovery key(s) opened.");
         }
@@ -244,40 +258,50 @@ async fn run(cli: Cli) -> Result<()> {
                 let _ = std::fs::remove_file(&key);
                 return Err(e);
             }
-            println!("key id：{}", k.trust_key.id);
+            println!("key id:       {}", k.trust_key.id);
             println!(
-                "指纹：  {}",
+                "fingerprint: {}",
                 mastersos_bundle::trust_fingerprint(&k.trust_key)
             );
-            println!("公钥：  {}", k.trust_key.public_key);
-            println!("私钥：  {}（0600）", key.display());
+            println!("public key:  {}", k.trust_key.public_key);
+            println!("private key: {} (owner only)", key.display());
             println!(
-                "纸面备份：{}（0600，含私钥）。打印出来锁进柜子，然后删掉这个文件。",
+                "paper copy:  {} (owner only; it holds the private key). Print it, lock the printout away, then delete this file.",
                 paper_path.display()
             );
             println!(
-                "登记后删除 {}；要签名时用 `mastersos-sign restore-from-paper` 临时还原，签完再删",
+                "After registering, delete {}. To sign, restore it for a moment with `mastersos-sign restore-from-paper` and delete it again.",
                 key.display()
             );
         }
         Cmd::RestoreFromPaper { paper, out: key } => {
             let text = std::fs::read_to_string(&paper)
-                .with_context(|| format!("读 {} 失败", paper.display()))?;
+                .with_context(|| format!("Could not read {}", paper.display()))?;
             let k = restore_from_paper(&text, &key)?;
-            println!("已还原到 {}（0600）", key.display());
-            println!("key id：{}", k.id);
-            println!("指纹：  {}", mastersos_bundle::trust_fingerprint(&k));
-            println!("请核对与纸面备份一致；签完立即删除 {}", key.display());
+            println!("Restored to {} (owner only)", key.display());
+            println!("key id:      {}", k.id);
+            println!("fingerprint: {}", mastersos_bundle::trust_fingerprint(&k));
+            println!(
+                "Check that they match the paper copy; delete {} as soon as you have signed.",
+                key.display()
+            );
         }
         Cmd::Register { server, key, label } => {
             let key = load_key_arg(key, &stdin)?;
             let api = server.api()?;
             match (register(&api, key.signing(), &label).await, &key) {
-                (Ok(id), _) => println!("已登记：{id}"),
+                (Ok(id), _) => match mastersos_bundle::keyid::key_code(&id) {
+                    Some(code) => println!("Registered school key {code} ({id})."),
+                    None => println!("Registered key {id}."),
+                },
                 // A kit registered before (say the recipient step failed): go on to the
                 // recipient.
                 (Err(e), Loaded::Kit(kit)) if is_already_registered(&e) => {
-                    println!("Recovery key {} is already registered.", kit.key_id())
+                    println!(
+                        "School key {} is already registered.",
+                        mastersos_bundle::keyid::key_code(&kit.key_id())
+                            .unwrap_or_else(|| kit.key_id())
+                    )
                 }
                 (Err(e), _) => return Err(e),
             }
@@ -292,11 +316,11 @@ async fn run(cli: Cli) -> Result<()> {
                     .await?;
             if v.latest != v.version {
                 println!(
-                    "Verified up to version {}; machines accept up to version {}. Its trust:",
+                    "Verified up to version {}; computers accept up to version {}. Its trusted keys:",
                     v.latest, v.version
                 );
             } else {
-                println!("已验证到第 {} 版，trust：", v.version);
+                println!("Verified up to version {}. Trusted keys:", v.version);
             }
             for k in &v.trust {
                 println!("    {}", mastersos_sign::key_line(k));
@@ -309,7 +333,7 @@ async fn run(cli: Cli) -> Result<()> {
             pending,
         } => {
             let key = load_key_arg(key, &stdin)?;
-            sign_pending(
+            let v = sign_pending(
                 &server.api()?,
                 key.signing(),
                 &pin_dir.get()?,
@@ -318,6 +342,7 @@ async fn run(cli: Cli) -> Result<()> {
                 &mut out,
             )
             .await?;
+            println!("Published version {v}");
         }
         Cmd::Heartbeat {
             server,
@@ -342,7 +367,7 @@ async fn run(cli: Cli) -> Result<()> {
             seed,
         } => {
             let text = std::fs::read_to_string(&seed)
-                .with_context(|| format!("读 {} 失败", seed.display()))?;
+                .with_context(|| format!("Could not read {}", seed.display()))?;
             seed_check(&server.api()?, &pin_dir.get()?, &text, &mut out).await?;
         }
     }

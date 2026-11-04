@@ -1926,7 +1926,6 @@ dependencies = [
  "reqwest",
  "ring",
  "rmcp",
- "rustix",
  "schemars",
  "serde",
  "serde_json",
@@ -1934,8 +1933,10 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml 0.8.23",
+ "toml_edit 0.25.17+spec-1.1.0",
  "wiremock",
  "yescrypt",
+ "zeroize",
 ]
 
 [[package]]
@@ -1951,6 +1952,7 @@ dependencies = [
  "mastersos-bundle",
  "nix 0.29.0",
  "reqwest",
+ "rustix",
  "sea-orm",
  "serde",
  "serde_json",
@@ -1959,6 +1961,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml 0.8.23",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 

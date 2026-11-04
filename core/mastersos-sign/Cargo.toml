@@ -31,3 +31,15 @@ tempfile.workspace = true
 # 钥匙文件的属主要是当前用户：getuid。
 # fs: flock around the pin compare-and-write.
 nix = { workspace = true, features = ["user", "fs"] }
+# platform::read_hidden_line: echo off on the terminal.
+rustix.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# platform: owner-only DACLs, reparse points, console echo.
+windows-sys = { version = "0.61", features = [
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Threading",
+] }

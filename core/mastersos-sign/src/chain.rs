@@ -83,7 +83,10 @@ pub fn recorded_contents(
         .map_err(|e| tampered(want, e))?
         .contents;
     if hex(&content_digest(&contents)) != rec.digest_hex {
-        return Err(tampered(want, "的内容与本机验证过的不同"));
+        return Err(tampered(
+            want,
+            "content differs from what this computer verified",
+        ));
     }
     Ok(contents)
 }
@@ -143,11 +146,11 @@ pub(crate) fn load_pin(path: &Path) -> Result<Option<Pin>> {
     match std::fs::read_to_string(path) {
         Ok(text) => {
             let pin: Pin = toml::from_str(&text)
-                .with_context(|| format!("pin 文件 {} 读不懂", path.display()))?;
+                .with_context(|| format!("Cannot read the pin file {}", path.display()))?;
             Ok(Some(pin.normalized()))
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e).with_context(|| format!("读 pin 文件 {} 失败", path.display())),
+        Err(e) => Err(e).with_context(|| format!("Could not read the pin file {}", path.display())),
     }
 }
 
@@ -200,7 +203,7 @@ pub fn save_pin(path: &Path, prev: Option<&Pin>, pin: &Pin) -> Result<()> {
             path.display()
         ),
     }
-    let text = toml::to_string(pin).context("pin 序列化失败")?;
+    let text = toml::to_string(pin).context("Could not serialise the pin")?;
     write_replace(dir, path, text.as_bytes())
 }
 
@@ -279,7 +282,7 @@ fn write_replace(dir: &Path, path: &Path, data: &[u8]) -> Result<()> {
 
 fn tampered(v: u64, why: impl std::fmt::Display) -> anyhow::Error {
     anyhow::anyhow!(
-        "历史版本验不过，服务端可能被篡改：第 {v} 版 {}",
+        "An earlier version fails verification; the server may have been tampered with: version {v} {}",
         crate::safe::field(&why.to_string())
     )
 }
@@ -300,7 +303,7 @@ pub async fn verify_chain(
     };
     if pin.host != api.host() {
         bail!(
-            "pin 文件 {} 记的是 {}，不是 {}",
+            "The pin file {} is for {}, not {}",
             path.display(),
             pin.host,
             api.host()
@@ -308,7 +311,7 @@ pub async fn verify_chain(
     }
     if latest < pin.version {
         bail!(
-            "服务端说最新是第 {latest} 版，而本地已验证过第 {} 版：版本回退，服务端可能被篡改",
+            "The server says the latest is version {latest}, but this computer already verified version {}: the version went backwards, the server may have been tampered with",
             pin.version
         );
     }
@@ -319,7 +322,10 @@ pub async fn verify_chain(
         .map_err(|e| tampered(pin.version, e))?
         .contents;
     if hex(&content_digest(&contents)) != pin.digest_hex {
-        return Err(tampered(pin.version, "的内容与上次验证过的不同"));
+        return Err(tampered(
+            pin.version,
+            "content differs from what was verified last time",
+        ));
     }
 
     let mut cur = Verified {
@@ -337,14 +343,14 @@ pub async fn verify_chain(
         if b.manifest.version != v {
             return Err(tampered(
                 v,
-                format!("的包里写的是第 {} 版", b.manifest.version),
+                format!("package says it is version {}", b.manifest.version),
             ));
         }
         let delta = TrustDelta::between(&cur.trust, &b.manifest.trust);
         if !delta.is_empty() {
             writeln!(
                 out,
-                "第 {v} 版改了 trust（已用第 {} 版的 trust 验过签名）：",
+                "Version {v} changes the trusted keys (its signature was checked with the trusted keys of version {}):",
                 cur.version
             )?;
             delta.print(out)?;
@@ -356,8 +362,8 @@ pub async fn verify_chain(
         if recipients_changed(&old_recipients, &b.manifest.school.escrow_recipients) {
             writeln!(
                 out,
-                "Version {v} changes the escrow recipients (machines seal their LUKS recovery keys \
-                 to them):"
+                "Version {v} changes disk unlocking (computers keep their disk recovery codes for \
+                 these school keys):"
             )?;
             for r in &old_recipients {
                 if !b.manifest.school.escrow_recipients.contains(r) {
@@ -380,20 +386,19 @@ pub async fn verify_chain(
         if let Err(BundleError::KitRequired(what)) =
             check_recovery_signed(&cur.trust, &old_recipients, &b.manifest, &signer)
         {
-            let rules = match what {
-                KitChange::Trust => "R7",
-                KitChange::Recipients => "R8",
-                KitChange::TrustAndRecipients => "R7 and R8",
+            // The rule ids stay out of the sentence; they are in the code above.
+            let changes = match what {
+                KitChange::Trust => "the trusted keys",
+                KitChange::Recipients => "disk unlocking",
+                KitChange::TrustAndRecipients => "the trusted keys and disk unlocking",
             };
             writeln!(
                 out,
-                "!!! WARNING: version {v} changes {} but is signed by a passkey, not a recovery kit \
-                 (publishing rule {rules}).\n\
-                 !!! An honest server never accepts this, and machines refuse it (they stay on version {}).\n\
+                "!!! WARNING: version {v} changes {changes} but was not approved with a school key.\n\
+                 !!! An honest server never accepts this, and computers refuse it (they stay on version {}).\n\
                  !!! The server or the signing page may be compromised. Check every added or changed key\n\
-                 !!! and recipient above; one you do not know means someone tried to take over the machines\n\
-                 !!! or their recovery keys. Sign a corrected version with a recovery kit and check the server.",
-                what.as_str(),
+                 !!! above; one you do not know means someone tried to take over the computers or unlock\n\
+                 !!! their disks. Approve a corrected version with a school key and check the server.",
                 cur.version
             )?;
             let typed = ask(
@@ -405,9 +410,8 @@ pub async fn verify_chain(
             .unwrap_or_default();
             if typed != "yes" {
                 bail!(
-                    "version {v} changes {} with a passkey signature (violates {rules}); not \
-                     confirmed, cancelled, pin unchanged",
-                    what.as_str()
+                    "version {v} changes {changes} without a school key's approval; not \
+                     confirmed, cancelled"
                 );
             }
             cur.latest = v;
@@ -428,7 +432,7 @@ pub async fn verify_chain(
     if cur.latest != pin.version {
         writeln!(
             out,
-            "已在本地逐版验证第 {} 版到第 {} 版。",
+            "Verified versions {} to {} on this computer, one by one.",
             pin.version + 1,
             cur.latest
         )?;
@@ -436,9 +440,9 @@ pub async fn verify_chain(
     if cur.version != cur.latest {
         writeln!(
             out,
-            "Machines stay on version {}: the versions after it that change trust or escrow \
-             recipients without a recovery-kit signature are refused. The pin and the base for the \
-             next signature stay at version {}; the next version is {}.",
+            "Computers stay on version {}: the versions after it that change the trusted keys or \
+             disk unlocking without a school key's approval are refused. Checks start from version \
+             {} again next time; the next version is {}.",
             cur.version,
             cur.version,
             cur.latest + 1
@@ -470,36 +474,37 @@ async fn first_use(
 ) -> Result<Verified> {
     if latest == 0 {
         bail!(
-            "the server has not published any version yet: nothing to verify. The first version is \
-             signed with a registered recovery key listed in its own trust (R1g): `mastersos-sign sign`"
+            "the server has not published any version yet: nothing to verify. Approve the first \
+             version with a school key: `mastersos publish --school-key <FILE>`"
         );
     }
     let archive = api.version_archive(latest).await?;
-    let unpacked = read_archive(&archive).context("最新版的包解不开")?;
-    let m = Manifest::parse(&unpacked.contents.manifest_text).context("最新版的清单读不懂")?;
+    let unpacked = read_archive(&archive).context("The latest package cannot be opened")?;
+    let m = Manifest::parse(&unpacked.contents.manifest_text)
+        .context("The latest manifest cannot be read")?;
     writeln!(
         out,
-        "首次使用：本机还没有 {} 的验证记录（pin）。服务端最新是第 {latest} 版，它信任这些钥匙：",
+        "This computer has not checked {} before. The server's latest is version {latest}; it names these keys as the ones computers accept:",
         api.host()
     )?;
     print_trust(out, &m.trust)?;
     writeln!(
         out,
-        "请逐把与管理网页「钥匙」页、种子开头注释里的指纹对照。之后的每一版都从这里往下验。"
+        "Compare each one with the School keys page and the comment at the top of the install file. Every later version is verified from here on."
     )?;
     let typed = ask(
         confirm,
         out,
-        "与钥匙页、种子开头的指纹对照无误，请输入 yes：",
+        "If they match the School keys page and the install file, type yes: ",
     )?;
     if typed != "yes" {
-        bail!("没有确认首次信任的 trust，已取消");
+        bail!("The trusted keys were not confirmed; cancelled");
     }
     let b = accept(&archive, &m.trust, None)
-        .context("最新版的签名用它自己的 trust 都验不过：不信任这台服务端")?;
+        .context("The latest version does not verify even with its own trusted keys: do not trust this server")?;
     if b.manifest.version != latest {
         bail!(
-            "服务端说最新是第 {latest} 版，包里写的是第 {} 版",
+            "The server says the latest is version {latest}, but the package says version {}",
             b.manifest.version
         );
     }
@@ -515,7 +520,11 @@ async fn first_use(
         history,
     };
     save_pin(path, None, &pin_of(api, &v))?;
-    writeln!(out, "已记下第 {latest} 版的 trust（{}）。", path.display())?;
+    writeln!(
+        out,
+        "Recorded the trusted keys of version {latest} ({}).",
+        path.display()
+    )?;
     Ok(v)
 }
 
