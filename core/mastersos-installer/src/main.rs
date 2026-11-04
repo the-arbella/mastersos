@@ -10,6 +10,8 @@ use mastersos_installer::{
 };
 
 fn main() {
+    // Developer diagnostics: the hidden one-second window, before anything is on the screen (hold d from power-on)
+    let debug = mastersos_installer::tty::sniff_debug();
     // A bug (panic) must not leave a dead screen either: show it, wait for Enter, restart (best effort).
     std::panic::set_hook(Box::new(|info| {
         let mut tty = RealTty;
@@ -21,6 +23,7 @@ fn main() {
         &mut RealTty,
         Path::new("/sys"),
         Path::new("/dev"),
+        debug,
     ) {
         // stdout and stderr both go to tty1: the failure screen shows the reason, what happened to the disk, and waits for Enter.
         fail_and_restart(&RealRunner, &mut RealTty, &e, Restart::system());

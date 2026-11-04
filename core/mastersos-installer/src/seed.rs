@@ -367,25 +367,20 @@ pub fn write_seed_dir(dir: &Path, seed: &SeedFound) -> Result<()> {
     Ok(())
 }
 
-/// The developer diagnostics switch (docs/specs/2026-11-03-diagnostics-design.md): a file of this name next to the seeds on
-/// the stick becomes an empty file of the same name in the installed seed partition. Its presence is the switch; its content
-/// is never read, and it takes no part in seed validation.
-pub const DEBUG_FLAG: &str = "debug.conf";
+/// The developer diagnostics marker (docs/specs/2026-11-03-diagnostics-design.md): the installer writes it into the seed
+/// folder when d was held in the hidden window ([`crate::tty::sniff_debug`]). The first boot moves it into the encrypted root
+/// (mastersos-diag-adopt.service); a marker found on the seed partition on any later boot is deleted, never trusted.
+pub const DEBUG_MARKER: &str = "debug-install";
 
-/// Whether `src_dir` holds the switch as a regular file (a symlink, a folder or anything unreadable is "off").
-pub fn debug_flag_present(src_dir: &Path) -> bool {
-    fs::symlink_metadata(src_dir.join(DEBUG_FLAG)).is_ok_and(|m| m.is_file())
-}
-
-/// Creates the empty switch file (0644) in `dir`, the seed folder `write_seed_dir` just made.
-pub fn write_debug_flag(dir: &Path) -> Result<()> {
-    let p = dir.join(DEBUG_FLAG);
+/// Creates the empty marker (0644) in `dir`, the seed folder `write_seed_dir` just made.
+pub fn write_debug_marker(dir: &Path) -> Result<()> {
+    let p = dir.join(DEBUG_MARKER);
     let f = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o644)
         .open(&p)
-        .context("writing debug.conf")?;
+        .context("writing the diagnostics marker")?;
     // umask must not tighten it
     fs::set_permissions(&p, std::os::unix::fs::PermissionsExt::from_mode(0o644))?;
     f.sync_all()?;
