@@ -2426,8 +2426,37 @@ for pkg in plymouth plymouth-label plymouth-theme-spinner; do
 		r=1
 	}
 done
-grep -qx 'ExecStartPre=-/usr/bin/plymouth quit' "$ix/usr/lib/systemd/system/mastersos-factory-reset-confirm.service" || {
-	bad 52 "mastersos-factory-reset-confirm.service does not quit Plymouth first"
+# The confirmation asks through systemd-ask-password. Once Plymouth runs, the console agent's path unit was skipped at boot
+# (ConditionPathExists=!/run/plymouth/pid) and the Plymouth agent has no daemon after the quit: hand the questions back to the
+# console agent, or nobody can answer (and the recovery key prompt after keep_data hangs until emergency).
+frc=$ix/usr/lib/systemd/system/mastersos-factory-reset-confirm.service
+for k in 'ExecStartPre=-/usr/bin/plymouth --wait quit' \
+	'ExecStartPre=-/usr/bin/systemctl --no-block stop systemd-ask-password-plymouth.path systemd-ask-password-plymouth.service' \
+	'ExecStartPre=-/usr/bin/systemctl --no-block start systemd-ask-password-console.path'; do
+	grep -qxF -- "$k" "$frc" || {
+		bad 52 "mastersos-factory-reset-confirm.service lacks $k"
+		r=1
+	}
+done
+# The initrd failure message must not sit behind the splash (upstream's emergency.service quits Plymouth; our drop-in empties
+# ExecStartPre= and must put the quit back).
+grep -qxF 'ExecStartPre=-/usr/bin/plymouth --wait quit' "$ix/usr/lib/systemd/system/emergency.service.d/50-mastersos-reboot.conf" || {
+	bad 52 "emergency.service.d/50-mastersos-reboot.conf does not quit Plymouth before its message"
+	r=1
+}
+# usr-repair decides between Plymouth and the console with plymouth --ping: Plymouth must already be up when it asks
+grep -qE '^After=.*\bplymouth-start\.service\b' "$ix/usr/lib/systemd/system/mastersos-usr-repair.service" || {
+	bad 52 "mastersos-usr-repair.service is not ordered after plymouth-start.service"
+	r=1
+}
+# Lab: with the serial console, Plymouth uses its text mode, which shows the prompts on ttyS0 and reads answers there (the
+# acceptance scripts answer over serial). Only a screenshot build (MASTERSOS_LAB_SPLASH=1) adds plymouth.ignore-serial-consoles.
+if grep -qE '^KernelCommandLine=.*plymouth\.ignore-serial-consoles' "$rel/mkosi.profiles/lab.conf"; then
+	bad 52 "mkosi.profiles/lab.conf must not hide the serial console from Plymouth (acceptance answers prompts over serial)"
+	r=1
+fi
+grep -qF -- '--kernel-command-line=plymouth.ignore-serial-consoles' "$rel/build.sh" && grep -qF 'MASTERSOS_LAB_SPLASH' "$rel/build.sh" || {
+	bad 52 "build.sh has no MASTERSOS_LAB_SPLASH=1 switch for the screenshot build"
 	r=1
 }
 grep -qx 'plymouth.enable=0' "$rel/installer/installer.cmdline" || {
@@ -2459,6 +2488,23 @@ for e in mastersos-login@mastersos.org mastersos-managed@mastersos.org; do
 		bad 53 "$e/stylesheet.css still has the old blue"
 		r=1
 	fi
+done
+# The desktop runs the ubuntu session mode (parentMode user), so currentMode alone never matches; the overview keeps GNOME's bar
+mext=$gse/mastersos-managed@mastersos.org
+grep -qF "Main.sessionMode.parentMode === 'user'" "$mext/extension.js" || {
+	bad 53 "mastersos-managed: the translucent top bar only checks currentMode === 'user' (the desktop's mode is ubuntu)"
+	r=1
+}
+grep -qF '#panel.mastersos-panel:overview' "$mext/stylesheet.css" || {
+	bad 53 "mastersos-managed/stylesheet.css: the overview's top bar is not left as GNOME has it"
+	r=1
+}
+# The mark is small and at 85 % opacity (design §5.4)
+for f in "$gse/mastersos-login@mastersos.org/brand.js" "$mext/extension.js"; do
+	grep -qF 'opacity: 217' "$f" || {
+		bad 53 "$f: the MastersOS mark is not at 85 % opacity (opacity: 217)"
+		r=1
+	}
 done
 grep -qF 'background: #090a16' "$ex/usr/share/mastersos/kiosk-error.html" || {
 	bad 53 "kiosk-error.html does not use the brand background #090a16"

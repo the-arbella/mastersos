@@ -7,7 +7,8 @@ import Clutter from 'gi://Clutter';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 export function brandMark() {
-    const box = new St.BoxLayout({style_class: 'mastersos-brand-corner', y_align: Clutter.ActorAlign.CENTER, reactive: false});
+    // Small and at 85 % opacity (design 2026-11-04 visual identity §5.4); St's CSS has no opacity, so the actor carries it
+    const box = new St.BoxLayout({style_class: 'mastersos-brand-corner', y_align: Clutter.ActorAlign.CENTER, reactive: false, opacity: 217});
     box.add_child(new St.Icon({icon_name: 'mastersos-logo', icon_size: 20, y_align: Clutter.ActorAlign.CENTER}));
     box.add_child(new St.Bin({style_class: 'mastersos-brand-wordmark', y_align: Clutter.ActorAlign.CENTER}));
     return box;

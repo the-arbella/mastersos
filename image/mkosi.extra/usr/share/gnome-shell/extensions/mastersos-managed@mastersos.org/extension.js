@@ -64,7 +64,8 @@ function readBranding() {
 // The MastersOS mark at the start of the top bar while the screen is locked, and a translucent top bar in the session
 // (design 2026-11-04 visual identity §5.4–5.5). The login screen's mark is mastersos-login's; same class names.
 function brandMark() {
-    const box = new St.BoxLayout({style_class: 'mastersos-brand-corner', y_align: Clutter.ActorAlign.CENTER, reactive: false});
+    // Small and at 85 % opacity (design 2026-11-04 visual identity §5.4); St's CSS has no opacity, so the actor carries it
+    const box = new St.BoxLayout({style_class: 'mastersos-brand-corner', y_align: Clutter.ActorAlign.CENTER, reactive: false, opacity: 217});
     box.add_child(new St.Icon({icon_name: 'mastersos-logo', icon_size: 20, y_align: Clutter.ActorAlign.CENTER}));
     box.add_child(new St.Bin({style_class: 'mastersos-brand-wordmark', y_align: Clutter.ActorAlign.CENTER}));
     return box;
@@ -152,7 +153,9 @@ export default class MastersosManagedExtension extends Extension {
             this._brand.destroy();
             this._brand = null;
         }
-        if (Main.sessionMode.currentMode === 'user')
+        // The desktop runs the ubuntu mode (ubuntu.json, parentMode user): currentMode alone is never 'user' there
+        const mode = Main.sessionMode;
+        if (mode.currentMode === 'user' || Main.sessionMode.parentMode === 'user')
             panel.add_style_class_name('mastersos-panel');
         else
             panel.remove_style_class_name('mastersos-panel');

@@ -23,3 +23,8 @@
 #panel.mastersos-panel {
     background-color: rgba(8, 8, 20, 0.55);
 }
+
+/* The overview keeps GNOME's own (transparent) bar: same specificity as #panel:overview and loaded later, so say it again. */
+#panel.mastersos-panel:overview {
+    background-color: transparent;
+}

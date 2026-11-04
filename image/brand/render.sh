@@ -43,17 +43,29 @@ shot() {
 mkdir -p "$ex/usr/share/mastersos/brand"
 python3 "$here/wordmark.py" "$here/fonts/PlusJakartaSans[wght].ttf" "$ex/usr/share/mastersos/brand/wordmark-light.svg"
 
-# Wallpapers: 1920x1200 CSS px at scale 2, JPEG quality 92 with full chroma (4:4:4)
+# Wallpapers: 1920x1200 CSS px at scale 2, dithered, JPEG quality 92 with full chroma (4:4:4). The dither is a 256 px tile of
+# triangular noise (about ±2 levels per channel, fixed seed: a re-render gives the same bytes; 20261104 put a check-private
+# denylist string into the JPEG bytes by chance, so pick another seed if that happens again); without it the night sky is
+# rows of one single colour that band on the 6-bit panels of school laptops (banding.py checks).
 bg=$ex/usr/share/backgrounds/mastersos
 mkdir -p "$bg"
 for m in day night; do
 	shot "file://$here/wallpaper.html?m=$m" 1920 1200 2 "$work/$m.png"
 	python3 - "$work/$m.png" "$bg/mastersos-$m.jpg" <<'PY'
 import sys
-from PIL import Image
+import random
+from PIL import Image, ImageChops
 im = Image.open(sys.argv[1]).convert("RGB")
 if im.size != (3840, 2400):
     sys.exit(f"render.sh: wallpaper is {im.size}, want (3840, 2400)")
+rng = random.Random(20261105)
+t = 256
+tile = Image.frombytes("RGB", (t, t), bytes(128 + round(2 * (rng.random() + rng.random() - 1)) for _ in range(t * t * 3)))
+noise = Image.new("RGB", im.size)
+for y in range(0, im.height, t):
+    for x in range(0, im.width, t):
+        noise.paste(tile, (x, y))
+im = ImageChops.add(im, noise, scale=1.0, offset=-128)
 im.save(sys.argv[2], "JPEG", quality=92, subsampling=0, optimize=True)
 PY
 done
