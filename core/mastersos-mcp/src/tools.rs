@@ -84,7 +84,7 @@ pub const TOOLS: &[Tool] = &[
     Tool {
         name: "keys_list",
         kind: Kind::Server,
-        description: "The signing keys registered for the school: key_id, kind (passkey or recovery), alg, label, and whether each is in the latest published trust (in_published_trust). No parameters.",
+        description: "The school keys registered for the school: key_id (its first 8 hex digits are the key code), kind, alg, label, and whether each is one of the trusted keys of the latest published version (in_published_trust). No parameters.",
     },
     Tool {
         name: "spec",
