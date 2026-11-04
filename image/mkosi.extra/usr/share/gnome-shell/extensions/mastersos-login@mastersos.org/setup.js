@@ -310,6 +310,10 @@ export class LanguageScreen {
         }
     }
 
+    focus() {
+        (this._language?.button ?? this._continue)?.grab_key_focus();
+    }
+
     destroy() {
         this._holder?.destroy();
         this._holder = null;

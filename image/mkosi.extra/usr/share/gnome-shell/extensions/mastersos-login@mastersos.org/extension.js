@@ -397,6 +397,16 @@ export default class MastersosLoginExtension extends Extension {
     _adoptDialog(dlg) {
         this._dialog = dlg;
 
+        // The screen shield calls dlg.activate() (show, keys to the user list) whenever the greeter wakes from idle blanking:
+        // while the language screen is up the dialog stays hidden behind it and the keys stay on the language list.
+        const visibleId = dlg.connect('notify::visible', () => {
+            if (this._language && dlg.visible) {
+                dlg.hide();
+                this._language.focus();
+            }
+        });
+        this._restore.push(() => dlg.disconnect(visibleId));
+
         // The list keeps people; guest and the locked apps have their own buttons.
         const hidden = user => {
             const n = user.get_user_name();

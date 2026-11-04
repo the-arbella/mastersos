@@ -2657,4 +2657,22 @@ for f in "$rel/brand/mastersos.plymouth" "$rel/mkosi.extra/usr/share/plymouth/th
 done
 [ "$r" = 0 ] && ok 57 "boot splash: the M animation is on in every boot, shutdown and reboot section"
 
+# 58. GDM's screen shield calls LoginDialog.activate() (show() and key focus on the user list) whenever the greeter wakes from
+#     idle blanking (screenShield.js _ensureUnlockDialog, _showLockScreen). On 20261104.6 the first-run language screen then
+#     had the login card showing through it. The extension hides the dialog again while the language screen is up, gives the
+#     keys back to the language list, and undoes the handler on disable.
+r=0
+ld=$rel/mkosi.extra/usr/share/gnome-shell/extensions/mastersos-login@mastersos.org
+adopt=$(awk '/^    _adoptDialog\(dlg\) \{/ {on = 1} on {print} on && /^    \}$/ {exit}' "$ld/extension.js")
+if ! grep -qF "dlg.connect('notify::visible'" <<<"$adopt" || ! grep -qF 'this._language.focus()' <<<"$adopt" ||
+	! grep -qE 'this\._restore\.push\(\(\) => dlg\.disconnect\(' <<<"$adopt"; then
+	bad 58 "extension.js _adoptDialog does not keep the login dialog hidden behind the language screen (notify::visible, focus, undo)"
+	r=1
+fi
+grep -qE '^    focus\(\) \{' "$ld/setup.js" || {
+	bad 58 "setup.js LanguageScreen has no focus()"
+	r=1
+}
+[ "$r" = 0 ] && ok 58 "first-run language screen: the login dialog stays hidden when the greeter wakes from idle"
+
 exit $fail
