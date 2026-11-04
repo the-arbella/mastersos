@@ -114,6 +114,15 @@ elif [ ! -f "$tmp/r/var/lib/mastersos-diag/enabled" ] || [ -L "$tmp/r/var/lib/ma
 elif [ "$(stat -c %a "$tmp/r/var/lib/mastersos-diag")" != 700 ]; then fail $t "folder mode $(stat -c %a "$tmp/r/var/lib/mastersos-diag")"
 else ok $t; fi
 
+t=adopt_refused_after_factory_reset
+new_root
+: >"$tmp/r/$marker"
+echo '{}' >"$tmp/r/var/lib/mastersos-seed/identity.json"
+run adopt
+if [ -e "$tmp/r/var/lib/mastersos-diag/enabled" ]; then fail $t "a factory reset turned the switch on"
+elif [ -e "$tmp/r/$marker" ]; then fail $t "marker not removed"
+else ok $t; fi
+
 t=adopt_without_marker_noop
 new_root
 run adopt

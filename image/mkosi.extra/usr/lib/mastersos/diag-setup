@@ -4,7 +4,7 @@
 # The switch is the regular file /var/lib/mastersos-diag/enabled on the encrypted root. Only the first boot creates it, from the
 # marker /var/lib/mastersos-seed/debug-install the installer wrote when d was held at its start ("adopt"). The seed partition is
 # not encrypted: a marker found there on any other boot was put there afterwards; it is deleted and never trusted. A factory
-# reset empties the root and so turns the switch off. Without the switch nothing is written. With it, before the services start:
+# reset empties the root and so turns the switch off, and its first boot does not adopt a marker (identity.json, see below). Without the switch nothing is written. With it, before the services start:
 #   /run/mastersos/diag.env                          read by the 90-mastersos-diag.conf drop-ins (EnvironmentFile=-):
 #       MASTERSOS_LOG_LEVEL=debug                    mastersos-agent
 #       MASTERSOS_DIAG_AUTHD_ARGS=-vv                authd and authd-oidc (cobra -v count: -vv is DEBUG, -vvv only adds the caller)
@@ -41,7 +41,12 @@ gdm_debug() {
 }
 
 if [ "${1:-}" = adopt ]; then
-	if [ -f "$marker" ] && [ ! -L "$marker" ]; then
+	# A factory reset also makes a first boot, but keeps the seed partition: identity.json there (written by the agent on the
+	# machine's first run, after this unit) means this root was rebuilt, not installed, so a marker cannot be the installer's
+	if [ -e "$R/var/lib/mastersos-seed/identity.json" ]; then
+		[ ! -e "$marker" ] && [ ! -L "$marker" ] ||
+			echo "mastersos-diag-setup: warning: removed $marker after a factory reset; only an install can turn diagnostics on" >&2
+	elif [ -f "$marker" ] && [ ! -L "$marker" ]; then
 		mkdir -p "$(dirname "$switch")"
 		chmod 0700 "$(dirname "$switch")"
 		: >"$switch"
