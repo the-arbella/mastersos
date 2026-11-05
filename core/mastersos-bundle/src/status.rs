@@ -47,6 +47,11 @@ pub struct StatusReport {
     /// At most 32 entries, each 1 to 64 bytes; the server refuses a report with more.
     #[serde(default)]
     pub manifest_features: Vec<String>,
+    /// A newer OS version is installed and takes effect at the next restart (`YYYYMMDD.N`, from
+    /// `/run/mastersos-update-pending`, which `update-run` writes). Empty when nothing waits for a
+    /// restart, and from agents that predate the field.
+    #[serde(default)]
+    pub os_pending_version: Option<String>,
 }
 
 /// `StatusReport::manifest_features` has at most this many entries.
@@ -104,7 +109,25 @@ mod tests {
             seed_trust_fingerprints: vec!["f5a3-7e83-ee45-c6cc".into()],
             imported_from_seed_at: Some("2026-10-13T08:09:47Z".into()),
             manifest_features: vec!["update_mirror".into()],
+            os_pending_version: Some("20261106.1".into()),
         }
+    }
+
+    /// A report from an agent that predates `os_pending_version` reads as None; one that has it
+    /// reaches a server that does not know it yet without being refused (no `deny_unknown_fields`:
+    /// unknown keys are ignored).
+    #[test]
+    fn os_pending_version_is_optional_both_ways() {
+        let mut v = serde_json::to_value(report()).unwrap();
+        assert_eq!(v["os_pending_version"], "20261106.1");
+        v.as_object_mut().unwrap().remove("os_pending_version");
+        let back: StatusReport = serde_json::from_value(v.clone()).unwrap();
+        assert_eq!(back.os_pending_version, None);
+        v.as_object_mut()
+            .unwrap()
+            .insert("a_field_from_the_future".into(), serde_json::json!(1));
+        let back: StatusReport = serde_json::from_value(v).unwrap();
+        assert_eq!(back.os_pending_version, None);
     }
 
     #[test]

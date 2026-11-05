@@ -1,0 +1,19 @@
+# The restart prompt at sign-in (docs/update-channels.md, "Restart prompt"): update-run leaves the version of an installed
+# update that waits for a restart in /run/mastersos-update-pending (0644, gone after the reboot that applies it); at the start
+# of a regular desktop session this shows the user the same notification update-run shows when it installs one. Runs as
+# the user (update-run --remind only reads the file and calls notify-send on the session bus). Pulled in by
+# gnome-session@ubuntu.target and gnome-session@gnome.target (their .target.d/mastersos-update-reminder.conf), not by
+# gnome-session.target, which the locked-app session reaches too; the greeter runs no gnome-session@ubuntu/gnome target.
+# No [Install].
+[Unit]
+Description=MastersOS: remind the user to restart for a system update
+PartOf=gnome-session.target
+After=gnome-session.target
+ConditionUser=!@system
+ConditionPathExists=/run/mastersos-update-pending
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/mastersos/update-run --remind
+TimeoutStartSec=30
+Restart=no

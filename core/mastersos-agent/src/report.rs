@@ -156,7 +156,48 @@ pub fn build(
         seed_trust_fingerprints: vec![],
         imported_from_seed_at: None,
         manifest_features: SUPPORTED_FEATURES.iter().map(|f| (*f).to_owned()).collect(),
+        os_pending_version: None,
     }
+}
+
+/// Where `update-run` (image/mkosi.extra/usr/lib/mastersos/update-run) leaves the version of an
+/// installed OS update that waits for a restart, relative to the root. /run is emptied by the
+/// reboot that applies it.
+pub const UPDATE_PENDING_REL: &str = "run/mastersos-update-pending";
+/// The file holds `YYYYMMDD.N\n`; anything longer is not ours.
+const UPDATE_PENDING_MAX_BYTES: u64 = 64;
+
+/// A release version `YYYYMMDD.N` as (date, N); None for anything else (N at most 9 digits, as
+/// update-run accepts).
+fn release_version(v: &str) -> Option<(u32, u64)> {
+    let (d, n) = v.split_once('.')?;
+    let digits = |s: &str, min: usize, max: usize| {
+        (min..=max).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_digit())
+    };
+    if !digits(d, 8, 8) || !digits(n, 1, 9) {
+        return None;
+    }
+    Some((d.parse().ok()?, n.parse().ok()?))
+}
+
+/// The OS version installed and waiting for the next restart (`StatusReport::os_pending_version`):
+/// what update-run wrote to [`UPDATE_PENDING_REL`] under `root`, when it is a release version
+/// greater than the running `os_version`. None when the file is missing, too long or malformed,
+/// or when the running version is not a release version to compare against.
+pub fn os_pending_version(root: &std::path::Path, os_version: Option<&str>) -> Option<String> {
+    use std::io::Read;
+    let running = release_version(os_version?)?;
+    let f = std::fs::File::open(root.join(UPDATE_PENDING_REL)).ok()?;
+    let mut b = Vec::new();
+    f.take(UPDATE_PENDING_MAX_BYTES + 1)
+        .read_to_end(&mut b)
+        .ok()?;
+    if b.len() as u64 > UPDATE_PENDING_MAX_BYTES {
+        return None;
+    }
+    let text = std::str::from_utf8(&b).ok()?;
+    let v = text.strip_suffix('\n').unwrap_or(text);
+    (release_version(v)? > running).then(|| v.to_owned())
 }
 
 /// The latest report built, in the state directory (0600): help requests carry it in their
@@ -233,6 +274,68 @@ mod tests {
         assert!(r.last_fetch_ok.unwrap().ends_with('Z'));
         assert_eq!(r.fresh_until, None);
         assert_eq!(r.newer_withheld, None);
+        assert_eq!(r.os_pending_version, None);
+    }
+
+    #[test]
+    fn os_pending_version_reads_the_file_update_run_writes() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path();
+        let run = "20261105.9";
+        assert_eq!(os_pending_version(root, Some(run)), None, "no file");
+        std::fs::create_dir_all(root.join("run")).unwrap();
+        let put = |s: &str| std::fs::write(root.join(UPDATE_PENDING_REL), s).unwrap();
+        put("20261106.1\n");
+        assert_eq!(
+            os_pending_version(root, Some(run)).as_deref(),
+            Some("20261106.1")
+        );
+        assert_eq!(os_pending_version(root, None), None, "no running version");
+        assert_eq!(
+            os_pending_version(root, Some("1.0")),
+            None,
+            "running version not comparable"
+        );
+        // N compares as a number
+        put("20261105.10\n");
+        assert_eq!(
+            os_pending_version(root, Some(run)).as_deref(),
+            Some("20261105.10")
+        );
+        assert_eq!(
+            os_pending_version(root, Some("20261105.10")),
+            None,
+            "already running"
+        );
+        assert_eq!(
+            os_pending_version(root, Some("20261105.11")),
+            None,
+            "older than running"
+        );
+        put("20261106.1");
+        assert_eq!(
+            os_pending_version(root, Some(run)).as_deref(),
+            Some("20261106.1"),
+            "no newline"
+        );
+        for bad in [
+            "",
+            "\n",
+            "20261106\n",
+            "20261106.\n",
+            "2026110.1\n",
+            "20261106.1\n\n",
+            " 20261106.1\n",
+            "20261106.1x\n",
+            "20261106.1234567890\n",
+            "20261106.-1\n",
+            "２0261106.1\n",
+        ] {
+            put(bad);
+            assert_eq!(os_pending_version(root, Some(run)), None, "{bad:?}");
+        }
+        put(&format!("20261106.1\n{}", " ".repeat(64)));
+        assert_eq!(os_pending_version(root, Some(run)), None, "too long");
     }
 
     #[test]

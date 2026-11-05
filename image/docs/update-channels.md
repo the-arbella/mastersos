@@ -250,6 +250,28 @@ systemd-boot 都按 systemd 的版本比较排序（`20261012.10` > `20261012.9`
 - sysupdate 把新 UKI 装成 `MastersOS_<v>_x86-64+3-0.efi`（三次机会），`InstancesMax=2`：ESP 上只有
   正在用的版本和新版本。装好后的第一个 UKI 不带计数（没有可退回的版本）。
 
+## 机器上：提示重启，回报等重启的版本（2026-11-06）
+
+- **以 ESP 为准**：`update-run` 每一轮成功（`main` 返回 0，含学校缓存的各条路）之后跑 `update_pending`：看
+  `<boot>/EFI/Linux` 里 20-uki 的三种文件名（`MastersOS_<v>_x86-64+<剩余>-<已用>.efi`、`…+<剩余>.efi`、`….efi`），
+  剩余次数为 0 的（`+0-3`：试过三次没起来、已经退回过的版本）不算；其余里版本最高的（`YYYYMMDD.N`，日期与 N 都按数字比，
+  `20261105.10` 比 `20261105.9` 新）高于正在跑的 `IMAGE_VERSION`（`/usr/lib/os-release`），就是「装好了、等重启」。
+  boot 路径取 `bootctl --print-boot-path`，取不到用 `/boot`。
+- 有等重启的版本：原子地写 `/run/mastersos-update-pending`（0644，内容 `<版本>\n`）；没有就删掉它。`/run` 在重启时清空，
+  正好是新版本生效的时候。文件新写或版本变了，就给当前活动的图形会话（`loginctl`，`Class=user`，wayland/x11；不发给登录界面）
+  发一条通知（`runuser` + `notify-send`，带超时），同一版本之后的轮次不再发。文字是 `update-ready`：英文
+  「A system update is ready. Restart the computer to finish installing it.」，按 `LANG`/`/etc/locale.conf` 换中文、泰文。
+  这一步出什么错都不改 `update-run` 的退出码；这一轮失败就不碰这个文件。
+- **登录时再提醒**：用户单元 `mastersos-update-reminder.service`（`ConditionPathExists=/run/mastersos-update-pending`，
+  由 `gnome-session@ubuntu.target.d` 与 `gnome-session@gnome.target.d` 的 drop-in 拉起，同 `mastersos-signin-import`；
+  锁定应用会话与登录界面不会拉起它）以用户身份跑 `update-run --remind`：读文件、版本合法且比正在跑的新，就发同一条通知。
+  不要 root，30 秒超时，不重试。
+- **回报**：agent 每次回报都读这个文件，放进 `StatusReport.os_pending_version`（只收 `YYYYMMDD.N`、最多 64 字节、且比
+  `os_version` 新，否则为空）。管理台据此看出哪些机器装好了更新、还没重启。字段带 `#[serde(default)]`，`StatusReport` 没有
+  `deny_unknown_fields`：旧服务端忽略它，旧 agent 不发它。
+- 测试：`tests/update-run-test.sh` 的最后一节（各种 UKI 名字、版本比较、文件写删、每个版本只通知一次、超时与失败不影响退出码、
+  `--remind`）；`tests/check-tree.sh` 第 72 条。
+
 ## 发布（在构建机 VM 161 上）
 
 ```bash

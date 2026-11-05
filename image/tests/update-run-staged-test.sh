@@ -59,6 +59,8 @@ chmod +x "$tmp/sysupdate"
 export MASTERSOS_SYSUPDATE=$tmp/sysupdate MASTERSOS_SYSTEM_VAR=$var FAKE_LOG=$tmp/log
 export MASTERSOS_SYSUPDATE_DIRS=$defs MASTERSOS_STAGING_FILE_URLS=1 MASTERSOS_GPG_KEYRING=$tmp/pubring.pgp
 export MASTERSOS_STAGED_DEFINITIONS=$tmp/run/definitions MASTERSOS_STAGING_MIN_FREE=1
+# the restart prompt after each successful round sees an empty ESP here (tests/update-run-test.sh covers it)
+export MASTERSOS_UPDATE_PENDING=$tmp/update-pending MASTERSOS_BOOT_PATH=$tmp/boot MASTERSOS_IMAGE_VERSION=20000101.1
 
 # publish <version…>: the channel holds these versions (each: UKI, three partition files, build-info), signed
 publish() {

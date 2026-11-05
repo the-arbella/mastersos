@@ -616,6 +616,7 @@ mod tests {
             seed_trust_fingerprints: vec![],
             imported_from_seed_at: None,
             manifest_features: vec![],
+            os_pending_version: None,
         }
     }
 

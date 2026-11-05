@@ -8,6 +8,9 @@
 # a check-new failure (message on stderr, exit 1; "none" is exit 1 with no output)
 # Cases: no cache set; cache fresh; cache broken (fallback works / both fail); cache stale within the grace
 # window, beyond it (fallback update plus a "school cache stale" record), and caught up again.
+# Restart prompt (last section): which UKI on the ESP counts as waiting (tries left, version order), the
+# /run/mastersos-update-pending file, one notification per version (loginctl / runuser / notify-send are recording stubs,
+# as in integrity-test.sh), the exit code untouched, and `update-run --remind` (the user unit's notification).
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -40,6 +43,9 @@ chmod +x "$fake"
 export MASTERSOS_SYSUPDATE=$fake MASTERSOS_SYSTEM_VAR=$var FAKE_LOG=$tmp/log
 # no transfers anywhere: every update takes the direct path (staging: tests/update-run-staged-test.sh)
 export MASTERSOS_SYSUPDATE_DIRS=$tmp/no-transfers
+# restart prompt: an empty ESP until the last section, which tests it
+export MASTERSOS_UPDATE_PENDING=$tmp/run/update-pending MASTERSOS_BOOT_PATH=$tmp/boot MASTERSOS_IMAGE_VERSION=20261105.9
+mkdir -p "$tmp/run" "$tmp/boot/EFI/Linux"
 
 fails=0
 check() { # check <name> <expected> <actual>
@@ -179,6 +185,177 @@ run 0 0 >/dev/null
 istrue "future unknown-since rewritten" test "$(cat "$var/update-mirror-unknown-since")" -le "$(date +%s)"
 absent "future unknown-since: no premature record" "$var/update-mirror-failed"
 export FAKE_OFFICIAL_ERR=''
+
+# --- restart prompt
+bin=$tmp/bin
+mkdir -p "$bin"
+cat >"$bin/loginctl" <<'EOF'
+#!/bin/bash
+case $1 in
+list-sessions) cat "$SESSIONS_FILE" 2>/dev/null || true ;;
+show-session) sed -n "s/^$2: //p" "$SESSION_INFO" | tr ' ' '\n' ;;
+esac
+EOF
+# runuser stub: runuser -u USER -- CMD... runs CMD (the notify stub) without switching user
+printf '#!/bin/bash\nshift 3\nexec "$@"\n' >"$bin/runuser"
+# shellcheck disable=SC2016 # the stub is written from single-quoted text on purpose
+printf '#!/bin/bash\nprintf "%%s|" "${DBUS_SESSION_BUS_ADDRESS:-}" "$@" >>"$NOTIFY_LOG"\necho >>"$NOTIFY_LOG"\n' >"$bin/notify-send"
+printf '#!/bin/bash\nexec sleep 30\n' >"$bin/notify-hang"
+printf '#!/bin/bash\nexit 3\n' >"$bin/notify-fail"
+chmod +x "$bin"/*
+export MASTERSOS_LOGINCTL=$bin/loginctl MASTERSOS_RUNUSER=$bin/runuser MASTERSOS_NOTIFY=$bin/notify-send
+export NOTIFY_LOG=$tmp/notify.log SESSIONS_FILE=$tmp/sessions SESSION_INFO=$tmp/session-info
+export MASTERSOS_LOCALE_CONF=$tmp/locale.conf
+printf 'c1 120 gdm seat0\n2 1000 alice seat0 tty2\n' >"$SESSIONS_FILE"
+printf 'c1: Active=yes Type=wayland Class=greeter Name=gdm User=120\n2: Active=yes Type=wayland Class=user Name=alice User=1000\n' >"$SESSION_INFO"
+unset LANG
+want_en="A system update is ready. Restart the computer to finish installing it."
+# a fresh state directory: no school cache (the cache path has its own case below)
+export MASTERSOS_SYSTEM_VAR=$tmp/var2
+mkdir -p "$MASTERSOS_SYSTEM_VAR"
+p=$MASTERSOS_UPDATE_PENDING
+esp=$tmp/boot/EFI/Linux
+uki() { for n in "$@"; do : >"$esp/MastersOS_$n.efi"; done; }
+noukis() { rm -f "$esp"/*.efi; }
+# prun [cache rc]: one round; prints the exit code
+prun() {
+	local rc=0
+	FAKE_MIRROR_RC=${1:-0} FAKE_FALLBACK_RC=0 "$here/../mkosi.extra/usr/lib/mastersos/update-run" 2>>"$tmp/prompt.err" || rc=$?
+	echo "$rc"
+}
+pend() { cat "$p" 2>/dev/null || echo "<none>"; }
+notes() { wc -l <"$NOTIFY_LOG" 2>/dev/null | tr -d ' '; }
+: >"$NOTIFY_LOG"
+
+check "no UKIs: round returns 0" 0 "$(prun)"
+absent "no UKIs: nothing pending" "$p"
+uki 20261105.9_x86-64
+check "only the running version: returns 0" 0 "$(prun)"
+absent "only the running version: nothing pending" "$p"
+check "only the running version: no notification" 0 "$(notes)"
+
+uki 20261106.1_x86-64+3-0
+check "failed round: exit code kept" 1 "$(prun 1)"
+absent "failed round: no prompt written" "$p"
+check "newer +3-0: returns 0" 0 "$(prun)"
+check "newer +3-0: pending version" 20261106.1 "$(pend)"
+check "pending file: exactly '<version>\\n'" "$(printf '20261106.1\n' | od -c)" "$(od -c <"$p")"
+check "pending file: mode 0644" 644 "$(stat -c %a "$p")"
+absent "pending file: no temporary file left" "$p.tmp"
+check "newer: one notification" 1 "$(notes)"
+check "notification: English, MastersOS title, session bus of the active user session (not the greeter)" \
+	"unix:path=/run/user/1000/bus|--app-name=MastersOS|--urgency=normal|MastersOS|$want_en|" "$(tr -d '\n' <"$NOTIFY_LOG")"
+check "same version next round: returns 0" 0 "$(prun)"
+check "same version next round: no second notification" 1 "$(notes)"
+
+noukis
+uki 20261105.9_x86-64+2-1 20261106.1_x86-64+0-3
+check "newer +0-3 (rolled back from): returns 0" 0 "$(prun)"
+absent "newer +0-3: file removed, nothing pending" "$p"
+check "newer +0-3: no notification" 1 "$(notes)"
+
+noukis
+uki 20261105.9_x86-64 20261106.2_x86-64
+prun >/dev/null
+check "newer without boot counter: pending" 20261106.2 "$(pend)"
+check "new version: notified again" 2 "$(notes)"
+
+noukis
+uki 20261105.9_x86-64 20261106.3_x86-64+3 20261107.1_x86-64+1-2 20261106.4_x86-64+3-0
+prun >/dev/null
+check "several newer (+3, +1-2, +3-0): the highest wins" 20261107.1 "$(pend)"
+noukis
+uki 20261107.1_x86-64+0-3 20261106.4_x86-64+3-0
+prun >/dev/null
+check "highest used up its tries: the next one that can boot" 20261106.4 "$(pend)"
+
+noukis
+uki 20261105.9_x86-64+3-0 20261105.10_x86-64+3-0
+prun >/dev/null
+check "20261105.10 is newer than the running 20261105.9 (N compared as a number)" 20261105.10 "$(pend)"
+noukis
+uki 20261105.8_x86-64+3-0 20261105.10_x86-64
+MASTERSOS_IMAGE_VERSION=20261105.10 prun >/dev/null
+absent "running 20261105.10, 20261105.8 waiting: older, nothing pending" "$p"
+noukis
+uki 20261106.1_aarch64+3-0 20261106.1_x86-64.efi.part 2026110.1_x86-64 X_20261106.1_x86-64
+prun >/dev/null
+absent "names that are not this transfer's UKIs are ignored" "$p"
+noukis
+uki 20261106.5_x86-64+3-0
+check "running version unreadable: round still returns 0" 0 "$(MASTERSOS_IMAGE_VERSION=garbage prun)"
+absent "running version unreadable: no prompt" "$p"
+
+# the language: LANG first, then /etc/locale.conf
+: >"$NOTIFY_LOG"
+LANG=zh_CN.UTF-8 prun >/dev/null
+check "LANG=zh_CN.UTF-8: Chinese" "系统更新已准备好。重新启动电脑即可完成安装。" "$(cut -d'|' -f5 "$NOTIFY_LOG")"
+rm -f "$p"
+: >"$NOTIFY_LOG"
+printf 'LANG="th_TH.UTF-8"\n' >"$MASTERSOS_LOCALE_CONF"
+prun >/dev/null
+check "/etc/locale.conf th: Thai" "การอัปเดตระบบพร้อมแล้ว รีสตาร์ทคอมพิวเตอร์เพื่อติดตั้งให้เสร็จสมบูรณ์" "$(cut -d'|' -f5 "$NOTIFY_LOG")"
+rm -f "$MASTERSOS_LOCALE_CONF"
+
+# the prompt can never fail a round
+rm -f "$p"
+: >"$NOTIFY_LOG"
+start=$SECONDS
+check "hung notify-send: returns 0" 0 "$(MASTERSOS_NOTIFY=$bin/notify-hang MASTERSOS_NOTIFY_TIMEOUT=1 prun)"
+istrue "hung notify-send: cut off within 10 s" test $((SECONDS - start)) -lt 10
+check "hung notify-send: file written first" 20261106.5 "$(pend)"
+rm -f "$p"
+check "failing notify-send: returns 0" 0 "$(MASTERSOS_NOTIFY=$bin/notify-fail prun)"
+rm -f "$p"
+check "no active session: returns 0" 0 "$(SESSIONS_FILE=$tmp/none prun)"
+check "no active session: still pending" 20261106.5 "$(pend)"
+check "unwritable pending path: returns 0" 0 "$(MASTERSOS_UPDATE_PENDING=$tmp/no-such-dir/pending prun)"
+check "unwritable pending path: failed round still returns its own code" 1 "$(MASTERSOS_UPDATE_PENDING=$tmp/no-such-dir/pending prun 1)"
+contains "unwritable pending path: says so" "$(cat "$tmp/prompt.err")" "update-run: cannot write $tmp/no-such-dir/pending"
+
+# the school cache path: a round through the cache gives the prompt too
+mkdir -p "$MASTERSOS_SYSTEM_VAR/sysupdate-fallback.d"
+touch "$MASTERSOS_SYSTEM_VAR/sysupdate-fallback.d/12-usr.transfer"
+rm -f "$p"
+noukis
+uki 20261105.9_x86-64 20261106.6_x86-64+3-0
+check "school cache round: returns 0" 0 "$(prun)"
+check "school cache round: pending" 20261106.6 "$(pend)"
+rm -f "$p"
+check "cache broken, official works: returns 0" 0 "$(prun 1)"
+check "cache broken, official works: pending" 20261106.6 "$(pend)"
+noukis
+uki 20261105.9_x86-64
+prun >/dev/null
+absent "nothing newer any more: file removed" "$p"
+
+# update-run --remind (the user unit): reads the file, notifies on its own session bus, never fails
+remind() { # remind [env...]: exit code of update-run --remind
+	local rc=0
+	env "$@" "$here/../mkosi.extra/usr/lib/mastersos/update-run" --remind 2>/dev/null || rc=$?
+	echo "$rc"
+}
+: >"$NOTIFY_LOG"
+rm -f "$p"
+check "remind, no file: returns 0" 0 "$(remind USER=alice)"
+check "remind, no file: no notification" 0 "$(notes)"
+echo 20261106.6 >"$p"
+check "remind: returns 0" 0 "$(remind USER=alice DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus)"
+check "remind: one notification on the user's own bus, English" \
+	"unix:path=/run/user/1000/bus|--app-name=MastersOS|--urgency=normal|MastersOS|$want_en|" "$(tr -d '\n' <"$NOTIFY_LOG")"
+: >"$NOTIFY_LOG"
+remind USER=alice LANG=th_TH.UTF-8 >/dev/null
+check "remind: LANG=th -> Thai" "การอัปเดตระบบพร้อมแล้ว รีสตาร์ทคอมพิวเตอร์เพื่อติดตั้งให้เสร็จสมบูรณ์" "$(cut -d'|' -f5 "$NOTIFY_LOG")"
+: >"$NOTIFY_LOG"
+remind USER=kiosk-exam >/dev/null
+check "remind: locked-app account gets nothing" 0 "$(notes)"
+remind USER=alice MASTERSOS_IMAGE_VERSION=20261106.6 >/dev/null
+check "remind: version already running gets nothing" 0 "$(notes)"
+echo 'not-a-version' >"$p"
+remind USER=alice >/dev/null
+check "remind: malformed file gets nothing" 0 "$(notes)"
+echo 20261106.6 >"$p"
+check "remind: failing notify-send still returns 0" 0 "$(remind USER=alice MASTERSOS_NOTIFY="$bin/notify-fail")"
 
 [ "$fails" = 0 ] || exit 1
 echo "update-run-test: all passed"

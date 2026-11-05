@@ -1367,6 +1367,8 @@ impl Agent {
             r.imported_from_seed_at =
                 Some(si.at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
         }
+        // read for every report: update-run writes it whenever a round installs a newer version
+        r.os_pending_version = report::os_pending_version(&self.cfg.root, r.os_version.as_deref());
         r
     }
 

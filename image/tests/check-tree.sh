@@ -3172,4 +3172,54 @@ grep -qxF '      - run: bash image/tests/card-url-test.sh' .github/workflows/mas
 }
 [ "$r" = 0 ] && ok 71 "idp_hint: agent card.json, card.js adds it to the URL through card-url.js (tested in CI), same rule on both sides"
 
+# 72. Restart prompt (2026-11-06, docs/update-channels.md): update-run writes /run/mastersos-update-pending after a successful
+#     round and has the --remind mode the user unit runs; the agent reads the same path (report.rs UPDATE_PENDING_REL) for
+#     StatusReport.os_pending_version; tests/update-run-test.sh (in CI) covers both modes; the user unit runs as the user,
+#     only when the file is there, and is pulled in only by the regular desktop sessions' targets through plain-file drop-ins.
+r=0
+upr=$rel/mkosi.extra/usr/lib/mastersos/update-run
+su=$ex/usr/lib/systemd/user
+ru=$su/mastersos-update-reminder.service
+# shellcheck disable=SC2016 # literal text of update-run
+for want in 'pending=${MASTERSOS_UPDATE_PENDING:-/run/mastersos-update-pending}' '	elif [ "${1:-}" = --remind ]; then' \
+	'			(update_pending) || echo "update-run: the restart prompt failed" >&2'; do
+	grep -qxF -- "$want" "$upr" 2>/dev/null || {
+		bad 72 "$upr should have the line: $want"
+		r=1
+	}
+done
+grep -qxF 'pub const UPDATE_PENDING_REL: &str = "run/mastersos-update-pending";' "$core/mastersos-agent/src/report.rs" || {
+	bad 72 "report.rs UPDATE_PENDING_REL should be run/mastersos-update-pending (update-run's \$pending)"
+	r=1
+}
+grep -qxF '      - run: bash image/tests/update-run-test.sh' .github/workflows/mastersos.yml || {
+	bad 72 "CI (mastersos.yml image-lint) does not run image/tests/update-run-test.sh"
+	r=1
+}
+for l in 'PartOf=gnome-session.target' 'After=gnome-session.target' 'ConditionUser=!@system' \
+	'ConditionPathExists=/run/mastersos-update-pending' 'Type=oneshot' 'ExecStart=/usr/lib/mastersos/update-run --remind' \
+	'TimeoutStartSec=30' 'Restart=no'; do
+	grep -qxF -- "$l" "$ru" 2>/dev/null || {
+		bad 72 "$ru should have the line: $l"
+		r=1
+	}
+done
+if grep -qxF '[Install]' "$ru" 2>/dev/null; then
+	bad 72 "$ru must have no [Install] (drop-ins pull it in)"
+	r=1
+fi
+for s in ubuntu gnome; do
+	d=$su/gnome-session@$s.target.d/mastersos-update-reminder.conf
+	if [ -L "$d" ] || [ ! -f "$d" ] || ! grep -qxF 'Wants=mastersos-update-reminder.service' "$d"; then
+		bad 72 "$d should be a plain file with Wants=mastersos-update-reminder.service"
+		r=1
+	fi
+done
+if grep -rlF 'mastersos-update-reminder.service' "$su" | grep -vE '/(mastersos-update-reminder\.service|gnome-session@(ubuntu|gnome)\.target\.d/mastersos-update-reminder\.conf)$' | grep -q . ||
+	find "$ex" -name 'mastersos-update-reminder.service' -type l | grep -q .; then
+	bad 72 "mastersos-update-reminder.service is pulled in by something other than the two desktop session drop-ins"
+	r=1
+fi
+[ "$r" = 0 ] && ok 72 "restart prompt: update-run writes the pending file and reminds, the agent reads the same path, user unit only in desktop sessions"
+
 exit $fail

@@ -31,6 +31,12 @@
 #   https, and writes the slot from local disk in minutes. After a successful update the staging tree is removed.
 #   Without usable transfers (none, a source that is not http(s), sources that differ), with too little free space or a
 #   check-new that cannot be judged, sysupdate runs directly as before.
+# Restart prompt (2026-11-06): after a successful round, update_pending looks at the UKIs on the ESP (the truth of what the
+#   next boot starts) and, when one newer than the running IMAGE_VERSION is waiting there, writes its version to
+#   $pending (/run/mastersos-update-pending, 0644: /run is emptied by the reboot that applies it) and tells the user of the
+#   active graphical session once per version; otherwise it removes the file. The agent reports the version
+#   (StatusReport.os_pending_version). `update-run --remind` is the user unit mastersos-update-reminder.service: at the
+#   start of a regular desktop session it shows the same notification, as that user. Neither can change the exit code.
 # Paths, grace window and timeout can be overridden through environment variables for tests/update-run-test.sh.
 set -euo pipefail
 
@@ -57,6 +63,10 @@ max_file=${MASTERSOS_STAGING_MAX_FILE_BYTES:-4294967296}
 # tests/update-run-test.sh serves a channel from a directory; on a Device a file:// source is local already and runs directly
 protos=http,https
 [ "${MASTERSOS_STAGING_FILE_URLS:-}" != 1 ] || protos=http,https,file
+
+# the restart prompt (update_pending, remind)
+pending=${MASTERSOS_UPDATE_PENDING:-/run/mastersos-update-pending}
+NOTIFY_TIMEOUT=${MASTERSOS_NOTIFY_TIMEOUT:-10} # seconds; the session bus belongs to the user, a hung bus must not stall us
 
 # write_status <text>: atomically replace the record with "<UTC time> <text>".
 write_status() {
@@ -362,11 +372,167 @@ main() {
 	return "$rc2"
 }
 
+# --- restart prompt -------------------------------------------------------------------------------------------------------
+# ver_ok <v>: a release version YYYYMMDD.N
+ver_ok() { [[ $1 =~ ^[0-9]{8}\.[0-9]{1,9}$ ]]; }
+
+# ver_gt <a> <b>: a > b, both ver_ok; by date, then by N as a number (20261105.10 > 20261105.9)
+ver_gt() {
+	local a1=${1%%.*} a2=${1#*.} b1=${2%%.*} b2=${2#*.}
+	((10#$a1 > 10#$b1 || (10#$a1 == 10#$b1 && 10#$a2 > 10#$b2)))
+}
+
+# running_version: IMAGE_VERSION of the booted system
+running_version() {
+	if [ -n "${MASTERSOS_IMAGE_VERSION:-}" ]; then
+		echo "$MASTERSOS_IMAGE_VERSION"
+		return 0
+	fi
+	(
+		# shellcheck disable=SC1091
+		. /usr/lib/os-release 2>/dev/null && echo "${IMAGE_VERSION:-}"
+	) || true
+}
+
+# boot_path: where sysupdate's 20-uki transfer writes (PathRelativeTo=boot); /boot when bootctl cannot tell
+boot_path() {
+	local b
+	if [ -n "${MASTERSOS_BOOT_PATH:-}" ]; then
+		echo "$MASTERSOS_BOOT_PATH"
+		return 0
+	fi
+	b=$(timeout 20 bootctl --print-boot-path 2>/dev/null) || b=""
+	echo "${b:-/boot}"
+}
+
+# pending_version <running version>: prints the highest version among the UKIs in <boot>/EFI/Linux that can still boot,
+# when it is newer than the running one; nothing otherwise. 20-uki.transfer names them MastersOS_<v>_x86-64+<left>-<done>.efi,
+# MastersOS_<v>_x86-64+<left>.efi or MastersOS_<v>_x86-64.efi; tries left 0 is a version that used up its boot attempts
+# and was rolled back from.
+pending_version() {
+	local cur=$1 f n v best=""
+	ver_ok "$cur" || return 0
+	for f in "$(boot_path)"/EFI/Linux/MastersOS_*.efi; do
+		[ -f "$f" ] || continue
+		n=${f##*/}
+		[[ $n =~ ^MastersOS_([0-9]{8}\.[0-9]{1,9})_x86-64(\+([0-9]{1,4})(-[0-9]{1,4})?)?\.efi$ ]] || continue
+		v=${BASH_REMATCH[1]}
+		[ -z "${BASH_REMATCH[2]}" ] || [ "$((10#${BASH_REMATCH[3]}))" -gt 0 ] || continue
+		if [ -z "$best" ] || ver_gt "$v" "$best"; then best=$v; fi
+	done
+	if [ -n "$best" ] && ver_gt "$best" "$cur"; then echo "$best"; fi
+	return 0
+}
+
+# notify_text <key> <lang> -> the text for the key in zh / th, English otherwise (integrity's scheme)
+notify_text() {
+	case $1:$2 in
+	update-ready:zh*) echo "系统更新已准备好。重新启动电脑即可完成安装。" ;;
+	update-ready:th*) echo "การอัปเดตระบบพร้อมแล้ว รีสตาร์ทคอมพิวเตอร์เพื่อติดตั้งให้เสร็จสมบูรณ์" ;;
+	update-ready:*) echo "A system update is ready. Restart the computer to finish installing it." ;;
+	*) return 1 ;;
+	esac
+}
+
+# notify_lang: LANG, else the system locale
+notify_lang() {
+	if [ -n "${LANG:-}" ]; then
+		echo "$LANG"
+		return 0
+	fi
+	sed -nE 's/^LANG=//p' "${MASTERSOS_LOCALE_CONF:-/etc/locale.conf}" 2>/dev/null | tr -d '"' | head -n 1 || true
+}
+
+# notify_user <key>: show a desktop notification to the user of the active graphical session; no such session = skip
+# (integrity's notify_user)
+notify_user() {
+	local key=$1 text loginctl=${MASTERSOS_LOGINCTL:-loginctl} runuser=${MASTERSOS_RUNUSER:-runuser} notify=${MASTERSOS_NOTIFY:-notify-send}
+	local id line active type name uid class
+	text=$(notify_text "$key" "$(notify_lang)") || return 0
+	while read -r id _; do
+		[ -n "$id" ] || continue
+		active="" type="" name="" uid="" class=""
+		while read -r line; do
+			case $line in
+			Active=*) active=${line#Active=} ;;
+			Type=*) type=${line#Type=} ;;
+			Class=*) class=${line#Class=} ;;
+			Name=*) name=${line#Name=} ;;
+			User=*) uid=${line#User=} ;;
+			esac
+		done < <("$loginctl" show-session "$id" -p Active -p Type -p Class -p Name -p User 2>/dev/null || true)
+		if [ "$active" != yes ] || [ "$class" != user ]; then continue; fi # not the GDM greeter (Class=greeter)
+		[ "$type" = wayland ] || [ "$type" = x11 ] || continue
+		if [ -z "$name" ] || ! [[ $uid =~ ^[0-9]+$ ]]; then continue; fi
+		timeout -k 2 "$NOTIFY_TIMEOUT" "$runuser" -u "$name" -- env "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" \
+			"$notify" --app-name=MastersOS --urgency=normal "MastersOS" "$text" ||
+			echo "update-run: notify-send for $name failed" >&2
+		return 0
+	done < <("$loginctl" list-sessions --no-legend 2>/dev/null || true)
+	return 0
+}
+
+# update_pending: write or remove $pending (see the top); notify when the waiting version is not the one $pending had
+update_pending() {
+	local cur v old=""
+	cur=$(running_version)
+	if ! ver_ok "$cur"; then
+		echo "update-run: no release IMAGE_VERSION in os-release ('${cur}'); no restart prompt" >&2
+		rm -f -- "$pending"
+		return 0
+	fi
+	v=$(pending_version "$cur")
+	if [ -z "$v" ]; then
+		rm -f -- "$pending"
+		return 0
+	fi
+	old=$(head -c 64 -- "$pending" 2>/dev/null) || old=""
+	[ "$old" != "$v" ] || return 0
+	if ! { printf '%s\n' "$v" >"$pending.tmp" && chmod 0644 -- "$pending.tmp" && mv -f -- "$pending.tmp" "$pending"; }; then
+		rm -f -- "$pending.tmp"
+		echo "update-run: cannot write $pending" >&2
+		return 0
+	fi
+	echo "update-run: $v is installed and starts at the next restart" >&2
+	notify_user update-ready
+}
+
+# remind: mastersos-update-reminder.service at the start of a desktop session, as that user (its own session bus)
+remind() {
+	local v cur text notify=${MASTERSOS_NOTIFY:-notify-send}
+	# locked-app accounts get nothing (as in browser-wait); their session pulls in no reminder anyway
+	case ${USER:-$(id -un 2>/dev/null || :)} in
+	kiosk-*) return 0 ;;
+	esac
+	v=$(head -c 64 -- "$pending" 2>/dev/null) || v=""
+	ver_ok "$v" || return 0
+	cur=$(running_version)
+	if ver_ok "$cur" && ! ver_gt "$v" "$cur"; then return 0; fi
+	text=$(notify_text update-ready "$(notify_lang)") || return 0
+	timeout -k 2 "$NOTIFY_TIMEOUT" "$notify" --app-name=MastersOS --urgency=normal "MastersOS" "$text" ||
+		echo "update-run: notify-send failed" >&2
+	return 0
+}
+
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 	# --staged-update <dir or "">: main runs the school-cache attempt through this, under timeout(1)
 	if [ "${1:-}" = --staged-update ]; then
 		staged_update "${2:-}"
+	elif [ "${1:-}" = --remind ]; then
+		remind || true
 	else
-		main "$@"
+		# main keeps set -e: a subshell started as a plain statement is not a context in which -e is ignored (main || x
+		# would be). The restart prompt runs only after a round that succeeded and never changes the exit code.
+		set +e
+		(
+			set -e
+			main "$@"
+		)
+		rc=$?
+		set -e
+		if [ "$rc" -eq 0 ]; then
+			(update_pending) || echo "update-run: the restart prompt failed" >&2
+		fi
+		exit "$rc"
 	fi
 fi
