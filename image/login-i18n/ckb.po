@@ -101,8 +101,8 @@ msgstr "ئەم ئەپە تەنیا لە شاشەی چوونەژوورەوە دە
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "ئەم ئەپە پێویستی بە تۆڕ هەیە. لە شریتی سەرەوە بە Wi-Fi ببەستەرەوە، پاشان دووبارە هەوڵبدەرەوە."
 
-msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
-msgstr "تۆڕ نییە. لە لیستی سەرەوەی لای چەپ تۆڕێکی Wi-Fi هەڵبژێرە، یان کێبڵی تۆڕ یان مۆبایلێک کە ئینتەرنێت لە ڕێگەی USB هاوبەش دەکات ببەستەرەوە."
+msgid "No network. Connect to Wi-Fi from the top-right menu."
+msgstr "تۆڕ نییە. لە لیستی سەرەوەی لای چەپ بە Wi-Fi ببەستەرەوە."
 
 msgid "Waiting for school settings."
 msgstr "چاوەڕوانی ڕێکخستنەکانی قوتابخانە."

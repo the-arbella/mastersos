@@ -101,8 +101,8 @@ msgstr "Това приложение може да се отвори само �
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Това приложение се нуждае от мрежа. Свържете се с Wi-Fi от горната лента и опитайте отново."
 
-msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
-msgstr "Няма мрежа. Изберете Wi-Fi мрежа от менюто горе вдясно или включете мрежов кабел или телефон с USB тетъринг."
+msgid "No network. Connect to Wi-Fi from the top-right menu."
+msgstr "Няма мрежа. Свържете се с Wi-Fi от менюто горе вдясно."
 
 msgid "Waiting for school settings."
 msgstr "Изчакване на училищните настройки."

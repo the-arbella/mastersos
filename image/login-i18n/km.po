@@ -101,8 +101,8 @@ msgstr "កម្មវិធីនេះអាចបើកបានតែពី
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "កម្មវិធីនេះត្រូវការបណ្តាញ។ សូមភ្ជាប់ Wi-Fi ពីរបារខាងលើ រួចព្យាយាមម្ដងទៀត។"
 
-msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
-msgstr "គ្មានបណ្តាញ។ សូមជ្រើសបណ្តាញ Wi-Fi ពីម៉ឺនុយនៅខាងលើស្ដាំ ឬដោតខ្សែបណ្តាញ ឬទូរសព្ទដែលចែករំលែកអ៊ីនធឺណិតតាម USB។"
+msgid "No network. Connect to Wi-Fi from the top-right menu."
+msgstr "គ្មានបណ្តាញ។ សូមភ្ជាប់ Wi-Fi ពីម៉ឺនុយនៅខាងលើស្ដាំ។"
 
 msgid "Waiting for school settings."
 msgstr "កំពុងរង់ចាំការកំណត់របស់សាលា។"

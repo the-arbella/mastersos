@@ -56,7 +56,7 @@ run() {
 status_json() { # status_json <dir> <message> <detail or null>
 	printf '{"network":"not_in_range","network_detail":%s,"settings":"waiting","settings_detail":null,"chrome":"installing","chrome_detail":null,"message":"%s"}\n' "$3" "$2" >"$1/pub/status.json"
 }
-msg_net='No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering.'
+msg_net='No network. Connect to Wi-Fi from the top-right menu.'
 
 # 1. Chrome is there: nothing at all
 c=$tmp/c1
@@ -128,6 +128,20 @@ printf '%s\n' '{"network":"ok","network_detail":null,"settings":"unreachable","s
 run "$c" >/dev/null
 wait
 check "learning: detail of the first non-ok part" yes "$(has '\nWaiting for school settings.\nHTTP 502 from server' "$c/log/zenity")"
+
+# 4e. a network still connecting is no headline: the detail is the settings one
+c=$tmp/c4e
+mkdir -p "$c/pub"
+echo learning >"$c/pub/session-mode"
+printf '%s\n' '{"network":"connecting","network_detail":"Connecting","settings":"unreachable","settings_detail":"HTTP 502 from server","chrome":"installing","chrome_detail":null,"message":"Waiting for school settings."}' >"$c/pub/status.json"
+(
+	sleep 1
+	printf '#!/bin/sh\n' >"$c/chrome"
+	chmod +x "$c/chrome"
+) &
+run "$c" >/dev/null
+wait
+check "learning: connecting network is skipped" yes "$(has '\nWaiting for school settings.\nHTTP 502 from server' "$c/log/zenity")"
 
 # 4c. status.json as the agent writes it (serde_json::to_vec_pretty: one key per line, 2-space indent), escaped quotes in the detail
 c=$tmp/c4c

@@ -101,8 +101,8 @@ msgstr "Бұл қолданбаны тек кіру экранынан ашуғ�
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Бұл қолданбаға желі қажет. Жоғарғы жолақтан Wi-Fi желісіне қосылып, қайталап көріңіз."
 
-msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
-msgstr "Желі жоқ. Жоғарғы оң жақтағы мәзірден Wi-Fi желісін таңдаңыз немесе желі кабелін не USB-модем режиміндегі телефонды жалғаңыз."
+msgid "No network. Connect to Wi-Fi from the top-right menu."
+msgstr "Желі жоқ. Жоғарғы оң жақтағы мәзірден Wi-Fi желісіне қосылыңыз."
 
 msgid "Waiting for school settings."
 msgstr "Мектеп баптауларын күту."

@@ -101,8 +101,8 @@ msgstr "Apl ini hanya boleh dibuka daripada skrin log masuk"
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Aplikasi ini memerlukan rangkaian. Sambung ke Wi-Fi daripada bar atas, kemudian cuba lagi."
 
-msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
-msgstr "Tiada rangkaian. Pilih rangkaian Wi-Fi dalam menu di penjuru kanan atas, atau sambungkan kabel rangkaian atau telefon dengan penambatan USB."
+msgid "No network. Connect to Wi-Fi from the top-right menu."
+msgstr "Tiada rangkaian. Sambung ke Wi-Fi daripada menu di penjuru kanan atas."
 
 msgid "Waiting for school settings."
 msgstr "Menunggu tetapan sekolah."

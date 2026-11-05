@@ -101,8 +101,8 @@ msgstr "이 앱은 로그인 화면에서만 열 수 있습니다"
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "이 앱에는 네트워크가 필요합니다. 상단 막대에서 Wi-Fi에 연결한 후 다시 시도하세요."
 
-msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
-msgstr "네트워크가 없습니다. 오른쪽 위 메뉴에서 Wi-Fi 네트워크를 선택하거나, 네트워크 케이블 또는 USB 테더링 중인 휴대폰을 연결하세요."
+msgid "No network. Connect to Wi-Fi from the top-right menu."
+msgstr "네트워크가 없습니다. 오른쪽 위 메뉴에서 Wi-Fi에 연결하세요."
 
 msgid "Waiting for school settings."
 msgstr "학교 설정을 기다리는 중입니다."

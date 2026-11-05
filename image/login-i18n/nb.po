@@ -101,8 +101,8 @@ msgstr "Denne appen kan bare åpnes fra påloggingsskjermen"
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Denne appen trenger et nettverk. Koble til Wi-Fi fra linjen øverst og prøv igjen."
 
-msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
-msgstr "Ingen nettverk. Velg et Wi-Fi-nettverk i menyen øverst til høyre, eller koble til en nettverkskabel eller en telefon med USB-deling."
+msgid "No network. Connect to Wi-Fi from the top-right menu."
+msgstr "Ingen nettverk. Koble til Wi-Fi fra menyen øverst til høyre."
 
 msgid "Waiting for school settings."
 msgstr "Venter på skoleinnstillingene."

@@ -101,8 +101,8 @@ msgstr "ಈ ಆ್ಯಪ್ ಅನ್ನು ಸೈನ್ ಇನ್ ಪರದೆ�
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "ಈ ಅಪ್ಲಿಕೇಶನ್‌ಗೆ ನೆಟ್‌ವರ್ಕ್ ಬೇಕು. ಮೇಲಿನ ಪಟ್ಟಿಯಿಂದ Wi-Fi ಗೆ ಸಂಪರ್ಕಿಸಿ, ನಂತರ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ."
 
-msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
-msgstr "ನೆಟ್‌ವರ್ಕ್ ಇಲ್ಲ. ಮೇಲಿನ ಬಲಭಾಗದ ಮೆನುವಿನಲ್ಲಿ Wi-Fi ನೆಟ್‌ವರ್ಕ್ ಆಯ್ಕೆಮಾಡಿ, ಅಥವಾ ನೆಟ್‌ವರ್ಕ್ ಕೇಬಲ್ ಅಥವಾ USB ಟೆಥರಿಂಗ್ ಇರುವ ಫೋನ್ ಅನ್ನು ಸಂಪರ್ಕಿಸಿ."
+msgid "No network. Connect to Wi-Fi from the top-right menu."
+msgstr "ನೆಟ್‌ವರ್ಕ್ ಇಲ್ಲ. ಮೇಲಿನ ಬಲಭಾಗದ ಮೆನುವಿನಿಂದ Wi-Fi ಗೆ ಸಂಪರ್ಕಿಸಿ."
 
 msgid "Waiting for school settings."
 msgstr "ಶಾಲೆಯ ಸೆಟ್ಟಿಂಗ್‌ಗಳಿಗಾಗಿ ಕಾಯಲಾಗುತ್ತಿದೆ."

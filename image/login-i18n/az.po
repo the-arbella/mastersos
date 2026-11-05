@@ -101,8 +101,8 @@ msgstr "Bu tətbiq yalnız giriş ekranından açıla bilər"
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Bu tətbiq şəbəkəyə ehtiyac duyur. Yuxarı paneldən Wi-Fi şəbəkəsinə qoşulun, sonra yenidən cəhd edin."
 
-msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
-msgstr "Şəbəkə yoxdur. Yuxarı sağdakı menyudan Wi-Fi şəbəkəsi seçin və ya şəbəkə kabeli, yaxud USB modem rejimində telefon qoşun."
+msgid "No network. Connect to Wi-Fi from the top-right menu."
+msgstr "Şəbəkə yoxdur. Yuxarı sağdakı menyudan Wi-Fi şəbəkəsinə qoşulun."
 
 msgid "Waiting for school settings."
 msgstr "Məktəb ayarları gözlənilir."

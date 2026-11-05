@@ -101,8 +101,8 @@ msgstr "ਇਹ ਐਪ ਸਿਰਫ਼ ਸਾਈਨ-ਇਨ ਸਕ੍ਰੀਨ ਤ
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "ਇਸ ਐਪ ਨੂੰ ਨੈੱਟਵਰਕ ਦੀ ਲੋੜ ਹੈ। ਉੱਪਰਲੀ ਪੱਟੀ ਤੋਂ Wi-Fi ਨਾਲ ਜੁੜੋ, ਫਿਰ ਮੁੜ ਕੋਸ਼ਿਸ਼ ਕਰੋ।"
 
-msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
-msgstr "ਕੋਈ ਨੈੱਟਵਰਕ ਨਹੀਂ। ਉੱਪਰ ਸੱਜੇ ਮੀਨੂ ਵਿੱਚੋਂ Wi-Fi ਨੈੱਟਵਰਕ ਚੁਣੋ, ਜਾਂ ਨੈੱਟਵਰਕ ਕੇਬਲ ਜਾਂ USB ਟੈਦਰਿੰਗ ਵਾਲਾ ਫ਼ੋਨ ਲਗਾਓ।"
+msgid "No network. Connect to Wi-Fi from the top-right menu."
+msgstr "ਕੋਈ ਨੈੱਟਵਰਕ ਨਹੀਂ। ਉੱਪਰ ਸੱਜੇ ਮੀਨੂ ਤੋਂ Wi-Fi ਨਾਲ ਜੁੜੋ।"
 
 msgid "Waiting for school settings."
 msgstr "ਸਕੂਲ ਦੀਆਂ ਸੈਟਿੰਗਾਂ ਦੀ ਉਡੀਕ ਕੀਤੀ ਜਾ ਰਹੀ ਹੈ।"
