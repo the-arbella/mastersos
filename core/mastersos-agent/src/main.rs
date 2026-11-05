@@ -46,6 +46,92 @@ enum Cmd {
         #[arg(long)]
         scheduled: bool,
     },
+    /// Remote diagnostics.
+    Diag {
+        #[command(subcommand)]
+        cmd: DiagCmd,
+    },
+    /// The upload queue (/var/lib/mastersos/upload-queue); run as root.
+    Upload {
+        #[command(subcommand)]
+        cmd: UploadCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum UploadCmd {
+    /// Works through the queue: collects, uploads, acks; exits when nothing is due soon
+    /// (mastersos-upload.service).
+    Drain,
+    /// Makes every queued item due now and starts mastersos-upload.service when anything is
+    /// queued (the NetworkManager dispatcher, on full connectivity).
+    Kick,
+}
+
+#[derive(Subcommand)]
+enum DiagCmd {
+    /// Collects the diagnostics archive (tar.zst, the same collector as `collect-diagnostics`) into a file; run as root.
+    #[command(group(clap::ArgGroup::new("range").required(true).args(["boots", "since_minutes"])))]
+    Collect {
+        /// The archive to write (replaced when it exists).
+        #[arg(long)]
+        out: PathBuf,
+        /// The journal of the last N boots.
+        #[arg(long, value_parser = clap::value_parser!(u8).range(1..=mastersos_agent::diag::collect::MAX_BOOTS as i64))]
+        boots: Option<u8>,
+        /// Only the journal of the last M minutes.
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=10080))]
+        since_minutes: Option<u32>,
+        /// A PNG to attach.
+        #[arg(long)]
+        screenshot: Option<PathBuf>,
+    },
+}
+
+/// `diag collect`: collects into the folder of `out`, then renames the archive to `out`.
+fn diag_collect(
+    state_dir: &std::path::Path,
+    out: PathBuf,
+    boots: Option<u8>,
+    since_minutes: Option<u32>,
+    screenshot: Option<PathBuf>,
+) -> anyhow::Result<()> {
+    use anyhow::Context;
+    use mastersos_agent::diag::{collect, CollectOpts};
+    use mastersos_bundle::diag::{DiagKind, DIAG_INBOX_MAX_BYTES};
+    // only the device id, from state.json (never the seed)
+    let device_id = std::fs::read(state_dir.join("state.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<mastersos_agent::State>(&b).ok())
+        .and_then(|s| s.device_id)
+        .unwrap_or_else(|| "unknown".into());
+    let dir = match out.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    let o = CollectOpts {
+        root: "/".into(),
+        kind: DiagKind::Inbox,
+        boots: boots.unwrap_or(1),
+        since_minutes,
+        screenshot: screenshot
+            .map(std::path::absolute)
+            .transpose()
+            .context("resolving the screenshot path")?,
+        max_bytes: DIAG_INBOX_MAX_BYTES,
+    };
+    let c = collect(&o, &device_id, &dir, &RealRunner, chrono::Utc::now())?;
+    std::fs::rename(&c.path, &out)
+        .with_context(|| format!("renaming {} to {}", c.path.display(), out.display()))?;
+    println!(
+        "{} bytes={} sha256={} truncated={} skipped={}",
+        out.display(),
+        c.bytes,
+        c.sha256,
+        c.manifest.truncated,
+        c.manifest.skipped.len()
+    );
+    Ok(())
 }
 
 /// 日志写到 stderr，交给 journald。
@@ -186,6 +272,25 @@ async fn agent_main() -> anyhow::Result<()> {
             }
             mastersos_agent::apply_local(cfg, applier).await
         }
+        Cmd::Diag {
+            cmd:
+                DiagCmd::Collect {
+                    out,
+                    boots,
+                    since_minutes,
+                    screenshot,
+                },
+        } => {
+            let state_dir = cfg.state_dir.clone();
+            tokio::task::spawn_blocking(move || {
+                diag_collect(&state_dir, out, boots, since_minutes, screenshot)
+            })
+            .await?
+        }
+        Cmd::Upload { cmd } => match cmd {
+            UploadCmd::Drain => mastersos_agent::upload::drain::drain_main(&cfg).await,
+            UploadCmd::Kick => mastersos_agent::upload::kick_main(&cfg.state_dir, &RealRunner),
+        },
         Cmd::Chrome { scheduled } => {
             let job = mastersos_agent::chrome_sysext::ChromeJob::new(Arc::new(RealRunner))
                 .scheduled(scheduled);

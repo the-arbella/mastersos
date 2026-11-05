@@ -1,0 +1,16 @@
+#!/bin/bash
+# NetworkManager dispatcher ($1 = interface, $2 = event): when the machine is online, everything in the upload queue is due
+# again with its backoff started over (a server's Retry-After still holds) and mastersos-upload.service is started
+# (remote diagnostics design 3). Nothing queued: nothing is started. `up` too, not only full connectivity: without a
+# connectivity check NetworkManager may never report FULL; a try that fails just backs off for a minute.
+# The agent missing or failing never matters to NetworkManager.
+set -euo pipefail
+
+case "${2:-}" in
+up) ;;
+connectivity-change)
+	[ "${CONNECTIVITY_STATE:-}" = FULL ] || exit 0
+	;;
+*) exit 0 ;;
+esac
+/usr/bin/mastersos-agent upload kick >/dev/null 2>&1 || true

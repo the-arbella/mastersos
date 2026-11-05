@@ -83,6 +83,10 @@ pub struct Status {
     /// Only [`Status::new`] sets it, so it cannot drift from the three states.
     #[serde(default)]
     pub message: Option<String>,
+    /// IT is collecting diagnostics until about then (the login screen shows a line until it
+    /// passes): from the drain's marker ([`set_collecting`]), absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diag_collecting_until: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl Status {
@@ -102,6 +106,7 @@ impl Status {
             chrome,
             chrome_detail,
             message: None,
+            diag_collecting_until: None,
         };
         s.message = s.headline().map(|(m, _)| m.to_string());
         s
@@ -415,6 +420,42 @@ pub fn write_status(paths: &SysPaths, s: &Status) -> Result<bool> {
     safefs::write_at(&dir, STATUS_FILE, &bytes, 0o644)
 }
 
+/// The marker of a diagnostics collection under way (RFC 3339 of when the notice ends), in the
+/// state directory: written by the upload drain, read by every status round.
+pub const COLLECTING_FILE: &str = "upload-collecting";
+
+/// When the collection under way ends at the latest, from the marker.
+pub fn collecting_until(paths: &SysPaths) -> Option<chrono::DateTime<chrono::Utc>> {
+    let text = std::fs::read_to_string(paths.state_dir.join(COLLECTING_FILE)).ok()?;
+    chrono::DateTime::parse_from_rfc3339(text.trim())
+        .ok()
+        .map(|t| t.to_utc())
+}
+
+/// Starts (`Some(until)`) or ends (`None`) the "IT is collecting" notice of the login screen:
+/// writes or removes the marker, then puts it into the `status.json` already on disk at once
+/// (the next status round keeps it from the marker). No `status.json` yet: only the marker.
+pub fn set_collecting(
+    paths: &SysPaths,
+    until: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<()> {
+    let dir = safefs::open_abs_dir(&paths.state_dir, false)?;
+    match until {
+        Some(t) => {
+            let line = format!("{}\n", t.to_rfc3339());
+            safefs::write_at(&dir, COLLECTING_FILE, line.as_bytes(), 0o600)?;
+        }
+        None => safefs::remove_at(&dir, COLLECTING_FILE)?,
+    }
+    if let Some(mut s) = read_status(paths) {
+        if s.diag_collecting_until != until {
+            s.diag_collecting_until = until;
+            write_status(paths, &s).context("writing status.json")?;
+        }
+    }
+    Ok(())
+}
+
 /// `None` when the file or directory is missing or unreadable.
 pub fn read_status(paths: &SysPaths) -> Option<Status> {
     let dir = safefs::open_abs_dir(&paths.public_dir, false).ok()?;
@@ -488,7 +529,7 @@ fn round(
     let (network, network_detail) = grace(network, network_detail);
     let (settings, settings_detail) = settings_status(has_bundle, fetch_error);
     let (chrome, chrome_detail) = chrome;
-    let status = Status::new(
+    let mut status = Status::new(
         network,
         network_detail,
         settings,
@@ -496,6 +537,7 @@ fn round(
         chrome,
         chrome_detail,
     );
+    status.diag_collecting_until = collecting_until(paths);
     write_status(paths, &status).context("writing status.json")?;
     match banner::refresh_from_policy(paths, runner) {
         Ok(true) => dconf_pending.store(false, Ordering::SeqCst),

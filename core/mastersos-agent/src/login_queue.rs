@@ -560,16 +560,40 @@ pub fn stale_notice(state: &State, now: DateTime<Utc>) -> Option<String> {
 /// 设置可能过期就给 `uid` 发一条桌面提示（等它的 user manager 起来；`notify-send` 失败隔几秒再试几次）。
 pub fn notify_if_stale(uid: u32, state: &State, now: DateTime<Utc>, runner: &dyn Runner) {
     if let Some(text) = stale_notice(state, now) {
-        notify_with(uid, &text, runner, USER_WAIT, NOTIFY_PAUSE);
+        notify_with(uid, &text, runner, USER_WAIT, NOTIFY_PAUSE, NOTIFY_TRIES);
     }
 }
 
-fn notify_with(uid: u32, text: &str, runner: &dyn Runner, wait: Duration, pause: Duration) {
+/// Shows `text` as a notification in every signed-in person's session (`loginctl list-users`:
+/// SSO accounts, local people and the guest; never root, GDM's greeter or other system
+/// accounts). One try each, no waiting for a session that is still starting: the login screen
+/// shows its own line from `status.json` ([`crate::status::set_collecting`]). Best effort.
+pub fn notify_sessions(text: &str, runner: &dyn Runner) {
+    let uids = crate::system::lock::list_users(runner)
+        .and_then(|out| crate::system::lock::sessions_to_end(&out, &[]));
+    match uids {
+        Ok(uids) => {
+            for uid in uids {
+                notify_with(uid, text, runner, Duration::ZERO, Duration::ZERO, 1);
+            }
+        }
+        Err(e) => log::warn!("listing the sessions for a notice failed: {e:#}"),
+    }
+}
+
+fn notify_with(
+    uid: u32,
+    text: &str,
+    runner: &dyn Runner,
+    wait: Duration,
+    pause: Duration,
+    tries: u32,
+) {
     if !wait_user(uid, runner, wait) {
-        log::warn!("the user session was not ready; no staleness notice sent");
+        log::warn!("the user session of {uid} was not ready; no notice sent");
         return;
     }
-    for i in 0..NOTIFY_TRIES {
+    for i in 0..tries {
         let cmd = user_run(
             uid,
             &[
@@ -586,16 +610,16 @@ fn notify_with(uid: u32, text: &str, runner: &dyn Runner, wait: Duration, pause:
         match runner.run(&cmd) {
             Ok(o) if o.code == 0 => return,
             Ok(o) => log::info!(
-                "the staleness notice was not sent (exit code {}); retrying later",
+                "the notice was not sent (exit code {}); retrying later",
                 o.code
             ),
-            Err(e) => log::info!("the staleness notice was not sent: {e:#}"),
+            Err(e) => log::info!("the notice was not sent: {e:#}"),
         }
-        if i + 1 < NOTIFY_TRIES {
+        if i + 1 < tries {
             std::thread::sleep(pause);
         }
     }
-    log::warn!("the staleness notice was not sent after {NOTIFY_TRIES} tries");
+    log::warn!("the notice to {uid} was not sent after {tries} tries");
 }
 
 #[cfg(test)]
