@@ -490,16 +490,31 @@ describe("Exit confirmation", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it('confirm sends {cmd:"exit"}; on ok:true the same dialog shows Exiting with its buttons disabled', () => {
+  it('confirm sends {cmd:"exit"}; on ok:true the same dialog shows a spinner and Exiting, no buttons', () => {
     const { root, sendMessage } = inject({ ok: true });
+    const spinner = () => root.querySelector(".spinner");
+    const row = () => root.querySelector(".actions");
     chooseExit(root);
+    expect(spinner().hidden).toBe(true);
+    expect(row().hidden).toBe(false);
     btns(root).confirm.click();
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(sendMessage.mock.calls[0][0]).toEqual({ cmd: "exit" });
     expect(overlay(root).hidden).toBe(false);
     expect(title(root)).toBe("Exiting…");
+    expect(body(root)).toBe("Closing this app.");
+    // the spinner sits before the title, in the same row
+    expect(spinner().hidden).toBe(false);
+    expect(spinner().nextElementSibling).toBe(root.querySelector(".title"));
+    expect(spinner().getAttribute("aria-hidden")).toBe("true");
+    // no stuck-looking disabled buttons: the button row is hidden (its space kept so the card does not jump)
+    expect(row().hidden).toBe(true);
     expect(btns(root).confirm.disabled).toBe(true);
     expect(btns(root).cancel.disabled).toBe(true);
+    const css = root.querySelector("style").textContent;
+    expect(css).toMatch(/\.actions\[hidden\]\s*\{[^}]*visibility:\s*hidden/);
+    expect(css).toMatch(/\.spinner\s*\{[^}]*border[^}]*#eee[^}]*#d9653b|\.spinner\s*\{[^}]*#d9653b[^}]*#eee/);
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{[^@]*\.spinner\s*\{[^}]*animation:\s*none/);
     // Escape does nothing while exiting
     key(dialog(root), "Escape");
     expect(overlay(root).hidden).toBe(false);
@@ -518,7 +533,10 @@ describe("Exit confirmation", () => {
 
   function expectFailed(root) {
     expect(overlay(root).hidden).toBe(false);
+    expect(title(root)).toBe("Could not exit");
     expect(body(root)).toBe("Could not leave. Please ask a teacher.");
+    expect(root.querySelector(".spinner").hidden).toBe(true);
+    expect(root.querySelector(".actions").hidden).toBe(false);
     const b = btns(root);
     expect(b.cancel.hidden).toBe(true);
     expect(b.confirm.hidden).toBe(true);

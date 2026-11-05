@@ -117,7 +117,17 @@ button::-moz-focus-inner { border: 0; }
   box-shadow: 0 16px 48px rgba(16, 18, 27, .35); font: 15px/1.5 ${FONT}; text-align: left;
 }
 .text { display: flex; flex-direction: column; gap: 8px; }
+.head { display: flex; align-items: center; gap: 10px; }
 .title { margin: 0; font: 600 18px/1.3 ${FONT}; color: #1b1d2a; }
+.spinner {
+  box-sizing: border-box; flex: none; width: 18px; height: 18px; border-radius: 50%;
+  border: 2px solid #eee; border-top-color: #d9653b; animation: mastersos-spin .8s linear infinite;
+}
+.spinner[hidden] { display: none; }
+@keyframes mastersos-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation: none; border-color: #d9653b #eee; }
+}
 .body { margin: 0; font: 400 15px/1.5 ${FONT}; color: #444; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .actions button {
@@ -127,6 +137,7 @@ button::-moz-focus-inner { border: 0; }
 .actions button:hover { background: #f1f2f6; }
 .actions button.confirm { border-color: #b3261e; background: #b3261e; color: #fff; }
 .actions button.confirm:hover { background: #9c2019; }
+.actions[hidden] { display: flex; visibility: hidden; } /* keeps its height: the card does not jump */
 .actions button[hidden] { display: none; }
 .actions button:disabled { opacity: .5; cursor: default; }
 `;
@@ -246,11 +257,16 @@ button::-moz-focus-inner { border: 0; }
   dialog.setAttribute("aria-describedby", "mastersos-exit-body");
   const text = el("div", "text");
   text.setAttribute("aria-live", "polite");
+  const head = el("div", "head");
+  const spinner = el("span", "spinner");
+  spinner.setAttribute("aria-hidden", "true");
+  spinner.hidden = true;
   const title = el("h2", "title");
   title.id = "mastersos-exit-title";
+  head.append(spinner, title);
   const body = el("p", "body");
   body.id = "mastersos-exit-body";
-  text.append(title, body);
+  text.append(head, body);
   const actions = el("div", "actions");
   const cancel = button("cancel", TEXT.cancel);
   const confirm = button("confirm", TEXT.confirm);
@@ -433,6 +449,9 @@ button::-moz-focus-inner { border: 0; }
     const [t, b, shown, focus] = v;
     title.textContent = t;
     body.textContent = b;
+    // exiting: a spinner instead of disabled buttons that would look stuck
+    spinner.hidden = next !== "exiting";
+    actions.hidden = next === "exiting";
     for (const btn of [cancel, confirm, ok]) {
       btn.hidden = !shown.includes(btn);
       btn.disabled = next === "exiting";

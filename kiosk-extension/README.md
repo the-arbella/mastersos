@@ -35,7 +35,7 @@
 - 后台连 native messaging 宿主 `org.mastersos.kiosk_exit`（= `mastersos-bundle` 的 `EXIT_HOST`）。宿主是
   `/usr/lib/mastersos/mastersos-kiosk-exit` → `mastersos-agent kiosk exit-host`：4 字节小端长度 + JSON，只认恰好
   `{"cmd":"exit"}`，回 `{"ok":true}`（「已请求」：会话随即结束，之后什么都等不到）或 `{"ok":false}`。
-- 回 `{"ok":true}` 时同一张卡片的标题变成「Exiting…」、按钮都禁用（Esc 也不关）；20 秒后会话还在，或回 `{"ok":false}`、
+- 回 `{"ok":true}` 时同一张卡片的标题变成「Exiting…」、前面一个 18 px 的转圈（`prefers-reduced-motion` 时不转），按钮行隐去但留着高度（Esc 也不关）；20 秒后会话还在，或回 `{"ok":false}`、
   宿主没回就断开、连不上，都在同一张卡片里显示「Could not leave. Please ask a teacher.」与一个「OK」按钮；OK 关掉，
   可以从菜单再试。
 
