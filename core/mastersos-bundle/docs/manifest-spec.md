@@ -226,12 +226,11 @@ config = "standard"
 
 The school's single sign-on provider (OpenID Connect). Devices use it only to check who someone is;
 they never read group membership from it. The provider must support the authorization code flow
-with PKCE and the fixed redirect `http://127.0.0.1:48123/callback`. Google accounts are not used to
-sign in on Devices.
+with PKCE and the fixed redirect `http://127.0.0.1:48123/callback`.
 
 | Key | Type | Required / default | Allowed values | Example | Notes |
 |---|---|---|---|---|---|
-| `issuer` | string | required in `[school.oidc]` | `https://` (or `http://`) URL; no spaces, control characters or any of ``# ; " ' ` \`` | `issuer = "https://sso.school.ac.th"` | Not `accounts.google.com` (`oidc_issuer_google`). |
+| `issuer` | string | required in `[school.oidc]` | `https://` (or `http://`) URL; no spaces, control characters or any of ``# ; " ' ` \`` | `issuer = "https://sso.school.ac.th"` | Google (`https://accounts.google.com`) is allowed but untried on Devices; set `allowed_domains`. |
 | `client_id` | string | required in `[school.oidc]` | non-empty; same character limits as `issuer` | `client_id = "mastersos"` | The client registered with the provider for MastersOS Devices. |
 | `client_secret` | string | optional; no secret | 1 to 512 printable ASCII characters; same character limits as `issuer`, and no `%` | — | Only for a provider that requires one even for a desktop app. Every Device holds it, so it protects nothing; do not reuse a real secret here. Devices whose OS predates this key reject the whole Version (see `feature_unsupported`, feature `oidc_card`). |
 | `card_hosts` | list of strings | optional; only the issuer's host | lowercase hostnames with at least two labels; no scheme, port, path, wildcard or IP address; none twice; at most 20 | `card_hosts = ["cdn.school.ac.th"]` | Hosts the sign-in page may load from besides the issuer, for example a CDN or an upstream provider. Each is reached over `https` on port 443, and its subdomains are not included. Leave it out when the provider serves everything from the issuer. Feature `oidc_card`, like `client_secret`. |
@@ -251,6 +250,33 @@ id = "default"
 name = "Unassigned"
 config = "standard"
 ```
+
+<!-- prompt:omit -->
+A school on Google Workspace may point Devices straight at Google: register a Desktop app OAuth
+client in the school's Google Cloud project and fill in its client id and secret. Always set
+`allowed_domains` with Google, otherwise any Google account in the world can sign in. This path has
+not yet been tried on Devices; `card_hosts` may need Google's other sign-in hosts.
+
+```toml check=ok
+[school]
+allowed_domains = ["school.ac.th"]
+
+[school.oidc]
+issuer = "https://accounts.google.com"
+client_id = "1234567890-example.apps.googleusercontent.com"
+client_secret = "example-only"
+
+[[config]]
+id = "standard"
+name = "Standard"
+login_methods = ["sso"]
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "standard"
+```
+<!-- /prompt:omit -->
 
 The seed downloaded from the console also carries the latest published `[school.oidc]`, so a school
 that uses SSO has it on a new Device before the first settings pull. If the `default` Config allows
@@ -1196,7 +1222,6 @@ last Version), so only the server's check at `mastersos publish` reports them.
 | `missing_field` | error | required key missing (parse) |
 | `no_admins` | warning | nobody can administer a Config's Devices |
 | `oidc_invalid` | error | `[school.oidc]` values |
-| `oidc_issuer_google` | error | Google as SSO issuer |
 | `path_file_and_dir` | error | bundle file is also a folder |
 | `printer_invalid` | error | printer entry |
 | `scanner_invalid` | error | scanner entry |
@@ -2965,35 +2990,6 @@ write each `card_hosts` entry as a bare hostname.
 [school.oidc]
 issuer = "sso.school.ac.th"
 client_id = "mastersos"
-
-[[config]]
-id = "standard"
-name = "Standard"
-login_methods = ["sso"]
-
-[[group]]
-id = "default"
-name = "Unassigned"
-config = "standard"
-```
-<!-- /prompt:omit -->
-
-### `oidc_issuer_google`
-
-**Level:** error. **Meaning:** the SSO issuer is `accounts.google.com`.
-
-<!-- prompt:omit -->
-**Why:** Devices do not sign in with Google accounts. Schools on Google Workspace issue Device
-accounts with Kanidm (with Dex) or Zitadel. Signing in to Google inside Chrome is unaffected.
-<!-- /prompt:omit -->
-
-**How to fix:** set `issuer` to the school's own OIDC provider.
-
-<!-- prompt:omit -->
-```toml check=oidc_issuer_google
-[school.oidc]
-issuer = "https://accounts.google.com"
-client_id = "1234567890-example.apps.googleusercontent.com"
 
 [[config]]
 id = "standard"

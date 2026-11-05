@@ -60,7 +60,9 @@ gives `group_unknown_config`.
 ## Turn on SSO
 
 Goal: school accounts can sign in. Add `[school.oidc]` (issuer and client id from the SSO provider), add
-`"sso"` to each Config that should allow it, optionally limit to your domains.
+`"sso"` to each Config that should allow it, optionally limit to your domains. A school on Google
+Workspace may use `issuer = "https://accounts.google.com"` (with its client id and secret); then always
+set `allowed_domains`, or any Google account can sign in.
 
 ```toml check=ok
 [school]
@@ -81,7 +83,7 @@ name = "Unassigned"
 config = "standard"
 ```
 
-Issues: `sso_without_oidc`, `oidc_invalid`, `oidc_issuer_google`, `allowed_domain_invalid`.
+Issues: `sso_without_oidc`, `oidc_invalid`, `allowed_domain_invalid`.
 
 ## Add an administrator
 

@@ -85,26 +85,6 @@ pub fn has_errors(lints: &[Lint]) -> bool {
 /// 镜像发布的更新通道（Ruling 5）。
 pub const UPDATE_CHANNELS: &[&str] = &["stable", "beta"];
 
-const GOOGLE_HOST: &str = "accounts.google.com";
-
-/// issuer 的主机是否 accounts.google.com：去掉 scheme（http / https）、userinfo、端口、
-/// 路径 / 查询 / 片段与结尾的点，主机名不分大小写。
-fn is_google_issuer(issuer: &str) -> bool {
-    let s = issuer.trim();
-    let lower = s.to_ascii_lowercase();
-    let rest = match lower
-        .strip_prefix("https://")
-        .or_else(|| lower.strip_prefix("http://"))
-    {
-        Some(r) => r,
-        None => return false,
-    };
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let hostport = authority.rsplit('@').next().unwrap_or("");
-    let host = hostport.split(':').next().unwrap_or("");
-    host.trim_end_matches('.') == GOOGLE_HOST
-}
-
 /// 按今天（UTC）的日期 lint，见 [`lint_at`]。
 pub fn lint(m: &Manifest, present: &BTreeSet<String>) -> Vec<Lint> {
     lint_at(m, present, chrono::Utc::now().date_naive())
@@ -194,13 +174,6 @@ pub fn lint_at(m: &Manifest, present: &BTreeSet<String>, today: chrono::NaiveDat
     if let Some(o) = &m.school.oidc {
         if let Err(e) = checks::oidc(o) {
             out.push(err("oidc_invalid", e, "school.oidc".into()));
-        }
-        if is_google_issuer(&o.issuer) {
-            out.push(err(
-                "oidc_issuer_google",
-                "Laptop login does not use Google accounts: issue accounts with Kanidm (plus Dex) or Zitadel instead.".into(),
-                "school.oidc.issuer".into(),
-            ));
         }
     }
     lint_formats(m, &views, &configs, &mut out);
@@ -1682,50 +1655,24 @@ config = "teacher"
     }
 
     #[test]
-    fn lint_google_issuer_is_error() {
-        let google = r#"oidc = { issuer = "https://accounts.google.com", client_id = "c" }"#;
-        let l = lint(&manifest(google, "", "\"local\""), &present());
-        assert_eq!(l.len(), 1, "{l:?}");
-        assert_eq!(l[0].code, "oidc_issuer_google");
-        assert_eq!(l[0].level, LintLevel::Error);
-        assert_eq!(l[0].path.as_deref(), Some("school.oidc.issuer"));
-        // 有 allowed_domains 也一样。
-        let with = format!("{google}\nallowed_domains = [\"school.ac.th\"]");
-        let l = lint(&manifest(&with, "", "\"local\""), &present());
-        assert!(l
-            .iter()
-            .all(|x| x.code != "public_idp_without_allowed_domains"));
-        assert!(l.iter().any(|x| x.code == "oidc_issuer_google"));
-    }
-
-    #[test]
-    fn google_issuer_is_matched_by_host() {
-        for yes in [
-            "https://ACCOUNTS.GOOGLE.COM",
-            "https://accounts.google.com:443",
-            "https://accounts.google.com/foo?x=1",
-            "http://accounts.google.com",
-            "https://user@accounts.google.com",
-            "https://user:pw@accounts.google.com:443/x",
-            "https://accounts.google.com/",
-            "https://accounts.google.com.",
+    fn google_issuer_passes_lint() {
+        // Since 2026-11-05 Devices may sign in with Google accounts: an accounts.google.com issuer
+        // is an ordinary OIDC issuer, not an error.
+        for issuer in [
+            "https://accounts.google.com",
+            "https://Accounts.Google.com:443/",
         ] {
-            assert!(is_google_issuer(yes), "{yes}");
+            let google = format!("oidc = {{ issuer = \"{issuer}\", client_id = \"c\" }}");
+            let m = manifest(&google, "", "\"local\"");
+            let l = lint(&m, &present());
+            assert!(l.is_empty(), "{issuer}: {l:?}");
+            let o = m.school.oidc.as_ref().expect("oidc");
+            assert!(checks::oidc(o).is_ok(), "{issuer}");
         }
-        for no in [
-            "https://accounts.google.com.evil.example",
-            "https://evil.example/accounts.google.com",
-            "https://evil.example?u=accounts.google.com",
-            "https://accounts.google.com@evil.example",
-            "https://sso.school.ac.th",
-            "accounts.google.com",
-        ] {
-            assert!(!is_google_issuer(no), "{no}");
-        }
-        let google = r#"oidc = { issuer = "https://Accounts.Google.com:443/", client_id = "c" }"#;
-        let l = lint(&manifest(google, "", "\"local\""), &present());
-        assert_eq!(l.len(), 1, "{l:?}");
-        assert_eq!(l[0].code, "oidc_issuer_google");
+        let with = r#"oidc = { issuer = "https://accounts.google.com", client_id = "c", client_secret = "s" }
+allowed_domains = ["school.ac.th"]"#;
+        let l = lint(&manifest(with, "", "\"sso\""), &present());
+        assert!(!has_errors(&l), "{l:?}");
     }
 
     #[test]
@@ -2012,7 +1959,6 @@ scanners = [{ name = "s", uri = "http://x" }, { name = "s", uri = "http://y" }]"
             ("timezone_invalid", &[]),
             ("locale_invalid", &[]),
             ("oidc_invalid", &[]),
-            ("oidc_issuer_google", &[]),
             ("update_mirror_invalid", &[]),
             ("escrow_recipients_invalid", &[]),
             ("lock_message_too_long", &[]),

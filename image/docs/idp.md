@@ -91,13 +91,14 @@ EIS 的实例 2026-10-31 按下面配置，VM 121 走通过卡片登录（当时
 
 ## 接入：Google Workspace（未测）
 
-> **这一节完全没有实测，不能照着给学校上线。** 2026-11-01 撤销了 2026-10-14 的「不用 Google 账号登录笔记本」裁定，但真正接入之前，发布检查仍然拒绝 `accounts.google.com`（`oidc_issuer_google`），所以现在这样配发布不出去。下面只来自对 Google 官方行为的了解。
+> **这一节完全没有实测，不能照着给学校上线。** 裁定（2026-11-05，David）：笔记本**可以**用 Google 账号登录，`[school.oidc] issuer` 可以直接指向 `https://accounts.google.com`。2026-10-14 的「笔记本永不用 Google 账号登录」裁定作废（11-01 已部分撤销，11-05 完全撤销）。发布检查不再拒绝 `accounts.google.com`（`oidc_issuer_google` 已删），这样配可以发布出去，但 Google 这条路在笔记本上一次都没有跑过：`card_hosts`、`login_hint`、`prompt` 的行为都还要实测。下面只来自对 Google 官方行为的了解。
+
+长期计划：我们托管的服务以后由一个中心签发方（Rauthy）给笔记本发令牌，Google 作为它的上游登录方式之一。这不改变系统本身的中立：学校仍然可以把笔记本直接指向任何 OIDC 签发方，包括 Google、Zitadel、Dex 或自己的服务。
 
 接入时要做的事：
 
 1. 实测下面的待验证项，确定 `card_hosts`。
-2. 去掉发布检查里的 `oidc_issuer_google`，同步改 `manifest-spec.md` 与界面文字。
-3. 走通验收后把这一节改成正式步骤。
+2. 走通验收后把这一节改成正式步骤。
 
 预计的配置：
 
@@ -112,6 +113,7 @@ EIS 的实例 2026-10-31 按下面配置，VM 121 走通过卡片登录（当时
 - `card_hosts` 到底要哪些主机（静态资源、两步验证、学校自己的 SAML 跳转都可能用到别的主机）。
 - Google 是否接受卡片这个受策略限制的 Chrome，还是当作不安全的浏览器拒绝。
 - `login_hint` 是否跳过邮箱输入，`ui_locales` 是否生效。
+- 卡片发出的 `prompt` 在 Google 上的表现（会不会每次都弹账号选择或同意页）。
 - 不带 `offline_access` 时 broker 的行为（Google 不接受这个 scope 写法；单元测试已覆盖没有刷新令牌的情形）。
 
 `allowed_domains` 仍然要配：Internal 只限制同意屏幕，机器上的域名限制由 `pam-check` 判。

@@ -604,8 +604,8 @@ impl Default for School {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct Oidc {
-    /// The provider's issuer URL (`https://…`). Not Google: Devices do not sign in with Google
-    /// accounts.
+    /// The provider's issuer URL (`https://…`); any OIDC provider, Google
+    /// (`https://accounts.google.com`) included.
     pub issuer: String,
     /// The client id registered with the provider for MastersOS Devices.
     pub client_id: String,

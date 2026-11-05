@@ -150,7 +150,6 @@ pub const ISSUE_CODES: &[&str] = &[
     "missing_field",
     "no_admins",
     "oidc_invalid",
-    "oidc_issuer_google",
     "path_file_and_dir",
     "printer_invalid",
     "scanner_invalid",
