@@ -3172,6 +3172,7 @@ grep -qxF 'pub const MAX_IDP_HINT_BYTES: usize = 64;' "$core/mastersos-bundle/sr
 	bad 71 "checks.rs MAX_IDP_HINT_BYTES should stay 64 (card-url.js has the same limit)"
 	r=1
 }
+# shellcheck disable=SC2016 # literal text of card.js
 grep -qF '${withIdpHint(url, readIdpHint())}' "$lc/card.js" || {
 	bad 71 "card.js should add the idp_hint to the URL it leaves for the browser (withIdpHint)"
 	r=1
