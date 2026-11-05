@@ -2624,7 +2624,7 @@ grep -qF 'MASTERSOS_PACKAGE_CACHE' "$wf" || {
 r=0
 bh=$rel/lab/build-host.sh
 read -ra bh_pkgs <<<"$(sed -n 's/^packages=(\(.*\))$/\1/p' "$bh")"
-ci_pkgs=$(sed -n '/^sudo apt-get install -y -qq /,/[^\\]$/p' "$rel/ci-runner-setup.sh" | tr -d '\\' | tr ' \t' '\n\n' | grep -E '^[a-z0-9][a-z0-9.+-]+$' | grep -vxE 'sudo|apt-get|install')
+ci_pkgs=$(sed -n '/^sudo apt-get install -y -qq /,/[^\\]$/p' "$rel/ci-runner-setup.sh" | sed 's/[\]//g' | tr -s ' \t' '\n' | grep -E '^[a-z0-9][a-z0-9.+-]+$' | grep -vxE 'sudo|apt-get|install')
 if [ -z "$ci_pkgs" ] || [ "${#bh_pkgs[@]}" = 0 ]; then
 	bad 56 "cannot read the package lists of ci-runner-setup.sh and lab/build-host.sh"
 	r=1
