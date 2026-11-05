@@ -7,6 +7,7 @@ The cloud service that manages devices is not open source and is not in this rep
 **School IT:** installing the command line on macOS, Linux or Windows and setting up a school is in English in
 [README.md, "Getting started for school IT"](README.md#getting-started-for-school-it-macos-linux-windows); the words
 are in [docs/glossary.md](docs/glossary.md).
+If the school network filters outbound traffic, allow the diagnostics upload domain shown on the admin site's Install page.
 
 The rest of the main documentation is in Chinese ([README.md](README.md), [image/README.md](image/README.md)). This
 page is a short guide for English readers. Design documents and acceptance records are kept private, so some documents mention
