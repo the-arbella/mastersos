@@ -8,7 +8,7 @@
 // Never on update: reloading in the middle of a test is worse than a missing signal.
 // Get help (plan 2026-11-05 Task 7): the content script's {cmd:"help-enabled" | "help-submit" | "help-status"} become
 // one native message each to org.mastersos.support (/usr/lib/mastersos/mastersos-support-host → mastersos-agent
-// support native-host, which forwards one JSON line to /run/mastersos/support.sock and answers one line). The host
+// support native-host, which forwards one JSON line to /run/mastersos-support/support.sock and answers one line). The host
 // decides who is asking and fills in the real kiosk:<app id> session; "kiosk" here is only a placeholder. No
 // screenshot in kiosk (Ruling P1): screenshot_png_b64 is always null. Only known fields go either way.
 "use strict";

@@ -1,6 +1,6 @@
 // The Get help dialog (plan 2026-11-05 Task 6, design 4–5): a category (required), a short description (optional) and, if the
 // student ticks it, a screenshot of the screen as it was before the dialog opened; sent to the agent over
-// /run/mastersos/support.sock and answered with a ticket number, "saved" (offline) or why not. The same file is in
+// /run/mastersos-support/support.sock and answered with a ticket number, "saved" (offline) or why not. The same file is in
 // mastersos-login@mastersos.org (session "login") and mastersos-managed@mastersos.org (session "desktop"); the caller passes
 // its gettext for the mastersos-login catalogue. The logic is help-model.js; this file is only the widgets and the IO, all of
 // it asynchronous: nothing here blocks the shell. Who is asking is the agent's business (peer credentials), not this dialog's.
@@ -27,7 +27,7 @@ import {
     afterStatus, afterSubmit, buildSubmit, canSend, counterText, encode, message, parseReply, statusRequest, supportEnabled,
 } from './help-model.js';
 
-export const SOCKET = '/run/mastersos/support.sock';
+export const SOCKET = '/run/mastersos-support/support.sock';
 export const SUPPORT_JSON = '/var/lib/mastersos-public/support.json';
 const PREVIEW_WIDTH = 160;
 // A screenshot over the limit is scaled down to this width once; still too big, and there is nothing to attach.

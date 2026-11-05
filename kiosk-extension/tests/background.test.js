@@ -117,7 +117,7 @@ describe("后台", () => {
 });
 
 // Get help (plan 2026-11-05 Task 7): the content script's {cmd:"help-…"} messages become one native message each to
-// org.mastersos.support (mastersos-agent support native-host, which forwards to /run/mastersos/support.sock and fills
+// org.mastersos.support (mastersos-agent support native-host, which forwards to /run/mastersos-support/support.sock and fills
 // in the real kiosk:<app id> session). No screenshot in kiosk (Ruling P1). Only known fields go either way.
 describe("Get help", () => {
   const HOST = "org.mastersos.support";

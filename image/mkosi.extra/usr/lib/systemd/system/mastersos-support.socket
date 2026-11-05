@@ -1,14 +1,16 @@
 # Get help (plan 2026-11-05 Task 5): the login screen, the desktop and the kiosk native host each connect here for one
 # request (one JSON line in, one out); mastersos-support.service answers. 0666: anyone may ask, who is asking comes from
 # the peer credentials (core/mastersos-agent/src/support/identity.rs). Accept=no: one service handles every connection
-# and exits when idle; the socket starts it again.
+# and exits when idle; the socket starts it again. Its own directory, 0755: /run/mastersos is root 0700 (the login
+# queue tightens it at every login), so a socket in there would be out of everyone's reach.
 [Unit]
 Description=MastersOS: Get help socket
 Documentation=file:/usr/bin/mastersos-agent
 
 [Socket]
-ListenStream=/run/mastersos/support.sock
+ListenStream=/run/mastersos-support/support.sock
 SocketMode=0666
+DirectoryMode=0755
 Accept=no
 
 [Install]

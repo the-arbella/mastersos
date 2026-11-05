@@ -26,6 +26,8 @@ const SSO: u32 = 10_042;
 struct FakeWho {
     accounts: BTreeMap<u32, Account>,
     greeters: Vec<u32>,
+    /// The kiosk step's records: id → (uid, name).
+    kiosk: BTreeMap<String, (u32, String)>,
 }
 
 impl Who for FakeWho {
@@ -34,6 +36,9 @@ impl Who for FakeWho {
     }
     fn is_greeter(&self, peer: &Peer) -> bool {
         self.greeters.contains(&peer.uid)
+    }
+    fn kiosk_record(&self, id: &str) -> Option<(u32, String)> {
+        self.kiosk.get(id).cloned()
     }
 }
 
@@ -52,6 +57,7 @@ fn who() -> FakeWho {
             (SSO, acct("ana@school.example", true)),
         ]),
         greeters: vec![GREETER],
+        kiosk: BTreeMap::from([("nwea".to_string(), (KIOSK, "kiosk-nwea".to_string()))]),
     }
 }
 
@@ -248,6 +254,22 @@ fn greeter_peer_is_none_guest_uid_is_guest() {
         },
     );
     assert_eq!(identify(&peer(ME + 5), &w).session, "desktop");
+    // A kiosk-<id> account in the range that the kiosk step has no record of, or whose record has another uid, is
+    // not a locked app either.
+    w.accounts.insert(
+        KIOSK + 2,
+        Account {
+            name: "kiosk-other".into(),
+            authd: false,
+        },
+    );
+    assert_eq!(identify(&peer(KIOSK + 2), &w).session, "desktop");
+    w.kiosk
+        .insert("other".into(), (KIOSK + 3, "kiosk-other".into()));
+    assert_eq!(identify(&peer(KIOSK + 2), &w).session, "desktop");
+    w.kiosk
+        .insert("other".into(), (KIOSK + 2, "kiosk-other".into()));
+    assert_eq!(identify(&peer(KIOSK + 2), &w).session, "kiosk:other");
     // No passwd entry: local, no name.
     let id = identify(&peer(4321), &w);
     assert_eq!((id.user.kind, id.user.name), (SupportUserKind::Local, None));
@@ -339,6 +361,18 @@ fn system_who_reads_logind_and_authd() {
         Output::ok("root:x:0:0::/root:/bin/bash\n"),
     );
     assert_eq!(w.account(OTHER), None);
+
+    // The kiosk step's record in system-state.json; none (no file) is no record.
+    assert_eq!(w.kiosk_record("nwea"), None);
+    let var = root.path().join("var/lib/mastersos-system");
+    std::fs::create_dir_all(&var).unwrap();
+    std::fs::write(
+        var.join("system-state.json"),
+        json!({"kiosk_accounts": {"nwea": {"uid": KIOSK, "name": "kiosk-nwea"}}}).to_string(),
+    )
+    .unwrap();
+    assert_eq!(w.kiosk_record("nwea"), Some((KIOSK, "kiosk-nwea".into())));
+    assert_eq!(w.kiosk_record("other"), None);
 }
 
 /// Review focus 5: three per hour per machine, counted on disk, so a restarted service still refuses the fourth.

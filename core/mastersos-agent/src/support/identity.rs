@@ -12,8 +12,11 @@
 //! 2. **The guest → `guest`.** uid 1999 ([`GUEST_UID`]), named from passwd (`guest`).
 //! 3. **A locked app (kiosk) → `none`, session `kiosk:<app id>`.** The kiosk step makes one account per app, named
 //!    `kiosk-<id>` with a uid in [`KIOSK_UIDS`] (`system/kiosk.rs`; `kiosk_session.rs` derives the id from the name the
-//!    same way, [`id_from_user`]). Both must hold: a uid in the range with another name, or a `kiosk-*` name outside
-//!    it, is not a locked app. Nobody signs in to a kiosk account, so there is no person to name.
+//!    same way, [`id_from_user`]) and records each one, id → uid and name, in `system-state.json`
+//!    ([`SysState::kiosk_accounts`](crate::system::SysState::kiosk_accounts), written before `useradd`). All three must
+//!    hold: a uid in the range with another name, a `kiosk-*` name outside it, or an account the kiosk step has no
+//!    record of (or whose record cannot be read) is not a locked app. Nobody signs in to a kiosk account, so there is no
+//!    person to name.
 //! 4. **An SSO account → `sso`.** authd serves school accounts through its NSS module, never `/etc/passwd`: the entry
 //!    is found with `getent -s authd passwd <uid>`. A name with `@` is an SSO account too (`login::decide` and
 //!    `lock.rs` classify by the `@` the same way), so an authd range moved somewhere else still reads as SSO.
@@ -32,6 +35,7 @@ use crate::kiosk_session::id_from_user;
 use crate::runner::{run_ok, Cmd, Runner};
 use crate::system::ephemeral::KIOSK_UIDS;
 use crate::system::guest::GUEST_UID;
+use crate::system::{SysPaths, SysState};
 
 const CMD_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -56,6 +60,9 @@ pub trait Who: Send + Sync {
     fn account(&self, uid: u32) -> Option<Account>;
     /// The peer is GDM's login screen by its logind session class (rule 1).
     fn is_greeter(&self, peer: &Peer) -> bool;
+    /// The kiosk step's record of the account for app `id`: its (uid, name). `None` when there is none or the state
+    /// cannot be read (rule 3).
+    fn kiosk_record(&self, id: &str) -> Option<(u32, String)>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,8 +100,12 @@ pub fn identify(peer: &Peer, who: &dyn Who) -> Identity {
         return named(SupportUserKind::Guest);
     }
     if KIOSK_UIDS.contains(&peer.uid) {
-        if let Some(id) = account.as_ref().and_then(|a| id_from_user(&a.name).ok()) {
-            return nobody(format!("kiosk:{id}"));
+        if let Some(a) = &account {
+            if let Ok(id) = id_from_user(&a.name) {
+                if who.kiosk_record(&id) == Some((peer.uid, a.name.clone())) {
+                    return nobody(format!("kiosk:{id}"));
+                }
+            }
         }
     }
     match &account {
@@ -107,11 +118,21 @@ pub fn identify(peer: &Peer, who: &dyn Who) -> Identity {
 pub struct SystemWho {
     runner: Arc<dyn Runner>,
     root: PathBuf,
+    /// Where `system-state.json` is (`<root>/var/lib/mastersos-system`).
+    sys: SysPaths,
 }
 
 impl SystemWho {
     pub fn new(runner: Arc<dyn Runner>, root: PathBuf) -> SystemWho {
-        SystemWho { runner, root }
+        let d = SysPaths::default();
+        let under = |p: &std::path::Path| root.join(p.strip_prefix("/").unwrap_or(p));
+        let sys = SysPaths {
+            var_dir: under(&d.var_dir),
+            public_dir: under(&d.public_dir),
+            state_dir: under(&d.state_dir),
+            root: root.clone(),
+        };
+        SystemWho { runner, root, sys }
     }
 
     fn run(&self, args: &[&str], program: &str) -> Option<String> {
@@ -167,6 +188,19 @@ impl Who for SystemWho {
         }
         self.getent(None, uid)
             .map(|name| Account { name, authd: false })
+    }
+
+    fn kiosk_record(&self, id: &str) -> Option<(u32, String)> {
+        // One small JSON file, read only for uids in the kiosk range.
+        let state = match SysState::peek(&self.sys) {
+            Ok(s) => s?,
+            Err(e) => {
+                log::warn!("support: reading the kiosk accounts failed: {e:#}");
+                return None;
+            }
+        };
+        let a = state.kiosk_accounts.get(id)?;
+        Some((a.uid, a.name.clone()))
     }
 
     fn is_greeter(&self, peer: &Peer) -> bool {

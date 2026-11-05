@@ -151,7 +151,7 @@
    启动上传服务，主循环不等；上传服务收集、上传后 ack `done`/`failed`。收集开始时在当前会话（含登录页）显示一条通知
    「IT is collecting diagnostic info from this computer.」（i18n）。
 5. **求助入口与本地通道。**
-   - 本地 socket `/run/mastersos/support.sock`（systemd socket 激活，0666），服务端是 root 的 `mastersos-agent support-host`。
+   - 本地 socket `/run/mastersos-support/support.sock`（systemd socket 激活，0666），服务端是 root 的 `mastersos-agent support-host`。
      用 `SO_PEERCRED` 取调用方 uid 认定用户：GDM 登录页 → `none`，访客 uid 1999 → `guest`，authd 用户 → `sso`，其他 → `local`；
      `name` 取自系统，不接受界面传来的名字。
    - 界面只传：分类、描述、是否附截图与截图（PNG，≤5 MB，base64 放在请求里，不按路径读）。

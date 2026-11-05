@@ -1,4 +1,4 @@
-//! `mastersos-agent support host`: the root service behind `/run/mastersos/support.sock` (socket activation,
+//! `mastersos-agent support host`: the root service behind `/run/mastersos-support/support.sock` (socket activation,
 //! `Accept=no`; the listening socket arrives as stdin, `StandardInput=socket`). The login screen, the desktop and the
 //! kiosk native host talk to it, one connection per request:
 //!

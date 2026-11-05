@@ -3017,18 +3017,25 @@ fi
 # 69. Get help, the machine side (plan 2026-11-05 Task 5): mastersos-support.socket (0666, Accept=no) is enabled through a
 #     sockets.target.wants link and starts mastersos-support.service, which runs the agent's `support host` with the socket
 #     as stdin and its output in the journal; the socket path, the queue directory and support.json are the agent's and
-#     the dialogs' names; main.rs dispatches `support`; the kiosk host manifest allows the same origin as the exit host's.
+#     the dialogs' names, and the socket is in its own 0755 directory, never in the 0700 /run/mastersos; main.rs dispatches
+#     `support`; the kiosk host manifest allows the same origin as the exit host's.
 r=0
 sd=$ex/usr/lib/systemd/system
 ss=$sd/mastersos-support.socket
 sv=$sd/mastersos-support.service
 sm=$core/mastersos-agent/src/support/mod.rs
-for l in 'ListenStream=/run/mastersos/support.sock' 'SocketMode=0666' 'Accept=no' 'WantedBy=sockets.target'; do
+for l in 'ListenStream=/run/mastersos-support/support.sock' 'SocketMode=0666' 'DirectoryMode=0755' 'Accept=no' 'WantedBy=sockets.target'; do
 	grep -qxF -- "$l" "$ss" 2>/dev/null || {
 		bad 69 "$ss should have the line: $l"
 		r=1
 	}
 done
+# /run/mastersos is root 0700 (tmpfiles, and login_queue tightens it at every login): a socket in it is out of users' reach
+sp=$(sed -n 's/^ListenStream=//p' "$ss" 2>/dev/null)
+if [ "$(dirname "${sp:-/run/mastersos/x}")" = /run/mastersos ]; then
+	bad 69 "$ss: the socket must not be in /run/mastersos (root 0700), not ${sp:-missing}"
+	r=1
+fi
 if [ "$(readlink "$sd/sockets.target.wants/mastersos-support.socket" 2>/dev/null)" != ../mastersos-support.socket ]; then
 	bad 69 "$sd/sockets.target.wants/mastersos-support.socket should be a link to ../mastersos-support.socket"
 	r=1
@@ -3044,7 +3051,7 @@ if [ "$(grep -c '^ExecStart=' "$sv" 2>/dev/null)" != 1 ] || grep -qxF '[Install]
 	bad 69 "$sv should have exactly one ExecStart= and no [Install] (the socket starts it)"
 	r=1
 fi
-for want in 'pub const SOCKET_PATH: &str = "/run/mastersos/support.sock";' \
+for want in 'pub const SOCKET_PATH: &str = "/run/mastersos-support/support.sock";' \
 	'pub const QUEUE_DIR: &str = "/var/lib/mastersos/support-queue";' 'pub const SUPPORT_JSON: &str = "support.json";' \
 	'pub const UPLOAD_UNIT: &str = "mastersos-upload.service";'; do
 	grep -qxF -- "$want" "$sm" || {
@@ -3054,9 +3061,9 @@ for want in 'pub const SOCKET_PATH: &str = "/run/mastersos/support.sock";' \
 done
 for e in mastersos-login@mastersos.org mastersos-managed@mastersos.org; do
 	h=$ex/usr/share/gnome-shell/extensions/$e/help.js
-	if ! grep -qxF "export const SOCKET = '/run/mastersos/support.sock';" "$h" ||
+	if ! grep -qxF "export const SOCKET = '/run/mastersos-support/support.sock';" "$h" ||
 		! grep -qxF "export const SUPPORT_JSON = '/var/lib/mastersos-public/support.json';" "$h"; then
-		bad 69 "$h should use /run/mastersos/support.sock and /var/lib/mastersos-public/support.json (the agent's names)"
+		bad 69 "$h should use /run/mastersos-support/support.sock and /var/lib/mastersos-public/support.json (the agent's names)"
 		r=1
 	fi
 done

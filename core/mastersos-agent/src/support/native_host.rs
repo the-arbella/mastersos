@@ -4,7 +4,7 @@
 //! caller's origin (and on some platforms a window handle) as arguments, which are ignored.
 //!
 //! One message in (4-byte little-endian length + JSON, at most [`MAX_MESSAGE`]), forwarded as one line to
-//! `/run/mastersos/support.sock`; the socket's one-line reply goes back as one message. The extension sends
+//! `/run/mastersos-support/support.sock`; the socket's one-line reply goes back as one message. The extension sends
 //! `{"op":"enabled"}`, `{"op":"status","client_id":…}` and
 //! `{"op":"submit","category":…,"text":…,"session":"kiosk","screenshot_png_b64":null}`; in a submit the placeholder
 //! session becomes `kiosk:<app id>` of this account. That is only for the record: the support host derives the session

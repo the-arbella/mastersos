@@ -1,6 +1,6 @@
 //! "Get help" on the machine (design 2026-11-05 remote diagnostics and help §5, plan Task 5): the local half.
 //!
-//! - [`host`]: `mastersos-agent support host`, the root service behind `/run/mastersos/support.sock`; checks a help
+//! - [`host`]: `mastersos-agent support host`, the root service behind `/run/mastersos-support/support.sock`; checks a help
 //!   request, decides who sent it ([`identity`]), queues it ([`store`]) and starts the sender ([`kick_sender`]).
 //! - [`native_host`]: `mastersos-agent support native-host`, the kiosk extension's native messaging host, which
 //!   forwards to the same socket.
@@ -28,7 +28,7 @@ use crate::safefs;
 use crate::system::{failed, ok, public_dir, Env, Step};
 
 /// The socket the dialogs and the native host connect to (`mastersos-support.socket`).
-pub const SOCKET_PATH: &str = "/run/mastersos/support.sock";
+pub const SOCKET_PATH: &str = "/run/mastersos-support/support.sock";
 /// The local queue ([`store::Store`]).
 pub const QUEUE_DIR: &str = "/var/lib/mastersos/support-queue";
 /// In the public directory (`/var/lib/mastersos-public`).
