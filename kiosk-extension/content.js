@@ -66,7 +66,8 @@
     close: "Close",
     sendingTitle: "Sending…",
     sendingBody: "Telling IT. This can take up to a minute.",
-    helpSent: (ticket) => `Sent. Ticket #${ticket}. IT has been told.`,
+    // the ticket part is bold: [before, bold, after]
+    helpSent: (ticket) => ["Sent. ", `Ticket #${ticket}`, ". IT has been told."],
     helpQueued: "Saved. It will be sent when this computer is online.",
     helpLimited: "You've sent 3 requests this hour. Please try again later.",
     helpOff: "Help requests are turned off at this school.",
@@ -95,6 +96,25 @@
       ["path", { d: "M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4" }],
       ["path", { d: "M15 8l4 4-4 4" }],
       ["path", { d: "M19 12H9" }],
+    ],
+    // result states of Get help, each a circle with a mark
+    statusSent: [
+      ["circle", { cx: 12, cy: 12, r: 9 }],
+      ["path", { d: "M8 12.4l2.7 2.7L16 9.6" }],
+    ],
+    statusQueued: [
+      ["circle", { cx: 12, cy: 12, r: 9 }],
+      ["path", { d: "M12 7.5V12l3 2" }],
+    ],
+    statusInfo: [
+      ["circle", { cx: 12, cy: 12, r: 9 }],
+      ["path", { d: "M12 11.2V16" }],
+      ["path", { d: "M12 8h.01" }],
+    ],
+    statusFailed: [
+      ["circle", { cx: 12, cy: 12, r: 9 }],
+      ["path", { d: "M12 7.6v5" }],
+      ["path", { d: "M12 16.2h.01" }],
     ],
     // a question mark in a circle
     help: [
@@ -203,6 +223,11 @@ textarea {
 textarea::placeholder { color: #6b6f7b; }
 textarea:focus { outline: none; border-color: #1b1d2a; }
 textarea:focus-visible { outline: 2px solid #d9653b; outline-offset: 2px; }
+.body.result { display: flex; align-items: center; gap: 12px; margin-top: 4px; font-size: 15px; }
+.result .status { flex: none; width: 24px; height: 24px; display: block; color: #5b6170; }
+.result .status[data-status="sent"] { color: #1e7d45; }
+.result .status[data-status="failed"] { color: #b3261e; }
+.result strong { font-weight: 700; }
 `;
 
   const doc = document;
@@ -697,6 +722,7 @@ textarea:focus-visible { outline: 2px solid #d9653b; outline-offset: 2px; }
     helpTitle.textContent = next === "sending" ? TEXT.sendingTitle : TEXT.helpTitle;
     helpSpinner.hidden = next !== "sending";
     helpBody.hidden = next === "form";
+    helpBody.classList.remove("result");
     helpBody.textContent = bodyText || "";
     form.hidden = next !== "form";
     for (const b of helpButtons) b.hidden = !shown.includes(b);
@@ -722,12 +748,25 @@ textarea:focus-visible { outline: 2px solid #d9653b; outline-offset: 2px; }
     helpOverlay.hidden = true;
     fab.focus();
   }
-  function helpResult(text) {
+  const STATUS_ICON = { sent: "statusSent", queued: "statusQueued", info: "statusInfo", failed: "statusFailed" };
+  /**
+   * The result card: a status icon (sent | queued | info | failed) left of the message. `text` is a string, or
+   * [before, bold, after] (the Sent text with its ticket in <strong>); built from DOM nodes only.
+   */
+  function helpResult(status, text) {
     stopPolling();
-    helpView("result", text);
+    helpView("result");
+    const icon = svgIcon(ICONS[STATUS_ICON[status]]);
+    icon.classList.add("status");
+    icon.dataset.status = status;
+    const msg = el("span", "message");
+    if (Array.isArray(text)) msg.append(text[0], el("strong", "", text[1]), text[2]);
+    else msg.textContent = text;
+    helpBody.classList.add("result");
+    helpBody.replaceChildren(icon, msg);
     helpOk.focus();
   }
-  const ERROR_TEXT = { rate_limited: TEXT.helpLimited, disabled: TEXT.helpOff };
+  const ERROR_RESULT = { rate_limited: ["info", TEXT.helpLimited], disabled: ["info", TEXT.helpOff] };
 
   function sendHelp() {
     if (picked < 0) {
@@ -742,7 +781,7 @@ textarea:focus-visible { outline: 2px solid #d9653b; outline-offset: 2px; }
     ask(msg).then((r) => {
       if (run !== helpRun) return;
       if (!r || r.ok !== true || typeof r.client_id !== "string" || r.client_id === "") {
-        helpResult((r && ERROR_TEXT[r.error]) || TEXT.helpFailed);
+        helpResult(...((r && ERROR_RESULT[r.error]) || ["failed", TEXT.helpFailed]));
         return;
       }
       const id = r.client_id;
@@ -752,13 +791,13 @@ textarea:focus-visible { outline: 2px solid #d9653b; outline-offset: 2px; }
         ask({ cmd: "help-status", client_id: id }).then((st) => {
           if (run !== helpRun) return;
           if (st && st.ok === true && st.state === "sent" && typeof st.ticket === "string" && st.ticket !== "") {
-            helpResult(TEXT.helpSent(st.ticket));
+            helpResult("sent", TEXT.helpSent(st.ticket));
           } else if (st && st.ok === true && st.state === "disabled") {
-            helpResult(TEXT.helpOff);
+            helpResult("info", TEXT.helpOff);
           } else if (st && st.ok === true && st.state === "failed") {
-            helpResult(TEXT.helpFailed);
+            helpResult("failed", TEXT.helpFailed);
           } else if (Date.now() >= until) {
-            helpResult(TEXT.helpQueued); // it is in the service's queue: sent when online
+            helpResult("queued", TEXT.helpQueued); // it is in the service's queue: sent when online
           } else {
             pollTimer = setTimeout(poll, POLL_MS); // still queued, or this one answer got lost: ask again
           }
