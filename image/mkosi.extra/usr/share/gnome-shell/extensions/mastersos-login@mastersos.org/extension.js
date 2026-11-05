@@ -9,8 +9,8 @@
 //     the accessibility button stay outside it
 //   - first run without a language from the school: only the language and keyboard screen (setup.js), and a Language item in
 //     the keyboard menu afterwards
-//   - when the user types '@' in the username field, pops up the school domains; an explicit pick
-//     completes the address, typing the full address by hand always works.
+//   - as a name is typed, the school addresses (name@domain for each school domain, filtered by what follows an '@') are
+//     offered in the same list as the people; an explicit pick fills in the address, typing it by hand always works.
 // Never reads passwords or tokens: everything secret stays in PAM, authd and the school's page. Reads
 // /var/lib/mastersos-public/branding/branding.json; missing, broken or empty values show nothing and never throw.
 //
@@ -34,7 +34,7 @@ import {loginArea} from './area.js';
 import {addBrandMark} from './brand.js';
 import {LoginCard} from './card.js';
 import {LanguageScreen, languageChosen, restartGreeter} from './setup.js';
-import {matchPeople, preselect} from './people.js';
+import {matchPeople, preselect, suggestDomains} from './people.js';
 import {Shelf} from './shelf.js';
 import {agentRefusal, bannerText, brokerText, cleanText, fmt, strings} from './strings.js';
 
@@ -132,20 +132,18 @@ export default class MastersosLoginExtension extends Extension {
     enable() {
         this.initTranslations();
         this._text = strings();
-        this._menu = null;
-        this._menuManager = null;
         this._hookedText = null;
         this._textChangedId = 0;
         this._keyPressId = 0;
         this._matchBox = null;
         this._shown = [];
         this._more = false;
+        this._addresses = [];
         this._sel = -1;
         this._picked = null;
         this._dismissed = false;
         this._pollId = 0;
         this._domains = [];
-        this._closeId = 0;
         this._dialog = null;
         this._shelf = null;
         this._restore = [];
@@ -471,7 +469,8 @@ export default class MastersosLoginExtension extends Extension {
             prompt._inputWell.add_child(button);
             return button;
         };
-        // The people found as the person types, right under the entry (a plain list: a popup menu would take the keyboard).
+        // The people found and the school addresses offered as the person types, right under the entry (a plain list: a popup
+        // menu would take the keyboard).
         this._matchBox = new St.BoxLayout({
             style_class: 'mastersos-people',
             orientation: Clutter.Orientation.VERTICAL,
@@ -665,7 +664,6 @@ export default class MastersosLoginExtension extends Extension {
         this._hookedText = null;
         this._textChangedId = 0;
         this._keyPressId = 0;
-        this._closeMenu();
         this._hideMatches();
     }
 
@@ -684,23 +682,12 @@ export default class MastersosLoginExtension extends Extension {
             try {
                 // Left the username stage (password / code prompt now uses this entry): do nothing and read nothing.
                 if (this._isSecret(entry) || !entry.visible) {
-                    this._scheduleClose();
                     this._hideMatches();
                     return;
                 }
-                const t = ct.get_text();
-                // Only a single trailing '@' on a non-empty name opens the school domains, and then the people
-                // step aside: one list under the entry at a time.
-                if (this._domains.length && t.length > 1 && t.endsWith('@') && !t.slice(0, -1).includes('@')) {
-                    this._hideMatches();
-                    this._showDomains(entry, ct);
-                    return;
-                }
-                if (this._menu && !t.endsWith('@'))
-                    this._scheduleClose();
                 this._dismissed = false;
                 if (this._atUsernameStep(entry))
-                    this._showMatches(t);
+                    this._showMatches(ct.get_text());
                 else
                     this._hideMatches();
             } catch (e) {
@@ -722,6 +709,12 @@ export default class MastersosLoginExtension extends Extension {
             if (key === Clutter.KEY_Escape) {
                 this._hideMatches();
                 this._dismissed = true;
+                return Clutter.EVENT_STOP;
+            }
+            // Enter on a school address fills it in; the next Enter signs in what the entry then says.
+            const address = this._selectedAddress();
+            if (address && (key === Clutter.KEY_Return || key === Clutter.KEY_KP_Enter || key === Clutter.KEY_ISO_Enter)) {
+                this._fillAddress(address);
                 return Clutter.EVENT_STOP;
             }
             return Clutter.EVENT_PROPAGATE;
@@ -788,16 +781,35 @@ export default class MastersosLoginExtension extends Extension {
             }));
     }
 
+    // People first, then the school addresses; Enter without the arrow keys only ever takes a person.
     _showMatches(text) {
         const found = matchPeople(this._people(), text);
         this._shown = found.shown;
         this._more = found.more;
+        this._addresses = suggestDomains(text, this._domains, found.shown.map(p => p.userName));
         this._sel = preselect(text, found.shown);
         this._renderMatches();
     }
 
+    // The school address chosen with the arrow keys, if the selection is on one.
+    _selectedAddress() {
+        const i = this._sel - this._shown.length;
+        return i >= 0 ? this._addresses[i] ?? null : null;
+    }
+
+    // Put the whole address in the entry, the cursor at its end; the list follows the new text.
+    _fillAddress(address) {
+        const entry = this._dialog?._authPrompt?._entry;
+        const ct = entry?.clutter_text;
+        if (!ct)
+            return;
+        ct.set_text(address);
+        ct.set_cursor_position(-1);
+        entry.grab_key_focus();
+    }
+
     _moveSelection(delta) {
-        const n = this._shown.length;
+        const n = this._shown.length + this._addresses.length;
         if (!n)
             return;
         this._sel = this._sel < 0 ? (delta > 0 ? 0 : n - 1) : (this._sel + delta + n) % n;
@@ -808,6 +820,7 @@ export default class MastersosLoginExtension extends Extension {
         this._dismissed = false;
         this._shown = [];
         this._more = false;
+        this._addresses = [];
         this._sel = -1;
         this._picked = null;
         if (this._matchBox) {
@@ -821,8 +834,8 @@ export default class MastersosLoginExtension extends Extension {
         if (!box)
             return;
         box.destroy_all_children();
-        this._picked = this._sel >= 0 ? this._shown[this._sel].userName : null;
-        if (!this._shown.length) {
+        this._picked = this._sel >= 0 && this._sel < this._shown.length ? this._shown[this._sel].userName : null;
+        if (!this._shown.length && !this._addresses.length) {
             box.hide();
             return;
         }
@@ -851,59 +864,18 @@ export default class MastersosLoginExtension extends Extension {
         });
         if (this._more)
             box.add_child(new St.Label({text: this._text.narrow, style_class: 'mastersos-person-more'}));
+        const first = this._shown.length;
+        this._addresses.forEach((address, i) => {
+            const row = new St.BoxLayout({style_class: 'mastersos-person-content'});
+            row.add_child(new St.Icon({icon_name: 'avatar-default-symbolic', style_class: 'mastersos-person-icon'}));
+            row.add_child(new St.Label({text: address, style_class: 'mastersos-person-name', y_align: Clutter.ActorAlign.CENTER}));
+            const button = new St.Button({child: row, style_class: 'mastersos-person', can_focus: false, x_expand: true});
+            if (first + i === this._sel)
+                button.add_style_pseudo_class('selected');
+            button.connect('clicked', () => this._fillAddress(address));
+            box.add_child(button);
+        });
         box.show();
-    }
-
-    _showDomains(entry, ct) {
-        this._closeMenu();
-        const menu = new PopupMenu.PopupMenu(entry, 0.0, St.Side.BOTTOM);
-        for (const d of this._domains) {
-            const item = new PopupMenu.PopupMenuItem(d);
-            item.connect('activate', () => {
-                ct.set_text(ct.get_text() + d);
-                ct.set_cursor_position(-1);
-                this._scheduleClose();
-                entry.grab_key_focus();
-            });
-            menu.addMenuItem(item);
-        }
-        Main.uiGroup.add_child(menu.actor);
-        menu.actor.hide();
-        this._menu = menu;
-        this._menuManager = new PopupMenu.PopupMenuManager(entry);
-        this._menuManager.addMenu(menu);
-        // The open menu holds the keyboard: typing the rest of the address by hand must keep working.
-        menu.actor.connect('key-press-event', (a, event) => {
-            const ch = event.get_key_unicode();
-            if (!ch || ch < ' ' || ch === '\u007f')
-                return Clutter.EVENT_PROPAGATE;
-            this._closeMenu();
-            entry.grab_key_focus();
-            ct.insert_text(ch, -1);
-            return Clutter.EVENT_STOP;
-        });
-        menu.open();
-    }
-
-    // Never destroy the menu inside its own activate / text-changed emission: defer to idle.
-    _scheduleClose() {
-        if (!this._menu || this._closeId)
-            return;
-        this._closeId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-            this._closeId = 0;
-            this._closeMenu();
-            return GLib.SOURCE_REMOVE;
-        });
-    }
-
-    _closeMenu() {
-        if (this._menu) {
-            const m = this._menu;
-            this._menu = null;
-            m.close();
-            m.destroy();
-        }
-        this._menuManager = null;
     }
 
     disable() {
@@ -912,10 +884,6 @@ export default class MastersosLoginExtension extends Extension {
         if (this._pollId) {
             GLib.source_remove(this._pollId);
             this._pollId = 0;
-        }
-        if (this._closeId) {
-            GLib.source_remove(this._closeId);
-            this._closeId = 0;
         }
         if (this._pendingId) {
             GLib.source_remove(this._pendingId);

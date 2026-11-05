@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 // login-people-test.sh copies people.js to a .mjs first: node before 22 reads a bare .js as CommonJS.
-const {HIDDEN, LIMIT, matchPeople, preselect} = await import(process.env.MASTERSOS_PEOPLE_MJS);
+const {HIDDEN, LIMIT, matchPeople, preselect, suggestDomains} = await import(process.env.MASTERSOS_PEOPLE_MJS);
 
 const person = (userName, realName, loginTime = 0) => ({userName, realName, loginTime});
 const names = r => r.shown.map(p => p.userName);
@@ -81,4 +81,45 @@ test('an exact user name or full name comes first', () => {
     assert.deepEqual(names(r), ['bob', 'bobby']);
     const n = matchPeople([person('u1', 'Ann Lim Two', 9), person('u2', 'Ann Lim', 1)], 'ann lim');
     assert.deepEqual(names(n), ['u2', 'u1']);
+});
+
+const D = ['school.example.org', 'students.example.net'];
+
+test('a name is offered every school domain', () => {
+    assert.deepEqual(suggestDomains('kim', D), ['kim@school.example.org', 'kim@students.example.net']);
+    assert.deepEqual(suggestDomains('k.im-2', D.slice(0, 1)), ['k.im-2@school.example.org']);
+});
+
+test('after the @ only the domains that start with what follows', () => {
+    assert.deepEqual(suggestDomains('kim@', D), ['kim@school.example.org', 'kim@students.example.net']);
+    assert.deepEqual(suggestDomains('kim@sch', D), ['kim@school.example.org']);
+    assert.deepEqual(suggestDomains('kim@SCH', D), ['kim@school.example.org']);
+    assert.deepEqual(suggestDomains('kim@stu', D), ['kim@students.example.net']);
+    assert.deepEqual(suggestDomains('kim@x', D), []);
+});
+
+test('nothing once the address is complete', () => {
+    assert.deepEqual(suggestDomains('kim@school.example.org', D), []);
+    assert.deepEqual(suggestDomains('KIM@School.Example.org', D), []);
+});
+
+test('no domain suggestion without domains, text or a possible local part', () => {
+    assert.deepEqual(suggestDomains('kim', []), []);
+    assert.deepEqual(suggestDomains('', D), []);
+    assert.deepEqual(suggestDomains('   ', D), []);
+    assert.deepEqual(suggestDomains('@mas', D), []);
+    assert.deepEqual(suggestDomains('Ann Lim', D), []);
+    assert.deepEqual(suggestDomains('สมชาย', D), []);
+    assert.deepEqual(suggestDomains('a@b@mas', D), []);
+    assert.deepEqual(suggestDomains('a(b)', D), []);
+    assert.deepEqual(suggestDomains('x'.repeat(65), D), []);
+});
+
+test('no domain suggestion for an address already listed as a person', () => {
+    assert.deepEqual(suggestDomains('ann', D, ['Ann@school.example.org']), ['ann@students.example.net']);
+});
+
+test('at most five domain suggestions', () => {
+    const many = Array.from({length: 8}, (_, i) => `s${i}.org`);
+    assert.equal(suggestDomains('kim', many).length, LIMIT);
 });

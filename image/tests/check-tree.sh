@@ -2701,4 +2701,60 @@ for t in "$rel"/mkosi.extra/usr/lib/systemd/system/timers.target.wants/*.timer; 
 done
 [ "$r" = 0 ] && ok 60 "installer: timer-started services (Chrome, system update) do not run in the installer"
 
+# 61. GNOME 50 gives the class login-dialog-prompt-layout to both the AuthPrompt (avatar and input) and its _inputWell
+#     (authPrompt.js), so on 20261104 ".login-dialog .login-dialog-prompt-layout" (visual identity) drew a second bordered box
+#     around the entry and "Local manager" inside the card. Only the AuthPrompt, the login dialog's own child, is the card;
+#     the entry keeps its warm focus ring.
+r=0
+if ! why=$(python3 -I - "$ld/stylesheet.css" 2>&1 <<'CARD'
+import re, sys
+css = re.sub(r"/\*.*?\*/", "", open(sys.argv[1]).read(), flags=re.S)
+rules = [([x.strip() for x in sel.split(",")], body) for sel, body in re.findall(r"([^{}]+)\{([^}]*)\}", css)]
+errs = []
+card = [body for sels, body in rules if ".login-dialog > .login-dialog-prompt-layout" in sels]
+if not card or not all(re.search(p, card[0]) for p in (r"border:\s*1px", r"background-color:", r"box-shadow:")):
+    errs.append("no frosted card on .login-dialog > .login-dialog-prompt-layout (border, background, shadow)")
+for sels, body in rules:
+    for one in sels:
+        if re.fullmatch(r"(.*\s)?\.login-dialog-prompt-layout", one) and ">" not in one and \
+                re.search(r"(^|[;\s])(border|background|background-color|box-shadow)\s*:", body):
+            errs.append(f"{one} also paints the inner input well")
+focus = [body for sels, body in rules if sels == [".login-dialog .login-dialog-prompt-entry:focus"]]
+if not focus or "box-shadow" not in focus[0] or "border-color" not in focus[0]:
+    errs.append("the entry lost its focus ring (.login-dialog .login-dialog-prompt-entry:focus)")
+if errs:
+    sys.exit("; ".join(errs))
+CARD
+); then
+	bad 61 "login card: $why"
+	r=1
+fi
+[ "$r" = 0 ] && ok 61 "login: one card around avatar and entry, no inner box, entry focus ring kept"
+
+# 62. Domain completion (design 2026-11-03 login single field §3): the school domains are offered as soon as a name is typed,
+#     in the same list as the people under the entry (people.js suggestDomains, unit-tested in login-people-test.mjs), not in
+#     a PopupMenu that only a trailing '@' opened: that menu took the keyboard and was a second list beside the people.
+#     Enter on a selected address fills it in instead of signing in.
+r=0
+lx=$ld/extension.js
+grep -qE "^import \{[^}]*suggestDomains[^}]*\} from './people.js';" "$lx" || {
+	bad 62 "extension.js does not take the domain suggestions from people.js suggestDomains"
+	r=1
+}
+if grep -qF "endsWith('@')" "$lx" || grep -qF '_showDomains' "$lx"; then
+	bad 62 "extension.js still opens the school domains only on a trailing '@' (_showDomains)"
+	r=1
+fi
+keys=$(awk '/key-press-event/ {on = 1} on {print} on && /^        \}\);$/ {exit}' "$lx")
+if ! grep -qF 'Clutter.KEY_Return' <<<"$keys" || ! grep -qF '_fillAddress' <<<"$keys"; then
+	bad 62 "extension.js: Enter on a selected school address does not fill it in (_fillAddress in the key handler)"
+	r=1
+fi
+grep -qE '^export function suggestDomains\(' "$ld/people.js" || {
+	bad 62 "people.js has no suggestDomains"
+	r=1
+}
+[ "$r" = 0 ] && ok 62 "login: school domains offered while the name is typed, in the people list, Enter fills the address"
+
+
 exit $fail

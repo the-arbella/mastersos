@@ -123,6 +123,8 @@ logo 与开机画面简单、温暖、不说教，不改。
 - 用户名那一步的卡片区（头像、输入框、Local manager）：半透明深色毛玻璃（GNOME Shell 的 CSS 没有 backdrop-filter；用
   半透明底色加细描边与阴影做出效果图的观感，能用 Shell 的 blur effect 就用，实施者取舍）、圆角 24、输入框聚焦用暖色描边，
   `.mastersos-pill:focus` 等的 `#8ab4f8` 蓝色焦点一并改成品牌暖色。
+  只画一层卡片（2026-11-05）：GNOME 50 给 AuthPrompt 与其内的输入区 `_inputWell` 同一个类 `login-dialog-prompt-layout`，
+  所以样式只挂在 `.login-dialog > .login-dialog-prompt-layout`（对话框的直接子元素，即 AuthPrompt），输入区里不再套第二个框。
 - 学校 logo 与名字仍在卡片顶部、是主角；左下角加 MastersOS 图块 + 文字标志（小、85% 不透明）。
 - 学校登录卡片（白底、承载网页）保持白色，只改圆角与阴影使其与毛玻璃卡片协调。
 - 锁屏（用户会话的 unlock dialog）：GNOME 50 用用户自己的桌面壁纸、模糊后做背景（默认就是夜间壁纸），`mastersos-login` 不在

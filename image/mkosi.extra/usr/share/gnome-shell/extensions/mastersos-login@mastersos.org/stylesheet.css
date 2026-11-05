@@ -60,8 +60,9 @@
     background-gradient-end: rgba(7, 8, 26, 0.55);
 }
 
-/* The username step as a frosted card: translucent night blue, a fine light edge, soft shadow. */
-.login-dialog .login-dialog-prompt-layout {
+/* The username step as a frosted card: translucent night blue, a fine light edge, soft shadow. GNOME 50 gives the same class to
+   the AuthPrompt (avatar and input) and to its input well inside it: only the AuthPrompt, the dialog's own child, is the card. */
+.login-dialog > .login-dialog-prompt-layout {
     background-color: rgba(20, 18, 40, 0.48);
     border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 24px;
