@@ -234,6 +234,7 @@ with PKCE and the fixed redirect `http://127.0.0.1:48123/callback`.
 | `client_id` | string | required in `[school.oidc]` | non-empty; same character limits as `issuer` | `client_id = "mastersos"` | The client registered with the provider for MastersOS Devices. |
 | `client_secret` | string | optional; no secret | 1 to 512 printable ASCII characters; same character limits as `issuer`, and no `%` | — | Only for a provider that requires one even for a desktop app. Every Device holds it, so it protects nothing; do not reuse a real secret here. Devices whose OS predates this key reject the whole Version (see `feature_unsupported`, feature `oidc_card`). |
 | `card_hosts` | list of strings | optional; only the issuer's host | lowercase hostnames with at least two labels; no scheme, port, path, wildcard or IP address; none twice; at most 20 | `card_hosts = ["cdn.school.ac.th"]` | Hosts the sign-in page may load from besides the issuer, for example a CDN or an upstream provider. Each is reached over `https` on port 443, and its subdomains are not included. Leave it out when the provider serves everything from the issuer. Feature `oidc_card`, like `client_secret`. |
+| `idp_hint` | string | optional; none | 1 to 64 of `A-Z a-z 0-9 _ -` | `idp_hint = "school-sso"` | Only when `issuer` is a broker in front of the school's SSO: the broker's id for that upstream provider. Feature `oidc_idp_hint`. |
 
 ```toml check=ok
 [school.oidc]
@@ -266,6 +267,31 @@ allowed_domains = ["school.ac.th"]
 issuer = "https://accounts.google.com"
 client_id = "1234567890-example.apps.googleusercontent.com"
 client_secret = "example-only"
+
+[[config]]
+id = "standard"
+name = "Standard"
+login_methods = ["sso"]
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "standard"
+```
+
+When `issuer` is an identity broker (such as Rauthy) that offers several upstream providers, the
+sign-in card would first show the broker's provider choice. With `idp_hint`, the card adds
+`idp_hint=<value>` to the sign-in URL and the broker goes straight to that provider; a broker that
+does not know the value shows its usual page. Use the id the broker gives the school's upstream
+provider, and list the upstream provider's hosts in `card_hosts`. Devices whose OS predates the
+key reject the whole Version (`feature_unsupported`, feature `oidc_idp_hint`).
+
+```toml check=ok
+[school.oidc]
+issuer = "https://auth.example.org/auth/v1"
+client_id = "mastersos"
+card_hosts = ["sso.school.ac.th"]
+idp_hint = "school-sso"
 
 [[config]]
 id = "standard"
@@ -1939,7 +1965,8 @@ there is no standalone example.
 with Configs counts as using it, `wifi_ext`: any `[[school.wifi]]`, or a Wi-Fi entry writing `open`,
 `wpa3_only` (either value), `eap` or an enterprise key, or `oidc_card`: `client_secret` or
 `card_hosts` in `[school.oidc]`, or `support`: `[config.support]` or `support` in `[defaults]`, or
-`config_update_channel`: `update_channel` in `[defaults]` or a `[[config]]`),
+`config_update_channel`: `update_channel` in `[defaults]` or a `[[config]]`, or `oidc_idp_hint`:
+`idp_hint` in `[school.oidc]`),
 and some Devices seen in the last 30 days have not reported that they understand it.
 
 <!-- prompt:omit -->
@@ -2978,7 +3005,7 @@ config = "standard"
 
 **Level:** error. **Meaning:** `[school.oidc]` `issuer` does not start with `http://` or `https://`,
 or `issuer` or `client_id` is empty or contains spaces, control characters or any of ``# ; " ' `
-\``; or `client_secret` or `card_hosts` breaks the limits in the [`[school.oidc]`](#schooloidc) table.
+\``; or `client_secret`, `card_hosts` or `idp_hint` breaks the limits in the [`[school.oidc]`](#schooloidc) table.
 
 <!-- prompt:omit -->
 **Why:** these values are written into the Devices' sign-in configuration.

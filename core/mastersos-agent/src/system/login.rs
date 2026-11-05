@@ -12,7 +12,9 @@
 //!   注册文件的内容来自镜像里的 [`BROKER_DECL_SRC`]。
 //! - The login screen's sign-in card (image: `mastersos-login-browser.service`) runs Chrome with a policy of its own:
 //!   [`render_login_browser_policy`] allows only the issuer's origin, the signed `card_hosts` and the broker's redirect. It is written next to the
-//!   broker drop-in and removed with it; the unit does not start without the file.
+//!   broker drop-in and removed with it; the unit does not start without the file. With `[school.oidc] idp_hint` the step
+//!   also writes [`LOGIN_CARD_FILE`] ([`render_login_card`]) for the login screen's extension, which adds the hint to the
+//!   authorization URL.
 //! - 策略文件缺失或坏了，`pam-check` 退回种子的默认值（[`effective_policy`]），而不是一律拒绝：
 //!   否则 `admin_users` 也被锁在外面，机器上没有别的管理员能修。种子也读不了才拒绝。
 //! - `pam-check` 不 panic、出错一律按「没有」处理并往拒绝的方向落（模块级 deny 守着 unwrap / expect / panic）。
@@ -72,6 +74,11 @@ pub const BROKER_DECL_FILE: &str = "oidc.conf";
 /// only the identity provider's host). The image's unit binds the directory over `/etc/opt/chrome/policies/managed`.
 pub const LOGIN_BROWSER_DIR: &str = "login-browser/policies";
 pub const LOGIN_BROWSER_FILE: &str = "mastersos-login.json";
+/// What the login screen's extension reads for the card itself (not Chrome: it sits beside the policy directory, not in it),
+/// under [`SysPaths::public_dir`]: `{"idp_hint": "<value>"}`, there only when the valid `[school.oidc]` has an `idp_hint`.
+/// card.js adds `idp_hint=<value>` to the authorization URL so an identity broker goes straight to the school's provider.
+pub const LOGIN_CARD_DIR: &str = "login-browser";
+pub const LOGIN_CARD_FILE: &str = "card.json";
 /// The broker's redirect (`0003-authorization-code-on-greeter.patch`, `authCodeRedirect`) as a URL-filter entry.
 pub const LOGIN_REDIRECT_FILTER: &str = "127.0.0.1:48123/callback";
 
@@ -592,6 +599,13 @@ pub fn render_login_browser_policy(oidc: &Oidc) -> Option<String> {
     serde_json::to_string_pretty(&policy).ok()
 }
 
+/// [`LOGIN_CARD_FILE`]'s content for a provider that passed `checks::oidc`: `None` without an `idp_hint`.
+pub fn render_login_card(oidc: &Oidc) -> Option<String> {
+    let hint = oidc.idp_hint.as_deref()?;
+    checks::idp_hint(hint).ok()?;
+    serde_json::to_string_pretty(&serde_json::json!({ "idp_hint": hint })).ok()
+}
+
 /// 经 `safefs` 写 [`POLICY_PATH`]（`login/` 0755、文件 0644；`var_dir` 收紧到 0700）。返回内容是否变了。
 /// 超过 [`MAX_POLICY_BYTES`] 时报错，不动原来的文件。
 pub fn write_policy(paths: &SysPaths, p: &LoginPolicy) -> Result<bool> {
@@ -755,6 +769,10 @@ fn apply(
     if let Err(e) = sync_login_browser(env.paths, browser_policy.as_deref()) {
         problems.push(format!("sign-in card policy: {e:#}"));
     }
+    let card = valid_oidc.and_then(render_login_card);
+    if let Err(e) = sync_login_card(env.paths, card.as_deref()) {
+        problems.push(format!("sign-in card settings: {e:#}"));
+    }
     // 状态没读出来：上次「改了配置、重启没成」的记录可能丢了。配置在就再重启一次（M1）。
     if env.sys.load_failed && want.is_some() {
         env.sys.broker_restart_pending = true;
@@ -797,21 +815,31 @@ fn sync_broker(root: &Path, want: Option<&str>) -> Result<bool> {
 
 /// Write the sign-in card's policy (directories 0755, file 0644: the greeter's browser reads it) or remove it.
 fn sync_login_browser(paths: &SysPaths, want: Option<&str>) -> Result<()> {
+    sync_public_file(paths, LOGIN_BROWSER_DIR, LOGIN_BROWSER_FILE, want)
+}
+
+/// Write [`LOGIN_CARD_FILE`] (directory 0755, file 0644: the greeter reads it) or remove it.
+fn sync_login_card(paths: &SysPaths, want: Option<&str>) -> Result<()> {
+    sync_public_file(paths, LOGIN_CARD_DIR, LOGIN_CARD_FILE, want)
+}
+
+/// Write `rel/name` under the public directory (`rel` 0755, the file 0644) when `want` is `Some`, otherwise remove it.
+fn sync_public_file(paths: &SysPaths, rel: &str, name: &str, want: Option<&str>) -> Result<()> {
     let public = public_dir(paths)?;
     match want {
         Some(text) => {
-            let dir = safefs::open_dir_at(&public, Path::new(LOGIN_BROWSER_DIR), true)?;
+            let dir = safefs::open_dir_at(&public, Path::new(rel), true)?;
             safefs::set_mode(&dir, 0o755)?;
-            safefs::write_at(&dir, LOGIN_BROWSER_FILE, text.as_bytes(), 0o644)?;
+            safefs::write_at(&dir, name, text.as_bytes(), 0o644)?;
         }
         None => {
-            let dir = match safefs::open_dir_at(&public, Path::new(LOGIN_BROWSER_DIR), false) {
+            let dir = match safefs::open_dir_at(&public, Path::new(rel), false) {
                 Ok(d) => d,
                 Err(e) if is_not_found(&e) => return Ok(()),
                 Err(e) => return Err(e),
             };
-            if safefs::open_file_at(&dir, LOGIN_BROWSER_FILE)?.is_some() {
-                safefs::remove_at(&dir, LOGIN_BROWSER_FILE)?;
+            if safefs::open_file_at(&dir, name)?.is_some() {
+                safefs::remove_at(&dir, name)?;
             }
         }
     }
@@ -2486,6 +2514,117 @@ client_id = "laptops"
         local.login_methods = vec![LoginMethod::Local];
         run_bundle(root.path(), &school_with(None), &local, &r, &mut sys);
         assert!(!f.exists());
+    }
+
+    fn card_settings(root: &Path) -> PathBuf {
+        paths(root)
+            .public_dir
+            .join(LOGIN_CARD_DIR)
+            .join(LOGIN_CARD_FILE)
+    }
+
+    fn with_hint(hint: &str) -> Oidc {
+        Oidc {
+            idp_hint: Some(hint.into()),
+            ..oidc("https://sso.school.ac.th")
+        }
+    }
+
+    #[test]
+    fn card_settings_carry_the_idp_hint() {
+        assert_eq!(render_login_card(&oidc("https://sso.school.ac.th")), None);
+        let text = render_login_card(&with_hint("school-sso")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v, serde_json::json!({"idp_hint": "school-sso"}));
+        assert_eq!(render_login_card(&with_hint("a&b")), None);
+        // Not in the directory Chrome reads its policies from.
+        assert_ne!(
+            Path::new(LOGIN_CARD_DIR).join(LOGIN_CARD_FILE).parent(),
+            Some(Path::new(LOGIN_BROWSER_DIR))
+        );
+    }
+
+    #[test]
+    fn card_settings_follow_the_hint_and_sso() {
+        let root = tmp_root();
+        let r = FakeRunner::new();
+        let mut sys = SysState::default();
+        let f = card_settings(root.path());
+        // SSO without a hint: the card policy, no card settings.
+        let plain = school_with(Some(oidc("https://sso.school.ac.th")));
+        assert_eq!(
+            run_bundle(root.path(), &plain, &sso_group(), &r, &mut sys),
+            vec![ok(ITEM)]
+        );
+        assert!(card_policy(root.path()).exists());
+        assert!(!f.exists());
+
+        let hinted = school_with(Some(with_hint("school-sso")));
+        assert_eq!(
+            run_bundle(root.path(), &hinted, &sso_group(), &r, &mut sys),
+            vec![ok(ITEM)]
+        );
+        let v: serde_json::Value = serde_json::from_slice(&fs::read(&f).unwrap()).unwrap();
+        assert_eq!(v["idp_hint"], "school-sso");
+        assert_eq!(mode(&f), 0o644);
+        assert_eq!(mode(f.parent().unwrap()), 0o755);
+
+        // The hint taken out again: the file goes, the card policy stays.
+        run_bundle(root.path(), &plain, &sso_group(), &r, &mut sys);
+        assert!(!f.exists());
+        assert!(card_policy(root.path()).exists());
+
+        // No SSO on this Config: neither file, whatever the school's provider says.
+        run_bundle(root.path(), &hinted, &sso_group(), &r, &mut sys);
+        assert!(f.exists());
+        let mut local = config();
+        local.login_methods = vec![LoginMethod::Local];
+        run_bundle(root.path(), &hinted, &local, &r, &mut sys);
+        assert!(!f.exists());
+        assert!(!card_policy(root.path()).exists());
+    }
+
+    #[test]
+    fn invalid_idp_hint_writes_neither_broker_nor_card_files() {
+        let root = tmp_root();
+        let r = FakeRunner::new();
+        let school = school_with(Some(with_hint("a b")));
+        let out = run_bundle(
+            root.path(),
+            &school,
+            &sso_group(),
+            &r,
+            &mut SysState::default(),
+        );
+        assert!(!out[0].ok);
+        assert!(
+            out[0].detail.as_deref().unwrap_or("").contains("idp_hint"),
+            "{out:?}"
+        );
+        assert!(!broker(root.path()).exists());
+        assert!(!card_policy(root.path()).exists());
+        assert!(!card_settings(root.path()).exists());
+    }
+
+    #[test]
+    fn seed_idp_hint_reaches_the_card() {
+        let root = tmp_root();
+        put_decl_src(root.path(), "[authd]\nname = OIDC\n");
+        let r = FakeRunner::new();
+        let mut sys = SysState::default();
+        let p = paths(root.path());
+        let out = run_seed(
+            &seed(&format!("{SEED_OIDC}idp_hint = \"school-sso\"\n")),
+            &mut Env {
+                paths: &p,
+                runner: &r,
+                sys: &mut sys,
+            },
+        );
+        assert_eq!(out, vec![ok(ITEM)]);
+        let v: serde_json::Value =
+            serde_json::from_slice(&fs::read(card_settings(root.path())).unwrap()).unwrap();
+        assert_eq!(v["idp_hint"], "school-sso");
     }
 
     #[test]

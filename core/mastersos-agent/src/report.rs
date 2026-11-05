@@ -23,6 +23,7 @@ const MAX_RESULTS: usize = 200;
 /// `config` (config profiles design §5): the new `[[config]]` shape and the `learning`/`full` modes.
 /// `support` (remote diagnostics and help design): `[config.support]` is read into `Config::support_enabled`.
 /// `config_update_channel`: `update_channel` of the Device's Config or the Defaults picks its update channel.
+/// `oidc_idp_hint`: the `login` step hands `[school.oidc] idp_hint` to the sign-in card (`login-browser/card.json`).
 pub const SUPPORTED_FEATURES: &[&str] = &[
     mastersos_bundle::FEATURE_UPDATE_MIRROR,
     mastersos_bundle::FEATURE_ESCROW_RECIPIENTS,
@@ -34,6 +35,7 @@ pub const SUPPORTED_FEATURES: &[&str] = &[
     mastersos_bundle::FEATURE_FORMAT_2,
     mastersos_bundle::FEATURE_SUPPORT,
     mastersos_bundle::FEATURE_CONFIG_CHANNEL,
+    mastersos_bundle::FEATURE_OIDC_IDP_HINT,
 ];
 
 /// 机器的硬件与系统身份。
@@ -249,7 +251,8 @@ mod tests {
                 "oidc_card",
                 "format_2",
                 "support",
-                "config_update_channel"
+                "config_update_channel",
+                "oidc_idp_hint"
             ]
         );
         assert_eq!(r.manifest_features, SUPPORTED_FEATURES);
@@ -266,6 +269,7 @@ mod tests {
             mastersos_bundle::FEATURE_FORMAT_2,
             mastersos_bundle::FEATURE_SUPPORT,
             mastersos_bundle::FEATURE_CONFIG_CHANNEL,
+            mastersos_bundle::FEATURE_OIDC_IDP_HINT,
         ];
         assert!(SUPPORTED_FEATURES.iter().all(|f| all.contains(f)));
     }

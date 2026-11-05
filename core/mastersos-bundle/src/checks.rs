@@ -450,6 +450,24 @@ pub fn locale(l: &str) -> Result<(), String> {
 pub const MAX_CARD_HOSTS: usize = 20;
 /// The longest `[school.oidc] client_secret`, in bytes.
 pub const MAX_CLIENT_SECRET_BYTES: usize = 512;
+/// The longest `[school.oidc] idp_hint`, in bytes.
+pub const MAX_IDP_HINT_BYTES: usize = 64;
+
+/// A `[school.oidc] idp_hint`: 1 to [`MAX_IDP_HINT_BYTES`] ASCII letters, digits, `_` or `-`. It goes into the
+/// authorization URL's query; the login screen's extension checks the same rule before adding it.
+pub fn idp_hint(h: &str) -> Result<(), String> {
+    let ok = !h.is_empty()
+        && h.len() <= MAX_IDP_HINT_BYTES
+        && h.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "OIDC idp_hint {h:?} must be 1 to {MAX_IDP_HINT_BYTES} characters, each an ASCII letter, digit, _ or -"
+        ))
+    }
+}
 
 /// One DNS name: at most 253 bytes of 1-63 byte labels of letters, digits or hyphens, no label
 /// starting or ending with a hyphen.
@@ -525,6 +543,9 @@ pub fn oidc(o: &Oidc) -> Result<(), String> {
         if o.card_hosts[..i].contains(h) {
             return Err(format!("OIDC card_hosts lists {h:?} twice"));
         }
+    }
+    if let Some(h) = &o.idp_hint {
+        idp_hint(h)?;
     }
     Ok(())
 }
@@ -1025,6 +1046,37 @@ mod tests {
         let refs: Vec<&str> = many.iter().map(String::as_str).collect();
         assert!(oidc(&o(&refs)).is_err());
         assert!(oidc(&o(&refs[..MAX_CARD_HOSTS])).is_ok());
+    }
+
+    #[test]
+    fn check_oidc_idp_hint() {
+        let o = |h: &str| Oidc {
+            issuer: "https://a".into(),
+            client_id: "c".into(),
+            idp_hint: Some(h.into()),
+            ..Oidc::default()
+        };
+        let longest = "a".repeat(MAX_IDP_HINT_BYTES);
+        for good in ["school-sso", "Google_1", "x", "0", longest.as_str()] {
+            assert!(oidc(&o(good)).is_ok(), "{good:?}");
+        }
+        let long = "a".repeat(MAX_IDP_HINT_BYTES + 1);
+        for bad in [
+            "",
+            "a b",
+            "a&b",
+            "a=b",
+            "a#b",
+            "a/b",
+            "a.b",
+            "a%20b",
+            "a\nb",
+            "ไทย",
+            long.as_str(),
+        ] {
+            let e = oidc(&o(bad)).unwrap_err();
+            assert!(e.contains("idp_hint"), "{bad:?}: {e}");
+        }
     }
 
     #[test]

@@ -599,7 +599,8 @@ impl Default for School {
 }
 
 /// `[school.oidc]`: the OpenID Connect provider Devices sign in with (authorization code on the
-/// login screen). `client_secret` and `card_hosts` are [`FEATURE_OIDC_CARD`].
+/// login screen). `client_secret` and `card_hosts` are [`FEATURE_OIDC_CARD`], `idp_hint` is
+/// [`FEATURE_OIDC_IDP_HINT`].
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -618,6 +619,11 @@ pub struct Oidc {
     /// included. At most 20.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub card_hosts: Vec<String>,
+    /// The upstream provider an identity broker (Rauthy, for one) should go straight to: the
+    /// sign-in card adds `idp_hint=<value>` to the authorization URL, so the broker skips its
+    /// provider choice. 1 to 64 of `A-Z a-z 0-9 _ -` ([`FEATURE_OIDC_IDP_HINT`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idp_hint: Option<String>,
 }
 
 /// What a Device using a Config gets: the Config as written laid over `[defaults]`
@@ -1695,6 +1701,9 @@ pub const FEATURE_OIDC_CARD: &str = "oidc_card";
 pub const FEATURE_SUPPORT: &str = "support";
 /// `update_channel` in `[defaults]` or a `[[config]]` (a Group of test Devices on beta).
 pub const FEATURE_CONFIG_CHANNEL: &str = "config_update_channel";
+/// See [`FEATURE_UPDATE_MIRROR`]: `idp_hint` in `[school.oidc]` (the sign-in card asks an
+/// identity broker for the school's upstream provider).
+pub const FEATURE_OIDC_IDP_HINT: &str = "oidc_idp_hint";
 /// See [`FEATURE_UPDATE_MIRROR`]: the Device reads `format = 2` (Defaults, `drop`, the IT account,
 /// the school logo and name); the same string as [`format_feature`]`(2)`.
 pub const FEATURE_FORMAT_2: &str = "format_2";
@@ -1802,6 +1811,9 @@ pub fn features_used(m: &Manifest) -> Vec<&'static str> {
         || m.configs.iter().any(|c| c.update_channel.is_some())
     {
         out.push(FEATURE_CONFIG_CHANNEL);
+    }
+    if s.oidc.as_ref().is_some_and(|o| o.idp_hint.is_some()) {
+        out.push(FEATURE_OIDC_IDP_HINT);
     }
     out
 }
@@ -2703,6 +2715,32 @@ mod tests {
             !plain.contains("client_secret") && !plain.contains("card_hosts"),
             "{plain}"
         );
+    }
+
+    #[test]
+    fn oidc_idp_hint_is_a_feature_of_its_own() {
+        let with = |extra: &str| {
+            let text = example().replacen(
+                "client_id = \"mastersos\" }",
+                &format!("client_id = \"mastersos\"{extra} }}"),
+                1,
+            );
+            Manifest::parse(&text).unwrap()
+        };
+        assert!(!features_used(&with("")).contains(&FEATURE_OIDC_IDP_HINT));
+        let m = with(", idp_hint = \"school-sso\"");
+        assert_eq!(
+            m.school.oidc.as_ref().unwrap().idp_hint.as_deref(),
+            Some("school-sso")
+        );
+        let used = features_used(&m);
+        assert!(used.contains(&FEATURE_OIDC_IDP_HINT), "{used:?}");
+        // Devices that know oidc_card but not the hint are told apart.
+        assert!(!used.contains(&FEATURE_OIDC_CARD), "{used:?}");
+        assert_eq!(FEATURE_OIDC_IDP_HINT, "oidc_idp_hint");
+        // Without the hint the provider serializes as before.
+        let plain = toml::to_string(&with("").school.oidc).unwrap();
+        assert!(!plain.contains("idp_hint"), "{plain}");
     }
 
     const SCHOOL_A: &str = "0192f3a4-5b6c-7d8e-9f00-112233445566";

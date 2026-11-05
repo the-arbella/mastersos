@@ -482,6 +482,7 @@ pub fn feature_path(m: &Manifest, feature: &str) -> String {
         FEATURE_ESCROW_RECIPIENTS => Some("school.escrow_recipients".to_owned()),
         FEATURE_SCHOOL_ID => Some("school.id".to_owned()),
         FEATURE_OIDC_CARD => Some("school.oidc".to_owned()),
+        FEATURE_OIDC_IDP_HINT => Some("school.oidc.idp_hint".to_owned()),
         FEATURE_CONFIG => Some("config".to_owned()),
         FEATURE_KIOSK => layers()
             .find(|(_, empty, _)| !empty)
@@ -1876,6 +1877,22 @@ config = "b"
     }
 
     #[test]
+    fn lint_oidc_idp_hint() {
+        let with = |hint: &str| {
+            format!(
+                r#"oidc = {{ issuer = "https://sso.x.th", client_id = "c", idp_hint = "{hint}" }}"#
+            )
+        };
+        assert!(lint(&manifest(&with("school-sso"), "", "\"sso\""), &present()).is_empty());
+        for bad in ["", "a b", "a&b", "a.b"] {
+            let l = lint(&manifest(&with(bad), "", "\"sso\""), &present());
+            assert_eq!(codes(&l), ["oidc_invalid"], "{bad}: {l:?}");
+            assert_eq!(l[0].path.as_deref(), Some("school.oidc"));
+            assert!(l[0].message.contains("idp_hint"), "{}", l[0].message);
+        }
+    }
+
+    #[test]
     fn lint_admin_user_with_quote() {
         let l = lint(
             &manifest(
@@ -2563,6 +2580,10 @@ config = "a"
         );
         assert_eq!(feature_path(&m, crate::FEATURE_SCHOOL_ID), "school.id");
         assert_eq!(feature_path(&m, crate::FEATURE_OIDC_CARD), "school.oidc");
+        assert_eq!(
+            feature_path(&m, crate::FEATURE_OIDC_IDP_HINT),
+            "school.oidc.idp_hint"
+        );
         assert_eq!(feature_path(&m, "nope"), "school");
     }
 

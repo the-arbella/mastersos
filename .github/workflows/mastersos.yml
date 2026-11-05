@@ -143,6 +143,8 @@ jobs:
       - run: bash image/tests/login-people-test.sh
       # Get help: the request it sends to the support socket, what it accepts, what it says (help-model.js, plan 2026-11-05 Task 6)
       - run: bash image/tests/help-model-test.sh
+      # The sign-in card's authorization URL: [school.oidc] idp_hint added to it (card-url.js)
+      - run: bash image/tests/card-url-test.sh
       # 正式私钥只从 tmpfs 读（keyset_priv release）与 key-leak-check.py；ceremony-test.sh 要 root 与 loop 设备，只 shellcheck、不在这里跑
       - run: bash image/tests/keyset-test.sh
       - run: bash image/tests/health-check-test.sh

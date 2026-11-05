@@ -46,6 +46,8 @@ client_id = "394475630609104899"
 # 下面两项可选，用到时机器要认得 oidc_card（feature_unsupported 会拦）
 client_secret = "..."
 card_hosts = ["cdn.school.ac.th"]
+# 可选，用到时机器要认得 oidc_idp_hint
+idp_hint = "school-sso"
 ```
 
 | 键 | 说明 |
@@ -53,6 +55,7 @@ card_hosts = ["cdn.school.ac.th"]
 | `issuer`、`client_id` | 必填，agent 写进 `/etc/authd/oidc/broker.conf.d/10-mastersos.conf`（0600），broker 读镜像自带的骨架 `/etc/authd/oidc/broker.conf` 再叠这个 drop-in |
 | `client_secret` | 只给桌面应用也要求带 secret 的身份系统。每台机器都有一份，它不算机密，不要拿真正的机密来填。1 到 512 个可打印 ASCII 字符，不含空格与 `% # ; " ' ` \` |
 | `card_hosts` | issuer 之外登录页要用的主机，逐个写完整主机名，最多 20 个。没有通配符，子域名不算在内。留空表示只放行 issuer |
+| `idp_hint` | 只在 issuer 是身份代理（例如 Rauthy）、背后接着学校自己的 SSO 时用：填代理里那个上游身份系统的 id，1 到 64 个 `A-Z a-z 0-9 _ -`。卡片在授权地址后加 `idp_hint=<值>`，代理直接跳到上游、不显示选择页；代理不认得的值照常显示选择页。上游的主机要写进 `card_hosts` |
 
 写进机器的 broker 配置只有这几行（没有 `extra_scopes`）：
 
@@ -67,7 +70,9 @@ allowed_users = ALL
 
 卡片 Chrome 的策略由 agent 写：`/var/lib/mastersos-public/login-browser/policies/mastersos-login.json`。名单是 issuer、`card_hosts` 和回调地址，其余全部挡掉。过滤器钉死协议、主机（前导点关掉子域名匹配）与端口，默认端口也写出来，例如 `https://.sso.school.ac.th:443`；`card_hosts` 一律是 `https` 的 443。没配 SSO 就删掉策略文件，单元（`ConditionPathExists=`）也就起不来。
 
-种子（`seed.toml`）带同样的 `oidc`，新机器在第一个设置包到达前就能登录。**带这两个新键的种子，旧镜像解析不了**：用到它们的学校要用不早于这一版的安装盘。
+`idp_hint` 不进 Chrome 的策略目录：agent 把它写到旁边的 `/var/lib/mastersos-public/login-browser/card.json`（`{"idp_hint": "..."}`，没有这个键或没配 SSO 就删掉），登录界面扩展的 `card.js` 每次打开卡片时读它，经 `card-url.js` 把参数加到 authd 给的授权地址末尾（只加给 `https` 地址、只加一次，`state`、PKCE、`login_hint` 原样不动），再写进 `mastersos-login-url`。authd 不用改。
+
+种子（`seed.toml`）带同样的 `oidc`，新机器在第一个设置包到达前就能登录。**带这几个新键（`client_secret`、`card_hosts`、`idp_hint`）的种子，旧镜像解析不了**：用到它们的学校要用不早于这一版的安装盘。
 
 ## 证书：只认公网信任的
 

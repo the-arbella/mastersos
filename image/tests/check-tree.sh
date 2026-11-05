@@ -2118,7 +2118,7 @@ fi
 #     the agent's redirect filter equals the patch's redirect, and build.sh pins gnome-shell (the extension patches its private code).
 r=0
 le=$gs/extensions/mastersos-login@mastersos.org
-for f in area.js brand.js card.js help-model.js help.js people.js setup.js shelf.js strings.js watch.js; do
+for f in area.js brand.js card.js card-url.js help-model.js help.js people.js setup.js shelf.js strings.js watch.js; do
 	[ -f "$le/$f" ] || {
 		bad 49 "$le/$f is missing"
 		r=1
@@ -3137,5 +3137,39 @@ grep -qF '.enqueue_support(' "$core/mastersos-agent/src/support/host.rs" || {
 	r=1
 }
 [ "$r" = 0 ] && ok 70 "Get help: the support host may write the upload queue, and queues each request there"
+
+# 71. [school.oidc] idp_hint: the agent writes it to login-browser/card.json (beside the Chrome policy directory, so Chrome
+#     never reads it), card.js reads that file and adds the hint to the URL it leaves for the browser through card-url.js
+#     (unit-tested by card-url-test.sh in CI), and both sides keep the same rule for the value.
+r=0
+lc=$ex/usr/share/gnome-shell/extensions/mastersos-login@mastersos.org
+lr=$core/mastersos-agent/src/system/login.rs
+for want in 'pub const LOGIN_CARD_DIR: &str = "login-browser";' 'pub const LOGIN_CARD_FILE: &str = "card.json";'; do
+	grep -qxF -- "$want" "$lr" || {
+		bad 71 "$lr should have: $want"
+		r=1
+	}
+done
+grep -qxF "export const CARD_SETTINGS = '/var/lib/mastersos-public/login-browser/card.json';" "$lc/card-url.js" 2>/dev/null || {
+	bad 71 "card-url.js should read /var/lib/mastersos-public/login-browser/card.json (login.rs LOGIN_CARD_DIR/LOGIN_CARD_FILE)"
+	r=1
+}
+grep -qxF 'const IDP_HINT = /^[A-Za-z0-9_-]{1,64}$/;' "$lc/card-url.js" 2>/dev/null || {
+	bad 71 "card-url.js should accept the hints checks::idp_hint accepts: /^[A-Za-z0-9_-]{1,64}\$/"
+	r=1
+}
+grep -qxF 'pub const MAX_IDP_HINT_BYTES: usize = 64;' "$core/mastersos-bundle/src/checks.rs" || {
+	bad 71 "checks.rs MAX_IDP_HINT_BYTES should stay 64 (card-url.js has the same limit)"
+	r=1
+}
+grep -qF '${withIdpHint(url, readIdpHint())}' "$lc/card.js" || {
+	bad 71 "card.js should add the idp_hint to the URL it leaves for the browser (withIdpHint)"
+	r=1
+}
+grep -qxF '      - run: bash image/tests/card-url-test.sh' .github/workflows/mastersos.yml || {
+	bad 71 "CI (mastersos.yml image-lint) does not run image/tests/card-url-test.sh"
+	r=1
+}
+[ "$r" = 0 ] && ok 71 "idp_hint: agent card.json, card.js adds it to the URL through card-url.js (tested in CI), same rule on both sides"
 
 exit $fail

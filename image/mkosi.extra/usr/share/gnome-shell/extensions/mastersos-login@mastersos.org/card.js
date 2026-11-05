@@ -17,6 +17,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Spinner} from 'resource:///org/gnome/shell/ui/animation.js';
 
 import {loginArea, underArea} from './area.js';
+import {CARD_SETTINGS, idpHintFrom, withIdpHint} from './card-url.js';
 
 const UNIT = `mastersos-login-browser@${GLib.get_user_name()}.service`;
 const URL_FILE = 'mastersos-login-url';
@@ -29,6 +30,19 @@ const WINDOW_TIMEOUT_S = 30;
 // The way out from the keyboard. Focus is inside Chrome, so only a compositor-level grab sees it, and a grab swallows the
 // key: plain Esc belongs to the page (open lists, dialogs), Ctrl+Esc is unused by Chrome and web pages never get it.
 const CANCEL_ACCELERATOR = '<Control>Escape';
+
+// The school's idp_hint (card-url.js), read each time a card opens so new settings apply without a greeter restart.
+// No file (no hint, or no SSO): null.
+function readIdpHint() {
+    try {
+        const [, bytes] = GLib.file_get_contents(CARD_SETTINGS);
+        return idpHintFrom(new TextDecoder().decode(bytes));
+    } catch (e) {
+        if (!e.matches?.(GLib.FileError, GLib.FileError.NOENT))
+            log(`mastersos-login: ${CARD_SETTINGS} unreadable: ${e.message ?? e}`);
+        return null;
+    }
+}
 
 function systemd(method, unit) {
     Gio.DBus.system.call(
@@ -76,7 +90,7 @@ export class LoginCard {
         });
         try {
             const path = GLib.build_filenamev([GLib.get_user_runtime_dir(), URL_FILE]);
-            GLib.file_set_contents_full(path, `${url}\n`, GLib.FileSetContentsFlags.CONSISTENT, 0o600);
+            GLib.file_set_contents_full(path, `${withIdpHint(url, readIdpHint())}\n`, GLib.FileSetContentsFlags.CONSISTENT, 0o600);
             systemd('RestartUnit', UNIT);
         } catch (e) {
             log(`mastersos-login: cannot start the browser: ${e.message}`);
