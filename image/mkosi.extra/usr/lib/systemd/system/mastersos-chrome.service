@@ -11,6 +11,9 @@ Documentation=file:/usr/bin/mastersos-agent
 # （Task 9 时 systemd-networkd-wait-online.service 还是启用的、每次开机等满 2 分钟超时，network-online.target 跟着晚 2 分钟；
 # 现在 mkosi.finalize 在 /usr 里屏蔽了它，network-online 由 NetworkManager-wait-online.service 负责。）
 After=NetworkManager.service NetworkManager-wait-online.service systemd-sysext.service
+# Not in the installer (systemd.unit=mastersos-installer.target): basic.target pulls timers.target there too, and this
+# would run (and fail, printing [FAILED] over the installer screen) on a machine that has no installed system yet.
+ConditionKernelCommandLine=!systemd.unit=mastersos-installer.target
 
 [Service]
 Type=oneshot

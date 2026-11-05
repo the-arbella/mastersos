@@ -2688,4 +2688,17 @@ if ! grep -qF 'hint_text !== this._text.email' <<<"$adopt" ||
 fi
 [ "$r" = 0 ] && ok 59 "login: a fresh greeter opens on the MastersOS username step, not GNOME's"
 
+# 60. The installer UKI boots systemd.unit=mastersos-installer.target, which pulls basic.target and so timers.target: on
+#     20261104.6 mastersos-chrome.timer (and the NetworkManager hook) started the Chrome updater inside the installer and its
+#     failure printed a red [FAILED] line over the installer screen. Every unit a timer in /usr starts must not run there.
+r=0
+for t in "$rel"/mkosi.extra/usr/lib/systemd/system/timers.target.wants/*.timer; do
+	svc=$rel/mkosi.extra/usr/lib/systemd/system/$(basename "$t" .timer).service
+	if ! grep -qxF 'ConditionKernelCommandLine=!systemd.unit=mastersos-installer.target' "$svc"; then
+		bad 60 "$svc runs from a timer but is not kept out of the installer"
+		r=1
+	fi
+done
+[ "$r" = 0 ] && ok 60 "installer: timer-started services (Chrome, system update) do not run in the installer"
+
 exit $fail

@@ -16,6 +16,9 @@ Requisite=boot-complete.target
 Wants=network-online.target
 After=boot-complete.target network-online.target time-sync.target
 ConditionVirtualization=!container
+# Not in the installer (systemd.unit=mastersos-installer.target): basic.target pulls timers.target there too, and this
+# would run (and fail, printing [FAILED] over the installer screen) on a machine that has no installed system yet.
+ConditionKernelCommandLine=!systemd.unit=mastersos-installer.target
 
 [Service]
 Type=oneshot
