@@ -40,7 +40,7 @@ paths that are not in this repository.
 
 A device applies only a bundle approved with one of the school's trusted keys. The **school key** (a small file plus
 a printed copy) is the one key type: IT approves with it from any computer that has the file
-(`mastersos publish --school-key <file>`) or on the signing page. The trusted keys come only from school key files
+(`mastersos publish --school-key <file>`). The trusted keys come only from school key files
 IT holds (`mastersos init`, `mastersos keys add|remove`), never from the server. The cloud stores and delivers
 bundles but cannot forge one, and an AI assistant can prepare a change but a person has to approve it.
 

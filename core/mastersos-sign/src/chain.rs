@@ -379,7 +379,7 @@ pub async fn verify_chain(
         // R7/R8: a trust or escrow-recipient change needs a recovery-kit signature. Machines
         // check this themselves (mastersos_bundle::check_recovery_signed, the same function) and
         // refuse such a version, staying on the one before it; an honest server never publishes
-        // one. It showing up here means the server or the signing page was compromised. Make the
+        // one. It showing up here means the server was compromised. Make the
         // operator look and confirm before going on; once confirmed, go on as machines do: the
         // base (trust, contents, pin) stays at the version they accept, only `latest` moves, so
         // a later kit signature is never shown the forged additions as already present.
@@ -396,7 +396,7 @@ pub async fn verify_chain(
                 out,
                 "!!! WARNING: version {v} changes {changes} but was not approved with a school key.\n\
                  !!! An honest server never accepts this, and computers refuse it (they stay on version {}).\n\
-                 !!! The server or the signing page may be compromised. Check every added or changed key\n\
+                 !!! The server may be compromised. Check every added or changed key\n\
                  !!! above; one you do not know means someone tried to take over the computers or unlock\n\
                  !!! their disks. Approve a corrected version with a school key and check the server.",
                 cur.version

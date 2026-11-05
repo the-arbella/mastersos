@@ -274,7 +274,7 @@ impl KitChange {
 /// ([`recipients_changed`]) differs from the currently accepted bundle's is accepted only when
 /// `signer` is an Ed25519 (recovery-kit) key of the current trust. A passkey alone cannot change
 /// whom the machine trusts or to whom it seals its LUKS recovery key, whatever the server showed
-/// the signing page.
+/// the person approving.
 ///
 /// `old_trust`/`old_recipients` are the accepted bundle's; `signer` is the key of `old_trust`
 /// that verified `new` ([`accept_signed`]). The first bundle after a seed (genesis) has nothing
