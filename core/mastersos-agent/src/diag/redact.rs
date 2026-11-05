@@ -5,7 +5,11 @@
 //! - `<key>=<value>` and `<key> = <value>` where the key ends in one of [`KEYS`]
 //!   (`psk=`, `password=`, `fetch_token=`, `X-Amz-Signature=`, wpa_supplicant's `psk="…"`);
 //! - JSON members `"<key>": "<value>"` with the same keys (`"token":"…"`, `"client_secret": "…"`);
+//!   and the same with `\"` (JSON quoted inside a log line);
+//! - bare keys with a colon (Rust Debug, YAML): `token: "…"`, `password: Some("…")`, and
+//!   `secret: value` when the value is one token (prose such as `password: please enter it` stays);
 //! - `Authorization: <scheme> <credential>` and `Bearer <credential>`;
+//! - `Cookie:` and `Set-Cookie:`, the whole value;
 //! - PEM private key blocks.
 //!
 //! Only the value is replaced by [`MASK`]; the key, quotes and the rest of the line stay.
@@ -57,18 +61,27 @@ pub fn redact(text: &str) -> Cow<'_, str> {
             }
         }
     }
+    for (at, _) in lower.match_indices("cookie") {
+        if let Some(s) = cookie(b, at + "cookie".len()) {
+            spans.push(s);
+        }
+    }
     pem_blocks(&lower, &mut spans);
     if spans.is_empty() {
         return Cow::Borrowed(text);
     }
     spans.sort_unstable();
+    // overlapping spans become one mask
+    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
+    for (s, e) in spans {
+        match merged.last_mut() {
+            Some(last) if s <= last.1 => last.1 = last.1.max(e),
+            _ => merged.push((s, e)),
+        }
+    }
     let mut out = String::with_capacity(text.len());
     let mut pos = 0;
-    for (s, e) in spans {
-        if e <= pos {
-            continue;
-        }
-        let s = s.max(pos);
+    for (s, e) in merged {
         out.push_str(&text[pos..s]);
         out.push_str(MASK);
         pos = e;
@@ -93,10 +106,10 @@ fn is_delim(c: u8) -> bool {
         )
 }
 
-/// An unquoted run starting at `i` (non-empty).
+/// An unquoted run starting at `i` (non-empty); also ends before a `\"`.
 fn token(b: &[u8], i: usize) -> Option<(usize, usize)> {
     let mut e = i;
-    while e < b.len() && !is_delim(b[e]) {
+    while e < b.len() && !is_delim(b[e]) && !esc_quote(b, e) {
         e += 1;
     }
     (e > i).then_some((i, e))
@@ -117,33 +130,92 @@ fn quoted(b: &[u8], i: usize) -> Option<(usize, usize)> {
     (e > start).then_some((start, e))
 }
 
-/// After a key ending at `i`: `= value`, `="value"`, or (JSON) `": "value"`.
-fn key_value(b: &[u8], i: usize) -> Option<(usize, usize)> {
-    // JSON: the key's closing quote, a colon, then a string value
-    if b.get(i) == Some(&b'"') {
-        let j = skip_blanks(b, i + 1);
-        if b.get(j) != Some(&b':') {
-            return None;
-        }
-        let j = skip_blanks(b, j + 1);
-        return (b.get(j) == Some(&b'"')).then(|| quoted(b, j)).flatten();
+/// The inside of a string quoted with `\"` (JSON inside a log line) whose content starts at `i`:
+/// up to the next `\"`, or the end of the line.
+fn quoted_escaped(b: &[u8], i: usize) -> Option<(usize, usize)> {
+    let mut e = i;
+    while e < b.len() && b[e] != b'\n' && !(b[e] == b'\\' && b.get(e + 1) == Some(&b'"')) {
+        e += 1;
     }
-    let j = skip_blanks(b, i);
-    if b.get(j) != Some(&b'=') {
+    (e > i).then_some((i, e))
+}
+
+/// `\"` at `i`.
+fn esc_quote(b: &[u8], i: usize) -> bool {
+    b.get(i) == Some(&b'\\') && b.get(i + 1) == Some(&b'"')
+}
+
+/// After a key ending at `i`:
+/// - `= value`, `="value"`, `='value'`;
+/// - a quoted key (JSON, also with `\"` inside a log line): `": <anything>`;
+/// - a bare key (Rust Debug, YAML, headers): `: "value"`, `: Some("value")`, or `: value` when the
+///   value is a single token ending the line or followed by `,;)]}` (prose like
+///   `password: please enter it` stays).
+fn key_value(b: &[u8], i: usize) -> Option<(usize, usize)> {
+    let mut j = i;
+    let quoted_key = if esc_quote(b, j) {
+        j += 2;
+        true
+    } else if b.get(j) == Some(&b'"') {
+        j += 1;
+        true
+    } else {
+        false
+    };
+    j = skip_blanks(b, j);
+    let sep = *b.get(j)?;
+    if sep != b'=' && sep != b':' {
         return None;
     }
-    let j = skip_blanks(b, j + 1);
-    match b.get(j) {
-        Some(b'"') | Some(b'\'') => quoted(b, j),
-        Some(_) => token(b, j),
-        None => None,
+    j = skip_blanks(b, j + 1);
+    if sep == b':' && b[j..].starts_with(b"some(") {
+        j += 5;
     }
+    if esc_quote(b, j) {
+        return quoted_escaped(b, j + 2);
+    }
+    match b.get(j) {
+        Some(b'"') | Some(b'\'') => return quoted(b, j),
+        None => return None,
+        Some(_) => {}
+    }
+    let (s, e) = token(b, j)?;
+    if sep == b'=' || quoted_key {
+        return Some((s, e));
+    }
+    let k = skip_blanks(b, e);
+    match b.get(k) {
+        None | Some(b'\n' | b'\r' | b',' | b';' | b')' | b']' | b'}') => Some((s, e)),
+        _ => None,
+    }
+}
+
+/// After `cookie` (also `set-cookie`): `: <value>` or `= <value>`, masked to the end of the line.
+fn cookie(b: &[u8], i: usize) -> Option<(usize, usize)> {
+    let mut j = i;
+    if esc_quote(b, j) {
+        j += 2;
+    } else if b.get(j) == Some(&b'"') {
+        j += 1;
+    }
+    j = skip_blanks(b, j);
+    if !matches!(b.get(j), Some(b':') | Some(b'=')) {
+        return None;
+    }
+    let s = skip_blanks(b, j + 1);
+    let mut e = s;
+    while e < b.len() && b[e] != b'\n' && b[e] != b'\r' {
+        e += 1;
+    }
+    (e > s).then_some((s, e))
 }
 
 /// After `authorization`: `: <scheme> <credential>` or `: <credential>`.
 fn authorization(b: &[u8], i: usize) -> Option<(usize, usize)> {
     let mut j = i;
-    if b.get(j) == Some(&b'"') {
+    if esc_quote(b, j) {
+        j += 2;
+    } else if b.get(j) == Some(&b'"') {
         j += 1;
     }
     j = skip_blanks(b, j);
@@ -151,7 +223,9 @@ fn authorization(b: &[u8], i: usize) -> Option<(usize, usize)> {
         return None;
     }
     j = skip_blanks(b, j + 1);
-    if b.get(j) == Some(&b'"') {
+    if esc_quote(b, j) {
+        j += 2;
+    } else if b.get(j) == Some(&b'"') {
         j += 1;
     }
     let (s, e) = token(b, j)?;
@@ -235,6 +309,50 @@ mod tests {
             "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----",
             "naïve ünïcode line = ok",
             "",
+        ] {
+            assert!(matches!(redact(plain), Cow::Borrowed(_)), "{plain}");
+        }
+        // Escaped JSON inside a log line, Rust Debug output, cookies.
+        let cases = [
+            (
+                r#"agent: body={\"token\":\"abc\",\"n\":1}"#,
+                r#"agent: body={\"token\":\"[redacted]\",\"n\":1}"#,
+            ),
+            (
+                r#"msg="{\"psk\": \"x y\"}""#,
+                r#"msg="{\"psk\": \"[redacted]\"}""#,
+            ),
+            (
+                r#"{\"Authorization\":\"Bearer abc\"}"#,
+                r#"{\"Authorization\":\"Bearer [redacted]\"}"#,
+            ),
+            (
+                r#"Config { token: "abc", n: 1 }"#,
+                r#"Config { token: "[redacted]", n: 1 }"#,
+            ),
+            (
+                r#"Wifi { password: Some("x"), ssid: "s" }"#,
+                r#"Wifi { password: Some("[redacted]"), ssid: "s" }"#,
+            ),
+            ("secret: \"x\"", "secret: \"[redacted]\""),
+            ("client_secret: abc123", "client_secret: [redacted]"),
+            ("X { token: abc, n: 1 }", "X { token: [redacted], n: 1 }"),
+            ("token: abc\nnext", "token: [redacted]\nnext"),
+            (
+                "Cookie: session=abc; theme=dark\nnext",
+                "Cookie: [redacted]\nnext",
+            ),
+            (
+                "set-cookie: sid=1; Path=/; HttpOnly\r\n",
+                "set-cookie: [redacted]\r\n",
+            ),
+        ];
+        for (input, want) in cases {
+            assert_eq!(redact(input), want, "{input}");
+        }
+        for plain in [
+            "password: please enter it",
+            "gdm: secret: agent not running yet",
         ] {
             assert!(matches!(redact(plain), Cow::Borrowed(_)), "{plain}");
         }
