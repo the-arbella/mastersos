@@ -1,14 +1,14 @@
 # MastersOS 考试扩展
 
 锁定会话（`[group.apps.kiosk]` 的网页 / PWA 应用，设计 `docs/superpowers/specs/2026-10-26-mastersos-kiosk-apps-design.md`
-§4.5、§4.7、§4.9）里强制安装的 MV3 扩展。它做两件事：页面右边缘一个浮动的「Options」把手，菜单里的「Exit」确认后结束锁定会话；以及按应用的模拟环境
+§4.5、§4.7、§4.9）里强制安装的 MV3 扩展。它做两件事：页面右边缘一个浮动的「Options」把手，菜单里「Get help」给学校 IT 发求助单、「Exit」确认后结束锁定会话；以及按应用的模拟环境
 （mock env，下文），让只认 ChromeOS 等设备的考试页读到它要的信号。
 
 | 文件 | 作用 |
 |---|---|
 | `manifest.json` | MV3；`permissions: ["nativeMessaging"]`，`host_permissions` 只有 mock env 的主机（后台按 URL 查这些标签页要用）；菜单按钮的内容脚本匹配 `<all_urls>`、`all_frames: false`、`document_idle`，mock env 的内容脚本只匹配各自应用的主机。不写 `update_url`：打包时按 `<base_url>` 加进 crx 里的那份 |
 | `content.js` | 往 `document.documentElement` 挂 `<mastersos-exit>`，closed shadow root 里是浮动按钮、它的菜单与确认对话框 |
-| `background.js` | service worker：收到自己内容脚本的恰好 `{cmd:"exit"}`，`chrome.runtime.connectNative("org.mastersos.kiosk_exit")` 发 `{"cmd":"exit"}`；装上（`install`）时重新加载 `MOCK_TAB_PATTERNS` 的标签页 |
+| `background.js` | service worker：收到自己内容脚本的恰好 `{cmd:"exit"}`，`chrome.runtime.connectNative("org.mastersos.kiosk_exit")` 发 `{"cmd":"exit"}`；`{cmd:"help-…"}` 各变成一条 `chrome.runtime.sendNativeMessage("org.mastersos.support", …)`（下「Get help」）；装上（`install`）时重新加载 `MOCK_TAB_PATTERNS` 的标签页 |
 | `mock/nwea/page.js` | NWEA 的 mock env，MAIN 世界、`document_start`：`isKioskChromium`、`extVersion`、`kioskChromiumExit`、UA 后缀、拦 F5 等 |
 | `mock/nwea/relay.js` | 隔离世界、`document_start`：把 `page.js` 的退出请求转成 `{cmd:"exit"}` |
 | `tests/` | vitest + jsdom（`environment: "jsdom"`、`globals: true`），没有自己的 package，见下「测试」 |
@@ -23,7 +23,7 @@
   边与高度记在页面的 `sessionStorage`（`mastersos-exit-pos`，`{"side":"l"|"r","y":0..1}`，`y` 是可用高度的比例，
   所以窗口变大变小都还在视口里）；上一版的 `mastersos-exit-corner` 不认。存储不可用（沙箱页面）时照样显示，只是不记。
 - 点把手弹出一个小菜单（`role="menu"`，在把手旁边、朝屏幕内侧展开、与把手竖直居中；白底、12 px 圆角、每项 44 px 高，
-  前面 18 px 图标），现在只有一项「Exit」（门与箭头的图标，红字）。菜单项是 `content.js` 里的 `ACTIONS` 列表，
+  前面 18 px 图标），两项：「Get help」（圆圈问号的图标，深色字，求助开着才显示）与「Exit」（门与箭头的图标，红字）。菜单项是 `content.js` 里的 `ACTIONS` 列表，
   以后加一项就是加一条。
 - 键盘：按钮能拿到焦点，Enter / Space 开关菜单，↓ / ↑ 打开并聚焦第一项 / 最后一项；菜单里 ↑ ↓ Home End Tab 在菜单项之间移动
   （焦点不出菜单），Esc 收起、焦点回到按钮。菜单开着时点页面别处就收起（`document` 上捕获阶段的 `pointerdown`，
@@ -38,6 +38,25 @@
 - 回 `{"ok":true}` 时同一张卡片的标题变成「Exiting…」、前面一个 18 px 的转圈（`prefers-reduced-motion` 时不转），按钮行隐去但留着高度（Esc 也不关）；20 秒后会话还在，或回 `{"ok":false}`、
   宿主没回就断开、连不上，都在同一张卡片里显示「Could not leave. Please ask a teacher.」与一个「OK」按钮；OK 关掉，
   可以从菜单再试。
+
+### Get help（计划 2026-11-05 Task 7）
+
+- 菜单第一次打开时问一次 `{cmd:"help-enabled"}`；只有回 `{ok:true, enabled:true}` 才把「Get help」显示在 Exit 前面，出错、没回、15 秒没答都不显示。
+- 对话框与 Exit 的确认卡片同一套样式，在同一个 shadow root 里：标题「Get help from IT」；话题六选一（必选，`role="radiogroup"`，
+  一个 Tab 停点、方向键移动并选中）：Wi-Fi / Can't sign in / An app / Screen, keys or sound / Battery / Other（线上名
+  `wifi` / `sign_in` / `app` / `hardware` / `battery` / `other`，同 `mastersos-bundle` 的 `SupportCategory`）；
+  可选的描述（`maxlength` 1000，占位「What happened? Please don't include passwords or personal details.」）；Cancel / Send。
+  没选话题按 Send：不发，提示「Choose a topic first.」、焦点回第一个话题。**没有截图选项**（Ruling P1：截图要放宽扩展的 host 权限）。
+- Send 发 `{cmd:"help-submit", category, text}`（text 去掉首尾空白）；后台转成
+  `{"op":"submit","category","text","session":"kiosk","screenshot_png_b64":null}`，真正的 `kiosk:<app id>` 与身份由宿主认定。
+  拿到 `client_id` 后每 3 秒问一次 `{cmd:"help-status", client_id}`，最多 60 秒：
+  有单号显示「Sent. Ticket #<n>. IT has been told.」，60 秒还在排队显示「Saved. It will be sent when this computer is online.」，
+  `rate_limited`「You've sent 3 requests this hour. Please try again later.」，`disabled`「Help requests are turned off at this school.」，
+  其余（宿主不在、拒收、没回）「Couldn't send. Please tell a teacher.」。等待时一个转圈与「Close」：关掉只是不再问，单子已在本机队列里。
+- 键盘：Esc 关、焦点回把手；Tab 只在卡片里转（话题组、描述、看得见的按钮）。
+- 后台只认这三种恰好的形状（多一个键、未知话题、超 1000 字、空的或过长的 `client_id` 一律不理），回内容脚本时也只留认得的字段。
+  宿主是 `/usr/lib/mastersos/mastersos-support-host` → `mastersos-agent support native-host`（一条消息进、一条出，转给 `/run/mastersos/support.sock`）；
+  锁定会话的 `NativeMessagingAllowlist` 是 `EXIT_HOST` 与 `SUPPORT_HOST` 两个。
 
 ### 不弄坏页面
 
@@ -127,16 +146,17 @@ bash image/kiosk-ext-pack.sh <钥匙.pem> <输出目录> <base_url>    # 打印 
 - 打进 zip 的是本目录里除 `tests/`、`README.md` 与点开头的文件之外的**全部**文件（新加图标、弹出页不用改打包脚本）；
   manifest 里像相对文件路径的字符串（`service_worker`、`content_scripts`、`icons`、`default_popup`……）有一个不在其中就拒绝。改了扩展要把 `manifest.json` 的 `version` 调高，否则装好的机器不更新。
 
-输出目录里四个文件：
+输出目录里五个文件：
 
 | 文件 | 去处 |
 |---|---|
 | `mastersos-kiosk-ext.crx` | 放到 `<base_url>/mastersos-kiosk-ext.crx` |
 | `updates.xml` | 放到 `<base_url>/updates.xml`（`appid` = id，`codebase` = 上一行，`version` 取 manifest） |
 | `org.mastersos.kiosk_exit.json` | 宿主清单（`image/kiosk-ext/org.mastersos.kiosk_exit.json.in` 填上 id）：镜像的 `/etc/opt/chrome/native-messaging-hosts/` |
+| `org.mastersos.support.json` | Get help 的宿主清单（`image/kiosk-ext/org.mastersos.support.json.in` 填上 id）：同上 |
 | `kiosk-ext.json` | `{"id", "update_url": "<base_url>/updates.xml"}`：镜像的 `/usr/lib/mastersos/kiosk-ext.json`，agent 的 kiosk 步骤读它写进锁定会话的策略 |
 
 **镜像怎么用这些输出（计划 9 Task 8）**：`build.sh` 按 lab / 正式选钥匙，`<base_url>` 固定为 `file:///usr/lib/mastersos/kiosk-ext`（断网时新 profile 也能装上，`ExamExtension::check` 只认这一个 file 地址）跑 `kiosk-ext-pack.sh`，把
-`org.mastersos.kiosk_exit.json` 装进 `/etc/opt/chrome/native-messaging-hosts/`、`kiosk-ext.json` 装进 `/usr/lib/mastersos/`，
+两份宿主清单装进 `/etc/opt/chrome/native-messaging-hosts/`、`kiosk-ext.json` 装进 `/usr/lib/mastersos/`，
 crx 与 `updates.xml` 装进 `/usr/lib/mastersos/kiosk-ext/`；产物目录的 `kiosk-ext/` 只留作核对，`publish.sh <版本> chrome` 对这样的构建什么都不做。宿主清单不是 `mkosi.extra` 里的静态文件，因为 `allowed_origins` 里的 id 随钥匙变。
-宿主清单的 `path` 是已在镜像里的包装 `/usr/lib/mastersos/mastersos-kiosk-exit`（native messaging 的 `path` 带不了参数）。
+宿主清单的 `path` 是已在镜像里的包装 `/usr/lib/mastersos/mastersos-kiosk-exit` 与 `mastersos-support-host`（native messaging 的 `path` 带不了参数）。

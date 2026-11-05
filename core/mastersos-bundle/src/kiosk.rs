@@ -91,6 +91,9 @@ pub const ERROR_PAGE: &str = "file:///usr/share/mastersos/kiosk-error.html";
 /// 考试扩展「退出」按钮用的原生消息宿主（镜像里的宿主清单同名）。
 pub const EXIT_HOST: &str = "org.mastersos.kiosk_exit";
 
+/// 考试扩展「Get help」用的原生消息宿主（镜像里的宿主清单同名，→ `mastersos-agent support native-host`）。
+pub const SUPPORT_HOST: &str = "org.mastersos.support";
+
 /// Where the image carries the exam extension's update manifest. A fresh Chrome profile installs from disk, so the Exit
 /// button needs no network. Only the exam extension may use it, and only as this exact string; school `extensions` stay https.
 pub const EXAM_LOCAL_UPDATE_URL: &str = "file:///usr/lib/mastersos/kiosk-ext/updates.xml";
@@ -365,11 +368,11 @@ pub fn chrome_policy(
         ("BackgroundModeEnabled", json!(false)),
         // 允许名单只是阻止名单的例外：不配 "*" 的阻止，任何系统级宿主都能连。
         ("NativeMessagingBlocklist", json!(["*"])),
-        // 本地程序的会话没有考试扩展，退出按钮的宿主也不放行
+        // 本地程序的会话没有考试扩展，退出与求助的宿主都不放行
         (
             "NativeMessagingAllowlist",
             match web {
-                Some(_) => json!([EXIT_HOST]),
+                Some(_) => json!([EXIT_HOST, SUPPORT_HOST]),
                 None => json!([]),
             },
         ),
@@ -1070,7 +1073,7 @@ url = "https://test.mapnwea.org/"
             // 关窗口就是退出：后台模式下有 background 权限的扩展会让 Chrome 不退，run 等不到它（复审 M3）
             "BackgroundModeEnabled": false,
             "NativeMessagingBlocklist": ["*"],
-            "NativeMessagingAllowlist": ["org.mastersos.kiosk_exit"],
+            "NativeMessagingAllowlist": ["org.mastersos.kiosk_exit", "org.mastersos.support"],
             "NativeMessagingUserLevelHosts": false,
         });
         for (k, v) in want.as_object().unwrap() {
@@ -1207,19 +1210,20 @@ url = "https://test.mapnwea.org/"
         }
     }
 
-    /// 复审 fix 2：「退出」按钮靠原生消息——只放行 MastersOS 的宿主、不许用户级宿主，应用改不了。
+    /// 复审 fix 2：「退出」与「Get help」靠原生消息——只放行 MastersOS 的两个宿主、不许用户级宿主，应用改不了。
     #[test]
     fn native_messaging_pinned_to_exit_host() {
         for app in [nwea(""), nwea("pwa = true"), web("")] {
             let p = policy(&app);
             assert_eq!(
                 p["NativeMessagingAllowlist"],
-                serde_json::json!([EXIT_HOST])
+                serde_json::json!([EXIT_HOST, SUPPORT_HOST])
             );
             assert_eq!(p["NativeMessagingUserLevelHosts"], serde_json::json!(false));
             assert_eq!(p["NativeMessagingBlocklist"], serde_json::json!(["*"]));
         }
         assert_eq!(EXIT_HOST, "org.mastersos.kiosk_exit");
+        assert_eq!(SUPPORT_HOST, "org.mastersos.support");
         for (k, v) in [
             ("NativeMessagingBlocklist", "[\"*\"]"),
             ("NativeMessagingAllowlist", "[\"com.evil\"]"),

@@ -127,6 +127,7 @@ jobs:
           image/mkosi.extra/usr/lib/mastersos/login-browser
           image/mkosi.extra/usr/bin/mastersos-kiosk
           image/mkosi.extra/usr/lib/mastersos/mastersos-kiosk-exit
+          image/mkosi.extra/usr/lib/mastersos/mastersos-support-host
           image/mkosi.extra/etc/security/namespace.init
           image/mkosi.profiles/lab.extra/usr/lib/mastersos/create-lab-user
           image/mkosi.initrd.conf/mkosi.extra/usr/lib/mastersos/tpm-probe

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """MastersOS 考试扩展的 crx3 打包（计划 9 Task 7），由 kiosk-ext-pack.sh 调用：
 
-    python3 -I kiosk-ext-pack.py <扩展源码目录> <宿主清单模板> <钥匙.pem> <输出目录> <base_url>
+    python3 -I kiosk-ext-pack.py <扩展源码目录> <宿主清单模板目录> <钥匙.pem> <输出目录> <base_url>
 
 只用标准库与 openssl 命令：公钥（DER 的 SubjectPublicKeyInfo）与 RSA-PKCS1v15-SHA256 签名都由 openssl 从
 <钥匙.pem> 读私钥算出——私钥只经这个路径交给 openssl，本程序不读它的内容、不复制、不写进输出目录或日志。
@@ -15,8 +15,8 @@ zip 里是扩展目录里除 tests/、README.md 与点文件之外的全部文�
 字符串（service_worker、content_scripts、icons、default_popup……）都要在其中，否则拒绝。条目排序、时间固定在 1980-01-01，所以同一把钥匙、
 同一份源码打出同样的字节。
 
-写出 mastersos-kiosk-ext.crx、updates.xml、org.mastersos.kiosk_exit.json、kiosk-ext.json（先写临时文件再改名），
-stdout 只打印 id。出错打印原因、退出 1。
+写出 mastersos-kiosk-ext.crx、updates.xml、两份宿主清单（org.mastersos.kiosk_exit.json、org.mastersos.support.json，
+由模板目录里的 <名>.in 填上 id）、kiosk-ext.json（先写临时文件再改名），stdout 只打印 id。出错打印原因、退出 1。
 """
 
 import hashlib
@@ -33,7 +33,8 @@ from xml.sax.saxutils import quoteattr
 
 CRX = "mastersos-kiosk-ext.crx"
 UPDATES = "updates.xml"
-HOST = "org.mastersos.kiosk_exit.json"
+# native messaging 宿主清单：退出（mastersos-kiosk-exit）与求助（mastersos-support-host）
+HOSTS = ("org.mastersos.kiosk_exit.json", "org.mastersos.support.json")
 EXT_JSON = "kiosk-ext.json"
 PLACEHOLDER = "__EXAM_EXTENSION_ID__"
 RSA_OID = bytes.fromhex("06092a864886f70d010101")  # rsaEncryption
@@ -198,8 +199,8 @@ def write_atomic(outdir, name, data):
 
 def main():
     if len(sys.argv) != 6:
-        die("用法：kiosk-ext-pack.py <扩展源码目录> <宿主清单模板> <钥匙.pem> <输出目录> <base_url>")
-    src, tmpl_path, key, outdir, base = sys.argv[1:]
+        die("用法：kiosk-ext-pack.py <扩展源码目录> <宿主清单模板目录> <钥匙.pem> <输出目录> <base_url>")
+    src, tmpl_dir, key, outdir, base = sys.argv[1:]
 
     if base != LOCAL_BASE and (not URL_RE.fullmatch(base) or URL_RE.fullmatch(base).group("host").split(".")[-1].isdigit()):
         die(f"base_url 应是 https://<小写主机名>[:端口][/路径]，不带查询串与片段：{base}")
@@ -260,27 +261,32 @@ def main():
     ).encode()
 
     # 宿主清单
-    try:
-        with open(tmpl_path, encoding="utf-8") as fh:
-            tmpl = fh.read()
-    except OSError as e:
-        die(f"读不了宿主清单模板：{e}")
-    if tmpl.count(PLACEHOLDER) != 1:
-        die(f"宿主清单模板里应恰好有一处 {PLACEHOLDER}")
-    host = tmpl.replace(PLACEHOLDER, eid)
-    try:
-        h = json.loads(host)
-    except ValueError as e:
-        die(f"填好的宿主清单不是 JSON：{e}")
-    if h.get("allowed_origins") != [f"chrome-extension://{eid}/"]:
-        die("宿主清单的 allowed_origins 应只有这个扩展")
+    hosts = []
+    for name in HOSTS:
+        try:
+            with open(os.path.join(tmpl_dir, name + ".in"), encoding="utf-8") as fh:
+                tmpl = fh.read()
+        except OSError as e:
+            die(f"读不了宿主清单模板 {name}.in：{e}")
+        if tmpl.count(PLACEHOLDER) != 1:
+            die(f"宿主清单模板 {name}.in 里应恰好有一处 {PLACEHOLDER}")
+        host = tmpl.replace(PLACEHOLDER, eid)
+        try:
+            h = json.loads(host)
+        except ValueError as e:
+            die(f"填好的宿主清单 {name} 不是 JSON：{e}")
+        if h.get("allowed_origins") != [f"chrome-extension://{eid}/"]:
+            die(f"宿主清单 {name} 的 allowed_origins 应只有这个扩展")
+        if h.get("name") != name.removesuffix(".json"):
+            die(f"宿主清单 {name} 的 name 应与文件名相同")
+        hosts.append((name, host.encode("utf-8")))
 
     ext_json = (json.dumps({"id": eid, "update_url": update_url}, indent=2) + "\n").encode("utf-8")
 
     for name, data in (
         (CRX, crx),
         (UPDATES, updates),
-        (HOST, host.encode("utf-8")),
+        *hosts,
         (EXT_JSON, ext_json),
     ):
         write_atomic(outdir, name, data)
