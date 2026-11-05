@@ -3051,11 +3051,11 @@ if command -v shellcheck >/dev/null && ! shellcheck "$nd" >&2; then
 	bad 68 "shellcheck $nd"
 	r=1
 fi
-grep -qF 'pub const QUEUE_DIR: &str = "upload-queue";' "$core/mastersos-agent/src/upload/queue.rs" &&
-	grep -qF 'pub const SERVICE: &str = "mastersos-upload.service";' "$core/mastersos-agent/src/upload/mod.rs" || {
+if ! grep -qF 'pub const QUEUE_DIR: &str = "upload-queue";' "$core/mastersos-agent/src/upload/queue.rs" ||
+	! grep -qF 'pub const SERVICE: &str = "mastersos-upload.service";' "$core/mastersos-agent/src/upload/mod.rs"; then
 	bad 68 "the agent's queue folder or unit name differs from the image's (upload-queue, mastersos-upload.service)"
 	r=1
-}
+fi
 [ "$r" = 0 ] && ok 68 "upload queue: oneshot drain with resource limits, 30-minute timer, NetworkManager kick, names agree with the agent"
 
 # 69. Get help, the machine side (plan 2026-11-05 Task 5): mastersos-support.socket (0666, Accept=no) is enabled through a
