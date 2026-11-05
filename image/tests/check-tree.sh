@@ -3014,4 +3014,61 @@ if grep -rlF 'mastersos-signin-import.service' "$su" | grep -vE '/(mastersos-sig
 fi
 [ "$r" = 0 ] && ok 67 "sign-in handoff: card unit stops on SIGINT with begin/stash, names match, pam-session claims, user unit only in desktop sessions"
 
+# 69. Get help, the machine side (plan 2026-11-05 Task 5): mastersos-support.socket (0666, Accept=no) is enabled through a
+#     sockets.target.wants link and starts mastersos-support.service, which runs the agent's `support host` with the socket
+#     as stdin and its output in the journal; the socket path, the queue directory and support.json are the agent's and
+#     the dialogs' names; main.rs dispatches `support`; the kiosk host manifest allows the same origin as the exit host's.
+r=0
+sd=$ex/usr/lib/systemd/system
+ss=$sd/mastersos-support.socket
+sv=$sd/mastersos-support.service
+sm=$core/mastersos-agent/src/support/mod.rs
+for l in 'ListenStream=/run/mastersos/support.sock' 'SocketMode=0666' 'Accept=no' 'WantedBy=sockets.target'; do
+	grep -qxF -- "$l" "$ss" 2>/dev/null || {
+		bad 69 "$ss should have the line: $l"
+		r=1
+	}
+done
+if [ "$(readlink "$sd/sockets.target.wants/mastersos-support.socket" 2>/dev/null)" != ../mastersos-support.socket ]; then
+	bad 69 "$sd/sockets.target.wants/mastersos-support.socket should be a link to ../mastersos-support.socket"
+	r=1
+fi
+for l in 'ExecStart=/usr/bin/mastersos-agent support host' 'StandardInput=socket' 'StandardOutput=journal' \
+	'Requires=mastersos-support.socket' 'StateDirectory=mastersos/support-queue' 'StateDirectoryMode=0700' 'ProtectSystem=strict'; do
+	grep -qxF -- "$l" "$sv" 2>/dev/null || {
+		bad 69 "$sv should have the line: $l"
+		r=1
+	}
+done
+if [ "$(grep -c '^ExecStart=' "$sv" 2>/dev/null)" != 1 ] || grep -qxF '[Install]' "$sv" 2>/dev/null; then
+	bad 69 "$sv should have exactly one ExecStart= and no [Install] (the socket starts it)"
+	r=1
+fi
+for want in 'pub const SOCKET_PATH: &str = "/run/mastersos/support.sock";' \
+	'pub const QUEUE_DIR: &str = "/var/lib/mastersos/support-queue";' 'pub const SUPPORT_JSON: &str = "support.json";' \
+	'pub const UPLOAD_UNIT: &str = "mastersos-upload.service";'; do
+	grep -qxF -- "$want" "$sm" || {
+		bad 69 "$sm should have: $want"
+		r=1
+	}
+done
+for e in mastersos-login@mastersos.org mastersos-managed@mastersos.org; do
+	h=$ex/usr/share/gnome-shell/extensions/$e/help.js
+	if ! grep -qxF "export const SOCKET = '/run/mastersos/support.sock';" "$h" ||
+		! grep -qxF "export const SUPPORT_JSON = '/var/lib/mastersos-public/support.json';" "$h"; then
+		bad 69 "$h should use /run/mastersos/support.sock and /var/lib/mastersos-public/support.json (the agent's names)"
+		r=1
+	fi
+done
+grep -qF 'Some(OsStr::new("support"))' "$core/mastersos-agent/src/main.rs" || {
+	bad 69 "main.rs should dispatch support"
+	r=1
+}
+if ! python3 -I -c 'import json, sys; a, b = (json.load(open(p)) for p in sys.argv[1:]); sys.exit(0 if a["allowed_origins"] == b["allowed_origins"] and a["name"] == "org.mastersos.support" else 1)' \
+	"$rel/kiosk-ext/org.mastersos.support.json.in" "$rel/kiosk-ext/org.mastersos.kiosk_exit.json.in" 2>/dev/null; then
+	bad 69 "$rel/kiosk-ext/org.mastersos.support.json.in should be org.mastersos.support with the exit host's allowed_origins"
+	r=1
+fi
+[ "$r" = 0 ] && ok 69 "Get help: support socket (0666, Accept=no, enabled) starts support host with the socket as stdin; names match the agent and the dialogs; kiosk host manifest"
+
 exit $fail

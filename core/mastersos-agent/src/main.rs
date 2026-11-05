@@ -112,6 +112,13 @@ fn main() -> ExitCode {
     if sub.as_deref() == Some(OsStr::new("signin-import")) {
         return mastersos_agent::signin_handoff::import_main();
     }
+    // Get help (plan 2026-11-05 Task 5): `support host` behind mastersos-support.socket (root; its log lines go to stderr
+    // and the journal) and `support native-host` for the kiosk extension (as the kiosk account; stdout is the message
+    // channel). Synchronous entry points with their own runtime and exit codes
+    if sub.as_deref() == Some(OsStr::new("support")) {
+        let _ = log::set_logger(&StderrLog).map(|()| log::set_max_level(env_level()));
+        return mastersos_agent::support::main(std::env::args_os().skip(2));
+    }
     // systemd-sysext.service 合并或刷新之后（镜像里的 drop-in）：按记下的模式重挂浏览器模式的桩，同步的
     if sub.as_deref() == Some(OsStr::new("exec-block")) {
         return mastersos_agent::system::exec_block::sync_main();
