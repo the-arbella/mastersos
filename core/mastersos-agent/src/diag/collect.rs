@@ -34,8 +34,7 @@ pub const SCREENSHOT_MAX_BYTES: u64 = 5 * 1024 * 1024;
 const ZSTD_LEVEL: i32 = 9;
 /// The cloud decompresses with a window of at most 8 MiB (its server is small): the encoder's
 /// window is set explicitly, no long-distance matching, no ultra levels.
-/// The same value as `mastersos_bundle::diag::DIAG_ZSTD_WINDOW_LOG_MAX`.
-pub const ZSTD_WINDOW_LOG: u32 = 23;
+pub const ZSTD_WINDOW_LOG: u32 = mastersos_bundle::diag::DIAG_ZSTD_WINDOW_LOG_MAX;
 const CMD_TIMEOUT: Duration = Duration::from_secs(20);
 /// A boot of the journal with debug logging is easily a million lines.
 const JOURNAL_TIMEOUT: Duration = Duration::from_secs(300);

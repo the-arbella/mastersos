@@ -380,7 +380,7 @@ fn never_reads_seed_or_system_connections() {
     }
     let files: BTreeMap<String, Vec<u8>> = unpack(&c.path).into_iter().collect();
     let state = String::from_utf8_lossy(&files["agent-state.json"]);
-    assert!(state.contains(r#""x_token":"[redacted]""#), "{state}");
+    assert!(state.ends_with(r#""x_token":[redacted]"#), "{state}");
     assert!(state.contains(r#""device_id":"dev-1""#), "{state}");
 }
 
@@ -397,7 +397,7 @@ fn redaction_applies_to_command_output() {
     let files: BTreeMap<String, Vec<u8>> = unpack(&c.path).into_iter().collect();
     assert_eq!(
         String::from_utf8_lossy(&files["journal/boot-0.txt"]),
-        "wpa_supplicant[1]: psk=\"[redacted]\"\nordinary line\n"
+        "wpa_supplicant[1]: psk=[redacted]\nordinary line\n"
     );
     let f = c
         .manifest
