@@ -6,6 +6,7 @@ pub mod apply_worker;
 pub mod backoff;
 pub mod chrome_sysext;
 pub mod config;
+pub mod diag;
 pub mod fetch;
 pub mod homes;
 pub mod hw;
