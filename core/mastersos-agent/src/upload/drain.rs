@@ -14,6 +14,10 @@
 //!   backoff); past the command's `expires_at` → ack `failed` `upload: <the last error>`.
 //! - `ack`: a final result whose send failed before; sent again with the backoff, given up
 //!   after [`ACK_KEEP_DAYS`] days (the server marks the command failed by itself then).
+//! - `support`: a help request ([`crate::support::send`]): `POST /v1/support`, the ticket into
+//!   the support store, then the attachment collected into a [`Target::Ticket`] `archive`. A
+//!   ticket archive that arrives or is given up (`expired`, `not_yours`, dropped for room) marks
+//!   the request's attachment done; the request keeps its ticket.
 //!
 //! On battery below [`LOW_BATTERY_PERCENT`] % with no power connected only the small items go
 //! (acks, and Task 5's help requests); collections and archives wait for power. Over
@@ -97,6 +101,7 @@ pub async fn drain_once(cx: &DrainCtx<'_>) -> Pass {
         set_notice(cx, None);
     }
     trim(cx).await;
+    crate::support::send::sweep(cx, (cx.clock)());
     let low = low_battery(&cx.paths.root);
     let items = match cx.queue.list() {
         Ok(i) => i,
@@ -183,16 +188,17 @@ async fn step(cx: &DrainCtx<'_>, item: Item, low: bool) {
         Job::Collect { .. } => collect_item(cx, item, now, low).await,
         Job::Archive { .. } => archive_item(cx, item, now, low).await,
         Job::Ack { .. } => ack_item(cx, item, now).await,
+        Job::Support { .. } => crate::support::send::step(cx, item, now, low).await,
     }
 }
 
-fn remove(cx: &DrainCtx<'_>, item: &Item) {
+pub(crate) fn remove(cx: &DrainCtx<'_>, item: &Item) {
     if let Err(e) = cx.queue.remove(item) {
         log::warn!("upload queue: removing {} failed: {e:#}", item.name());
     }
 }
 
-fn put(cx: &DrainCtx<'_>, item: &Item) -> bool {
+pub(crate) fn put(cx: &DrainCtx<'_>, item: &Item) -> bool {
     match cx.queue.put(item) {
         Ok(()) => true,
         Err(e) => {
@@ -354,7 +360,7 @@ fn set_notice(cx: &DrainCtx<'_>, until: Option<DateTime<Utc>>) {
     }
 }
 
-async fn archive_item(cx: &DrainCtx<'_>, mut item: Item, now: DateTime<Utc>, low: bool) {
+pub(crate) async fn archive_item(cx: &DrainCtx<'_>, mut item: Item, now: DateTime<Utc>, low: bool) {
     let Job::Archive {
         target,
         file,
@@ -410,11 +416,14 @@ async fn archive_item(cx: &DrainCtx<'_>, mut item: Item, now: DateTime<Utc>, low
     match crate::diag::upload::upload(cx.fetcher, cx.cred, req, &path, cx.lab).await {
         Ok(id) => {
             log::info!("upload queue: {} arrived as {id}", item.name());
-            let acked = match seq {
-                Some(seq) => {
-                    final_ack(cx, seq, InboxResultState::Done, &format!("diag:{id}")).await
+            let acked = match &target {
+                Target::Inbox { seq } => {
+                    final_ack(cx, *seq, InboxResultState::Done, &format!("diag:{id}")).await
                 }
-                None => true,
+                Target::Ticket { client_id } => {
+                    crate::support::send::attachment_finished(cx, client_id, "attached");
+                    true
+                }
             };
             if acked {
                 remove(cx, &item);
@@ -439,9 +448,17 @@ async fn archive_item(cx: &DrainCtx<'_>, mut item: Item, now: DateTime<Utc>, low
     }
 }
 
-/// Gives the archive up; its command (if any) is acked `failed` with `why` first.
+/// Gives the archive up; its command (if any) is acked `failed` with `why` first, a ticket's
+/// attachment is marked done (the ticket stays).
 async fn give_up(cx: &DrainCtx<'_>, item: &Item, seq: Option<u64>, why: String) {
     log::warn!("upload queue: giving up {}: {why}", item.name());
+    if let Job::Archive {
+        target: Target::Ticket { client_id },
+        ..
+    } = &item.job
+    {
+        crate::support::send::attachment_finished(cx, client_id, &why);
+    }
     let acked = match seq {
         Some(seq) => final_ack(cx, seq, InboxResultState::Failed, &why).await,
         None => true,
@@ -479,8 +496,9 @@ async fn ack_item(cx: &DrainCtx<'_>, mut item: Item, now: DateTime<Utc>) {
     }
 }
 
-/// Keeps the queue within its size: the oldest archives go, their commands acked `failed`.
-async fn trim(cx: &DrainCtx<'_>) {
+/// Keeps the queue within its size: the oldest archives go, their commands acked `failed` (a
+/// ticket's attachment is marked done).
+pub(crate) async fn trim(cx: &DrainCtx<'_>) {
     let dropped = match cx.queue.trim_to(cx.max_queue_bytes) {
         Ok(d) => d,
         Err(e) => {
@@ -494,12 +512,18 @@ async fn trim(cx: &DrainCtx<'_>) {
             cx.max_queue_bytes,
             item.name()
         );
-        if let Job::Archive {
-            target: Target::Inbox { seq },
-            ..
-        } = item.job
-        {
-            final_ack(cx, seq, InboxResultState::Failed, DETAIL_QUEUE_FULL).await;
+        match &item.job {
+            Job::Archive {
+                target: Target::Inbox { seq },
+                ..
+            } => {
+                final_ack(cx, *seq, InboxResultState::Failed, DETAIL_QUEUE_FULL).await;
+            }
+            Job::Archive {
+                target: Target::Ticket { client_id },
+                ..
+            } => crate::support::send::attachment_finished(cx, client_id, DETAIL_QUEUE_FULL),
+            _ => {}
         }
     }
 }

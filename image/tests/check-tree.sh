@@ -3123,4 +3123,18 @@ if ! python3 -I -c 'import json, sys; a, b = (json.load(open(p)) for p in sys.ar
 fi
 [ "$r" = 0 ] && ok 69 "Get help: support socket (0666, Accept=no, enabled) starts support host with the socket as stdin; names match the agent and the dialogs; kiosk host manifest"
 
+# 70. Get help, sending (plan 2026-11-05 Task 5b): the support host queues each request for mastersos-upload.service as a
+#     `support` item in /var/lib/mastersos/upload-queue, so its sandbox (ProtectSystem=strict) must make that folder
+#     writable too; without it every submit fails on a read-only file system.
+r=0
+grep -qxF 'StateDirectory=mastersos/upload-queue' "$sv" 2>/dev/null || {
+	bad 70 "$sv should have the line: StateDirectory=mastersos/upload-queue (the host writes the sender's items there)"
+	r=1
+}
+grep -qF '.enqueue_support(' "$core/mastersos-agent/src/support/host.rs" || {
+	bad 70 "support/host.rs should queue a support item for the sender (enqueue_support)"
+	r=1
+}
+[ "$r" = 0 ] && ok 70 "Get help: the support host may write the upload queue, and queues each request there"
+
 exit $fail

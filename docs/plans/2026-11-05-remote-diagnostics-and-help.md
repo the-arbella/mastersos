@@ -157,6 +157,10 @@
 - `send::drain(f, cred, now)`：每条未发的 → `POST /v1/support`（`SupportRequest`，`snapshot` 由 `os-release`、NM 状态、电池、磁盘、最近一次 `StatusReport` 组成）→ 记 ticket → `collect(kind=Ticket, since_minutes=30, screenshot)` → `upload` → `attach_done`；
   错误按 `error_action`：`too_many` 按 Retry-After 稍后再发；`support_disabled` 丢弃队列里的单子、状态 `disabled`（界面显示 `Help requests are turned off at this school.`）；`invalid` 丢弃并记日志；
   `not_yours`/`expired` 放弃附件；附件 48 小时窗口以服务端为准（`expired` 即放弃），删附件，单子保持 `sent`；`sent` 且附件完成的 7 天后删。
+- 注（Task 5b 实现时改定）：发送在 `upload drain` 里（`support/send.rs`），不是 agent 主循环；support host 提交时在上传队列写一项
+  `support`（`Job::Support { client_id, tries }`），记录仍在 support-queue。网络（nmcli，发送时刻）与最近一次 StatusReport
+  （agent 每次回报时存 `last-status-report.json`）在发送时补进 snapshot。附件收成 `archive`（`Target::Ticket`）后截图即删；
+  完成（含放弃）的单子不占 support-queue 的 20 条名额，7 天后删。support 服务的沙箱加 `StateDirectory=mastersos/upload-queue`（check-tree 70）。
 - `support native-host`：Chrome native messaging（4 字节长度前缀 JSON）转发到 socket，`session` 由 host 按 kiosk 账户填。宿主清单 `org.mastersos.support.json`，`allowed_origins` 同 `org.mastersos.kiosk_exit.json`。
 
 - [ ] Step 1: 测试：`rejects_client_supplied_identity`；`greeter_peer_is_none_guest_uid_is_guest`；`rate_limit_survives_restart`；`queue_survives_restart_and_reuses_client_id`；

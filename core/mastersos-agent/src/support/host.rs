@@ -43,6 +43,7 @@ use super::identity::{identify, Peer, Who};
 use super::store::{Item, ItemState, Store};
 use super::{kick_sender, MAX_REQUEST_BYTES, MAX_SCREENSHOT_BYTES, SUPPORT_JSON};
 use crate::runner::Runner;
+use crate::upload::queue::Queue;
 
 /// The service exits after this long without a connection.
 pub const IDLE: Duration = Duration::from_secs(120);
@@ -196,6 +197,8 @@ fn decode_png(b64: &str) -> Option<Vec<u8>> {
 /// The request handler; the parts the tests replace are fields.
 pub struct Host {
     pub store: Store,
+    /// Where the sender looks for work (`/var/lib/mastersos/upload-queue`): each request gets a `support` item.
+    pub upload: Queue,
     /// Where the agent writes `support.json` (`/var/lib/mastersos-public`).
     pub public_dir: PathBuf,
     /// System root for the snapshot (`/sys`, the queue's file system); `/` in production.
@@ -335,6 +338,11 @@ impl Host {
             if !self.budget_allows(peer, now)? {
                 return Ok(Reply::err(ERR_RATE_LIMITED));
             }
+            // The sender's item first: one without its store item is dropped by the sender (which takes this lock
+            // to read the store), a store item without it would never be sent.
+            self.upload
+                .enqueue_support(&request.client_id, now)
+                .context("queueing the help request for the sender")?;
             self.store
                 .put_new(&Item::new(request.clone(), peer.uid, now), png.as_deref())?;
             self.store.record_submit(now, peer.uid)?;
@@ -558,6 +566,7 @@ pub fn main() -> Result<()> {
     let runner: Arc<dyn Runner> = Arc::new(crate::runner::RealRunner);
     let host = Host {
         store: Store::new(super::QUEUE_DIR),
+        upload: Queue::new(&crate::system::SysPaths::default().state_dir),
         public_dir: crate::system::SysPaths::default().public_dir,
         root: "/".into(),
         os_release: crate::AgentConfig::default().os_release,

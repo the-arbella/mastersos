@@ -7,23 +7,23 @@
 //! - [`step`]: the settings step that writes `support.json` (`{"enabled": bool}`, 0644) into the public directory for
 //!   the dialogs and the host (`[config.support] enabled`; no file means off).
 //!
-//! Sending the queue to the cloud (`POST /v1/support`, the attachment) is the sender's job in
-//! `mastersos-upload.service` (Task 5b).
+//! - [`send`]: sending a queued request to the cloud (`POST /v1/support`, then the attachment), in
+//!   `mastersos-upload.service` (Task 5b): the host queues a `support` item in the upload queue beside the store item.
 
 pub mod host;
 pub mod identity;
 pub mod native_host;
+pub mod send;
 pub mod store;
 
 use std::ffi::OsString;
 use std::process::ExitCode;
-use std::time::Duration;
 
 use mastersos_bundle::ItemResult;
 use serde::Serialize;
 
 use crate::apply::ApplyContext;
-use crate::runner::{Cmd, Runner};
+use crate::runner::Runner;
 use crate::safefs;
 use crate::system::{failed, ok, public_dir, Env, Step};
 
@@ -37,28 +37,16 @@ pub const SUPPORT_JSON: &str = "support.json";
 pub const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 /// The largest screenshot (decoded PNG).
 pub const MAX_SCREENSHOT_BYTES: usize = 5 * 1024 * 1024;
-/// The oneshot unit that sends queued uploads (Task 4) and help requests (Task 5b).
+/// The oneshot unit that sends queued uploads (Task 4) and help requests (Task 5b): [`crate::upload::SERVICE`].
 pub const UPLOAD_UNIT: &str = "mastersos-upload.service";
 /// Report item of [`step`].
 pub const ITEM: &str = "support";
 
-const SYSTEMCTL_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// After a help request is queued: start the sender without waiting for it. Best effort: when it fails, the sender's
-/// timer and the network hook send the queue later.
-// Task 5b: the sender (`upload drain`) picks up the support queue; if 5b moves help requests into Task 4's upload
-// queue, this is still the one place that starts it.
+/// After a help request is queued (its `support` item is in the upload queue): start the sender without waiting for
+/// it, through [`crate::upload::kick`]. Best effort: when it fails, the sender's timer and the network hook send the
+/// queue later.
 pub fn kick_sender(runner: &dyn Runner) {
-    let cmd =
-        Cmd::new("systemctl", &["start", "--no-block", UPLOAD_UNIT]).timeout(SYSTEMCTL_TIMEOUT);
-    match runner.run(&cmd) {
-        Ok(o) if o.code == 0 => {}
-        Ok(o) => log::warn!(
-            "support: starting {UPLOAD_UNIT} failed (systemctl exit code {}); it is sent later",
-            o.code
-        ),
-        Err(e) => log::warn!("support: starting {UPLOAD_UNIT} failed: {e:#}; it is sent later"),
-    }
+    crate::upload::kick(runner);
 }
 
 /// `support.json`.

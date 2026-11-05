@@ -11,8 +11,12 @@
 //! - `ack`: a final inbox result (`done` / `failed`) whose send failed; retried on its own so a
 //!   finished upload is never uploaded again.
 //!
-//! Task 5 adds `support` (the help request itself). An item this version cannot read (a newer
-//! kind) is left alone.
+//! - `support`: a help request to send (Task 5b). The request itself, its state and its ticket
+//!   stay in the support store ([`crate::support::store`]); this item only says "send it" and
+//!   carries the retry state. Once the ticket is in, the drain collects the attachment into an
+//!   `archive` for [`Target::Ticket`] and this item goes.
+//!
+//! An item this version cannot read (a newer kind) is left alone.
 //!
 //! Every item carries its [`Retry`] state: exponential backoff from 1 minute up to 1 hour with
 //! jitter, or the server's `Retry-After`. A kick ([`Queue::mark_kicked`], NetworkManager reaching full
@@ -77,6 +81,13 @@ pub enum Job {
         seq: u64,
         state: InboxResultState,
         detail: String,
+    },
+    /// Send the help request `client_id` of the support store, then collect its attachment.
+    Support {
+        client_id: String,
+        /// Attachment collections started (like [`Job::Collect`]'s `tries`).
+        #[serde(default)]
+        tries: u32,
     },
 }
 
@@ -162,6 +173,7 @@ impl Item {
             Job::Collect { seq, .. } => collect_name(*seq),
             Job::Archive { target, .. } => archive_name(target),
             Job::Ack { seq, .. } => ack_name(*seq),
+            Job::Support { client_id, .. } => support_name(client_id),
         }
     }
 }
@@ -172,6 +184,10 @@ pub fn collect_name(seq: u64) -> String {
 
 pub fn ack_name(seq: u64) -> String {
     format!("ack-{seq}.json")
+}
+
+pub fn support_name(client_id: &str) -> String {
+    format!("support-{client_id}.json")
 }
 
 fn archive_stem(t: &Target) -> String {
@@ -368,6 +384,28 @@ impl Queue {
         ))
     }
 
+    /// Queues the help request `client_id` (a lowercase UUID: it names files) for sending;
+    /// nothing when it is already queued at any stage.
+    pub fn enqueue_support(&self, client_id: &str, now: DateTime<Utc>) -> Result<()> {
+        anyhow::ensure!(
+            mastersos_bundle::valid_school_id(client_id),
+            "not a client id: {client_id:?}"
+        );
+        let target = Target::Ticket {
+            client_id: client_id.to_string(),
+        };
+        if self.has(&support_name(client_id)) || self.has(&archive_name(&target)) {
+            return Ok(());
+        }
+        self.enqueue(&Item::new(
+            Job::Support {
+                client_id: client_id.to_string(),
+                tries: 0,
+            },
+            now,
+        ))
+    }
+
     /// Records a kick at `now` (NetworkManager reached full connectivity).
     pub fn mark_kicked(&self, now: DateTime<Utc>) -> Result<()> {
         let p = self.kick_path();
@@ -470,14 +508,34 @@ mod tests {
     }
 
     #[test]
+    fn support_items_round_trip() {
+        let (_d, q) = queue();
+        let id = "0192f3a4-5b6c-7d8e-9f00-112233445566";
+        let now = t("2026-11-05T08:00:00Z");
+        q.enqueue_support(id, now).unwrap();
+        q.enqueue_support(id, now).unwrap();
+        let items = q.list().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].name(), format!("support-{id}.json"));
+        assert_eq!(
+            items[0].job,
+            Job::Support {
+                client_id: id.into(),
+                tries: 0
+            }
+        );
+        assert!(q.enqueue_support("../x", now).is_err(), "names files");
+    }
+
+    #[test]
     fn unreadable_items_are_left_alone() {
         let (_d, q) = queue();
         q.ensure().unwrap();
-        std::fs::write(q.path("support-x.json"), r#"{"kind":"support"}"#).unwrap();
+        std::fs::write(q.path("later-x.json"), r#"{"kind":"later"}"#).unwrap();
         std::fs::write(q.path("collect-9.json"), "not json").unwrap();
         assert!(q.list().unwrap().is_empty());
         q.remove_orphans().unwrap();
-        assert!(q.path("support-x.json").exists(), "a newer kind is kept");
+        assert!(q.path("later-x.json").exists(), "a newer kind is kept");
         assert!(q.path("collect-9.json").exists());
     }
 

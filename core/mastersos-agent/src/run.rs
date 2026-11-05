@@ -1330,6 +1330,7 @@ impl Agent {
         }
         self.last_report = Instant::now();
         let r = self.status_report();
+        report::save_last(&self.cfg.state_dir, &r);
         let lab = crate::luks::image_is_lab(&self.cfg.root);
         let cred = self.device_cred();
         let sent = self.fetcher.report(&r, cred.as_ref(), lab).await;

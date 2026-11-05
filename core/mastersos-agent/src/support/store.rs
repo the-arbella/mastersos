@@ -1,8 +1,9 @@
 //! The local support queue (plan 2026-11-05 Task 5): `/var/lib/mastersos/support-queue/` (root 0700), one
 //! `<client_id>.json` (0600, an [`Item`]) per help request and its `<client_id>.png` (0600) when the student attached a
 //! screenshot, plus `rate.json` (0600), the submit times and uids of the last hour ([`SUPPORT_MAX_PER_HOUR`] per
-//! machine, [`MAX_PER_UID_PER_HOUR`] per uid). The queue holds at most [`MAX_QUEUE_ITEMS`] items or
-//! [`MAX_QUEUE_BYTES`]; when it is full new requests are refused, never queued ones dropped.
+//! machine, [`MAX_PER_UID_PER_HOUR`] per uid). The queue holds at most [`MAX_QUEUE_ITEMS`] unfinished items or
+//! [`MAX_QUEUE_BYTES`]; when it is full new requests are refused, never queued ones dropped. The sender
+//! ([`super::send`]) keeps finished items a week for `status`, then deletes them.
 //!
 //! Two processes write here: the support host (new items, the rate file) and the sender (Task 5b: ticket, state,
 //! attachment). Every read-modify-write holds [`Store::lock`] (`flock` on `.lock`), so the single-writer rule of
@@ -74,6 +75,15 @@ impl Item {
             attach_done: false,
         }
     }
+
+    /// Nothing left to send: the ticket and its attachment are in (or given up on), or the cloud refused it.
+    pub fn finished(&self) -> bool {
+        match self.state {
+            ItemState::Queued => false,
+            ItemState::Sent => self.attach_done,
+            ItemState::Failed | ItemState::Disabled => true,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -126,10 +136,12 @@ impl Store {
         self
     }
 
-    /// Whether the queue has room for one more item: fewer than its item limit, and its items and screenshots
-    /// together under its byte limit. Hold the lock.
+    /// Whether the queue has room for one more item: fewer unfinished items ([`Item::finished`]) than its item limit,
+    /// and all its items and screenshots together under its byte limit. Finished items stay a week for `status`
+    /// (Task 5b) and are small. Hold the lock.
     pub fn has_room(&self) -> Result<bool> {
         let d = self.open()?;
+        let finished = self.list()?.iter().filter(|i| i.finished()).count();
         let (mut items, mut bytes) = (0usize, 0u64);
         for name in safefs::list_at(&d)? {
             let Some(id) = name
@@ -149,7 +161,7 @@ impl Store {
                 .with_context(|| format!("checking {name}"))?;
             bytes = bytes.saturating_add(u64::try_from(st.st_size).unwrap_or(0));
         }
-        Ok(items < self.max_items && bytes < self.max_bytes)
+        Ok(items.saturating_sub(finished) < self.max_items && bytes < self.max_bytes)
     }
 
     pub fn dir(&self) -> &Path {

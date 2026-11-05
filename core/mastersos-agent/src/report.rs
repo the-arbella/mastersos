@@ -155,6 +155,34 @@ pub fn build(
     }
 }
 
+/// The latest report built, in the state directory (0600): help requests carry it in their
+/// snapshot (plan 2026-11-05 Task 5), and the sender is another process.
+pub const LAST_REPORT_FILE: &str = "last-status-report.json";
+
+/// Keeps `r` as the latest report. Best effort: a failure is logged.
+pub fn save_last(state_dir: &std::path::Path, r: &StatusReport) {
+    let save = || -> anyhow::Result<()> {
+        let fd = crate::state::ensure_state_dir(state_dir)?;
+        crate::safefs::write_at(&fd, LAST_REPORT_FILE, &serde_json::to_vec(r)?, 0o600)?;
+        Ok(())
+    };
+    if let Err(e) = save() {
+        log::warn!("keeping the latest status report failed: {e:#}");
+    }
+}
+
+/// The latest report kept by [`save_last`], if there is one of at most `max_bytes`.
+pub fn load_last(state_dir: &std::path::Path, max_bytes: u64) -> Option<StatusReport> {
+    use std::io::Read;
+    let f = std::fs::File::open(state_dir.join(LAST_REPORT_FILE)).ok()?;
+    let mut b = Vec::new();
+    f.take(max_bytes + 1).read_to_end(&mut b).ok()?;
+    if b.len() as u64 > max_bytes {
+        return None;
+    }
+    serde_json::from_slice(&b).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,5 +421,27 @@ mod tests {
         assert!(r.results[0].detail.as_ref().unwrap().len() <= MAX_DETAIL_BYTES + 3);
         assert!(r.results[199].detail.is_none());
         assert!(serde_json::to_vec(&r).unwrap().len() < 64 * 1024);
+    }
+
+    #[test]
+    fn latest_report_is_kept_privately() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        assert!(load_last(d.path(), 1 << 20).is_none());
+        let r = build(
+            &machine(),
+            &placement(),
+            &Freshness::default(),
+            vec![],
+            Utc::now(),
+        );
+        save_last(d.path(), &r);
+        assert_eq!(load_last(d.path(), 1 << 20), Some(r));
+        let mode = std::fs::metadata(d.path().join(LAST_REPORT_FILE))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert!(load_last(d.path(), 10).is_none(), "over the cap");
     }
 }

@@ -21,12 +21,14 @@ MemoryMax=64M
 # 16 connections, the runner's pipes, the queue: well under this
 LimitNOFILE=256
 
-# Hardening: it parses what any local user sends. It writes only its queue; it reads passwd entries (getent), logind
-# sessions (loginctl), /proc/<pid>/cgroup and support.json, and asks systemd to start the sender (systemctl over /run:
-# the read-only mounts do not stop it). No network.
+# Hardening: it parses what any local user sends. It writes only its queue and the sender's item for each request in
+# the upload queue (Task 5b); it reads passwd entries (getent), logind sessions (loginctl), /proc/<pid>/cgroup and
+# support.json, and asks systemd to start the sender (systemctl over /run: the read-only mounts do not stop it). No
+# network.
 PrivateTmp=yes
 ProtectSystem=strict
 StateDirectory=mastersos/support-queue
+StateDirectory=mastersos/upload-queue
 StateDirectoryMode=0700
 ProtectHome=yes
 PrivateDevices=yes

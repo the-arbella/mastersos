@@ -118,6 +118,7 @@ impl Rig {
     fn host(&self) -> Host {
         Host {
             store: Store::new(self.queue()),
+            upload: crate::upload::queue::Queue::new(&self.dir.path().join("state")),
             public_dir: self.public(),
             root: self.dir.path().to_path_buf(),
             os_release: self.dir.path().join("os-release"),
@@ -581,11 +582,13 @@ fn queue_survives_restart_and_reuses_client_id() {
     assert_eq!(r["state"], json!("queued"));
     let id = r["client_id"].as_str().unwrap().to_string();
     assert!(mastersos_bundle::valid_school_id(&id), "{id}");
-    // The sender was asked to run.
-    assert!(rig
-        .runner
-        .calls()
-        .contains(&"systemctl start --no-block mastersos-upload.service".to_string()));
+    // The sender has its item and was asked to run.
+    let upload = crate::upload::queue::Queue::new(&rig.dir.path().join("state"));
+    assert!(upload.has(&crate::upload::queue::support_name(&id)));
+    assert_eq!(UPLOAD_UNIT, crate::upload::SERVICE);
+    assert!(rig.runner.calls().contains(
+        &"systemctl --no-ask-password start --no-block mastersos-upload.service".to_string()
+    ));
 
     assert_eq!(mode(&rig.queue()), 0o700);
     assert_eq!(mode(&rig.queue().join(format!("{id}.json"))), 0o600);

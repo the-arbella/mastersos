@@ -1,6 +1,7 @@
 //! Talking to mastersos-server: fetch the bundle (`wait=0`, never a long poll), the signed
 //! heartbeat, status reports, recovery-key escrow, fetch-token renewal, push grants, the inbox and
-//! the diagnostics upload (`POST /v1/diagnostics`, the presigned S3 `PUT`, the complete call).
+//! the diagnostics upload (`POST /v1/diagnostics`, the presigned S3 `PUT`, the complete call) and
+//! help requests (`POST /v1/support`).
 //!
 //! agent 的 HTTP 客户端只在这里构造（Ruling 27 m6）：跟随重定向的一律经 [`http_client`]
 //! （带 [`no_downgrade_redirects`]），托管与换领令牌经 [`no_redirect_client`]（不跟随）。
@@ -14,6 +15,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use mastersos_bundle::archive::MAX_BUNDLE_BYTES;
 use mastersos_bundle::diag::{
     error_action, ApiError, DiagUploadRequest, DiagUploadResponse, ErrorAction, PresignedUpload,
+    SupportRequest, SupportResponse,
 };
 use mastersos_bundle::{
     FetchTokenRequest, FetchTokenResponse, InboxPage, InboxResult, PushTokenRequest,
@@ -759,6 +761,60 @@ impl Fetcher {
         }
         Err(e)
     }
+
+    /// `POST /v1/support` with the device headers (plan 2026-11-05 Task 5): `200` / `201` →
+    /// [`SupportResponse`] (the same `client_id` always gets the same ticket). Any other answer is
+    /// a [`DiagUploadError`] with the [`error_action`] of its status and error code (its detail
+    /// names this step, not an upload). A request the device secret may not travel with (http on
+    /// a release image) is kept and backed off, not dropped: it is the student's request.
+    pub async fn support(
+        &self,
+        cred: &DeviceCred,
+        r: &SupportRequest,
+        lab: bool,
+    ) -> std::result::Result<SupportResponse, DiagUploadError> {
+        const STEP: &str = "POST /v1/support";
+        if let Err(e) = r.validate() {
+            return Err(DiagUploadError::new(
+                ErrorAction::Drop,
+                format!("{STEP}: invalid request: {e}"),
+            ));
+        }
+        let used = self.current_token();
+        let req = self
+            .device_request(reqwest::Method::POST, "/v1/support", cred, &used, lab)
+            .map_err(|e| DiagUploadError::new(ErrorAction::Backoff, format!("{STEP}: {e}")))?;
+        let resp = req.json(r).send().await.map_err(|e| net_error(STEP, e))?;
+        self.observe(&resp, &used);
+        let status = resp.status();
+        if !(status == StatusCode::OK || status == StatusCode::CREATED) {
+            return Err(api_failure(STEP, resp).await);
+        }
+        let body = read_capped(resp, MAX_DIAG_BODY_BYTES)
+            .await
+            .map_err(|why| DiagUploadError::new(ErrorAction::Backoff, format!("{STEP}: {why}")))?;
+        let a: SupportResponse = serde_json::from_slice(&body).map_err(|_| {
+            DiagUploadError::new(
+                ErrorAction::Backoff,
+                format!("{STEP}: the answer is not valid JSON of the expected shape"),
+            )
+        })?;
+        if !valid_ticket(&a.ticket) {
+            return Err(DiagUploadError::new(
+                ErrorAction::Backoff,
+                format!("{STEP}: the answer's ticket is not a plain identifier"),
+            ));
+        }
+        Ok(a)
+    }
+}
+
+/// A ticket is shown to the student ("Ticket #1042"): letters, digits, `-` and `_`, at most 32.
+fn valid_ticket(t: &str) -> bool {
+    !t.is_empty()
+        && t.len() <= 32
+        && t.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 /// The client of the presigned diagnostics `PUT`: never follows a redirect, [`DIAG_PUT_TIMEOUT`].
