@@ -776,7 +776,8 @@ if [ "$(grep -c '^ReadWritePaths=' "$svc" 2>/dev/null)" != 1 ] || grep -q '^\[In
 	bad 17 "$svc 只许一行 ReadWritePaths=（它的状态目录），也不许有 [Install]（由 D-Bus 激活）"
 	r=1
 fi
-# 骨架配置不带身份系统（issuer 由 agent 写进 broker.conf.d），allowed_users = ALL（域名限制在 pam-check）
+# The skeleton has no identity provider (the agent writes issuer into broker.conf.d) and allowed_users = ALL (the
+# agent's drop-in adds the school's domains, patch 0006, and pam-check checks them again)
 bc=$ex/etc/authd/oidc/broker.conf
 if grep -qE '^[[:space:]]*(issuer|client_id|client_secret)[[:space:]]*=' "$bc" 2>/dev/null ||
 	! grep -qxF 'allowed_users = ALL' "$bc" 2>/dev/null; then

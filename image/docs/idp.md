@@ -29,7 +29,17 @@ MastersOS 只认标准 OIDC，判断账号一律看 `email`，不写任何一家
 
 用户名是全小写的邮箱；`admin_users`、`pam-check` 都按小写比。
 
-域名限制不靠 authd：broker 配置是 `allowed_users = ALL`（authd 只认完整的用户名，不认 `*@school`），只许本校域名、只许哪几种登录方式由 PAM 里的 `mastersos-agent pam-check` 决定（spec §6.10 S1）。身份系统一侧也限制（例如 Zitadel 的项目授权）会更干净，两边都做。
+域名限制在 broker 里做，`pam-check` 再查一遍：
+
+- **为什么不能只靠 `pam-check`**：authd 在 broker 回 granted 的那一刻就把用户写进自己的数据库（用户名、uid、组），这发生在 PAM 的 account 阶段之前。`pam-check` 拒绝之后这条记录仍然留在机器上（20261105.15 实测：私人账号、别校账号都拿到了 uid）。
+- **做法**：broker 的补丁 `0006-allowed-domains.patch` 给 `[users]` 加了 `allowed_domains`。agent 按学校的 `[school] allowed_domains` 写 drop-in：`allowed_users = ALL, <每个管理员>`、`allowed_domains = <每个域名>`。有这个键时，只有点名的用户（`admin_users`，可以是别的域名）和这几个域名下的账号能通过；其他账号在 broker 回 granted 之前就被拒绝（`Authentication failure: user not allowed in broker configuration`），authd 不建用户、broker 也不留 token。`allowed_domains` 为空时照旧是 `allowed_users = ALL`。
+- **没有选的办法**：authd-oidc 原生的 `allowed_users` 只认完整的用户名，不认 `*@school`；被拒之后再用 authd 的工具（`authctl`）删记录，要在 PAM 拒绝的路径上以 root 再调一个命令，它失败、超时或机器在中途断电都会留下记录，而且 uid 已经分出去了；authd 自己没有按域名过滤的设置。拒绝在授权之前发生，才不会留下任何东西。
+- 不合规的域名与管理员名不写进 drop-in。域名全都不合规时只放管理员；也没有管理员时不写 drop-in（没有学校账号的入口），`login` 回报失败，免得空的 `allowed_users` 落回 broker 默认的 OWNER。
+- 域名或管理员名单变了，drop-in 跟着变，agent 重启 broker 与 authd（broker 只在启动时读配置）。
+- 升级前已经被拒、留在 authd 数据库里的记录不会自动删掉。
+- **回滚**：旧镜像的 broker 不认得 `allowed_domains`，读到这个键会拒绝启动；旧版 agent 的 `login` 步骤重写 drop-in 之后恢复（之前学校账号登录不了，访客和本机账号不受影响）。
+
+只许哪几种登录方式、锁定、管理员豁免仍由 PAM 里的 `mastersos-agent pam-check` 决定（spec §6.10 S1）。身份系统一侧也限制（例如 Zitadel 的项目授权）会更干净，两边都做。
 
 `admin_users` 里的管理员（Task 10 的 `pam-check`）：
 
@@ -149,7 +159,7 @@ Kanidm 的 `authsession_expiry`、`oauth2_refresh_token_expiry`、Dex 的 `expir
 
 ## broker 的补丁
 
-MastersOS 带五个补丁（`patches/authd-oidc/`，按文件名顺序打）。
+MastersOS 带六个补丁（`patches/authd-oidc/`，按文件名顺序打）。
 
 | 补丁 | 内容 | 现状 |
 |---|---|---|
@@ -158,6 +168,7 @@ MastersOS 带五个补丁（`patches/authd-oidc/`，按文件名顺序打）。
 | `0003-authorization-code-on-greeter.patch` | `MASTERSOS_AUTH_CODE=1` 时设备码的两个登录方式改走授权码 + PKCE，回调到 `127.0.0.1:48123`（只监听回环；校验 `state`；同时只有一个流程，新的顶掉旧的），带 `login_hint=<邮箱>`。方式的 id 不变；UI 层仍是 `qrcode`，`content` 是授权地址、`code` 为空 | 卡片的基础 |
 | `0004-card-only-login.patch` | 见下 | 卡片的基础 |
 | `0005-follow-reselected-sign-in.patch` | 同一会话再次选登录方式时，新流程接替旧流程：已经在等旧流程的 `IsAuthenticated` 改等新流程（用新流程的 PKCE verifier 换令牌）；被取消的等待不关掉它跟过去的新流程 | 修重新登录卡在「Signed in. Starting your session…」：authd 0.6.1 的 PAM 模块在 GDM 回显自己的选择时会再选一次（canonical/authd#1121，authd 0.7.0 修了），`IsAuthenticated` 落在两次选择之间就会一直等已关掉的旧监听，而卡片里的页面回调到新监听（VM 123，2026-11-05）。自带测试 `TestMastersOSAuthCodeWaitFollowsHandOver`、`TestMastersOSAuthCodeCancelledFollowerKeepsNewFlow`、`TestMastersOSAuthCodeHandOverOfNothing`、`TestMastersOSReselectedSignInIsFollowed`、`TestMastersOSCancelledWaitLeavesNewSignIn`。authd 升到带 #1623 的版本后仍无害 |
+| `0006-allowed-domains.patch` | `[users]` 新键 `allowed_domains`（逗号分隔、不分大小写）：有它时只有 `allowed_users` 里点名的用户（不分大小写）和用户名最后一个 `@` 之后正好是其中之一的账号能通过，`ALL`、`OWNER` 只对通过的人生效；没有这个键或为空时与上游一样。上游 `TestParseConfig` 的 golden 不含这个字段 | 别的域名的账号在授权之前被拒，authd 不建用户（见上面的「域名限制」）。自带测试 `TestMastersOSAllowedDomainsLimitAllUsers`、`TestMastersOSNoAllowedDomainsKeepsAll`、`TestMastersOSAllowedDomainsWithoutAll`、`TestMastersOSAllowedDomainsSurviveClone`、`TestMastersOSOtherDomainIsDeniedBeforeGrant`、`TestMastersOSSchoolDomainIsGranted` |
 
 `0004` 在 `MASTERSOS_AUTH_CODE=1` 时生效：
 
@@ -203,7 +214,7 @@ MastersOS 带五个补丁（`patches/authd-oidc/`，按文件名顺序打）。
 - **需要网页认证的网络**（酒店、机场）：登录页的 Chrome 打不开认证页，只能进 Guest 完成认证后再回来登录。
 - **被停用的账号**下一次登录时被身份系统拒绝。已经开着的会话不会被踢出；挂失的机器用设置里的锁定（Ruling 11），不靠身份系统。
 - **没有本机密码**：`passwd`、GNOME 设置都改不了学校账号的密码，改密码在学校的系统里做。
-- 被 PAM 拒掉的人（别校域名、方式不允许）仍会在 authd 的数据库里留下一条记录（S1）。
+- 别的域名的账号由 broker 在授权之前拒绝，不留记录（补丁 0006）。只在 PAM 里被拒的人（锁定的机器上不是管理员的本校账号）仍会在 authd 的数据库里留下一条记录（S1）。
 
 ## 镜像里的东西
 
