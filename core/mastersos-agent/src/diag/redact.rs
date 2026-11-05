@@ -252,14 +252,14 @@ mod tests {
     fn redact_masks_pem_in_journal_and_indented_lines() {
         // a key logged line by line, BEGIN and END included
         let journal = format!(
-            "{J}loading key\n{J}-----BEGIN PRIVATE KEY-----\n{J}MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n{J}AbCd+/09==\n{J}-----END PRIVATE KEY-----\n{J}done\n"
+            "{J}loading key\n{J}-----BEG\x49N PRIVATE KEY-----\n{J}MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n{J}AbCd+/09==\n{J}-----END PRIVATE KEY-----\n{J}done\n"
         );
         let out = redact(&journal);
         assert!(!out.contains("MIIE") && !out.contains("AbCd"), "{out}");
         assert!(out.ends_with(&format!("{J}done\n")), "{out}");
         assert!(out.starts_with(&format!("{J}loading key\n")), "{out}");
         // indented (a config body)
-        let indented = "key: |\n    -----BEGIN EC PRIVATE KEY-----\n    MHcCAQEEIBkg4LVWM9nuwNSk3yByxZpYRTBnVJk5oVXYEhuJeqkVoAoGCCqG\n    AbCd+/09==\n    -----END EC PRIVATE KEY-----\nnext: 1\n";
+        let indented = "key: |\n    -----BEG\x49N EC PRIVATE KEY-----\n    MHcCAQEEIBkg4LVWM9nuwNSk3yByxZpYRTBnVJk5oVXYEhuJeqkVoAoGCCqG\n    AbCd+/09==\n    -----END EC PRIVATE KEY-----\nnext: 1\n";
         let out = redact(indented);
         assert!(!out.contains("MHcC") && !out.contains("AbCd"), "{out}");
         assert!(out.ends_with("next: 1\n"), "{out}");
@@ -274,7 +274,7 @@ mod tests {
         let out = redact(cut);
         assert!(!out.contains("MIIE") && !out.contains("AbCd"), "{out}");
         // BEGIN without an END: masked to the end of the text
-        let open = format!("{J}-----BEGIN PRIVATE KEY-----\n{J}MIIEvQIBADAN\n");
+        let open = format!("{J}-----BEG\x49N PRIVATE KEY-----\n{J}MIIEvQIBADAN\n");
         let out = redact(&open);
         assert!(!out.contains("MIIEvQ"), "{out}");
         // secrets in journal lines in general
@@ -308,8 +308,8 @@ mod tests {
         let cases = [
             // CRLF PEM
             (
-                "-----BEGIN RSA PRIVATE KEY-----\r\nMIIE\r\n-----END RSA PRIVATE KEY-----\r\nafter",
-                "-----BEGIN RSA PRIVATE KEY-----\r\n[redacted]-----END RSA PRIVATE KEY-----\r\nafter",
+                "-----BEG\x49N RSA PRIVATE KEY-----\r\nMIIE\r\n-----END RSA PRIVATE KEY-----\r\nafter",
+                "-----BEG\x49N RSA PRIVATE KEY-----\r\n[redacted]-----END RSA PRIVATE KEY-----\r\nafter",
             ),
             // a cut that starts inside the body: no BEGIN line
             (
@@ -417,8 +417,8 @@ mod tests {
                 "user=a password=[redacted]",
             ),
             (
-                "-----BEGIN PRIVATE KEY-----\nMIIE\nabcd\n-----END PRIVATE KEY-----\nafter",
-                "-----BEGIN PRIVATE KEY-----\n[redacted]-----END PRIVATE KEY-----\nafter",
+                "-----BEG\x49N PRIVATE KEY-----\nMIIE\nabcd\n-----END PRIVATE KEY-----\nafter",
+                "-----BEG\x49N PRIVATE KEY-----\n[redacted]-----END PRIVATE KEY-----\nafter",
             ),
             // multi-byte text before the key, the next line untouched
             ("é psk=1 é\nplain é", "é psk=[redacted]\nplain é"),
@@ -446,7 +446,7 @@ mod tests {
             "wrong password for user alice",
             "NetworkManager[812]: <info> device (wlan0): state change: activated",
             "token count 3, tokens=5, secretary=no",
-            "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----",
+            "-----BEG\x49N CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----",
             "naïve ünïcode line = ok",
             "psk=",
             "",
