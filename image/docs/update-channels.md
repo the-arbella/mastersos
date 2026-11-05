@@ -141,6 +141,9 @@ part of it that it changes from the S3 mirror (`image/ci-publish.sh`), checks it
   only by this repository's `release` environment. The bucket, distribution id and role ARN are secrets of that environment
   (`MASTERSOS_OS_BUCKET`, `MASTERSOS_OS_CDN`, `MASTERSOS_OS_PUBLISH_ROLE`); `sync-s3.sh` uses the environment's
   credentials when `MASTERSOS_AWS_PROFILE` is set to the empty string.
+- **Build a commit that does not itself change `.github/workflows/`**: GitHub refuses `GITHUB_TOKEN` creating a tag (the
+  GitHub Release) on such a commit (`HTTP 403: Resource not accessible by integration`, run 42053544318). After a workflow
+  change, build the next commit on master instead.
 - The usual flow: build (lands in beta) → machines on beta update and report healthy → `mastersos-promote` with that
   version. The version rules above still hold: never publish to beta a version that will not be promoted while a later
   stable version would be lower.
