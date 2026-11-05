@@ -10,8 +10,11 @@
 //! starts is masked instead. Prose where the word is not
 //! followed by `=` or `:` ("wrong password for user") stays as it is.
 //!
-//! Also masked to the end of the line: whatever follows `Bearer `; and the body of PEM private
-//! key blocks.
+//! Also masked to the end of the line: whatever follows `Bearer `, and the value after a
+//! space-separated `--password`, `--passphrase`, `--psk`, `--secret` or `--token` flag. Masked
+//! too: the userinfo of a URL (`scheme://user:pass@host` → `scheme://[redacted]@host`), the
+//! body of PEM private key blocks, and the base64 lines right above an `-----END … PRIVATE
+//! KEY-----` line even without its BEGIN line (output cut for size may start inside a key).
 
 use std::borrow::Cow;
 
@@ -42,6 +45,8 @@ const KEYS: &[&str] = &[
 const PEM_BEGIN: &str = "-----begin ";
 const PEM_PRIVATE: &str = "private key-----";
 const PEM_END: &str = "-----end ";
+/// Flags whose value is the next argument (`--password x`).
+const FLAGS: &[&str] = &["--password", "--passphrase", "--psk", "--secret", "--token"];
 
 /// `text` with every secret value replaced by [`MASK`]; borrowed when nothing matched.
 pub fn redact(text: &str) -> Cow<'_, str> {
@@ -62,7 +67,18 @@ pub fn redact(text: &str) -> Cow<'_, str> {
             spans.push((s, line_end(b, s)));
         }
     }
+    for flag in FLAGS {
+        for (at, _) in lower.match_indices(flag) {
+            let i = at + flag.len();
+            let s = skip_blanks(b, i);
+            if s > i && s < b.len() && b[s] != b'\n' && b[s] != b'\r' {
+                spans.push((s, line_end(b, s)));
+            }
+        }
+    }
+    userinfo(b, &mut spans);
     pem_blocks(&lower, &mut spans);
+    pem_tails(&lower, &mut spans);
     spans.retain(|(s, e)| e > s);
     if spans.is_empty() {
         return Cow::Borrowed(text);
@@ -133,7 +149,10 @@ fn pem_blocks(lower: &str, spans: &mut Vec<(usize, usize)>) {
     while let Some(at) = lower[from..].find(PEM_BEGIN) {
         let begin = from + at;
         let line_end = lower[begin..].find('\n').map_or(lower.len(), |n| begin + n);
-        if !lower[begin..line_end].ends_with(PEM_PRIVATE) {
+        if !lower[begin..line_end]
+            .trim_end_matches('\r')
+            .ends_with(PEM_PRIVATE)
+        {
             from = begin + PEM_BEGIN.len();
             continue;
         }
@@ -148,9 +167,112 @@ fn pem_blocks(lower: &str, spans: &mut Vec<(usize, usize)>) {
     }
 }
 
+/// `scheme://userinfo@`: the userinfo (up to the first `@` before any `/`, `?`, `#` or blank).
+fn userinfo(b: &[u8], spans: &mut Vec<(usize, usize)>) {
+    let mut from = 0;
+    while let Some(at) = b[from..].windows(3).position(|w| w == b"://") {
+        let s = from + at + 3;
+        let mut e = s;
+        while e < b.len()
+            && !matches!(
+                b[e],
+                b'/' | b'?' | b'#' | b'@' | b' ' | b'\t' | b'\r' | b'\n'
+            )
+        {
+            e += 1;
+        }
+        if e < b.len() && b[e] == b'@' && e > s {
+            spans.push((s, e));
+        }
+        from = s;
+    }
+}
+
+/// Base64 lines right above every `-----END … PRIVATE KEY-----` line (a block whose BEGIN line
+/// is missing): from the first of them to the END line.
+fn pem_tails(lower: &str, spans: &mut Vec<(usize, usize)>) {
+    let b = lower.as_bytes();
+    let mut from = 0;
+    while let Some(at) = lower[from..].find(PEM_END) {
+        let end = from + at;
+        from = end + PEM_END.len();
+        let eol = lower[end..].find('\n').map_or(lower.len(), |n| end + n);
+        let is_line_start = end == 0 || b[end - 1] == b'\n';
+        if !is_line_start
+            || !lower[end..eol]
+                .trim_end_matches('\r')
+                .ends_with(PEM_PRIVATE)
+        {
+            continue;
+        }
+        let mut start = end;
+        while start > 0 {
+            // the line before `start`
+            let prev_end = start - 1;
+            let prev_start = lower[..prev_end].rfind('\n').map_or(0, |n| n + 1);
+            let line = lower[prev_start..prev_end].trim_end_matches('\r');
+            let base64 = !line.is_empty()
+                && line
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'/' | b'='));
+            if !base64 {
+                break;
+            }
+            start = prev_start;
+        }
+        if start < end {
+            spans.push((start, end));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redact_masks_pem_userinfo_and_flags() {
+        let cases = [
+            // CRLF PEM
+            (
+                "-----BEGIN RSA PRIVATE KEY-----\r\nMIIE\r\n-----END RSA PRIVATE KEY-----\r\nafter",
+                "-----BEGIN RSA PRIVATE KEY-----\r\n[redacted]-----END RSA PRIVATE KEY-----\r\nafter",
+            ),
+            // a cut that starts inside the body: no BEGIN line
+            (
+                "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC\nBKcwggSjAgEAAoIBAQC7\n-----END PRIVATE KEY-----\nafter",
+                "[redacted]-----END PRIVATE KEY-----\nafter",
+            ),
+            (
+                "log line: ok\nAbCd+/09==\r\n-----END EC PRIVATE KEY-----\r\n",
+                "log line: ok\n[redacted]-----END EC PRIVATE KEY-----\r\n",
+            ),
+            // URL userinfo
+            (
+                "fetching https://ana:hunter2@example.org/x ok",
+                "fetching https://[redacted]@example.org/x ok",
+            ),
+            ("git remote ssh://deploy@host/repo", "git remote ssh://[redacted]@host/repo"),
+            // space-separated flags
+            ("nmcli --password hunter2 rest", "nmcli --password [redacted]"),
+            ("x --PSK  abc", "x --PSK  [redacted]"),
+            ("cli --token t --secret s", "cli --token [redacted]"),
+            ("cli --passphrase 'a b'", "cli --passphrase [redacted]"),
+            ("cli --secret\tv", "cli --secret\t[redacted]"),
+        ];
+        for (input, want) in cases {
+            assert_eq!(redact(input), want, "{input}");
+        }
+        for plain in [
+            "see https://example.org/a@b and mail ana@example.org",
+            "cli --password-file /run/x",
+            "cli --token",
+            "-----END CERTIFICATE-----",
+            "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END CERTIFICATE-----",
+        ] {
+            assert!(matches!(redact(plain), Cow::Borrowed(_)), "{plain}");
+        }
+    }
 
     #[test]
     fn redact_masks_secrets() {

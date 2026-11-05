@@ -38,6 +38,8 @@ pub const QUEUE_DIR: &str = "upload-queue";
 pub const KICK_FILE: &str = "upload-kick";
 /// The whole queue (items and archives) stays at or below this; the oldest archives go first.
 pub const MAX_QUEUE_BYTES: u64 = 100 * 1024 * 1024;
+/// A temporary file (dot name) older than this is a leftover of a crash.
+pub const TMP_LEFTOVER_AGE: Duration = Duration::from_secs(10 * 60);
 /// The first wait after a failure.
 pub const BACKOFF_START: Duration = Duration::from_secs(60);
 /// The longest wait between two tries (before the jitter).
@@ -321,7 +323,17 @@ impl Queue {
             _ => None,
         }));
         for name in safefs::list_at(&dir)? {
-            let ours = name.starts_with('.') || name.ends_with(".tar.zst");
+            // Temporary files may belong to a writer at work right now (the agent queues items
+            // while a drain runs): only old ones are leftovers.
+            let ours = if name.starts_with('.') {
+                safefs::mtime_at(&dir, &name)
+                    .ok()
+                    .flatten()
+                    .and_then(|t| t.elapsed().ok())
+                    .is_some_and(|age| age >= TMP_LEFTOVER_AGE)
+            } else {
+                name.ends_with(".tar.zst")
+            };
             if ours && !keep.contains(&name) {
                 log::info!("upload queue: removing the leftover {name}");
                 safefs::remove_at(&dir, &name)?;
@@ -475,6 +487,12 @@ mod tests {
         archive(&q, 1, 10, "2026-11-05T08:00:00Z");
         std::fs::write(q.path("diag-20261105T080000Z.tar.zst"), b"x").unwrap();
         std::fs::write(q.path(".diag-x.tar.zst.tmp"), b"x").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(q.path(".diag-x.tar.zst.tmp"))
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - Duration::from_secs(3600))
+            .unwrap();
         q.remove_orphans().unwrap();
         let mut names: Vec<String> = std::fs::read_dir(q.dir())
             .unwrap()
@@ -482,6 +500,24 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, ["archive-inbox-1.json", "archive-inbox-1.tar.zst"]);
+    }
+
+    /// A temporary file the agent is writing right now (safefs: create, then rename) is not
+    /// touched; one left from a crash long ago is.
+    #[test]
+    fn fresh_temporary_files_are_kept() {
+        let (_d, q) = queue();
+        q.ensure().unwrap();
+        let fresh = q.path(".collect-4.json.mastersos-tmp");
+        std::fs::write(&fresh, b"{").unwrap();
+        let old = q.path(".collect-3.json.mastersos-tmp");
+        std::fs::write(&old, b"{").unwrap();
+        let f = std::fs::File::options().write(true).open(&old).unwrap();
+        f.set_modified(std::time::SystemTime::now() - Duration::from_secs(11 * 60))
+            .unwrap();
+        q.remove_orphans().unwrap();
+        assert!(fresh.exists(), "being written");
+        assert!(!old.exists(), "left over");
     }
 
     #[test]

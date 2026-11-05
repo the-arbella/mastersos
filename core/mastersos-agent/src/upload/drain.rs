@@ -82,6 +82,9 @@ pub struct Pass {
     pub remaining: usize,
     /// The earliest time a waiting item is due (items held for power not counted).
     pub next_due: Option<DateTime<Utc>>,
+    /// An item that was not there when the pass started is due now: queued while the pass
+    /// ran, when `systemctl start` of the running service did nothing. Run another pass.
+    pub fresh: bool,
 }
 
 /// One pass over the queue (see the module docs).
@@ -102,6 +105,7 @@ pub async fn drain_once(cx: &DrainCtx<'_>) -> Pass {
             return Pass::default();
         }
     };
+    let seen: Vec<String> = items.iter().map(Item::name).collect();
     // A collect item beside the archive or ack of its command: a run was killed between writing
     // the archive and removing the collect item. Dropped first, so that finishing the archive
     // in this pass does not make it look like it still needs collecting.
@@ -127,9 +131,14 @@ pub async fn drain_once(cx: &DrainCtx<'_>) -> Pass {
         .filter(|i| !(low && needs_power(i)))
         .filter_map(|i| i.retry.not_before.filter(|t| *t > now))
         .min();
+    let kicked = cx.queue.kicked_at();
+    let fresh = rest
+        .iter()
+        .any(|i| !seen.contains(&i.name()) && !(low && needs_power(i)) && i.retry.due(now, kicked));
     Pass {
         remaining: rest.len(),
         next_due,
+        fresh,
     }
 }
 
@@ -139,6 +148,9 @@ pub async fn drain(cx: &DrainCtx<'_>) {
     let started = Instant::now();
     loop {
         let pass = drain_once(cx).await;
+        if pass.fresh {
+            continue;
+        }
         let Some(next) = pass.next_due else {
             return;
         };
@@ -502,6 +514,10 @@ pub fn low_battery(root: &Path) -> bool {
     let mut caps = vec![];
     for e in rd.filter_map(|e| e.ok()) {
         let p = e.path();
+        // A mouse's or keyboard's own battery is not the computer's.
+        if read(&p, "scope").trim() == "Device" {
+            continue;
+        }
         if read(&p, "type").trim() == "Battery" {
             if matches!(read(&p, "status").trim(), "Charging" | "Full") {
                 return false;

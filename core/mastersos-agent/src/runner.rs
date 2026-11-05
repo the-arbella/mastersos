@@ -20,8 +20,18 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 /// After the timeout, SIGTERM first; still running after this long, SIGKILL.
 pub(crate) const TERM_GRACE: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(50);
-/// At most this much of a command's stdout / stderr is kept (the beginning of anything longer is dropped).
-const MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
+/// At most this much of a command's stdout / stderr is kept (the beginning of anything longer is dropped); a command can
+/// ask for more stdout ([`Cmd::max_output`]).
+pub const MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
+/// The first line of a stdout whose beginning was dropped ([`RealRunner`]); the cut is made at a line start, so the
+/// next line is whole. See [`was_cut`].
+pub const CUT_MARKER: &str =
+    "[mastersos: the beginning of this output was left out: over the size limit]\n";
+
+/// Whether the beginning of `stdout` was dropped for size.
+pub fn was_cut(stdout: &str) -> bool {
+    stdout.starts_with(CUT_MARKER)
+}
 /// After the command exits, wait at most this long for its output pipes to reach EOF (stop waiting when a background process keeps them open).
 const OUTPUT_GRACE: Duration = Duration::from_secs(2);
 /// stdin up to this size is written straight into the pipe (the buffer holds it); larger stdin is written by a separate thread.
@@ -34,6 +44,8 @@ pub struct Cmd {
     pub args: Vec<String>,
     pub stdin: Option<Vec<u8>>,
     pub timeout: Duration,
+    /// At most this much stdout is kept ([`MAX_OUTPUT_BYTES`] by default).
+    pub max_output: usize,
 }
 
 impl Cmd {
@@ -44,7 +56,14 @@ impl Cmd {
             args: args.iter().map(|a| a.to_string()).collect(),
             stdin: None,
             timeout: DEFAULT_TIMEOUT,
+            max_output: MAX_OUTPUT_BYTES,
         }
+    }
+
+    /// Keep up to `bytes` of stdout instead of [`MAX_OUTPUT_BYTES`].
+    pub fn max_output(mut self, bytes: usize) -> Cmd {
+        self.max_output = bytes;
+        self
     }
 
     pub fn stdin(mut self, b: Vec<u8>) -> Cmd {
@@ -162,7 +181,7 @@ impl Runner for RealRunner {
             c.spawn()
                 .with_context(|| format!("{} could not be started", cmd.program))?
         };
-        let out = capture(out_r, MAX_OUTPUT_BYTES);
+        let out = capture(out_r, cmd.max_output);
         let err = capture(err_r, MAX_OUTPUT_BYTES);
         if let (Some(bytes), Some(mut w)) = (cmd.stdin.as_ref(), child.stdin.take()) {
             if bytes.len() <= INLINE_STDIN_BYTES {
@@ -186,7 +205,7 @@ impl Runner for RealRunner {
         };
         Ok(Output {
             code: exit_code(st),
-            stdout: out.finish(),
+            stdout: out.finish_marked(),
             stderr: err.finish(),
         })
     }
@@ -196,12 +215,16 @@ impl Runner for RealRunner {
 pub(crate) struct Capture {
     buf: Arc<Mutex<Vec<u8>>>,
     done: mpsc::Receiver<()>,
+    /// The beginning was dropped.
+    cut: Arc<std::sync::atomic::AtomicBool>,
 }
 
 pub(crate) fn capture(mut r: PipeReader, cap: usize) -> Capture {
     let buf = Arc::new(Mutex::new(Vec::new()));
+    let cut = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let (tx, done) = mpsc::channel();
     let b = buf.clone();
+    let c = cut.clone();
     std::thread::spawn(move || {
         let mut chunk = [0u8; 8192];
         loop {
@@ -213,13 +236,14 @@ pub(crate) fn capture(mut r: PipeReader, cap: usize) -> Capture {
                     if g.len() > cap {
                         let cut = g.len() - cap;
                         g.drain(..cut);
+                        c.store(true, std::sync::atomic::Ordering::SeqCst);
                     }
                 }
             }
         }
         let _ = tx.send(());
     });
-    Capture { buf, done }
+    Capture { buf, done, cut }
 }
 
 impl Capture {
@@ -228,6 +252,18 @@ impl Capture {
         let _ = self.done.recv_timeout(OUTPUT_GRACE);
         let g = self.buf.lock().unwrap_or_else(|e| e.into_inner());
         String::from_utf8_lossy(&g).into_owned()
+    }
+
+    /// Like [`Capture::finish`]; when the beginning was dropped, the partial first line goes too and the text starts
+    /// with [`CUT_MARKER`].
+    pub(crate) fn finish_marked(self) -> String {
+        let cut = self.cut.clone();
+        let text = self.finish();
+        if !cut.load(std::sync::atomic::Ordering::SeqCst) {
+            return text;
+        }
+        let rest = text.find('\n').map_or("", |i| &text[i + 1..]);
+        format!("{CUT_MARKER}{rest}")
     }
 }
 
@@ -449,6 +485,32 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(format!("{e:#}"), "systemd-cryptenroll exited with 1");
+    }
+
+    /// Over the cap: the beginning goes, the cut is marked and lands on a line start.
+    #[test]
+    fn real_runner_marks_a_cut_stdout() {
+        let out = RealRunner
+            .run(
+                &Cmd::new(
+                    "sh",
+                    &[
+                        "-c",
+                        "i=0; while [ $i -lt 5000 ]; do echo line-$i; i=$((i+1)); done",
+                    ],
+                )
+                .max_output(10_000),
+            )
+            .unwrap();
+        assert!(was_cut(&out.stdout), "{}", &out.stdout[..80]);
+        let rest = &out.stdout[CUT_MARKER.len()..];
+        assert!(rest.len() <= 10_000);
+        assert!(rest.starts_with("line-"), "{}", &rest[..20]);
+        assert!(rest.ends_with("line-4999\n"));
+        // Under the cap: untouched.
+        let out = RealRunner.run(&Cmd::new("echo", &["short"])).unwrap();
+        assert_eq!(out.stdout, "short\n");
+        assert!(!was_cut(&out.stdout));
     }
 
     #[test]

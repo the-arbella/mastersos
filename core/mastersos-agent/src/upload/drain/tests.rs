@@ -67,6 +67,8 @@ struct Spy {
     inner: FakeRunner,
     marker_at_journal: Mutex<Option<Option<DateTime<Utc>>>>,
     paths: SysPaths,
+    /// Run once, at the first `journalctl` (something happening while a drain is mid-pass).
+    on_journal: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 impl Runner for Spy {
@@ -75,6 +77,10 @@ impl Runner for Spy {
             let mut m = self.marker_at_journal.lock().unwrap();
             if m.is_none() {
                 *m = Some(crate::status::collecting_until(&self.paths));
+            }
+            let hook = self.on_journal.lock().unwrap().take();
+            if let Some(f) = hook {
+                f();
             }
         }
         self.inner.run(cmd)
@@ -90,6 +96,7 @@ fn spy(m: &Machine) -> Arc<Spy> {
         inner,
         marker_at_journal: Mutex::new(None),
         paths: m.paths(),
+        on_journal: Mutex::new(None),
     })
 }
 
@@ -627,4 +634,61 @@ async fn queue_over_cap_drops_oldest_archive() {
         [(1, InboxResultState::Failed, DETAIL_QUEUE_FULL.to_string())]
     );
     assert!(m.queue.has(&archive_name(&Target::Inbox { seq: 2 })));
+}
+
+/// The agent queues a command while a drain is mid-pass (its `systemctl start` is a no-op then):
+/// the same drain run picks it up before exiting.
+#[tokio::test]
+async fn item_queued_during_a_pass_is_drained_by_the_same_run() {
+    let m = Machine::new();
+    m.collect(7);
+    let c = cloud(None, 200, 204).await;
+    let r = spy(&m);
+    let q = m.queue.clone();
+    *r.on_journal.lock().unwrap() = Some(Box::new(move || {
+        q.enqueue_collect(8, CollectDiagnostics::default(), Some(t(EXPIRES)), t(T0))
+            .unwrap();
+    }));
+    let f = fetcher(&c.srv.uri());
+    let cr = cred();
+    let clock = || t(T0);
+    let cx = DrainCtx {
+        queue: &m.queue,
+        fetcher: &f,
+        cred: &cr,
+        runner: r.clone(),
+        paths: m.paths(),
+        device_id: "dev-1",
+        lab: true,
+        clock: &clock,
+        jitter: Jitter::fixed(0.5),
+        max_queue_bytes: MAX_QUEUE_BYTES,
+    };
+    tokio::time::timeout(Duration::from_secs(60), drain(&cx))
+        .await
+        .expect("the drain ends");
+    let mut seqs: Vec<u64> = acks(&c).iter().map(|a| a.0).collect();
+    seqs.sort();
+    assert_eq!(seqs, [7, 8]);
+    assert!(m.queue.is_empty());
+}
+
+/// A mouse or keyboard battery (scope Device) is not the laptop's.
+#[test]
+fn device_batteries_do_not_count() {
+    let m = Machine::new();
+    let mouse = m
+        .tmp
+        .path()
+        .join("root/sys/class/power_supply/hidpp_battery_0");
+    std::fs::create_dir_all(&mouse).unwrap();
+    std::fs::write(mouse.join("type"), "Battery\n").unwrap();
+    std::fs::write(mouse.join("scope"), "Device\n").unwrap();
+    std::fs::write(mouse.join("capacity"), "5\n").unwrap();
+    std::fs::write(mouse.join("status"), "Discharging\n").unwrap();
+    assert!(!low_battery(&m.paths().root), "only a mouse battery");
+    m.battery(80, "Discharging", false);
+    assert!(!low_battery(&m.paths().root), "the laptop is at 80 %");
+    m.battery(10, "Discharging", false);
+    assert!(low_battery(&m.paths().root));
 }

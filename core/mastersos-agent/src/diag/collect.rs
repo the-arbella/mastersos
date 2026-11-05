@@ -7,6 +7,9 @@
 //! collector reads only the files in [`READ_PATHS`] (plus the screenshot it is handed) and runs
 //! only the commands below; it never lists or copies a directory except `/sys/class/power_supply`.
 //!
+//! Command output over the runner's cap ([`JOURNAL_MAX_BYTES`] for the journal) keeps its newest
+//! part; the cut is recorded in `skipped` and marks the archive `truncated`.
+//!
 //! Every file read goes through [`CollectOpts::root`] (`/` in production; a fake tree in tests,
 //! Ruling P2).
 
@@ -37,6 +40,9 @@ pub const ZSTD_WINDOW_LOG: u32 = mastersos_bundle::diag::DIAG_ZSTD_WINDOW_LOG_MA
 const CMD_TIMEOUT: Duration = Duration::from_secs(20);
 /// A boot of the journal with debug logging is easily a million lines.
 const JOURNAL_TIMEOUT: Duration = Duration::from_secs(300);
+/// The newest this much of one journal (a boot, or the recent minutes) is kept; an older
+/// beginning is left out and the archive marked truncated.
+pub const JOURNAL_MAX_BYTES: usize = 16 * 1024 * 1024;
 /// Files under /proc, /sys and the agent's own JSON are small; anything longer is cut.
 const FILE_MAX_BYTES: u64 = 4 * 1024 * 1024;
 /// At most this many `coredumpctl info` and `loginctl show-session` calls.
@@ -140,10 +146,23 @@ struct Entry {
 struct Gather {
     entries: Vec<Entry>,
     skipped: Vec<DiagSkipped>,
+    /// Some output was cut for size ([`crate::runner::CUT_MARKER`]).
+    cut: bool,
 }
 
 impl Gather {
     fn text(&mut self, src: &str, path: String, text: &str, log_age: Option<u32>) {
+        let text = match text.strip_prefix(crate::runner::CUT_MARKER) {
+            Some(rest) => {
+                self.cut = true;
+                self.skip(
+                    src,
+                    &format!("{path}: the beginning was left out: over the size limit"),
+                );
+                rest
+            }
+            None => text,
+        };
         let data = redact(text).into_owned().into_bytes();
         self.entries.push(Entry {
             file: DiagFile {
@@ -178,7 +197,10 @@ impl Gather {
         args: &[&str],
         timeout: Duration,
     ) -> Option<String> {
-        let cmd = Cmd::new(program, args).timeout(timeout);
+        let mut cmd = Cmd::new(program, args).timeout(timeout);
+        if program == "journalctl" {
+            cmd = cmd.max_output(JOURNAL_MAX_BYTES);
+        }
         match runner.run(&cmd) {
             Ok(out) if out.code == 0 => {
                 let mut text = out.stdout;
@@ -330,13 +352,14 @@ pub fn collect(
     let Gather {
         mut entries,
         skipped,
+        cut,
     } = g;
     let mut manifest = DiagManifest {
         format: DIAG_MANIFEST_FORMAT,
         created_at: now,
         device_id: device_id.to_string(),
         kind: o.kind,
-        truncated: false,
+        truncated: cut,
         files: vec![],
         skipped,
     };

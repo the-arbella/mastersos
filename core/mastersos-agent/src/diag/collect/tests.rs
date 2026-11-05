@@ -544,3 +544,31 @@ fn archive_decodes_with_the_cloud_window_and_holds_regular_files_only() {
     }
     assert_eq!(n, c.manifest.files.len() + 1);
 }
+
+/// A journal the runner cut for size: the archive says so (truncated, and the source in
+/// skipped), and the marker line itself is not kept as if it were the journal.
+#[test]
+fn a_cut_journal_is_marked_truncated() {
+    let d = tree();
+    let out = tempfile::tempdir().unwrap();
+    let r = FakeRunner::new();
+    r.respond(
+        "journalctl -b 0",
+        Output::ok(&format!(
+            "{}2026-11-05 later line\n",
+            crate::runner::CUT_MARKER
+        )),
+    );
+    let c = collect(&opts(d.path()), "dev-1", out.path(), &r, now()).unwrap();
+    assert!(c.manifest.truncated);
+    let why = skipped_of(&c.manifest, source::JOURNAL);
+    assert_eq!(why.len(), 1, "{why:?}");
+    assert!(why[0].contains("journal/boot-0.txt"), "{}", why[0]);
+    let files = unpack(&c.path);
+    let boot = &files
+        .iter()
+        .find(|(p, _)| p == "journal/boot-0.txt")
+        .unwrap()
+        .1;
+    assert_eq!(String::from_utf8_lossy(boot), "2026-11-05 later line\n");
+}
