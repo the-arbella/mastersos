@@ -106,7 +106,7 @@ async fn server_listing(keys: Value, recipients: Value) -> MockServer {
     .await;
     get(
         "/v1/auth/config",
-        json!({ "name": "Alpha School", "slug": "alpha", "school_id": SID, "signing_origin": "https://sign.example" }),
+        json!({ "name": "Alpha School", "slug": "alpha", "school_id": SID }),
     )
     .mount(&s)
     .await;
@@ -220,7 +220,9 @@ async fn init_refuses_unregistered_key() {
     let (out, err) = text(&o);
     assert!(!o.status.success(), "{out}{err}");
     assert!(
-        err.contains("is not registered for") && err.contains("signing page"),
+        err.contains("is not registered for")
+            && err.contains("mastersos-sign register")
+            && !err.contains("signing page"),
         "{err}"
     );
     assert!(err.contains("Alpha School"), "{err}");
@@ -253,14 +255,16 @@ async fn init_refuses_key_registered_with_another_public_key() {
 }
 
 #[test]
-fn init_requires_school_key() {
+fn init_without_key_points_to_mastersos_sign() {
     let home = tempfile::tempdir().unwrap();
     let dir = home.path().join("school");
     let o = mastersos(home.path(), &["init".as_ref(), dir.as_os_str()]);
     assert!(!o.status.success());
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(err.contains("--school-key"), "{err}");
-    assert!(err.contains("signing page"), "{err}");
+    assert!(err.contains("mastersos-sign school-key new"), "{err}");
+    assert!(err.contains("mastersos-sign register"), "{err}");
+    assert!(!err.contains("signing page"), "{err}");
     assert!(!dir.exists(), "nothing may be created");
 }
 

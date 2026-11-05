@@ -1,10 +1,10 @@
 //! `mastersos publish`: the local directory is checked, its secrets are filled back in, version
-//! and time are stamped, and the result is uploaded as a pending bundle. With the recovery kit
-//! (`--kit`) or a recovery key file (`--key`) the bundle is then verified and signed on this
-//! computer ([`mastersos_sign::sign_pending_expecting`]); without one, the signing page link is
-//! returned for IT to open and sign with the recovery kit (or a Passkey, where one is registered).
-//! Either way the content digest is computed here from what was uploaded and must equal the
-//! server's, and only that digest is signed. Its first 8 characters are the check code IT sees.
+//! and time are stamped, and the result is uploaded as a pending bundle. With the school key
+//! (`--school-key`) or a PKCS#8 key file (`--key`) the bundle is then verified and signed on this
+//! computer ([`mastersos_sign::sign_pending_expecting`]). The key is required: without one the
+//! command refuses before anything is uploaded. The content digest is computed here from what
+//! was uploaded and must equal the server's, and only that digest is signed. Its first 8
+//! characters are the check code IT sees.
 //!
 //! After signing here, the monthly check-in (the heartbeat statement) for exactly the version and
 //! digest just published is signed too ([`mastersos_sign::checkin_after_publish`]); IT is told
@@ -96,33 +96,14 @@ pub const CHECKIN_FAILED_TEXT: &str =
 pub enum PublishOutcome {
     /// Signed here and accepted: this is the new version, and the directory's base now is it.
     Published { version: u64, checkin: CheckIn },
-    /// Uploaded, not signed: IT opens `url` and signs with the recovery kit (or a registered
-    /// Passkey, except for the first version), then runs `mastersos pull`.
-    NeedsSigning {
-        url: String,
-        pending_id: String,
-        /// The version uploaded (1: the first, which only the recovery kit may sign).
-        version: u64,
-        /// The content digest computed here from what was uploaded (lower-case hex); the signing
-        /// page shows its first 8 characters.
-        digest_hex: String,
-    },
 }
 
-/// How many characters of the digest are printed: as many as the signing page shows.
+/// How many characters of the digest are printed: as many as the check code shows.
 pub const DIGEST_SHOWN: usize = 8;
 
 /// The check code: the first [`DIGEST_SHOWN`] characters of the content digest.
 pub fn check_code(digest_hex: &str) -> &str {
     &digest_hex[..digest_hex.len().min(DIGEST_SHOWN)]
-}
-
-/// The lines printed after the settings are uploaded but not approved here.
-pub fn needs_signing_text(url: &str, digest_hex: &str) -> String {
-    let code = check_code(digest_hex);
-    format!(
-        "Waiting for approval: open {url}\nCompare the check code on that page with {code}. If it differs, do not approve.\nAfter approving, run `mastersos pull` to bring this folder up to date."
-    )
 }
 
 /// The local check found errors; nothing was sent.
@@ -199,9 +180,7 @@ impl std::error::Error for ServerRefused {}
 #[derive(Deserialize)]
 struct AuthConfig {
     name: String,
-    slug: String,
     school_id: String,
-    signing_origin: String,
 }
 
 /// The server's answer to an upload (the fields used here).
@@ -300,30 +279,6 @@ fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-/// The domain of the school's host `<slug>.<domain>` (what the admin page's `domainOfHost` gives):
-/// the signing page needs it when the cloud serves several domains. `None` for another host (a
-/// local server).
-fn domain_of(server: &str, slug: &str) -> Option<String> {
-    let url = reqwest::Url::parse(server).ok()?;
-    let host = url.host_str()?;
-    let rest = host.strip_prefix(slug)?.strip_prefix('.')?;
-    (!rest.is_empty()).then(|| rest.to_ascii_lowercase())
-}
-
-/// The signing page link for a pending bundle; `server` is the school's address.
-fn sign_link(c: &AuthConfig, server: &str, pending_id: &str) -> String {
-    let domain = domain_of(server, &c.slug)
-        .map(|d| format!("&domain={d}"))
-        .unwrap_or_default();
-    format!(
-        "{}/#school={}&sid={}&op=commit{domain}&pending={}",
-        c.signing_origin.trim_end_matches('/'),
-        c.slug,
-        c.school_id,
-        pending_id
-    )
-}
-
 /// Before the upload: the signing key must be in the new version's trust (Devices accept no
 /// other signature, and a signer cannot remove itself, R5), and a kit must be a recovery key
 /// registered on the server ([`mastersos_sign::kit::ensure_registered`]). Returns the signing
@@ -397,15 +352,14 @@ async fn checkin(
 pub async fn publish(
     api: &Api,
     w: &Workdir,
-    sign: Option<SignOpts<'_>>,
+    sign: SignOpts<'_>,
     allow_reroute: &[String],
     now: DateTime<Utc>,
     confirm: &mut dyn BufRead,
     out: &mut dyn Write,
 ) -> Result<PublishOutcome> {
     let meta = w.meta()?;
-    // The first version (no base) is uploaded like any other: without `--key` the signing page
-    // offers only the recovery kit for it, and the server's commit enforces R1g.
+    // The first version (no base) is uploaded like any other; the server's commit enforces R1g.
     // One read: what is checked, uploaded, kept and later made the base is this snapshot.
     let snap = w.freeze()?;
     if w.equals_base(&snap)? {
@@ -470,12 +424,9 @@ pub async fn publish(
     let stamped = secret_ref::fill(&stamped_refs, &snap.secrets).map_err(CheckFailed)?;
     // A kit or key that cannot sign this version stops here, before a pending bundle is left on
     // the server. Signing checks all of it again against the verified chain.
-    let sign_api = match &sign {
-        Some(s) => Some(precheck_signer(s, &meta.server, &stamped, &w.root).await?),
-        None => None,
-    };
+    let sign_api = precheck_signer(&sign, &meta.server, &stamped, &w.root).await?;
     // The digest is computed here over exactly what is uploaded: the server's must equal it, and
-    // only this digest is signed (here) or shown to compare (on the signing page).
+    // only this digest is signed.
     let digest = content_digest(&Contents {
         manifest_text: stamped.clone(),
         files: files.clone(),
@@ -540,7 +491,7 @@ pub async fn publish(
         .eq_ignore_ascii_case(&local_digest)
     {
         bail!(
-            "the server reports check code {} for the upload, but this computer computed {}: the server does not hold what was uploaded. Nothing was approved; do not approve upload {} on the signing page",
+            "the server reports check code {} for the upload, but this computer computed {}: the server does not hold what was uploaded. Nothing was approved; do not approve upload {}",
             check_code(prepared.digest_hex.trim()),
             check_code(&local_digest),
             prepared.pending_id
@@ -563,44 +514,34 @@ pub async fn publish(
     print_server_lints(out, &warnings)?;
     writeln!(out, "{}", checked_line(&lints, &warnings))?;
     writeln!(out, "Check code: {}", check_code(&local_digest))?;
-    match (sign, sign_api) {
-        (Some(s), Some(sign_api)) => {
-            let v = mastersos_sign::sign_pending_expecting(
-                &sign_api,
-                s.key.signing(),
-                s.pin_dir,
-                &prepared.pending_id,
-                Some(&local_digest),
-                confirm,
-                out,
-            )
-            .await?;
-            // The version and digest just signed and committed, with that version's trust:
-            // nothing is fetched to decide what the check-in says. It goes before this folder's
-            // own bookkeeping, so a published version always gets its check-in.
-            let checkin = match checkin(&sign_api, s.key, v, &digest, &stamped).await {
-                Ok(until) => CheckIn::Until(until),
-                Err(e) => CheckIn::Failed(format!("{e:#}")),
-            };
-            if let Err(e) = w.mark_published(v, &stamped_refs) {
-                let also = match &checkin {
-                    CheckIn::Failed(_) => format!(" {CHECKIN_FAILED_TEXT}"),
-                    CheckIn::Until(_) => String::new(),
-                };
-                bail!("Published version {v}, but this folder could not record it: {e:#}.{also}");
-            }
-            Ok(PublishOutcome::Published {
-                version: v,
-                checkin,
-            })
-        }
-        _ => Ok(PublishOutcome::NeedsSigning {
-            url: sign_link(&cfg, &meta.server, &prepared.pending_id),
-            pending_id: prepared.pending_id,
-            version,
-            digest_hex: local_digest,
-        }),
+    let v = mastersos_sign::sign_pending_expecting(
+        &sign_api,
+        sign.key.signing(),
+        sign.pin_dir,
+        &prepared.pending_id,
+        Some(&local_digest),
+        confirm,
+        out,
+    )
+    .await?;
+    // The version and digest just signed and committed, with that version's trust: nothing is
+    // fetched to decide what the check-in says. It goes before this folder's own bookkeeping, so
+    // a published version always gets its check-in.
+    let checkin = match checkin(&sign_api, sign.key, v, &digest, &stamped).await {
+        Ok(until) => CheckIn::Until(until),
+        Err(e) => CheckIn::Failed(format!("{e:#}")),
+    };
+    if let Err(e) = w.mark_published(v, &stamped_refs) {
+        let also = match &checkin {
+            CheckIn::Failed(_) => format!(" {CHECKIN_FAILED_TEXT}"),
+            CheckIn::Until(_) => String::new(),
+        };
+        bail!("Published version {v}, but this folder could not record it: {e:#}.{also}");
     }
+    Ok(PublishOutcome::Published {
+        version: v,
+        checkin,
+    })
 }
 
 #[cfg(test)]
@@ -615,8 +556,20 @@ mod tests {
 
     const SID: &str = "11111111-1111-1111-1111-111111111111";
 
+    /// A key file made once for the tests that go no further than the upload, and its trust key.
+    fn test_signer() -> &'static (PathBuf, TrustKey) {
+        static SIGNER: std::sync::OnceLock<(PathBuf, TrustKey)> = std::sync::OnceLock::new();
+        SIGNER.get_or_init(|| {
+            let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+            let key = dir.path().join("test.pem");
+            let tk = mastersos_sign::keygen(&key).unwrap().trust_key;
+            (key, tk)
+        })
+    }
+
     fn manifest_text() -> String {
-        manifest_trusting("rk", &STANDARD.encode([7u8; 32]))
+        let tk = &test_signer().1;
+        manifest_trusting(&tk.id, &tk.public_key)
     }
 
     /// The test manifest with one ed25519 key in trust.
@@ -656,8 +609,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/v1/auth/config"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "name": "Demo School", "slug": "demo", "school_id": SID,
-                "signing_origin": "https://sign.example"
+                "name": "Demo School", "slug": "demo", "school_id": SID
             })))
             .mount(&s)
             .await;
@@ -680,10 +632,21 @@ mod tests {
         let api = Api::new(&s.uri(), "tok").unwrap();
         let allow: Vec<String> = allow.iter().map(|a| a.to_string()).collect();
         let mut out = Vec::new();
+        let key = SignWith::key_file(&test_signer().0).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let token = dir.path().join("token");
+        std::fs::write(&token, "tok").unwrap();
+        let pins = dir.path().join("pins");
+        // The mock server stops at the upload, so a publish that gets that far fails when it
+        // goes on to sign: the tests here look at what was printed and uploaded.
         let r = publish(
             &api,
             w,
-            None,
+            SignOpts {
+                key: &key,
+                token_file: &token,
+                pin_dir: &pins,
+            },
             &allow,
             now(),
             &mut std::io::empty(),
@@ -799,7 +762,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn json_publish_writes_one_json_document_to_stdout() {
+    async fn json_publish_keeps_stdout_for_the_result() {
         let s = server().await;
         Mock::given(method("POST"))
             .and(path("/v1/admin/publish/pending"))
@@ -815,15 +778,20 @@ mod tests {
             let w = rerouted_workdir(&t.path().join("school"));
             let api = Api::new(&s.uri(), "tok").unwrap();
             let allow = vec![GUEST.to_string()];
+            let key = SignWith::key_file(&test_signer().0).unwrap();
+            let token = t.path().join("token");
+            std::fs::write(&token, "tok").unwrap();
             let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
-            crate::cli::publish_to(
+            // The mock server stops at the upload, so signing fails afterwards: what matters here
+            // is where the warnings go, and that nothing but a result goes to stdout.
+            let r = crate::cli::publish_to(
                 &api,
                 "https://school.example",
                 &crate::cli::PublishArgs {
                     w: &w,
-                    token_file: &t.path().join("token"),
+                    token_file: &token,
                     pins: &w.test_pins(),
-                    key: None,
+                    key: &key,
                     allow_reroute: &allow,
                     json: json_mode,
                 },
@@ -831,24 +799,19 @@ mod tests {
                 &mut stdout,
                 &mut stderr,
             )
-            .await
-            .unwrap();
+            .await;
+            assert!(r.is_err());
             let (stdout, stderr) = (
                 String::from_utf8(stdout).unwrap(),
                 String::from_utf8(stderr).unwrap(),
             );
             if json_mode {
-                let v: Value = serde_json::from_str(&stdout).expect(&stdout);
-                assert_eq!(v["published"], false);
-                assert_eq!(v["pending_id"], "p-1");
-                assert_eq!(v["version"], 5);
-                assert_eq!(stdout.lines().count(), 1, "{stdout}");
+                assert!(stdout.is_empty(), "{stdout}");
                 assert!(stderr.contains("The local check:") && stderr.contains("secret_rerouted"));
                 assert!(stderr.contains("The server's check:"), "{stderr}");
             } else {
                 assert!(
-                    stdout.contains("The local check:")
-                        && stdout.contains("Waiting for approval: open ")
+                    stdout.contains("The local check:") && stdout.contains("The server's check:")
                 );
                 assert!(stderr.is_empty(), "{stderr}");
             }
@@ -886,7 +849,7 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let w = rerouted_workdir(&t.path().join("school"));
         let (r, out) = run_allow(&s, &w, &[GUEST, "unused-name"]).await;
-        assert!(matches!(r.unwrap(), PublishOutcome::NeedsSigning { .. }));
+        assert!(r.is_err(), "the mock server cannot be signed with");
         assert_eq!(uploads(&s).await.len(), 1);
         // Every local warning is printed, before the server's answer.
         let local = out.find("The local check:").expect(&out);
@@ -952,7 +915,7 @@ mod tests {
             .await;
         let t = tempfile::tempdir().unwrap();
         let w = workdir(&t.path().join("school"));
-        run(&s, &w).await.unwrap();
+        let _ = run(&s, &w).await;
         let up = uploads(&s).await;
         assert_eq!(up.len(), 1);
         let text = up[0]["manifest_text"].as_str().unwrap();
@@ -1020,34 +983,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn publish_without_key_returns_sign_link() {
-        let s = server().await;
-        Mock::given(method("POST"))
-            .and(path("/v1/admin/publish/pending"))
-            .respond_with(accepted(5))
-            .mount(&s)
-            .await;
-        let t = tempfile::tempdir().unwrap();
-        let w = workdir(&t.path().join("school"));
-        let got = run(&s, &w).await.unwrap();
-        let digest = digest_of(&uploads(&s).await[0]);
-        assert_eq!(
-            got,
-            PublishOutcome::NeedsSigning {
-                url: format!("https://sign.example/#school=demo&sid={SID}&op=commit&pending=p-1"),
-                pending_id: "p-1".into(),
-                version: 5,
-                digest_hex: digest.clone(),
-            }
-        );
-        // Not signed here: the base stays until IT signs and pulls; the upload is recorded (with
-        // the digest computed here) so that pull accepts the directory as clean once it is
-        // published.
-        assert_eq!(w.meta().unwrap().base_version, 4);
-        assert!(Workdir::is_published_upload(&w.root, 5, &digest).unwrap());
-    }
-
-    #[tokio::test]
     async fn publish_refuses_unchanged_directory() {
         let s = server().await;
         let t = tempfile::tempdir().unwrap();
@@ -1057,50 +992,6 @@ mod tests {
         let err = run(&s, &w).await.unwrap_err().to_string();
         assert_eq!(err, "Nothing to publish: the directory equals version 4");
         assert!(s.received_requests().await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn first_version_without_key_uploads_for_the_kit() {
-        // C1: a new school has only recovery kits (no key file): the first version is uploaded
-        // and the link says to sign it with the kit on the signing page.
-        let s = server().await;
-        Mock::given(method("POST"))
-            .and(path("/v1/admin/publish/pending"))
-            .respond_with(accepted(1))
-            .mount(&s)
-            .await;
-        let t = tempfile::tempdir().unwrap();
-        let meta = Meta {
-            server: "https://school.example".into(),
-            school_id: SID.into(),
-            base_version: 0,
-        };
-        let w = Workdir::init(&t.path().join("school"), meta, &manifest_text()).unwrap();
-        let got = run(&s, &w).await.unwrap();
-        let up = uploads(&s).await;
-        assert!(up[0]["manifest_text"]
-            .as_str()
-            .unwrap()
-            .contains("version = 1"));
-        let PublishOutcome::NeedsSigning {
-            url,
-            version,
-            digest_hex,
-            ..
-        } = got
-        else {
-            panic!("not uploaded for signing: {got:?}");
-        };
-        assert_eq!(version, 1);
-        assert_eq!(digest_hex, digest_of(&up[0]));
-        let text = needs_signing_text(&url, &digest_hex);
-        assert!(
-            text.contains(&format!("Waiting for approval: open {url}\n")),
-            "{text}"
-        );
-        assert!(text.contains(&digest_hex[..8]), "{text}");
-        assert!(!text.contains(&digest_hex), "only 8 characters: {text}");
-        assert_eq!(w.meta().unwrap().base_version, 0);
     }
 
     #[test]
@@ -1118,24 +1009,6 @@ mod tests {
         );
         let info = Lint::new(LintLevel::Info, "note", "x");
         assert_eq!(checked_line(&[info], &[]), "Checked: no problems");
-    }
-
-    #[test]
-    fn waiting_text_gives_the_link_and_the_check_code() {
-        let text = needs_signing_text("https://sign.example/#x", "0123456789abcdef");
-        assert!(
-            text.starts_with("Waiting for approval: open https://sign.example/#x\n"),
-            "{text}"
-        );
-        assert!(
-            text.contains("Compare the check code on that page with 01234567."),
-            "{text}"
-        );
-        assert!(text.contains("mastersos pull"), "{text}");
-        let lower = text.to_lowercase();
-        for w in ["digest", "kit", "pending", "passkey"] {
-            assert!(!lower.contains(w), "{w}: {text}");
-        }
     }
 
     #[tokio::test]
@@ -1210,11 +1083,11 @@ mod tests {
         let err = publish(
             &api,
             &w,
-            Some(SignOpts {
+            SignOpts {
                 key: &key,
                 token_file: &token,
                 pin_dir: &pins,
-            }),
+            },
             &[],
             now(),
             &mut std::io::empty(),
@@ -1234,32 +1107,6 @@ mod tests {
             .iter()
             .any(|r| r.url.path().ends_with("/commit")));
         assert_eq!(w.meta().unwrap().base_version, 4);
-    }
-
-    #[test]
-    fn sign_link_names_the_domain_of_the_school_host() {
-        let c = AuthConfig {
-            name: "Demo".into(),
-            slug: "demo".into(),
-            school_id: SID.into(),
-            signing_origin: "https://sign.os.example.com/".into(),
-        };
-        assert_eq!(
-            sign_link(&c, "https://demo.os.example.com", "p-1"),
-            format!("https://sign.os.example.com/#school=demo&sid={SID}&op=commit&domain=os.example.com&pending=p-1")
-        );
-        // Another host (a local server, or a name that is not `<slug>.<domain>`): no domain.
-        for server in [
-            "http://localhost:8080",
-            "https://demo2.os.example.com",
-            "https://demo",
-        ] {
-            assert_eq!(
-                sign_link(&c, server, "p-1"),
-                format!("https://sign.os.example.com/#school=demo&sid={SID}&op=commit&pending=p-1"),
-                "{server}"
-            );
-        }
     }
 
     #[tokio::test]
@@ -1317,8 +1164,7 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let w = workdir(&t.path().join("school"));
         let name = w.secrets().unwrap().keys().next().unwrap().clone();
-        let (r, out) = run_out(&s, &w).await;
-        r.unwrap();
+        let (_, out) = run_out(&s, &w).await;
         assert!(out.contains("wifi_weak"), "{out}");
         assert!(out.contains(&format!("psk secret:{name} is weak")), "{out}");
         assert!(!out.contains("guestpass1"), "{out}");
@@ -1335,7 +1181,7 @@ mod tests {
             .await;
         let t = tempfile::tempdir().unwrap();
         let w = workdir(&t.path().join("school"));
-        run(&s, &w).await.unwrap();
+        let _ = run(&s, &w).await;
         let up = uploads(&s).await;
         let snap = w.freeze().unwrap();
         assert!(up[0]["manifest_text"]
@@ -1395,11 +1241,11 @@ mod tests {
         let r = publish(
             &api,
             w,
-            Some(SignOpts {
+            SignOpts {
                 key: &kit,
                 token_file: &token,
                 pin_dir: &pins,
-            }),
+            },
             &[],
             now(),
             &mut confirm.as_bytes(),

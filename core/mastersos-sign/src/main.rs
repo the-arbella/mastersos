@@ -31,7 +31,9 @@ struct Server {
     #[arg(long)]
     server: String,
     /// File holding the token (a token is never accepted on the command line). `sign`, `heartbeat`,
-    /// `seed-check` and `verify` need read + draft; `register` needs keys.
+    /// `seed-check` and `verify` need read + draft. `register` takes a key token from the admin
+    /// site's Tokens page (valid 60 minutes); `escrow-read` takes a recovery token from the same
+    /// page (valid 60 minutes).
     #[arg(long)]
     token_file: PathBuf,
 }
@@ -123,10 +125,10 @@ enum KitCmd {
 #[derive(Subcommand)]
 enum Cmd {
     /// The school key file
-    #[command(subcommand)]
+    #[command(subcommand, name = "school-key", alias = "kit")]
     Kit(KitCmd),
     /// Unlock a computer's disk: open its stored recovery keys on this computer with the school
-    /// key (the token needs read + recovery; every read is recorded)
+    /// key (--token-file holds a recovery token from the admin site's Tokens page, valid 60 minutes; every read is recorded)
     EscrowRead {
         #[command(flatten)]
         server: Server,
@@ -155,7 +157,7 @@ enum Cmd {
         #[arg(long)]
         out: PathBuf,
     },
-    /// Register the school key with the server (needs a temporary token with the keys scope)
+    /// Register the school key with the server (--token-file holds a key token from the admin site's Tokens page, valid 60 minutes)
     Register {
         #[command(flatten)]
         server: Server,

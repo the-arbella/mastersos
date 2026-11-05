@@ -38,8 +38,8 @@ The settings file can also carry files (`files/…`, such as wallpapers or icons
    - **warning**: shown, does not block (`secret_rerouted` blocks until IT approves it);
    - **info**: reports the current state (for example a Chrome update pause), not a problem.
 3. When there are no errors, `mastersos publish` builds the next **Version** from the directory (it puts the
-   secrets in) and uploads it; IT approves it with a **school key**, on the computer
-   (`mastersos publish --school-key <file>`) or on the signing page. Devices accept only Versions signed by one of
+   secrets in) and uploads it; IT approves it with a **school key** on the computer
+   (`mastersos publish --school-key <file>`). Devices accept only Versions signed by one of
    the **trusted keys** (`[[trust]]`), and only Versions newer than the one they have. Afterwards `mastersos pull`
    takes the published Version as the new base.
 
@@ -196,7 +196,7 @@ Settings shared by every Device, whatever its Group.
 | `name` | string | written by the server | 1-100 characters | `name = "Example International School"` | The school's display name, shown on Devices ("Managed by …"). Do not write it by hand (`format = 2`); a name that is empty, over 100 characters or holds control characters is `school_name_invalid`. |
 | `logo_sha256` | string | written by IT | 64 lowercase hex digits | — | The SHA-256 of the sign-in screen logo (a PNG 96 pixels high, at most 480 wide) Devices download from the school's server at `/logos/<sha256>.png` and show only when it matches; written, with `logo_icon_sha256`, when IT runs `mastersos logo upload` and pastes the lines it prints. Do not invent it (`format = 2`); anything else is `logo_sha256_invalid`, and one of the two keys without the other is `logo_incomplete`. |
 | `logo_icon_sha256` | string | written by IT | 64 lowercase hex digits | — | The SHA-256 of the quick menu icon (a PNG of 40 x 40 pixels), downloaded and checked like `logo_sha256`. Written together with `logo_sha256`; do not write it by hand (`format = 2`). |
-| `escrow_recipients` | list of strings | optional; no escrow | 1 to 8 age X25519 public keys (`age1…`) in canonical lowercase form, none twice; never an empty list | — | Devices encrypt their disk recovery key to these keys before sending it to the cloud. Written by the signing page; each must belong to a Recovery kit in trust (`escrow_recipient_unregistered`). Write the key with entries or leave it out: `escrow_recipients = []` is `invalid_value`. |
+| `escrow_recipients` | list of strings | optional; no escrow | 1 to 8 age X25519 public keys (`age1…`) in canonical lowercase form, none twice; never an empty list | — | Devices encrypt their disk recovery key to these keys before sending it to the cloud. Written by `mastersos init` and `mastersos keys add`; each must belong to a Recovery kit in trust (`escrow_recipient_unregistered`). Write the key with entries or leave it out: `escrow_recipients = []` is `invalid_value`. |
 
 ```toml check=ok
 [school]
@@ -268,7 +268,7 @@ here (only public keys). Changing trust needs a Recovery kit signature.
 | `id` | string | required | any name, unique within trust | `id = "recovery-2026"` | Signatures name the key by it. |
 | `alg` | string | required | `"ed25519"` (Recovery kit key), `"webauthn-es256"` (Passkey) | `alg = "webauthn-es256"` | |
 | `public_key` | string | required | standard base64: 32 bytes for `ed25519`; 65 bytes starting with `0x04` (an uncompressed P-256 point) for `webauthn-es256` | `public_key = "AAAA…="` | |
-| `rp_id` | string | required for `webauthn-es256`; not allowed for `ed25519` | a lowercase ASCII host name without scheme, port or path | `rp_id = "sign.os.khundavid.com"` | The host the Passkey was registered on (the signing page). |
+| `rp_id` | string | required for `webauthn-es256`; not allowed for `ed25519` | a lowercase ASCII host name without scheme, port or path | `rp_id = "sign.os.khundavid.com"` | The host the Passkey was registered on. |
 
 The values below are format placeholders, not real keys:
 
@@ -1818,8 +1818,7 @@ a binding signature of a Recovery kit key in this trust.
 **Why:** Devices would encrypt their disk recovery keys to a key the school never proved it holds.
 <!-- /prompt:omit -->
 
-**How to fix:** register the school key it belongs to (signing page, or
-`mastersos-sign register --school-key`), or remove it with `mastersos keys remove`. Needs the school's registered keys, so there is no
+**How to fix:** register the school key it belongs to (`mastersos-sign register --school-key`), or remove it with `mastersos keys remove`. Needs the school's registered keys, so there is no
 standalone example.
 
 ### `escrow_recipients_invalid`
@@ -1831,7 +1830,7 @@ public key in canonical form, an entry listed twice, or more than 8 entries.
 **Why:** Devices encrypt their recovery key to every entry and compare the list exactly.
 <!-- /prompt:omit -->
 
-**How to fix:** let the signing page write this key; if editing, paste each `age1…` key exactly as
+**How to fix:** let `mastersos init` or `mastersos keys add` write this key; if editing, paste each `age1…` key exactly as
 given, once.
 
 <!-- prompt:omit -->
@@ -1860,7 +1859,7 @@ had recipients, or while the school registered recipients for the Recovery kits 
 password could not be recovered.
 <!-- /prompt:omit -->
 
-**How to fix:** put the recipients back (the signing page writes them). Needs the school's state, so
+**How to fix:** put the recipients back (`mastersos keys add` writes them). Needs the school's state, so
 there is no standalone example.
 
 ### `feature_unsupported`

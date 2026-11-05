@@ -159,7 +159,7 @@ async fn server(kit: &Kit, checkin_status: u16) -> (MockServer, School) {
     .await;
     get(
         "/v1/auth/config",
-        json!({ "name": "Alpha School", "slug": "alpha", "school_id": SID, "signing_origin": "https://sign.example" }),
+        json!({ "name": "Alpha School", "slug": "alpha", "school_id": SID }),
     )
     .mount(&s)
     .await;
@@ -294,6 +294,8 @@ fn plain_words(out: &str, manifests: &[String]) {
         "the pin",
         "not_after",
         "check-in",
+        "signing page",
+        "passkey",
     ] {
         assert!(!lower.contains(w), "{w}: {shown}");
     }
@@ -378,34 +380,31 @@ async fn publish_heartbeat_failure_keeps_version() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn publish_without_key_prints_link_and_check_code() {
+async fn publish_without_school_key_uploads_nothing() {
     let t = tempfile::tempdir().unwrap();
     let (key, kit) = school_key(t.path());
     let (s, school) = server(&kit, 204).await;
     let home = connected_home(&s.uri());
     let dir = folder(home.path(), t.path(), &key).await;
+    let before = s.received_requests().await.unwrap().len();
     let o = run(home.path(), args(&[&"publish", &dir]), "").await;
     let (out, err) = text(&o);
-    assert!(o.status.success(), "{out}{err}");
-    let digest = digest_of(&school.upload(1));
-    let short = &digest[..8];
-    let link = format!("https://sign.example/#school=alpha&sid={SID}&op=commit&pending=p-1");
-    let checked = out
-        .find("Checked: no errors, 1 warning (above)")
-        .expect(&out);
-    let code = out.find(&format!("Check code: {short}")).expect(&out);
-    let wait = out
-        .find(&format!("Waiting for approval: open {link}"))
-        .expect(&out);
-    let compare = out
-        .find(&format!(
-            "Compare the check code on that page with {short}."
-        ))
-        .expect(&out);
-    assert!(checked < code && code < wait && wait < compare, "{out}");
-    plain_words(&out.replace(&link, ""), &[]);
-    assert!(!out.replace(&link, "").contains("pending"), "{out}");
-    // Nothing signed here, no check-in.
+    assert_eq!(o.status.code(), Some(1), "{out}{err}");
+    assert_eq!(
+        err.trim_end(),
+        "mastersos: Publishing needs the school key file: mastersos publish --school-key <FILE>"
+    );
+    assert!(out.is_empty(), "{out}");
+    // Nothing was uploaded: no request to create a pending bundle, and none at all after init.
+    let reqs = s.received_requests().await.unwrap();
+    assert!(
+        !reqs
+            .iter()
+            .any(|r| r.url.path().starts_with("/v1/admin/publish/pending")),
+        "{reqs:?}"
+    );
+    assert_eq!(reqs.len(), before, "no network call at all");
+    assert!(school.0.lock().unwrap().uploads.is_empty());
     assert!(checkins(&s).await.is_empty());
 }
 
@@ -580,4 +579,32 @@ async fn publish_checks_in_even_when_the_folder_cannot_record_it() {
     assert!(!o.status.success(), "{out}{err}");
     assert!(err.contains("Published version 1"), "{err}");
     assert!(err.contains("could not record"), "{err}");
+}
+
+/// No help text of `mastersos` sends IT to a signing page, and none uses the words kept out of
+/// IT-facing text.
+#[test]
+fn help_texts_are_in_plain_words() {
+    let mut commands: Vec<Vec<&str>> = vec![vec![]];
+    for c in [
+        "init", "pull", "check", "diff", "devices", "spec", "publish", "keys", "connect",
+    ] {
+        commands.push(vec![c]);
+    }
+    commands.push(vec!["keys", "add"]);
+    commands.push(vec!["keys", "remove"]);
+    for c in commands {
+        let o = Command::new(env!("CARGO_BIN_EXE_mastersos"))
+            .args(&c)
+            .arg("--help")
+            .output()
+            .unwrap();
+        let help = String::from_utf8_lossy(&o.stdout).into_owned();
+        assert!(o.status.success(), "{c:?}: {help}");
+        assert!(
+            !help.to_lowercase().contains("signing page"),
+            "{c:?}: {help}"
+        );
+        plain_words(&help, &[]);
+    }
 }

@@ -82,11 +82,11 @@ enum Cmd {
     Init {
         /// The directory to create (it must be empty or not exist)
         dir: PathBuf,
-        /// A school key file; give it once for each school key (two is good). Make school keys on the admin site's signing page first
+        /// A school key file; give it once for each school key (two is good). Make one with `mastersos-sign school-key new`, then register it with `mastersos-sign register`
         #[arg(long = "school-key", alias = "kit", value_name = "FILE")]
         school_key: Vec<PathBuf>,
     },
-    /// Download the latest published settings (verified against the pinned keys) into a local directory
+    /// Download the latest published settings (checked on this computer, version by version) into a local directory
     Pull {
         /// The settings directory (default: the current directory)
         dir: Option<PathBuf>,
@@ -119,11 +119,11 @@ enum Cmd {
         #[arg(long, conflicts_with = "section")]
         full: bool,
     },
-    /// Publish the local settings directory: check, fill in secrets, stamp, upload, then sign with --school-key or print the signing page link
+    /// Publish the local settings directory: check, fill in secrets, stamp, upload, then approve with the school key file (--school-key)
     Publish {
         /// The settings directory (default: the current directory)
         dir: Option<PathBuf>,
-        /// The school key file (keep it on a USB stick; only you should be able to read it): check and approve on this computer. Without it, you approve on the signing page
+        /// The school key file (keep it on a USB stick; only you should be able to read it): check and approve on this computer. Required
         #[arg(long = "school-key", alias = "kit", value_name = "FILE")]
         kit: Option<PathBuf>,
         /// A PKCS#8 key file instead of the school key (kept for old scripts)
@@ -157,7 +157,7 @@ enum KeysCmd {
         #[arg(long)]
         dir: Option<PathBuf>,
     },
-    /// Add the school key in FILE (registered on the signing page) to the local manifest.toml; then publish with a school key already in use
+    /// Add the school key in FILE (registered with `mastersos-sign register`) to the local manifest.toml; then publish with a school key already in use
     Add {
         /// The school key file
         #[arg(value_name = "FILE")]
@@ -307,7 +307,18 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         }
         Cmd::Init { school_key, .. } if school_key.is_empty() => {
             return Err(OpError::Failed(
-                "mastersos init needs a school key file: --school-key <FILE>. Make school keys on the admin site's signing page first."
+                "mastersos init needs a school key file: --school-key <FILE>. Make one with: mastersos-sign school-key new --out <FOLDER> --school <name>, then register it with mastersos-sign register (the admin site's Tokens page gives the key token)."
+                    .into(),
+            ))
+        }
+        // Settings are approved on this computer with the school key; nothing is uploaded without it.
+        Cmd::Publish {
+            kit: None,
+            key: None,
+            ..
+        } => {
+            return Err(OpError::Failed(
+                "Publishing needs the school key file: mastersos publish --school-key <FILE>"
                     .into(),
             ))
         }
@@ -400,7 +411,7 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
                 &server,
                 &token_file,
                 dir.as_deref(),
-                sign_with,
+                sign_with.ok_or_else(|| fail("no school key"))?,
                 &allow_reroute,
                 json,
             )
@@ -978,7 +989,7 @@ async fn ensure_registered(
         let recipient_ok = recipients.iter().any(|r| r.recipient == recipient);
         if !key_ok || !recipient_ok {
             return Err(OpError::Failed(format!(
-                "This school key ({}) is not registered for {school}. Make keys on the signing page first.",
+                "This school key ({}) is not registered for {school}. Register it first with `mastersos-sign register` (the admin site's Tokens page gives the key token).",
                 k.code()
             )));
         }
@@ -1416,7 +1427,7 @@ async fn publish_dir(
     server: &str,
     token_file: &Path,
     dir: Option<&Path>,
-    key: Option<SignWith>,
+    key: SignWith,
     allow_reroute: &[String],
     json: bool,
 ) -> Result<ExitCode, OpError> {
@@ -1429,7 +1440,7 @@ async fn publish_dir(
             w: &w,
             token_file,
             pins: &pins,
-            key: key.as_ref(),
+            key: &key,
             allow_reroute,
             json,
         },
@@ -1445,7 +1456,7 @@ pub(crate) struct PublishArgs<'a> {
     pub w: &'a Workdir,
     pub token_file: &'a Path,
     pub pins: &'a Path,
-    pub key: Option<&'a SignWith>,
+    pub key: &'a SignWith,
     pub allow_reroute: &'a [String],
     /// `--json`: `stdout` gets exactly one JSON document (the result; a refusal is printed by
     /// [`main`]), and everything else (local and server warnings, the signing dialogue) goes to
@@ -1476,11 +1487,11 @@ pub(crate) async fn publish_to(
             m.server
         )));
     }
-    let sign = a.key.map(|key| SignOpts {
-        key,
+    let sign = SignOpts {
+        key: a.key,
         token_file: a.token_file,
         pin_dir: a.pins,
-    });
+    };
     let r = {
         let out: &mut dyn std::io::Write = if a.json { stderr } else { &mut *stdout };
         publish(
@@ -1512,23 +1523,6 @@ pub(crate) async fn publish_to(
             if let CheckIn::Failed(_) = checkin {
                 writeln!(stderr, "{CHECKIN_FAILED_TEXT}").map_err(fail)?;
             }
-            Ok(ExitCode::SUCCESS)
-        }
-        Ok(PublishOutcome::NeedsSigning {
-            url,
-            pending_id,
-            version,
-            digest_hex,
-        }) => {
-            let text = crate::publish::needs_signing_text(&url, &digest_hex);
-            print(
-                stdout,
-                json!({
-                    "published": false, "pending_id": pending_id, "version": version,
-                    "sign_url": url, "digest_hex": digest_hex,
-                }),
-                text,
-            )?;
             Ok(ExitCode::SUCCESS)
         }
         Err(e) => match e.downcast::<CheckFailed>() {

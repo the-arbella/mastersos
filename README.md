@@ -69,7 +69,7 @@ Only your user account can read these files.
 ### 3. Make two school keys
 
 A **school key** is a small file, plus a printed copy, that approves settings for every computer and can unlock
-their disks. Make two on the admin site's **signing page**, and save each file to a USB stick. The file name ends in
+their disks. Make two on the command line with `mastersos-sign school-key new --out <folder> --school <name>`, register each with `mastersos-sign register` (the admin site's **Tokens** page gives the key token, valid 60 minutes), and save each file to a USB stick. The file name ends in
 the key's **key code**, for example `myschool-school-key-11d903eb.kit`; the same code (`11d9-03eb`) is on the printed
 copy and on the **School keys** page. Keep the printed copies and the second stick in separate safe places.
 
@@ -106,19 +106,18 @@ mastersos publish ./school --school-key <school key file>
 ```
 
 `publish` prints `Checked: no problems`, the **check code** (`Check code: a1b2c3d4`) and `Published version N`.
-Without `--school-key` it uploads only and prints `Waiting for approval: open <link>`: open that page, load the school
-key file there, and compare the check code on the page with the one `publish` printed. Afterwards run
-`mastersos pull ./school`.
+`publish` needs the school key file: without `--school-key` it stops before uploading anything and says so. Afterwards
+run `mastersos pull ./school`.
 
 Computers want a **monthly check-in** ("nothing new; what you have is current"). `publish --school-key` does it for
-you; if you have not published for a while, the admin site reminds you and does it on the signing page.
+you; if you have not published for a while, the admin site reminds you; run `mastersos-sign heartbeat --school-key <file>` then.
 
 ### 6. Add or remove a school key
 
 ```bash
 cd ./school                               # or add --dir ./school to each keys command
 mastersos keys list                       # key code, label, registered date, trusted here or not
-mastersos keys add <new school key file>  # made on the signing page first
+mastersos keys add <new school key file>  # make it with mastersos-sign school-key new, register it with mastersos-sign register first
 mastersos keys remove 11d9-03eb           # never the last one
 mastersos publish --school-key <a school key that is already trusted>
 ```
@@ -149,7 +148,7 @@ mastersos pull ./school          # 下载最新已发布版本，沿版本链验
 $EDITOR ./school/manifest.toml   # 或让 AI 改；新密码网络写 psk = "secret:<名字>"，值由 IT 填进 secrets.toml
 mastersos check ./school && mastersos diff ./school     # 本地，不联网；check 有错误退出码 2
 mastersos publish ./school --school-key <学校钥匙文件>   # 在本机验链、批准并发布，顺带完成每月确认
-mastersos publish ./school       # 不带 --school-key：只上传，打印签名页链接与核对码，IT 在签名页载入学校钥匙批准，之后 mastersos pull
+mastersos publish ./school       # 不带 --school-key：直接拒绝，什么都不上传
 ```
 
 目录里：`mastersos.toml`（学校主机与 `base_version`）、`manifest.toml`（秘密只写引用）、`secrets.toml`（只有本人可读，git 忽略，秘密的值）、
@@ -330,16 +329,12 @@ kiosk PWA），同时联系厂商取得长期支持（设计 `docs/superpowers/s
 服务端没有签名钥匙（云端设计裁定 8）：每一版都由学校钥匙批准（签名），受信钥匙也由学校自己列，服务端从不替草稿写受信钥匙。
 
 **学校钥匙是唯一的签名钥匙**（2026-11-04 起 IT 的流程里没有 passkey）：一个小文件加一份打印件，批准每台电脑的设置，
-也能解开它们的磁盘。IT 在任何一台电脑上有这个文件就能批准：命令行 `mastersos publish --school-key <文件>`，或在签名页载入它。
-在签名页上做学校钥匙（文件名 `<学校>-school-key-<钥匙码>.kit`，打印件上有同一个钥匙码），每个文件放一根 U 盘，建议做两把、分开放。
+也能解开它们的磁盘。IT 在任何一台电脑上有这个文件就能批准：命令行 `mastersos publish --school-key <文件>`。
+用 `mastersos-sign school-key new --out <目录> --school <名>` 做学校钥匙，再用 `mastersos-sign register` 登记（要管理网站「Tokens」页给的钥匙 token，60 分钟有效）（文件名 `<学校>-school-key-<钥匙码>.kit`，打印件上有同一个钥匙码），每个文件放一根 U 盘，建议做两把、分开放。
 `mastersos-bundle` 与 agent 仍然验旧的 `webauthn-es256` 签名（没有在用的学校，以后再删），只是不再产生新的。
 
-### 网页批准与 `mastersos-sign` 的分工
+### `mastersos publish` 与 `mastersos-sign` 的分工
 
-- **签名页**：每一版（包括第一版与受信钥匙、磁盘解锁收件人有变化的版本）都可以载入学校钥匙批准。签名页下载等待批准的每个文件、
-  自己算摘要，显示核对码（摘要的前 8 位）给 IT 与 `mastersos publish` 打印的对照；从上一版的归档里读出受信钥匙与收件人自己比对，
-  和服务端说的对不上就按变化处理；签名用的消息在本地重建，不签服务端给的字节。
-  **网页批准信任的是发出签名页的云**（横幅写明构建号与签名源）：怀疑签名页被换过时，改用命令行。
 - **`mastersos publish --school-key` 与 `mastersos-sign`**：不信任服务端。批准前从本机 pin 住的那一版起，逐版取回服务端发布过的
   每一版原始包，像 agent 一样验签。差异、摘要、受信钥匙的增删都在本地算，服务端给的差异和 lint 只作参考。
 
@@ -352,10 +347,10 @@ IT 平时只用 `mastersos`；`mastersos-sign` 给在另一台电脑上批准、
 S=mastersos-sign
 # 离线做一把学校钥匙：写进只有本人可读的新文件（已存在就拒绝），终端只打印钥匙码与指纹，不打印钥匙本身。
 # --out 是目录时文件名为 <学校>-school-key-<钥匙码>.kit
-$S kit new --out /Volumes/USB --school myschool
-# 登记学校钥匙与它的磁盘解锁收件人（要 keys 范围的临时 token，登记完删掉）；已登记过的只提示、不报错，中途失败可以原样再跑
+$S school-key new --out /Volumes/USB --school myschool
+# 登记学校钥匙与它的磁盘解锁收件人（要管理网站「Tokens」页给的钥匙 token，60 分钟有效）；已登记过的只提示、不报错，中途失败可以原样再跑
 $S register --server https://<slug>.os.khundavid.com --token-file keys.token --school-key /Volumes/USB/myschool-school-key-11d903eb.kit --label "IT 的第一把"
-# 批准一个等待批准的上传（<id> 由 mastersos publish 打印）：先核对这把钥匙是本校登记过的，不是就退出 1
+# 批准一个等待批准的上传（<id> 是等待批准的上传的编号）：先核对这把钥匙是本校登记过的，不是就退出 1
 $S sign --server https://<slug>.os.khundavid.com --token-file draft.token --school-key <文件> --pending <id>
 # 只验链，不签名
 $S verify --server https://<slug>.os.khundavid.com --token-file draft.token
@@ -364,7 +359,7 @@ $S seed-check --server https://<slug>.os.khundavid.com --token-file draft.token 
 # 每月确认（心跳）：版本与摘要取自本地验证过的最新版，--days 取 1 到 31，默认 30。本机时钟要准，与服务端差 10 分钟以上会被拒。
 # mastersos publish --school-key 每次发布都顺带做，长期没发布时管理网站会提醒，这条命令只留给进阶用途
 $S heartbeat --server https://<slug>.os.khundavid.com --token-file draft.token --school-key <文件> --days 30
-# 读一台电脑托管的磁盘恢复码：取回密文、在本机用学校钥匙解开（token 要 read + recovery，服务端每次都留审计）
+# 读一台电脑托管的磁盘恢复码：取回密文、在本机用学校钥匙解开（token 要管理网站「Tokens」页给的恢复 token，60 分钟有效，服务端每次都留审计）
 $S escrow-read --server https://<slug>.os.khundavid.com --token-file recovery.token --school-key <文件> --device <device_id>
 ```
 
@@ -375,7 +370,7 @@ $S escrow-read --server https://<slug>.os.khundavid.com --token-file recovery.to
 不会悄悄变成另一把钥匙。钥匙码是 key id 的前 8 位十六进制，4-4 分组（`11d9-03eb`）。
 
 - **第一版（R1g）**：还没发布过时没有链可验：`publish` / `sign` 打印第一版自己的整份受信钥匙，要 IT 逐把对照钥匙码与指纹、键入版本号 `1`
-  与 `yes`（旧的 `trust` 也收），再用学校钥匙签。**要与自己手里的对照**（打印件、`kit new` / `register` 打印的），不要与这台服务端的页面对照。
+  与 `yes`（旧的 `trust` 也收），再用学校钥匙签。**要与自己手里的对照**（打印件、`school-key new` / `register` 打印的），不要与这台服务端的页面对照。
   签名的学校钥匙必须登记过、而且受信；服务端也用这一版自己的受信钥匙验。签完 pin 在第 1 版。
   本机已经有这台服务端的 pin 时，服务端却说什么都没发布过，拒绝签（可能是回滚或换了服务端），报出 pin 文件的路径；
   确知服务端是有意重建的，才删掉那个文件。pin 只会沿着验过的链往前走：版本不升、或不是从磁盘上那个 pin 验过来的，一律不写。
@@ -400,7 +395,6 @@ $S escrow-read --server https://<slug>.os.khundavid.com --token-file recovery.to
 
 - 所有学校钥匙（文件与打印件）都丢失时，只能逐台重刷。
 - 新电脑的装机文件是「首次信任」：服务器被攻破期间下载的装机文件，信任的是攻击者。用 `mastersos-sign seed-check` 核对。
-- 网页批准信任发出页面的服务器，见上一节。
 
 ### 每月确认
 
@@ -411,4 +405,4 @@ $S escrow-read --server https://<slug>.os.khundavid.com --token-file recovery.to
 
 每月确认说有更新的版本、而电脑立即重拉仍拿不到时，电脑回报「有更新被扣住」。**每月确认的有效期就是服务端扣住更新、
 而电脑看不出来的最长时间。** 服务端从不自签，由 IT 的学校钥匙签，最长 31 天（按签发时刻算；电脑容许签发时刻比本机快 1 天，所以从电脑的角度看最多约 32 天）：
-`mastersos publish --school-key` 每次发布都顺带签 30 天；长期没发布时，管理网站首页提醒，在签名页用学校钥匙文件完成。
+`mastersos publish --school-key` 每次发布都顺带签 30 天；长期没发布时，管理网站首页提醒，用 `mastersos-sign heartbeat --school-key <文件>` 完成。
