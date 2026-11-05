@@ -636,6 +636,14 @@ describe("Get help", () => {
   const hTitle = (root) => hd(root).querySelector(".title").textContent;
   const hBody = (root) => hd(root).querySelector(".body").textContent;
   const hError = (root) => hd(root).querySelector(".error");
+  /** The result's status icon: [data-status, inline svg, before the message]. */
+  const hStatus = (root) => {
+    const icon = hd(root).querySelector(".body svg.status");
+    if (!icon) return null;
+    expect(icon.parentNode.firstElementChild).toBe(icon); // left of the message
+    expect(icon.getAttribute("aria-hidden")).toBe("true");
+    return icon.dataset.status;
+  };
   const shown = (e) => {
     for (let n = e; n && n.nodeType === 1; n = n.parentNode) if (n.hidden) return false;
     return true;
@@ -819,6 +827,11 @@ describe("Get help", () => {
     await vi.advanceTimersByTimeAsync(3000);
     expect(calls(help, "help-status")).toHaveLength(2);
     expect(hBody(root)).toBe(SENT);
+    expect(hStatus(root)).toBe("sent");
+    // only the ticket is bold
+    const bold = [...hd(root).querySelectorAll(".body strong")];
+    expect(bold.map((b) => b.textContent)).toEqual(["Ticket #1042"]);
+    expect(hd(root).querySelector(".body .message").childNodes[0].nodeValue).toBe("Sent. ");
     expect(shown(hd(root).querySelector(".spinner"))).toBe(false);
     expect(visibleButtons(root)).toEqual(["OK"]);
     expect(root.activeElement).toBe(hOk(root));
@@ -838,6 +851,7 @@ describe("Get help", () => {
     expect(shown(hd(root).querySelector(".spinner"))).toBe(true);
     await vi.advanceTimersByTimeAsync(3000);
     expect(hBody(root)).toBe(QUEUED);
+    expect(hStatus(root)).toBe("queued");
     const n = calls(help, "help-status").length;
     expect(n).toBe(20);
     await vi.advanceTimersByTimeAsync(30000);
@@ -858,25 +872,50 @@ describe("Get help", () => {
   it("errors map to their texts: rate limited, turned off, refused, host unreachable, turned off later", async () => {
     vi.useFakeTimers();
     const cases = [
-      [{ submit: { ok: false, error: "rate_limited" } }, LIMITED, 0],
-      [{ submit: { ok: false, error: "disabled" } }, OFF, 0],
-      [{ submit: { ok: false, error: "invalid" } }, FAILED, 0],
-      [{ submit: { ok: false, error: "unreachable" } }, FAILED, 0],
-      [{ submit: { ok: false } }, FAILED, 0],
-      [{ submit: { ok: true, state: "queued" } }, FAILED, 0], // no client_id
-      [{ status: [{ ok: true, state: "disabled" }] }, OFF, 3000],
-      [{ status: [{ ok: true, state: "failed" }] }, FAILED, 3000],
-      [{ submit: null }, FAILED, 20000], // never answers: not a spinner forever
+      [{ submit: { ok: false, error: "rate_limited" } }, LIMITED, 0, "info"],
+      [{ submit: { ok: false, error: "disabled" } }, OFF, 0, "info"],
+      [{ submit: { ok: false, error: "invalid" } }, FAILED, 0, "failed"],
+      [{ submit: { ok: false, error: "unreachable" } }, FAILED, 0, "failed"],
+      [{ submit: { ok: false } }, FAILED, 0, "failed"],
+      [{ submit: { ok: true, state: "queued" } }, FAILED, 0, "failed"], // no client_id
+      [{ status: [{ ok: true, state: "disabled" }] }, OFF, 3000, "info"],
+      [{ status: [{ ok: true, state: "failed" }] }, FAILED, 3000, "failed"],
+      [{ submit: null }, FAILED, 20000, "failed"], // never answers: not a spinner forever
     ];
-    for (const [h, text, wait] of cases) {
+    for (const [h, text, wait, status] of cases) {
       const { root } = inject(undefined, { help: host(h) });
       await openHelp(root);
       await fillAndSend(root, 0, "");
       await vi.advanceTimersByTimeAsync(wait);
       expect(hBody(root), JSON.stringify(h)).toBe(text);
+      expect(hStatus(root), JSON.stringify(h)).toBe(status);
+      expect(hd(root).querySelector(".body strong")).toBeNull();
       expect(visibleButtons(root)).toEqual(["OK"]);
       reset();
     }
+  });
+
+  it("result icons: 24px, coloured per state; none while waiting or on the form; no HTML parsing in the source", async () => {
+    const { root } = inject(undefined, { help: host({ status: [{ ok: true, state: "sent", ticket: "1042" }] }) });
+    const css = root.querySelector("style").textContent;
+    expect(css).toMatch(/\.result \.status \{[^}]*width: 24px; height: 24px;[^}]*color: #5b6170/);
+    expect(css).toMatch(/\.status\[data-status="sent"\] \{ color: #1e7d45; \}/);
+    expect(css).toMatch(/\.status\[data-status="failed"\] \{ color: #b3261e; \}/);
+    expect(css).toMatch(/\.body\.result \{[^}]*align-items: center; gap: 12px; margin-top: 4px; font-size: 15px;/);
+    vi.useFakeTimers();
+    await openHelp(root);
+    expect(hd(root).querySelector("svg.status")).toBeNull();
+    await fillAndSend(root, 0, "");
+    expect(hd(root).querySelector("svg.status")).toBeNull();
+    expect(hd(root).querySelector(".body").classList.contains("result")).toBe(false);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(hStatus(root)).toBe("sent");
+    expect(hd(root).querySelector(".title").textContent).toBe("Get help from IT");
+    // opening again: the form, no leftover icon
+    hOk(root).click();
+    await openHelp(root);
+    expect(hd(root).querySelector("svg.status")).toBeNull();
+    expect(SRC).not.toMatch(/innerHTML\s*=|outerHTML\s*=|insertAdjacentHTML|DOMParser|createContextualFragment/);
   });
 
   it("keyboard: Esc closes and focus goes back to the handle; Tab is trapped in the dialog", async () => {
