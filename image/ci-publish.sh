@@ -2,6 +2,8 @@
 # Publish a release build to the update source from GitHub Actions. The release root (docs/update-channels.md) only
 # exists for the length of a job: this script rebuilds the part of it that the step changes from the S3 mirror, checks
 # it against the signed manifests, then runs the same publish.sh / promote.sh / sync-s3.sh as a build host would.
+#   ci-publish.sh sign-release <version> <dir>    in the image workflow, before the GitHub Release: sign <dir>/SHA256SUMS
+#                                                 (the release assets) with this root's gpg key, as <dir>/SHA256SUMS.gpg
 #   ci-publish.sh beta <version>                  after build.sh in the image workflow: the build goes into beta/
 #   ci-publish.sh promote <version> [--allow-…]   the promote workflow: beta → stable, then the installer of that version
 #                                                 (from the version's GitHub Release) into installer/
@@ -22,11 +24,12 @@ die() {
 }
 say() { echo "ci-publish.sh: $*"; }
 
-[ $# -ge 2 ] || die "usage: ci-publish.sh beta <version> | ci-publish.sh promote <version> [--allow-…]"
+[ $# -ge 2 ] || die "usage: ci-publish.sh sign-release <version> <dir> | beta <version> | promote <version> [--allow-…]"
 step=$1 version=$2
 shift 2
 [[ $version =~ ^[0-9]{8}\.[0-9]+$ ]] || die "bad version '$version'"
 case "$step" in
+sign-release) [ $# -eq 1 ] || die "sign-release takes one directory" ;;
 beta) [ $# -eq 0 ] || die "beta takes no flags" ;;
 promote)
 	for a in "$@"; do
@@ -36,9 +39,31 @@ promote)
 *) die "unknown step '$step'" ;;
 esac
 
+base=${MASTERSOS_UPDATE_BASE:-https://os.khundavid.com}
+
+# The release assets are what promote later publishes to installer/ with this root's key: they must carry a signature from
+# the same key (made here, while the build's keys are loaded), so nobody who can edit a GitHub Release can get other bytes
+# signed into the update source.
+if [ "$step" = sign-release ]; then
+	assets=$1
+	[ -f "$assets/SHA256SUMS" ] || die "no $assets/SHA256SUMS"
+	MASTERSOS_PUBLISH_ROOT=$(mktemp -d)
+	export MASTERSOS_PUBLISH_ROOT
+	printf 'base=%s\nlab=no\n' "$base" >"$MASTERSOS_PUBLISH_ROOT/mastersos-root.conf"
+	# shellcheck source-path=SCRIPTDIR source=channel-common.sh
+	. "$here/channel-common.sh"
+	read_root_conf sign
+	gpg --homedir "$gnupghome" --batch --yes --detach-sign --output "$assets/SHA256SUMS.gpg" "$assets/SHA256SUMS" ||
+		die "cannot sign $assets/SHA256SUMS"
+	gpgv --keyring "$pubring" "$assets/SHA256SUMS.gpg" "$assets/SHA256SUMS" 2>/dev/null ||
+		die "the new signature of $assets/SHA256SUMS does not verify with $pubring"
+	rm -rf "$MASTERSOS_PUBLISH_ROOT"
+	say "signed $assets/SHA256SUMS"
+	exit 0
+fi
+
 bucket=${MASTERSOS_OS_BUCKET:?MASTERSOS_OS_BUCKET is empty}
 cdn=${MASTERSOS_OS_CDN:?MASTERSOS_OS_CDN is empty}
-base=${MASTERSOS_UPDATE_BASE:-https://os.khundavid.com}
 export MASTERSOS_PUBLISH_ROOT=${MASTERSOS_PUBLISH_ROOT:-${RUNNER_TEMP:?}/mastersos-release}
 # sync-s3.sh: an empty profile means the credentials in the environment
 export MASTERSOS_AWS_PROFILE=
@@ -86,6 +111,9 @@ promote)
 	restore stable
 	restore installer
 	[ -f "$root/beta/MastersOS_${version}_x86-64.efi" ] || die "$version is not in beta"
+	# An empty stable/ would mean no baseline for promote.sh's shim and systemd-boot gates: never the case once the update
+	# source exists, so treat it as a damaged bucket rather than a first promote
+	[ -f "$root/stable/SHA256SUMS" ] || die "stable/ is empty in the bucket: refusing to promote without the gates' baseline"
 	"$here/promote.sh" "$version" "$@"
 
 	# The installer of this version, from the GitHub Release the image workflow made. publish.sh installer checks that the
@@ -96,7 +124,13 @@ promote)
 	mkdir -p "$out"
 	tag=image-release-$version
 	gh release download "$tag" --repo "${GITHUB_REPOSITORY:?}" --dir "$out" || die "cannot download the assets of release $tag"
+	[ -f "$out/SHA256SUMS.gpg" ] || die "release $tag has no SHA256SUMS.gpg (built before ci-publish.sh sign-release): rebuild"
+	gpgv --keyring "$pubring" "$out/SHA256SUMS.gpg" "$out/SHA256SUMS" 2>/dev/null ||
+		die "the SHA256SUMS of release $tag does not verify with this root's key"
 	(cd "$out" && sha256sum --quiet --strict -c SHA256SUMS) || die "the assets of $tag do not match its SHA256SUMS"
+	listed=$(awk '{ print $2 } END { print "SHA256SUMS"; print "SHA256SUMS.gpg" }' "$out/SHA256SUMS" | LC_ALL=C sort)
+	extra=$(cd "$out" && find . -mindepth 1 -printf '%P\n' | LC_ALL=C sort | comm -23 - <(echo "$listed"))
+	[ -z "$extra" ] || die "release $tag has assets its SHA256SUMS does not list: $extra"
 	cmp -s "$out/build-info.txt" "$root/beta/MastersOS_${version}_x86-64.build-info.txt" ||
 		die "the build-info of release $tag is not the one beta has for $version"
 	for f in "$out"/*.part-00; do

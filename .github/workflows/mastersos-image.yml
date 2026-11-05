@@ -117,6 +117,8 @@ jobs:
             fi
           done
           (cd "$assets" && sha256sum -- * >SHA256SUMS)
+          # signed with the update source's key: mastersos-promote publishes these assets to installer/ only if it verifies
+          image/ci-publish.sh sign-release "$VERSION" "$assets"
           gh release create "image-$PROFILE-$VERSION" "$assets"/* --prerelease --target "$GITHUB_SHA" \
             --title "MastersOS $VERSION ($PROFILE)" --notes "Commit $GITHUB_SHA, run $GITHUB_RUN_ID."
       - name: AWS credentials for the update source

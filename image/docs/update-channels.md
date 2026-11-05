@@ -127,6 +127,11 @@ part of it that it changes from the S3 mirror (`image/ci-publish.sh`), checks it
   image and Ventoy package from the version's GitHub Release (`image-release-<v>`; its `build-info.txt` must be byte for
   byte the one beta signed) into `publish.sh <v> installer`, then one `sync-s3.sh`, then marks the GitHub Release as the
   latest non-prerelease one. Nothing is rebuilt: stable gets the bytes beta had.
+- **Signed release assets**: the GitHub Release's `SHA256SUMS` is signed in the build job with the update source's gpg key
+  (`ci-publish.sh sign-release`, `SHA256SUMS.gpg` among the assets); promote verifies it, every asset against it and that
+  nothing unlisted is there before `publish.sh <v> installer` re-signs anything. Editing a Release cannot get other bytes
+  into `installer/`. Releases made before 2026-11-05 have no signature and cannot be promoted: rebuild. Promote also
+  refuses an empty `stable/` (no baseline for the shim and systemd-boot gates means a damaged bucket, not a first run).
 - **Restore check**: `publish.sh` and `promote.sh` re-sign whatever a channel holds, so a restored directory must be
   exactly what its last manifest vouches for: `SHA256SUMS.gpg` verifies with the repository key, every listed file
   matches, nothing unlisted is there. Otherwise the job stops before any key is used (`tests/ci-publish-test.sh`).
