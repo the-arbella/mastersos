@@ -12,9 +12,12 @@
 //!
 //! Also masked to the end of the line: whatever follows `Bearer `, and the value after a
 //! space-separated `--password`, `--passphrase`, `--psk`, `--secret` or `--token` flag. Masked
-//! too: the userinfo of a URL (`scheme://user:pass@host` → `scheme://[redacted]@host`), the
-//! body of PEM private key blocks, and the base64 lines right above an `-----END … PRIVATE
-//! KEY-----` line even without its BEGIN line (output cut for size may start inside a key).
+//! too: the userinfo of a URL (`scheme://user:pass@host` → `scheme://[redacted]@host`, up to the
+//! last `@` of the authority); everything after a `-----BEGIN … PRIVATE KEY-----` (found
+//! anywhere in a line, so journal prefixes and indents do not matter) up to its END, or to the
+//! end of the text without one; and the base64 lines right above an `-----END … PRIVATE
+//! KEY-----` without a BEGIN (output cut for size may start inside a key), each line read after
+//! any indent or log prefix.
 
 use std::borrow::Cow;
 
@@ -149,10 +152,7 @@ fn pem_blocks(lower: &str, spans: &mut Vec<(usize, usize)>) {
     while let Some(at) = lower[from..].find(PEM_BEGIN) {
         let begin = from + at;
         let line_end = lower[begin..].find('\n').map_or(lower.len(), |n| begin + n);
-        if !lower[begin..line_end]
-            .trim_end_matches('\r')
-            .ends_with(PEM_PRIVATE)
-        {
+        if !lower[begin..line_end].trim_end().ends_with(PEM_PRIVATE) {
             from = begin + PEM_BEGIN.len();
             continue;
         }
@@ -167,60 +167,74 @@ fn pem_blocks(lower: &str, spans: &mut Vec<(usize, usize)>) {
     }
 }
 
-/// `scheme://userinfo@`: the userinfo (up to the first `@` before any `/`, `?`, `#` or blank).
+/// `scheme://userinfo@`: the authority runs to the first `/`, `?`, `#` or blank after `://`; when
+/// it holds an `@`, everything up to its **last** `@` is the userinfo (a password may itself hold
+/// `@` and `:`).
 fn userinfo(b: &[u8], spans: &mut Vec<(usize, usize)>) {
     let mut from = 0;
     while let Some(at) = b[from..].windows(3).position(|w| w == b"://") {
         let s = from + at + 3;
         let mut e = s;
-        while e < b.len()
-            && !matches!(
-                b[e],
-                b'/' | b'?' | b'#' | b'@' | b' ' | b'\t' | b'\r' | b'\n'
-            )
-        {
+        while e < b.len() && !matches!(b[e], b'/' | b'?' | b'#' | b' ' | b'\t' | b'\r' | b'\n') {
             e += 1;
         }
-        if e < b.len() && b[e] == b'@' && e > s {
-            spans.push((s, e));
+        if let Some(last) = b[s..e].iter().rposition(|&c| c == b'@') {
+            if last > 0 {
+                spans.push((s, s + last));
+            }
         }
         from = s;
     }
 }
 
-/// Base64 lines right above every `-----END … PRIVATE KEY-----` line (a block whose BEGIN line
-/// is missing): from the first of them to the END line.
+/// The key material of a PEM body line: without leading blanks (an indented config body) and
+/// without a log prefix up to the first `": "` (`journalctl` lines: `<time> <host>
+/// <ident>[<pid>]: `), which base64 never contains.
+fn pem_payload(line: &str) -> &str {
+    let line = line.trim();
+    match line.find(": ") {
+        Some(i) => line[i + 2..].trim(),
+        None => line,
+    }
+}
+
+fn is_base64(s: &str) -> bool {
+    !s.is_empty()
+        && s.bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'/' | b'='))
+}
+
+/// A key's body lines are this long (64 in PEM, 70 in OpenSSH keys) except the last one, right
+/// above the END line.
+const PEM_BODY_LINE_MIN: usize = 32;
+
+/// The body above every `-----END … PRIVATE KEY-----` (anywhere in its line) whose BEGIN line is
+/// missing (output cut for size may start inside a key): the base64 lines above it, each taken
+/// after any indent or log prefix ([`pem_payload`]), are masked from the first of them up to the
+/// END. The line right above the END may be short; the others must look like full body lines.
 fn pem_tails(lower: &str, spans: &mut Vec<(usize, usize)>) {
-    let b = lower.as_bytes();
     let mut from = 0;
     while let Some(at) = lower[from..].find(PEM_END) {
         let end = from + at;
         from = end + PEM_END.len();
         let eol = lower[end..].find('\n').map_or(lower.len(), |n| end + n);
-        let is_line_start = end == 0 || b[end - 1] == b'\n';
-        if !is_line_start
-            || !lower[end..eol]
-                .trim_end_matches('\r')
-                .ends_with(PEM_PRIVATE)
-        {
+        if !lower[end..eol].trim_end().ends_with(PEM_PRIVATE) {
             continue;
         }
-        let mut start = end;
+        let end_line = lower[..end].rfind('\n').map_or(0, |n| n + 1);
+        let mut start = end_line;
+        let mut first = true;
         while start > 0 {
-            // the line before `start`
             let prev_end = start - 1;
             let prev_start = lower[..prev_end].rfind('\n').map_or(0, |n| n + 1);
-            let line = lower[prev_start..prev_end].trim_end_matches('\r');
-            let base64 = !line.is_empty()
-                && line
-                    .bytes()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'/' | b'='));
-            if !base64 {
+            let payload = pem_payload(&lower[prev_start..prev_end]);
+            if !is_base64(payload) || (!first && payload.len() < PEM_BODY_LINE_MIN) {
                 break;
             }
+            first = false;
             start = prev_start;
         }
-        if start < end {
+        if start < end_line {
             spans.push((start, end));
         }
     }
@@ -229,6 +243,65 @@ fn pem_tails(lower: &str, spans: &mut Vec<(usize, usize)>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The collector's journal format (`journalctl -o short-iso-precise`): every line carries a
+    /// `<timestamp> <host> <ident>[<pid>]: ` prefix.
+    const J: &str = "2026-11-05T08:00:00.123456+00:00 laptop app[812]: ";
+
+    #[test]
+    fn redact_masks_pem_in_journal_and_indented_lines() {
+        // a key logged line by line, BEGIN and END included
+        let journal = format!(
+            "{J}loading key\n{J}-----BEGIN PRIVATE KEY-----\n{J}MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n{J}AbCd+/09==\n{J}-----END PRIVATE KEY-----\n{J}done\n"
+        );
+        let out = redact(&journal);
+        assert!(!out.contains("MIIE") && !out.contains("AbCd"), "{out}");
+        assert!(out.ends_with(&format!("{J}done\n")), "{out}");
+        assert!(out.starts_with(&format!("{J}loading key\n")), "{out}");
+        // indented (a config body)
+        let indented = "key: |\n    -----BEGIN EC PRIVATE KEY-----\n    MHcCAQEEIBkg4LVWM9nuwNSk3yByxZpYRTBnVJk5oVXYEhuJeqkVoAoGCCqG\n    AbCd+/09==\n    -----END EC PRIVATE KEY-----\nnext: 1\n";
+        let out = redact(indented);
+        assert!(!out.contains("MHcC") && !out.contains("AbCd"), "{out}");
+        assert!(out.ends_with("next: 1\n"), "{out}");
+        // a cut journal that starts inside the key: only the END is left
+        let cut = format!(
+            "{J}MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n{J}AbCd+/09==\n{J}-----END RSA PRIVATE KEY-----\n{J}after\n"
+        );
+        let out = redact(&cut);
+        assert!(!out.contains("MIIE") && !out.contains("AbCd"), "{out}");
+        assert!(out.ends_with(&format!("{J}after\n")), "{out}");
+        let cut = "    MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n    AbCd+/09==\n    -----END PRIVATE KEY-----\n";
+        let out = redact(cut);
+        assert!(!out.contains("MIIE") && !out.contains("AbCd"), "{out}");
+        // BEGIN without an END: masked to the end of the text
+        let open = format!("{J}-----BEGIN PRIVATE KEY-----\n{J}MIIEvQIBADAN\n");
+        let out = redact(&open);
+        assert!(!out.contains("MIIEvQ"), "{out}");
+        // secrets in journal lines in general
+        assert_eq!(
+            redact(&format!("{J}network 0 psk=\"x\"\n{J}ok")),
+            format!("{J}network 0 psk=[redacted]\n{J}ok")
+        );
+    }
+
+    #[test]
+    fn redact_masks_userinfo_with_at_and_colon_in_the_password() {
+        let cases = [
+            (
+                "get https://u:p@ss@host/x ok",
+                "get https://[redacted]@host/x ok",
+            ),
+            (
+                "get https://user:p@ss:x@host/ ok",
+                "get https://[redacted]@host/ ok",
+            ),
+            ("smb://a:b:c@srv", "smb://[redacted]@srv"),
+            ("x https://u:p@h?q=a@b", "x https://[redacted]@h?q=a@b"),
+        ];
+        for (input, want) in cases {
+            assert_eq!(redact(input), want, "{input}");
+        }
+    }
 
     #[test]
     fn redact_masks_pem_userinfo_and_flags() {
