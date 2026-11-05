@@ -118,3 +118,60 @@ msgstr "ئىسىم ياكى مەكتەپ ئېلخېتى"
 
 msgid "Keep typing to narrow down"
 msgstr "تىزىملىكنى تارايتىش ئۈچۈن داۋاملىق كىرگۈزۈڭ"
+
+msgid "Get help"
+msgstr "ياردەم سوراش"
+
+msgid "Get help from IT"
+msgstr "IT دىن ياردەم سوراش"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "كىرەلمىدىم"
+
+msgid "An app"
+msgstr "بىر ئەپ"
+
+msgid "Screen, keys or sound"
+msgstr "ئېكران، كۇنۇپكا ياكى ئاۋاز"
+
+msgid "Battery"
+msgstr "باتارېيە"
+
+msgid "Other"
+msgstr "باشقا"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "نېمە بولدى؟ مەخپىي نومۇر ياكى شەخسىي ئۇچۇرلارنى يازماڭ."
+
+msgid "Attach a screenshot"
+msgstr "ئېكران رەسىمى قوشۇش"
+
+msgid "Send"
+msgstr "يوللاش"
+
+msgid "Close"
+msgstr "تاقاش"
+
+msgid "Sending…"
+msgstr "يوللىنىۋاتىدۇ…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "يوللاندى. خىزمەت بېلىتى #%s. IT غا ئۇقتۇرۇلدى."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "ساقلاندى. بۇ كومپيۇتېر تورغا ئۇلانغاندا يوللىنىدۇ."
+
+msgid "Help requests are turned off at this school."
+msgstr "بۇ مەكتەپتە ياردەم سوراش ئېتىۋېتىلگەن."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "بۇ سائەتتە 3 قېتىم ئىلتىماس يوللىدىڭىز. كېيىن قايتا سىناڭ."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "يوللىغىلى بولمىدى. ئوقۇتقۇچىغا ئېيتىڭ."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT بۇ كومپيۇتېردىن دىياگنوز ئۇچۇرى توپلاۋاتىدۇ."

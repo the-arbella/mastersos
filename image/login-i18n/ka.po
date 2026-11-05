@@ -118,3 +118,60 @@ msgstr "სახელი ან სკოლის ელფოსტა"
 
 msgid "Keep typing to narrow down"
 msgstr "განაგრძეთ აკრეფა სიის შესავიწროებლად"
+
+msgid "Get help"
+msgstr "დახმარება"
+
+msgid "Get help from IT"
+msgstr "დახმარება IT განყოფილებისგან"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "შესვლა ვერ ხერხდება"
+
+msgid "An app"
+msgstr "აპლიკაცია"
+
+msgid "Screen, keys or sound"
+msgstr "ეკრანი, კლავიშები ან ხმა"
+
+msgid "Battery"
+msgstr "ბატარეა"
+
+msgid "Other"
+msgstr "სხვა"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "რა მოხდა? გთხოვთ, ნუ მიუთითებთ პაროლებს ან პირად მონაცემებს."
+
+msgid "Attach a screenshot"
+msgstr "ეკრანის სურათის მიმაგრება"
+
+msgid "Send"
+msgstr "გაგზავნა"
+
+msgid "Close"
+msgstr "დახურვა"
+
+msgid "Sending…"
+msgstr "იგზავნება…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "გაიგზავნა. მოთხოვნა #%s. IT განყოფილებას ეცნობა."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "შენახულია. გაიგზავნება, როცა ეს კომპიუტერი ინტერნეტს დაუკავშირდება."
+
+msgid "Help requests are turned off at this school."
+msgstr "დახმარების მოთხოვნები ამ სკოლაში გამორთულია."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "ამ საათში უკვე გაგზავნეთ 3 მოთხოვნა. გთხოვთ, სცადოთ მოგვიანებით."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "გაგზავნა ვერ მოხერხდა. გთხოვთ, უთხრათ მასწავლებელს."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT განყოფილება ამ კომპიუტერიდან დიაგნოსტიკურ ინფორმაციას აგროვებს."

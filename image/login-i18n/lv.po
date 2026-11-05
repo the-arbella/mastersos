@@ -118,3 +118,60 @@ msgstr "Vārds vai skolas e-pasts"
 
 msgid "Keep typing to narrow down"
 msgstr "Turpiniet rakstīt, lai sašaurinātu sarakstu"
+
+msgid "Get help"
+msgstr "Saņemt palīdzību"
+
+msgid "Get help from IT"
+msgstr "Palīdzība no IT speciālistiem"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Nevar pieteikties"
+
+msgid "An app"
+msgstr "Lietotne"
+
+msgid "Screen, keys or sound"
+msgstr "Ekrāns, taustiņi vai skaņa"
+
+msgid "Battery"
+msgstr "Akumulators"
+
+msgid "Other"
+msgstr "Cits"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Kas notika? Lūdzu, nenorādiet paroles vai personas datus."
+
+msgid "Attach a screenshot"
+msgstr "Pievienot ekrānuzņēmumu"
+
+msgid "Send"
+msgstr "Sūtīt"
+
+msgid "Close"
+msgstr "Aizvērt"
+
+msgid "Sending…"
+msgstr "Sūta…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Nosūtīts. Pieteikums #%s. IT speciālisti ir informēti."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Saglabāts. Tiks nosūtīts, kad šis dators būs tiešsaistē."
+
+msgid "Help requests are turned off at this school."
+msgstr "Šajā skolā palīdzības pieprasījumi ir izslēgti."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Šajā stundā jūs jau nosūtījāt 3 pieprasījumus. Lūdzu, mēģiniet vēlreiz vēlāk."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Neizdevās nosūtīt. Lūdzu, pasakiet skolotājam."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT speciālisti vāc diagnostikas informāciju no šī datora."

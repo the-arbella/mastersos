@@ -118,3 +118,60 @@ msgstr "姓名或學校電子郵件"
 
 msgid "Keep typing to narrow down"
 msgstr "繼續輸入以縮小範圍"
+
+msgid "Get help"
+msgstr "取得協助"
+
+msgid "Get help from IT"
+msgstr "向 IT 人員求助"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "無法登入"
+
+msgid "An app"
+msgstr "應用程式"
+
+msgid "Screen, keys or sound"
+msgstr "螢幕、按鍵或聲音"
+
+msgid "Battery"
+msgstr "電池"
+
+msgid "Other"
+msgstr "其他"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "發生了什麼事？請不要填寫密碼或個人資料。"
+
+msgid "Attach a screenshot"
+msgstr "附上螢幕截圖"
+
+msgid "Send"
+msgstr "傳送"
+
+msgid "Close"
+msgstr "關閉"
+
+msgid "Sending…"
+msgstr "傳送中…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "已傳送。工單 #%s。已通知 IT 人員。"
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "已儲存。這部電腦連上網路後就會傳送。"
+
+msgid "Help requests are turned off at this school."
+msgstr "這所學校已關閉求助功能。"
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "你這個小時已傳送 3 個求助。請稍後再試。"
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "無法傳送。請告訴老師。"
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT 人員正在收集這部電腦的診斷資訊。"

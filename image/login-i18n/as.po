@@ -118,3 +118,60 @@ msgstr "নাম বা বিদ্যালয়ৰ ইমেইল"
 
 msgid "Keep typing to narrow down"
 msgstr "তালিকা সৰু কৰিবলৈ টাইপ কৰি থাকক"
+
+msgid "Get help"
+msgstr "সহায় লওক"
+
+msgid "Get help from IT"
+msgstr "আই.টি.ৰ পৰা সহায় লওক"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "ছাইন ইন কৰিব পৰা নাই"
+
+msgid "An app"
+msgstr "এটা এপ"
+
+msgid "Screen, keys or sound"
+msgstr "স্ক্ৰীন, কী বা শব্দ"
+
+msgid "Battery"
+msgstr "বেটাৰী"
+
+msgid "Other"
+msgstr "অন্যান্য"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "কি হ'ল? অনুগ্ৰহ কৰি পাছৱৰ্ড বা ব্যক্তিগত তথ্য নিদিব।"
+
+msgid "Attach a screenshot"
+msgstr "এটা স্ক্ৰীনশ্বট সংলগ্ন কৰক"
+
+msgid "Send"
+msgstr "পঠিয়াওক"
+
+msgid "Close"
+msgstr "বন্ধ কৰক"
+
+msgid "Sending…"
+msgstr "পঠিয়াই আছে…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "পঠিওৱা হ'ল। টিকেট #%s। আই.টি.ক জনোৱা হৈছে।"
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "সংৰক্ষণ কৰা হ'ল। এই কমপিউটাৰটো অনলাইন হ'লে পঠিওৱা হ'ব।"
+
+msgid "Help requests are turned off at this school."
+msgstr "এই বিদ্যালয়ত সহায়ৰ অনুৰোধ বন্ধ কৰা আছে।"
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "আপুনি এই ঘণ্টাত 3 টা অনুৰোধ পঠিয়াইছে। অনুগ্ৰহ কৰি পিছত পুনৰ চেষ্টা কৰক।"
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "পঠিয়াব পৰা নগ'ল। অনুগ্ৰহ কৰি এজন শিক্ষকক কওক।"
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "আই.টি.য়ে এই কমপিউটাৰৰ পৰা ডায়াগনষ্টিক তথ্য সংগ্ৰহ কৰি আছে।"

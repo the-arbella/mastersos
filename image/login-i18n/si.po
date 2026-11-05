@@ -118,3 +118,60 @@ msgstr "නම හෝ පාසල් විද්‍යුත් තැපෑ�
 
 msgid "Keep typing to narrow down"
 msgstr "ලැයිස්තුව අඩු කිරීමට දිගටම ටයිප් කරන්න"
+
+msgid "Get help"
+msgstr "උදව් ලබාගන්න"
+
+msgid "Get help from IT"
+msgstr "IT වෙතින් උදව් ලබාගන්න"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "පිවිසිය නොහැක"
+
+msgid "An app"
+msgstr "යෙදුමක්"
+
+msgid "Screen, keys or sound"
+msgstr "තිරය, යතුරු හෝ ශබ්දය"
+
+msgid "Battery"
+msgstr "බැටරිය"
+
+msgid "Other"
+msgstr "වෙනත්"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "කුමක් සිදු වුණේද? කරුණාකර මුරපද හෝ පුද්ගලික තොරතුරු ඇතුළත් නොකරන්න."
+
+msgid "Attach a screenshot"
+msgstr "තිර රුවක් අමුණන්න"
+
+msgid "Send"
+msgstr "යවන්න"
+
+msgid "Close"
+msgstr "වසන්න"
+
+msgid "Sending…"
+msgstr "යවමින්…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "යැව්වා. ටිකට් #%s. IT වෙත දැනුම් දුන්නා."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "සුරැකුණා. මෙම පරිගණකය සබැඳි වූ විට යවනු ලැබේ."
+
+msgid "Help requests are turned off at this school."
+msgstr "මෙම පාසලේ උදව් ඉල්ලීම් අක්‍රිය කර ඇත."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "ඔබ මෙම පැයේ ඉල්ලීම් 3ක් යවා ඇත. කරුණාකර පසුව නැවත උත්සාහ කරන්න."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "යැවිය නොහැකි විය. කරුණාකර ගුරුවරයෙකුට කියන්න."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT මෙම පරිගණකයෙන් දෝෂ නිර්ණ තොරතුරු රැස් කරමින් සිටී."

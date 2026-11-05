@@ -118,3 +118,60 @@ msgstr "Naam of school-e-mailadres"
 
 msgid "Keep typing to narrow down"
 msgstr "Blijf typen om de lijst te verkleinen"
+
+msgid "Get help"
+msgstr "Hulp vragen"
+
+msgid "Get help from IT"
+msgstr "Hulp vragen aan ICT"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Kan niet aanmelden"
+
+msgid "An app"
+msgstr "Een app"
+
+msgid "Screen, keys or sound"
+msgstr "Scherm, toetsen of geluid"
+
+msgid "Battery"
+msgstr "Batterij"
+
+msgid "Other"
+msgstr "Anders"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Wat is er gebeurd? Vermeld geen wachtwoorden of persoonlijke gegevens."
+
+msgid "Attach a screenshot"
+msgstr "Schermafbeelding toevoegen"
+
+msgid "Send"
+msgstr "Versturen"
+
+msgid "Close"
+msgstr "Sluiten"
+
+msgid "Sending…"
+msgstr "Versturen…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Verstuurd. Ticket #%s. ICT is op de hoogte."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Opgeslagen. Wordt verstuurd zodra deze computer online is."
+
+msgid "Help requests are turned off at this school."
+msgstr "Hulpverzoeken staan uit op deze school."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Je hebt dit uur 3 verzoeken verstuurd. Probeer het later opnieuw."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Versturen is mislukt. Vertel het aan een leraar."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "ICT verzamelt diagnostische gegevens van deze computer."

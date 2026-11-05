@@ -118,3 +118,60 @@ msgstr "Име или училишна е-пошта"
 
 msgid "Keep typing to narrow down"
 msgstr "Продолжете да пишувате за да го стесните списокот"
+
+msgid "Get help"
+msgstr "Побарај помош"
+
+msgid "Get help from IT"
+msgstr "Побарај помош од IT"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Не можам да се најавам"
+
+msgid "An app"
+msgstr "Апликација"
+
+msgid "Screen, keys or sound"
+msgstr "Екран, копчиња или звук"
+
+msgid "Battery"
+msgstr "Батерија"
+
+msgid "Other"
+msgstr "Друго"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Што се случи? Ве молиме не внесувајте лозинки или лични податоци."
+
+msgid "Attach a screenshot"
+msgstr "Прикачи слика од екранот"
+
+msgid "Send"
+msgstr "Испрати"
+
+msgid "Close"
+msgstr "Затвори"
+
+msgid "Sending…"
+msgstr "Се испраќа…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Испратено. Барање #%s. IT е известен."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Зачувано. Ќе се испрати кога компјутерот ќе биде на интернет."
+
+msgid "Help requests are turned off at this school."
+msgstr "Барањата за помош се исклучени во ова училиште."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Испративте 3 барања овој час. Обидете се повторно подоцна."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Не можеше да се испрати. Кажете му на наставник."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT собира дијагностички информации од овој компјутер."

@@ -2117,7 +2117,7 @@ fi
 #     the agent's redirect filter equals the patch's redirect, and build.sh pins gnome-shell (the extension patches its private code).
 r=0
 le=$gs/extensions/mastersos-login@mastersos.org
-for f in area.js brand.js card.js people.js setup.js shelf.js strings.js watch.js; do
+for f in area.js brand.js card.js help-model.js help.js people.js setup.js shelf.js strings.js watch.js; do
 	[ -f "$le/$f" ] || {
 		bad 49 "$le/$f is missing"
 		r=1
@@ -2876,5 +2876,70 @@ grep -qxF 'R /var/lib/mastersos-diag' "$rel/mkosi.extra/usr/lib/tmpfiles.d/maste
 	r=1
 }
 [ "$r" = 0 ] && ok 65 "the USB diagnostics are gone, and the old switch folder is removed on boot"
+
+# 66. Get help (plan 2026-11-05 Task 6): the dialog (help.js) and its logic (help-model.js, unit-tested by help-model-test.sh,
+#     which CI runs) are the same bytes in the login and the desktop extension, and so is their block of styles. Every text the
+#     model marks N_ is a msgid of mastersos-login.pot (rule 50 then wants it in every catalogue). help.js takes the gettext
+#     it is given; the desktop extension reads the login extension's catalogues. Both entries hide unless support.json says
+#     enabled, each says which session it is, and the login screen shows the collecting notice from status.json.
+r=0
+md=$rel/mkosi.extra/usr/share/gnome-shell/extensions/mastersos-managed@mastersos.org
+for f in help-model.js help.js; do
+	if [ ! -f "$ld/$f" ] || [ ! -f "$md/$f" ]; then
+		bad 66 "$f should be in both $ld and $md"
+		r=1
+	elif ! cmp -s "$ld/$f" "$md/$f"; then
+		bad 66 "$ld/$f and $md/$f differ (they must be byte-identical copies)"
+		r=1
+	fi
+done
+if ! why=$(python3 -I - "$ld" "$md" "$rel/login-i18n/mastersos-login.pot" 2>&1 <<'HELP'
+import re, sys
+ld, md, pot = sys.argv[1:]
+errs = []
+def block(path):
+    m = re.search(r"/\* Get help dialog \(help\.js\).*?/\* End of the Get help dialog\. \*/", open(path, encoding="utf-8").read(), re.S)
+    return m.group(0) if m else None
+a, b = block(f"{ld}/stylesheet.css"), block(f"{md}/stylesheet.css")
+if not a or a != b:
+    errs.append("the Get help styles are missing from a stylesheet.css or differ between the two extensions")
+model = open(f"{ld}/help-model.js", encoding="utf-8").read()
+ids = re.findall(r"""N_\((?:'([^'\\]*)'|"([^"\\]*)")\)""", model)
+ids = [x or y for x, y in ids]
+if len(ids) < 20:
+    errs.append(f"help-model.js marks only {len(ids)} texts with N_")
+text = open(pot, encoding="utf-8").read()
+missing = [i for i in ids if f'msgid "{i}"' not in text]
+if missing:
+    errs.append(f"not in mastersos-login.pot: {missing}")
+if errs:
+    sys.exit("; ".join(errs))
+HELP
+); then
+	bad 66 "help: $why"
+	r=1
+fi
+hj=$ld/help.js
+if grep -qF "from 'resource:///org/gnome/shell/extensions/extension.js'" "$hj" 2>/dev/null ||
+	! grep -qF '_init({session, gettext})' "$hj" 2>/dev/null; then
+	bad 66 "help.js should take session and gettext from its caller, not the extension's own gettext"
+	r=1
+fi
+grep -qF "bindtextdomain('mastersos-login', LOGIN_LOCALE)" "$md/extension.js" || {
+	bad 66 "mastersos-managed should translate Get help through the login extension's catalogues (mastersos-login)"
+	r=1
+}
+for want in "$lx:session: 'login'" "$md/extension.js:session: 'desktop'" "$lx:setHelpAvailable(readSupportEnabled())" \
+	"$md/extension.js:readSupportEnabled()" "$lx:collectingFor(" "$ld/shelf.js:setCollecting(on)" "$ld/shelf.js:actions.help()"; do
+	grep -qF "${want#*:}" "${want%%:*}" || {
+		bad 66 "${want%%:*} has no ${want#*:}"
+		r=1
+	}
+done
+grep -qxF '      - run: bash image/tests/help-model-test.sh' .github/workflows/mastersos.yml || {
+	bad 66 "CI (mastersos.yml image-lint) does not run image/tests/help-model-test.sh"
+	r=1
+}
+[ "$r" = 0 ] && ok 66 "Get help: one dialog and model in both extensions, every text in the catalogues, hidden unless enabled, collecting notice on the login screen"
 
 exit $fail

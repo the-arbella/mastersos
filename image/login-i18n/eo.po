@@ -118,3 +118,60 @@ msgstr "Nomo aŭ lerneja retpoŝto"
 
 msgid "Keep typing to narrow down"
 msgstr "Daŭre tajpu por malvastigi la liston"
+
+msgid "Get help"
+msgstr "Peti helpon"
+
+msgid "Get help from IT"
+msgstr "Peti helpon de IT"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Ne eblas saluti"
+
+msgid "An app"
+msgstr "Aplikaĵo"
+
+msgid "Screen, keys or sound"
+msgstr "Ekrano, klavoj aŭ sono"
+
+msgid "Battery"
+msgstr "Baterio"
+
+msgid "Other"
+msgstr "Alia"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Kio okazis? Bonvolu ne skribi pasvortojn aŭ personajn informojn."
+
+msgid "Attach a screenshot"
+msgstr "Kunsendi ekrankopion"
+
+msgid "Send"
+msgstr "Sendi"
+
+msgid "Close"
+msgstr "Fermi"
+
+msgid "Sending…"
+msgstr "Sendado…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Sendita. Bileto #%s. IT estas informita."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Konservita. Ĝi estos sendita kiam ĉi tiu komputilo estos konektita."
+
+msgid "Help requests are turned off at this school."
+msgstr "Helppetoj estas malŝaltitaj en ĉi tiu lernejo."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Vi sendis 3 petojn ĉi-hore. Bonvolu reprovi poste."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Sendo ne eblis. Bonvolu diri al instruisto."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT kolektas diagnozajn informojn de ĉi tiu komputilo."

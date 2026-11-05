@@ -118,3 +118,60 @@ msgstr "Jméno nebo školní e-mail"
 
 msgid "Keep typing to narrow down"
 msgstr "Pište dál, abyste výběr zúžili"
+
+msgid "Get help"
+msgstr "Získat pomoc"
+
+msgid "Get help from IT"
+msgstr "Pomoc od IT"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Nemohu se přihlásit"
+
+msgid "An app"
+msgstr "Aplikace"
+
+msgid "Screen, keys or sound"
+msgstr "Obrazovka, klávesy nebo zvuk"
+
+msgid "Battery"
+msgstr "Baterie"
+
+msgid "Other"
+msgstr "Jiné"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Co se stalo? Neuvádějte prosím hesla ani osobní údaje."
+
+msgid "Attach a screenshot"
+msgstr "Přiložit snímek obrazovky"
+
+msgid "Send"
+msgstr "Odeslat"
+
+msgid "Close"
+msgstr "Zavřít"
+
+msgid "Sending…"
+msgstr "Odesílání…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Odesláno. Požadavek č. %s. IT bylo informováno."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Uloženo. Odešle se, až bude tento počítač online."
+
+msgid "Help requests are turned off at this school."
+msgstr "Žádosti o pomoc jsou na této škole vypnuté."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Tuto hodinu jste odeslali 3 žádosti. Zkuste to prosím později."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Odeslání se nezdařilo. Řekněte to prosím učiteli."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT shromažďuje diagnostické informace z tohoto počítače."

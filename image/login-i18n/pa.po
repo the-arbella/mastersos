@@ -118,3 +118,60 @@ msgstr "ਨਾਮ ਜਾਂ ਸਕੂਲ ਈਮੇਲ"
 
 msgid "Keep typing to narrow down"
 msgstr "ਸੂਚੀ ਛੋਟੀ ਕਰਨ ਲਈ ਟਾਈਪ ਕਰਦੇ ਰਹੋ"
+
+msgid "Get help"
+msgstr "ਮਦਦ ਲਓ"
+
+msgid "Get help from IT"
+msgstr "IT ਤੋਂ ਮਦਦ ਲਓ"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "ਸਾਈਨ ਇਨ ਨਹੀਂ ਹੋ ਰਿਹਾ"
+
+msgid "An app"
+msgstr "ਕੋਈ ਐਪ"
+
+msgid "Screen, keys or sound"
+msgstr "ਸਕ੍ਰੀਨ, ਕੁੰਜੀਆਂ ਜਾਂ ਆਵਾਜ਼"
+
+msgid "Battery"
+msgstr "ਬੈਟਰੀ"
+
+msgid "Other"
+msgstr "ਹੋਰ"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "ਕੀ ਹੋਇਆ? ਕਿਰਪਾ ਕਰਕੇ ਪਾਸਵਰਡ ਜਾਂ ਨਿੱਜੀ ਜਾਣਕਾਰੀ ਨਾ ਲਿਖੋ।"
+
+msgid "Attach a screenshot"
+msgstr "ਸਕ੍ਰੀਨਸ਼ੌਟ ਨੱਥੀ ਕਰੋ"
+
+msgid "Send"
+msgstr "ਭੇਜੋ"
+
+msgid "Close"
+msgstr "ਬੰਦ ਕਰੋ"
+
+msgid "Sending…"
+msgstr "ਭੇਜਿਆ ਜਾ ਰਿਹਾ ਹੈ…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "ਭੇਜ ਦਿੱਤਾ। ਟਿਕਟ #%s। IT ਨੂੰ ਦੱਸ ਦਿੱਤਾ ਗਿਆ ਹੈ।"
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "ਸੰਭਾਲਿਆ ਗਿਆ। ਇਹ ਕੰਪਿਊਟਰ ਆਨਲਾਈਨ ਹੋਣ 'ਤੇ ਭੇਜ ਦਿੱਤਾ ਜਾਵੇਗਾ।"
+
+msgid "Help requests are turned off at this school."
+msgstr "ਇਸ ਸਕੂਲ ਵਿੱਚ ਮਦਦ ਬੇਨਤੀਆਂ ਬੰਦ ਹਨ।"
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "ਤੁਸੀਂ ਇਸ ਘੰਟੇ 3 ਬੇਨਤੀਆਂ ਭੇਜੀਆਂ ਹਨ। ਕਿਰਪਾ ਕਰਕੇ ਬਾਅਦ ਵਿੱਚ ਮੁੜ ਕੋਸ਼ਿਸ਼ ਕਰੋ।"
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "ਭੇਜਿਆ ਨਹੀਂ ਜਾ ਸਕਿਆ। ਕਿਰਪਾ ਕਰਕੇ ਕਿਸੇ ਅਧਿਆਪਕ ਨੂੰ ਦੱਸੋ।"
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT ਇਸ ਕੰਪਿਊਟਰ ਤੋਂ ਨਿਦਾਨ ਜਾਣਕਾਰੀ ਇਕੱਠੀ ਕਰ ਰਿਹਾ ਹੈ।"

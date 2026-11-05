@@ -118,3 +118,60 @@ msgstr "Ном ё почтаи электронии мактаб"
 
 msgid "Keep typing to narrow down"
 msgstr "Барои танг кардани рӯйхат навиштанро идома диҳед"
+
+msgid "Get help"
+msgstr "Кӯмак гирифтан"
+
+msgid "Get help from IT"
+msgstr "Кӯмак аз шӯъбаи IT"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Ворид шуда наметавонам"
+
+msgid "An app"
+msgstr "Барнома"
+
+msgid "Screen, keys or sound"
+msgstr "Экран, тугмаҳо ё садо"
+
+msgid "Battery"
+msgstr "Батарея"
+
+msgid "Other"
+msgstr "Дигар"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Чӣ шуд? Лутфан паролҳо ё маълумоти шахсиро нанависед."
+
+msgid "Attach a screenshot"
+msgstr "Замима кардани акси экран"
+
+msgid "Send"
+msgstr "Фиристодан"
+
+msgid "Close"
+msgstr "Пӯшидан"
+
+msgid "Sending…"
+msgstr "Фиристода истодааст…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Фиристода шуд. Дархости №%s. Ба шӯъбаи IT хабар дода шуд."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Захира шуд. Вақте ки ин компютер ба интернет пайваст шавад, фиристода мешавад."
+
+msgid "Help requests are turned off at this school."
+msgstr "Дархостҳои кӯмак дар ин мактаб хомӯш карда шудаанд."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Шумо дар ин соат 3 дархост фиристодед. Лутфан баъдтар кӯшиш кунед."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Фиристодан муяссар нашуд. Лутфан ба муаллим гӯед."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "Шӯъбаи IT аз ин компютер маълумоти ташхисӣ ҷамъ меорад."

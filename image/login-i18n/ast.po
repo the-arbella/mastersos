@@ -118,3 +118,60 @@ msgstr "Nome o corréu de la escuela"
 
 msgid "Keep typing to narrow down"
 msgstr "Sigui escribiendo p'amenorgar la llista"
+
+msgid "Get help"
+msgstr "Pidir ayuda"
+
+msgid "Get help from IT"
+msgstr "Pidir ayuda a TI"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Nun puedo aniciar sesión"
+
+msgid "An app"
+msgstr "Una aplicación"
+
+msgid "Screen, keys or sound"
+msgstr "Pantalla, tecles o soníu"
+
+msgid "Battery"
+msgstr "Batería"
+
+msgid "Other"
+msgstr "Otru"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "¿Qué pasó? Nun incluyas contraseñes nin datos personales."
+
+msgid "Attach a screenshot"
+msgstr "Axuntar una captura de pantalla"
+
+msgid "Send"
+msgstr "Unviar"
+
+msgid "Close"
+msgstr "Zarrar"
+
+msgid "Sending…"
+msgstr "Unviando…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Unviáu. Tique #%s. Yá s'avisó a TI."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Guardóse. Va unviase cuando esti ordenador tea en llinia."
+
+msgid "Help requests are turned off at this school."
+msgstr "Les solicitúes d'ayuda tán desactivaes nesta escuela."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Unviesti 3 solicitúes nesta hora. Volvi intentalo más sero."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Nun se pudo unviar. Avisa a un profesor."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "TI ta recoyendo información de diagnósticu d'esti ordenador."

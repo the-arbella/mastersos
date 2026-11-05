@@ -118,3 +118,60 @@ msgstr "姓名或学校邮箱"
 
 msgid "Keep typing to narrow down"
 msgstr "继续输入以缩小范围"
+
+msgid "Get help"
+msgstr "获取帮助"
+
+msgid "Get help from IT"
+msgstr "向 IT 求助"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "无法登录"
+
+msgid "An app"
+msgstr "某个应用"
+
+msgid "Screen, keys or sound"
+msgstr "屏幕、键盘或声音"
+
+msgid "Battery"
+msgstr "电池"
+
+msgid "Other"
+msgstr "其他"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "发生了什么？请不要填写密码或个人信息。"
+
+msgid "Attach a screenshot"
+msgstr "附上截图"
+
+msgid "Send"
+msgstr "发送"
+
+msgid "Close"
+msgstr "关闭"
+
+msgid "Sending…"
+msgstr "正在发送…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "已发送。工单号 #%s。已通知 IT。"
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "已保存。这台电脑联网后会自动发送。"
+
+msgid "Help requests are turned off at this school."
+msgstr "本校未开启求助功能。"
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "你这一小时已经发送了 3 次求助。请稍后再试。"
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "发送失败。请告诉老师。"
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT 正在收集这台电脑的诊断信息。"

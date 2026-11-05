@@ -118,3 +118,60 @@ msgstr "Név vagy iskolai e-mail-cím"
 
 msgid "Keep typing to narrow down"
 msgstr "Gépeljen tovább a lista szűkítéséhez"
+
+msgid "Get help"
+msgstr "Segítségkérés"
+
+msgid "Get help from IT"
+msgstr "Segítség az informatikustól"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Nem tudok bejelentkezni"
+
+msgid "An app"
+msgstr "Egy alkalmazás"
+
+msgid "Screen, keys or sound"
+msgstr "Képernyő, billentyűk vagy hang"
+
+msgid "Battery"
+msgstr "Akkumulátor"
+
+msgid "Other"
+msgstr "Egyéb"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Mi történt? Kérjük, ne írj jelszót vagy személyes adatot."
+
+msgid "Attach a screenshot"
+msgstr "Képernyőkép csatolása"
+
+msgid "Send"
+msgstr "Küldés"
+
+msgid "Close"
+msgstr "Bezárás"
+
+msgid "Sending…"
+msgstr "Küldés…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Elküldve. Hibajegy: #%s. Az informatikus értesítést kapott."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Mentve. Elküldjük, amikor ez a számítógép online lesz."
+
+msgid "Help requests are turned off at this school."
+msgstr "Ebben az iskolában a segítségkérés ki van kapcsolva."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Ebben az órában már 3 kérést küldtél. Próbáld újra később."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Nem sikerült elküldeni. Szólj egy tanárnak."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "Az informatikus diagnosztikai adatokat gyűjt erről a számítógépről."

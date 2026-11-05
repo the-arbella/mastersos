@@ -118,3 +118,60 @@ msgstr ""
 
 msgid "Keep typing to narrow down"
 msgstr ""
+
+msgid "Get help"
+msgstr ""
+
+msgid "Get help from IT"
+msgstr ""
+
+msgid "Wi-Fi"
+msgstr ""
+
+msgid "Can't sign in"
+msgstr ""
+
+msgid "An app"
+msgstr ""
+
+msgid "Screen, keys or sound"
+msgstr ""
+
+msgid "Battery"
+msgstr ""
+
+msgid "Other"
+msgstr ""
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr ""
+
+msgid "Attach a screenshot"
+msgstr ""
+
+msgid "Send"
+msgstr ""
+
+msgid "Close"
+msgstr ""
+
+msgid "Sending…"
+msgstr ""
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr ""
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr ""
+
+msgid "Help requests are turned off at this school."
+msgstr ""
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr ""
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr ""
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr ""

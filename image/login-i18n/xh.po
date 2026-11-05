@@ -119,3 +119,60 @@ msgstr "Igama okanye i-imeyile yesikolo"
 
 msgid "Keep typing to narrow down"
 msgstr "Qhubeka uchwetheza ukuze unciphise uluhlu"
+
+msgid "Get help"
+msgstr "Fumana uncedo"
+
+msgid "Get help from IT"
+msgstr "Fumana uncedo kwi-IT"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Andikwazi ukungena"
+
+msgid "An app"
+msgstr "I-app"
+
+msgid "Screen, keys or sound"
+msgstr "Isikrini, amaqhosha okanye isandi"
+
+msgid "Battery"
+msgstr "Ibhetri"
+
+msgid "Other"
+msgstr "Okunye"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Kwenzeke ntoni? Nceda ungafaki iiphasiwedi okanye iinkcukacha zakho."
+
+msgid "Attach a screenshot"
+msgstr "Qhoboshela umfanekiso wesikrini"
+
+msgid "Send"
+msgstr "Thumela"
+
+msgid "Close"
+msgstr "Vala"
+
+msgid "Sending…"
+msgstr "Iyathunyelwa…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Ithunyelwe. Itikiti #%s. I-IT yaziswe."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Igciniwe. Iya kuthunyelwa xa le khompyutha ikwi-intanethi."
+
+msgid "Help requests are turned off at this school."
+msgstr "Izicelo zoncedo zicinyiwe kwesi sikolo."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Uthumele izicelo ezi-3 kule yure. Nceda uzame kwakhona kamva."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Akukwazekanga ukuthumela. Nceda uxelele utitshala."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "I-IT iqokelela ulwazi lokuxilonga kule khompyutha."

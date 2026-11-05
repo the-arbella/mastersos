@@ -118,3 +118,60 @@ msgstr "Ad ya da mektep e-poçtası"
 
 msgid "Keep typing to narrow down"
 msgstr "Cedvelni tarlatmaq içün yazmağa devam etiñiz"
+
+msgid "Get help"
+msgstr "Yardım soramaq"
+
+msgid "Get help from IT"
+msgstr "IT'den yardım soramaq"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Kirip olamayım"
+
+msgid "An app"
+msgstr "Bir programma"
+
+msgid "Screen, keys or sound"
+msgstr "Ekran, tuşlar ya da ses"
+
+msgid "Battery"
+msgstr "Batareya"
+
+msgid "Other"
+msgstr "Başqa"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Ne oldı? Lütfen, parol ya da şahsiy malümat yazmañız."
+
+msgid "Attach a screenshot"
+msgstr "Ekran resimini qoşmaq"
+
+msgid "Send"
+msgstr "Yollamaq"
+
+msgid "Close"
+msgstr "Qapatmaq"
+
+msgid "Sending…"
+msgstr "Yollana…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Yollandı. Bilet #%s. IT haberdar etildi."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Saqlandı. Bu kompyuter internetke bağlanğanda yollanacaq."
+
+msgid "Help requests are turned off at this school."
+msgstr "Bu mektepte yardım istekleri qapatılğan."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Bu saat 3 istek yolladıñız. Lütfen, soñra yañıdan sınañız."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Yollanamadı. Lütfen, bir ocağa aytıñız."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT bu kompyuterden diagnostika malümatı toplay."

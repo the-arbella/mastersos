@@ -118,3 +118,60 @@ msgstr "Namn eller skolans e-post"
 
 msgid "Keep typing to narrow down"
 msgstr "Fortsätt skriva för att begränsa listan"
+
+msgid "Get help"
+msgstr "Få hjälp"
+
+msgid "Get help from IT"
+msgstr "Få hjälp av IT"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Kan inte logga in"
+
+msgid "An app"
+msgstr "En app"
+
+msgid "Screen, keys or sound"
+msgstr "Skärm, tangenter eller ljud"
+
+msgid "Battery"
+msgstr "Batteri"
+
+msgid "Other"
+msgstr "Annat"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Vad hände? Skriv inte lösenord eller personuppgifter."
+
+msgid "Attach a screenshot"
+msgstr "Bifoga en skärmbild"
+
+msgid "Send"
+msgstr "Skicka"
+
+msgid "Close"
+msgstr "Stäng"
+
+msgid "Sending…"
+msgstr "Skickar…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Skickat. Ärende #%s. IT har fått veta."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Sparat. Det skickas när den här datorn är online."
+
+msgid "Help requests are turned off at this school."
+msgstr "Hjälpförfrågningar är avstängda på den här skolan."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Du har skickat 3 förfrågningar den här timmen. Försök igen senare."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Det gick inte att skicka. Säg till en lärare."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT samlar in diagnostikinformation från den här datorn."

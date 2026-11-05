@@ -118,3 +118,60 @@ msgstr "Nom o correu de l'escola"
 
 msgid "Keep typing to narrow down"
 msgstr "Continueu escrivint per reduir la llista"
+
+msgid "Get help"
+msgstr "Demaneu ajuda"
+
+msgid "Get help from IT"
+msgstr "Demaneu ajuda a TI"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "No puc iniciar la sessió"
+
+msgid "An app"
+msgstr "Una aplicació"
+
+msgid "Screen, keys or sound"
+msgstr "Pantalla, tecles o so"
+
+msgid "Battery"
+msgstr "Bateria"
+
+msgid "Other"
+msgstr "Altres"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Què ha passat? No hi incloeu contrasenyes ni dades personals."
+
+msgid "Attach a screenshot"
+msgstr "Adjunta una captura de pantalla"
+
+msgid "Send"
+msgstr "Envia"
+
+msgid "Close"
+msgstr "Tanca"
+
+msgid "Sending…"
+msgstr "S'està enviant…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Enviat. Tiquet #%s. S'ha avisat TI."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Desat. S'enviarà quan aquest ordinador estigui connectat."
+
+msgid "Help requests are turned off at this school."
+msgstr "Les sol·licituds d'ajuda estan desactivades en aquesta escola."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Heu enviat 3 sol·licituds en aquesta hora. Torneu-ho a provar més tard."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "No s'ha pogut enviar. Digueu-ho a un docent."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "TI està recollint informació de diagnòstic d'aquest ordinador."

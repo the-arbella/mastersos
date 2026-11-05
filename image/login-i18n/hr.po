@@ -118,3 +118,60 @@ msgstr "Ime ili školska e-pošta"
 
 msgid "Keep typing to narrow down"
 msgstr "Nastavite tipkati kako biste suzili popis"
+
+msgid "Get help"
+msgstr "Zatraži pomoć"
+
+msgid "Get help from IT"
+msgstr "Zatražite pomoć od IT službe"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Ne mogu se prijaviti"
+
+msgid "An app"
+msgstr "Aplikacija"
+
+msgid "Screen, keys or sound"
+msgstr "Zaslon, tipke ili zvuk"
+
+msgid "Battery"
+msgstr "Baterija"
+
+msgid "Other"
+msgstr "Ostalo"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Što se dogodilo? Molimo ne upisujte lozinke ni osobne podatke."
+
+msgid "Attach a screenshot"
+msgstr "Priloži snimku zaslona"
+
+msgid "Send"
+msgstr "Pošalji"
+
+msgid "Close"
+msgstr "Zatvori"
+
+msgid "Sending…"
+msgstr "Slanje…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Poslano. Prijava #%s. IT služba je obaviještena."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Spremljeno. Bit će poslano kad ovo računalo bude na mreži."
+
+msgid "Help requests are turned off at this school."
+msgstr "Zahtjevi za pomoć isključeni su u ovoj školi."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "U ovom ste satu poslali 3 zahtjeva. Pokušajte ponovno kasnije."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Slanje nije uspjelo. Recite nastavniku."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT služba prikuplja dijagnostičke podatke s ovog računala."

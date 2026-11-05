@@ -118,3 +118,60 @@ msgstr "Anv pe postel ar skol"
 
 msgid "Keep typing to narrow down"
 msgstr "Kendalc'hit da skrivañ evit strishaat ar roll"
+
+msgid "Get help"
+msgstr "Goulenn skoazell"
+
+msgid "Get help from IT"
+msgstr "Goulenn skoazell digant an TIC"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Ne c'hallan ket kevreañ"
+
+msgid "An app"
+msgstr "Un arload"
+
+msgid "Screen, keys or sound"
+msgstr "Skramm, stokelloù pe son"
+
+msgid "Battery"
+msgstr "Batiri"
+
+msgid "Other"
+msgstr "All"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Petra zo c'hoarvezet? Na lakait ket gerioù-tremen na titouroù personel, mar plij."
+
+msgid "Attach a screenshot"
+msgstr "Stagañ ur skeudenn-skramm"
+
+msgid "Send"
+msgstr "Kas"
+
+msgid "Close"
+msgstr "Serriñ"
+
+msgid "Sending…"
+msgstr "O kas…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Kaset. Tiked #%s. Kelaouet eo bet an TIC."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Enrollet. Kaset e vo pa vo kevreet ar mikrourzhiataer-mañ ouzh ar genrouedad."
+
+msgid "Help requests are turned off at this school."
+msgstr "Diweredekaet eo ar goulennoù skoazell er skol-mañ."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Kaset hoc'h eus 3 goulenn an eurvezh-mañ. Klaskit en-dro diwezhatoc'h, mar plij."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "N'eus ket bet gallet kas. Lavarit d'ur c'helenner, mar plij."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "An TIC a zastum titouroù diagnostik diwar ar mikrourzhiataer-mañ."

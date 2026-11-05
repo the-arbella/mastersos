@@ -118,3 +118,60 @@ msgstr "الاسم أو البريد الإلكتروني المدرسي"
 
 msgid "Keep typing to narrow down"
 msgstr "تابع الكتابة لتضييق النتائج"
+
+msgid "Get help"
+msgstr "طلب المساعدة"
+
+msgid "Get help from IT"
+msgstr "اطلب المساعدة من قسم تقنية المعلومات"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "تعذّر تسجيل الدخول"
+
+msgid "An app"
+msgstr "تطبيق"
+
+msgid "Screen, keys or sound"
+msgstr "الشاشة أو المفاتيح أو الصوت"
+
+msgid "Battery"
+msgstr "البطارية"
+
+msgid "Other"
+msgstr "أخرى"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "ماذا حدث؟ يرجى عدم كتابة كلمات المرور أو البيانات الشخصية."
+
+msgid "Attach a screenshot"
+msgstr "إرفاق لقطة شاشة"
+
+msgid "Send"
+msgstr "إرسال"
+
+msgid "Close"
+msgstr "إغلاق"
+
+msgid "Sending…"
+msgstr "جارٍ الإرسال…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "تم الإرسال. التذكرة رقم %s. تم إبلاغ قسم تقنية المعلومات."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "تم الحفظ. سيُرسل عند اتصال هذا الحاسوب بالإنترنت."
+
+msgid "Help requests are turned off at this school."
+msgstr "طلبات المساعدة متوقفة في هذه المدرسة."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "لقد أرسلت 3 طلبات خلال هذه الساعة. يرجى المحاولة لاحقًا."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "تعذّر الإرسال. يرجى إخبار أحد المعلمين."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "يجمع قسم تقنية المعلومات معلومات تشخيصية من هذا الحاسوب."

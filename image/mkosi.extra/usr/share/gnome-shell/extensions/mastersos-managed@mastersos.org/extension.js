@@ -3,18 +3,27 @@
 // "This device is managed by <school>" (with the school's quick menu icon when there is one) to the quick
 // settings menu. Reads /var/lib/mastersos-public/branding/branding.json; missing, broken or
 // empty school_name adds nothing and never throws. Also runs while locked, for session.js.
+// A "Get help" row under it opens the Get help dialog (help.js, the same file as the login screen's), when the school allows it
+// (support.json) and the screen is not locked. Its text comes from the login extension's catalogues (gettext domain
+// mastersos-login, one translation of every Get help text for both screens); the managed line keeps its own two languages.
 
+import Gettext from 'gettext';
 import St from 'gi://St';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Clutter from 'gi://Clutter';
 
+import * as BoxPointer from 'resource:///org/gnome/shell/ui/boxpointer.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 import {LockToGreeter, isSchoolAccount, syncKeyboard} from './session.js';
+import {HelpDialog, readSupportEnabled} from './help.js';
+import {COPY} from './help-model.js';
 
 const BRANDING = '/var/lib/mastersos-public/branding/branding.json';
+// mkosi.build compiles login-i18n/*.po there; the login extension is installed (not enabled) in every session.
+const LOGIN_LOCALE = '/usr/share/gnome-shell/extensions/mastersos-login@mastersos.org/locale';
 
 const STRINGS = {
     en: {managed: 'This device is managed by %s'},
@@ -71,9 +80,19 @@ function brandMark() {
     return box;
 }
 
+// gettext for the mastersos-login domain, whatever the shell has bound for this extension.
+function loginGettext() {
+    Gettext.bindtextdomain('mastersos-login', LOGIN_LOCALE);
+    const domain = Gettext.domain('mastersos-login');
+    return s => domain.gettext(s);
+}
+
 export default class MastersosManagedExtension extends Extension {
     enable() {
         this._item = null;
+        this._help = null;
+        this._helpMenuId = 0;
+        this._helpDialog = null;
         this._brand = null;
         this._modeId = 0;
         try {
@@ -89,6 +108,11 @@ export default class MastersosManagedExtension extends Extension {
         }
         // Every account keeps this extension while locked: the lock screen shows the MastersOS mark (_syncLook)
         this._stayWhileLocked();
+        try {
+            this._addHelp();
+        } catch (e) {
+            log(`mastersos-managed: Get help: ${e.message ?? e}`);
+        }
         try {
             const b = readBranding();
             const name = cleanText(b?.school_name, 100);
@@ -123,6 +147,52 @@ export default class MastersosManagedExtension extends Extension {
             log(`mastersos-managed: enable failed: ${e.message ?? e}`);
             this.disable();
         }
+    }
+
+    // A row at the top of the quick settings menu (under the managed line, which enable() inserts above it), shown each time
+    // the menu opens if the school allows help requests and the screen is not locked.
+    _addHelp() {
+        const qs = Main.panel?.statusArea?.quickSettings;
+        if (!qs?.menu?.box)
+            return;
+        const _ = loginGettext();
+        const box = new St.BoxLayout({style_class: 'mastersos-help-row-content', x_expand: true});
+        box.add_child(new St.Icon({
+            icon_name: 'help-browser-symbolic',
+            fallback_icon_name: 'dialog-question-symbolic',
+            icon_size: 16,
+            y_align: Clutter.ActorAlign.CENTER,
+        }));
+        box.add_child(new St.Label({text: _(COPY.entry), y_align: Clutter.ActorAlign.CENTER}));
+        this._help = new St.Button({
+            style_class: 'mastersos-help-row',
+            child: box,
+            x_expand: true,
+            can_focus: true,
+            reactive: true,
+            accessible_name: _(COPY.entry),
+        });
+        this._help.connect('clicked', () => {
+            // Closed at once, without the animation: the screenshot taken next is of the screen the student was looking at.
+            qs.menu.close(BoxPointer.PopupAnimation.NONE);
+            if (this._helpDialog)
+                return;
+            this._helpDialog = new HelpDialog({session: 'desktop', gettext: _});
+            this._helpDialog.connect('destroy', () => {
+                this._helpDialog = null;
+            });
+            this._helpDialog.open();
+        });
+        const sync = () => {
+            if (this._help)
+                this._help.visible = !Main.sessionMode.isLocked && readSupportEnabled();
+        };
+        sync();
+        this._helpMenuId = qs.menu.connect('open-state-changed', (menu, open) => {
+            if (open)
+                sync();
+        });
+        qs.menu.box.insert_child_at_index(this._help, 0);
     }
 
     // This extension is enabled through ubuntu.json, and the lock screen's session mode has no such list of its own: session-modes
@@ -175,6 +245,14 @@ export default class MastersosManagedExtension extends Extension {
         }
         this._lock?.disable();
         this._lock = null;
+        if (this._helpMenuId) {
+            Main.panel?.statusArea?.quickSettings?.menu?.disconnect(this._helpMenuId);
+            this._helpMenuId = 0;
+        }
+        this._helpDialog?.destroy();
+        this._helpDialog = null;
+        this._help?.destroy();
+        this._help = null;
         if (this._item) {
             this._item.destroy();
             this._item = null;

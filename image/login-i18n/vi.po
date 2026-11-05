@@ -118,3 +118,60 @@ msgstr "Tên hoặc email trường học"
 
 msgid "Keep typing to narrow down"
 msgstr "Tiếp tục nhập để thu hẹp danh sách"
+
+msgid "Get help"
+msgstr "Nhận trợ giúp"
+
+msgid "Get help from IT"
+msgstr "Nhờ bộ phận IT trợ giúp"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Không đăng nhập được"
+
+msgid "An app"
+msgstr "Một ứng dụng"
+
+msgid "Screen, keys or sound"
+msgstr "Màn hình, phím hoặc âm thanh"
+
+msgid "Battery"
+msgstr "Pin"
+
+msgid "Other"
+msgstr "Khác"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Đã xảy ra chuyện gì? Vui lòng không ghi mật khẩu hoặc thông tin cá nhân."
+
+msgid "Attach a screenshot"
+msgstr "Đính kèm ảnh chụp màn hình"
+
+msgid "Send"
+msgstr "Gửi"
+
+msgid "Close"
+msgstr "Đóng"
+
+msgid "Sending…"
+msgstr "Đang gửi…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Đã gửi. Phiếu #%s. Bộ phận IT đã được thông báo."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Đã lưu. Yêu cầu sẽ được gửi khi máy tính này có mạng."
+
+msgid "Help requests are turned off at this school."
+msgstr "Trường này đã tắt tính năng yêu cầu trợ giúp."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Bạn đã gửi 3 yêu cầu trong giờ này. Vui lòng thử lại sau."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Không gửi được. Vui lòng báo cho thầy cô."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "Bộ phận IT đang thu thập thông tin chẩn đoán từ máy tính này."

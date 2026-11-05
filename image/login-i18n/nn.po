@@ -118,3 +118,60 @@ msgstr "Namn eller e-post frå skulen"
 
 msgid "Keep typing to narrow down"
 msgstr "Hald fram med å skrive for å snevre inn lista"
+
+msgid "Get help"
+msgstr "Få hjelp"
+
+msgid "Get help from IT"
+msgstr "Få hjelp frå IT"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Får ikkje logga inn"
+
+msgid "An app"
+msgstr "Ein app"
+
+msgid "Screen, keys or sound"
+msgstr "Skjerm, tastar eller lyd"
+
+msgid "Battery"
+msgstr "Batteri"
+
+msgid "Other"
+msgstr "Anna"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Kva skjedde? Ikkje skriv passord eller personopplysningar."
+
+msgid "Attach a screenshot"
+msgstr "Legg ved skjermbilete"
+
+msgid "Send"
+msgstr "Send"
+
+msgid "Close"
+msgstr "Lukk"
+
+msgid "Sending…"
+msgstr "Sender…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Sendt. Sak #%s. IT har fått beskjed."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Lagra. Førespurnaden blir send når denne datamaskina er på nett."
+
+msgid "Help requests are turned off at this school."
+msgstr "Hjelpeførespurnader er slått av på denne skulen."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Du har sendt 3 førespurnader denne timen. Prøv igjen seinare."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Kunne ikkje senda. Sei frå til ein lærar."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT samlar inn diagnoseinformasjon frå denne datamaskina."

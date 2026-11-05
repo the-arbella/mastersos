@@ -118,3 +118,60 @@ msgstr "שם או דוא״ל בית הספר"
 
 msgid "Keep typing to narrow down"
 msgstr "המשיכו להקליד כדי לצמצם את הרשימה"
+
+msgid "Get help"
+msgstr "קבלת עזרה"
+
+msgid "Get help from IT"
+msgstr "קבלת עזרה מצוות ה-IT"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "בעיה בכניסה"
+
+msgid "An app"
+msgstr "אפליקציה"
+
+msgid "Screen, keys or sound"
+msgstr "מסך, מקשים או צליל"
+
+msgid "Battery"
+msgstr "סוללה"
+
+msgid "Other"
+msgstr "אחר"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "מה קרה? נא לא לכלול סיסמאות או פרטים אישיים."
+
+msgid "Attach a screenshot"
+msgstr "צירוף צילום מסך"
+
+msgid "Send"
+msgstr "שליחה"
+
+msgid "Close"
+msgstr "סגירה"
+
+msgid "Sending…"
+msgstr "בשליחה…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "נשלח. קריאה #%s. צוות ה-IT עודכן."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "נשמר. הפנייה תישלח כשהמחשב יתחבר לאינטרנט."
+
+msgid "Help requests are turned off at this school."
+msgstr "בקשות עזרה מושבתות בבית הספר הזה."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "שלחתם 3 בקשות בשעה הזו. נסו שוב מאוחר יותר."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "השליחה נכשלה. ספרו למורה."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "צוות ה-IT אוסף מידע אבחוני מהמחשב הזה."

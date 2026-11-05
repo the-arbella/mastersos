@@ -118,3 +118,60 @@ msgstr "Ім'я або шкільна електронна пошта"
 
 msgid "Keep typing to narrow down"
 msgstr "Продовжуйте вводити, щоб звузити список"
+
+msgid "Get help"
+msgstr "Отримати допомогу"
+
+msgid "Get help from IT"
+msgstr "Допомога від ІТ-відділу"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Не вдається увійти"
+
+msgid "An app"
+msgstr "Застосунок"
+
+msgid "Screen, keys or sound"
+msgstr "Екран, клавіші або звук"
+
+msgid "Battery"
+msgstr "Акумулятор"
+
+msgid "Other"
+msgstr "Інше"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Що сталося? Не вказуйте паролів та особистих даних."
+
+msgid "Attach a screenshot"
+msgstr "Додати знімок екрана"
+
+msgid "Send"
+msgstr "Надіслати"
+
+msgid "Close"
+msgstr "Закрити"
+
+msgid "Sending…"
+msgstr "Надсилання…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Надіслано. Заявка №%s. ІТ-відділ повідомлено."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Збережено. Буде надіслано, коли цей комп’ютер з’явиться в мережі."
+
+msgid "Help requests are turned off at this school."
+msgstr "Запити на допомогу в цій школі вимкнено."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Ви надіслали 3 запити за цю годину. Спробуйте пізніше."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Не вдалося надіслати. Скажіть учителю."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "ІТ-відділ збирає діагностичні дані з цього комп’ютера."

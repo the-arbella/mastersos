@@ -118,3 +118,60 @@ msgstr "အမည် သို့မဟုတ် ကျောင်းအီး�
 
 msgid "Keep typing to narrow down"
 msgstr "စာရင်းကို ကျဉ်းစေရန် ဆက်ရိုက်ပါ"
+
+msgid "Get help"
+msgstr "အကူအညီ ရယူရန်"
+
+msgid "Get help from IT"
+msgstr "IT ထံမှ အကူအညီ ရယူရန်"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "လော့ဂ်အင်ဝင်၍ မရပါ"
+
+msgid "An app"
+msgstr "အက်ပ်တစ်ခု"
+
+msgid "Screen, keys or sound"
+msgstr "မျက်နှာပြင်၊ ကီးများ သို့မဟုတ် အသံ"
+
+msgid "Battery"
+msgstr "ဘက်ထရီ"
+
+msgid "Other"
+msgstr "အခြား"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "ဘာဖြစ်ခဲ့သလဲ။ စကားဝှက်များ သို့မဟုတ် ကိုယ်ရေးအချက်အလက်များ မထည့်ပါနှင့်။"
+
+msgid "Attach a screenshot"
+msgstr "ဖန်သားပြင်ဓာတ်ပုံ ပူးတွဲမည်"
+
+msgid "Send"
+msgstr "ပို့မည်"
+
+msgid "Close"
+msgstr "ပိတ်မည်"
+
+msgid "Sending…"
+msgstr "ပို့နေသည်…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "ပို့ပြီးပါပြီ။ လက်မှတ် #%s။ IT ကို အသိပေးပြီးပါပြီ။"
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "သိမ်းထားပါပြီ။ ဤကွန်ပျူတာ အွန်လိုင်းဖြစ်သည့်အခါ ပို့ပါမည်။"
+
+msgid "Help requests are turned off at this school."
+msgstr "ဤကျောင်းတွင် အကူအညီတောင်းခံမှုများကို ပိတ်ထားပါသည်။"
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "ဤတစ်နာရီအတွင်း တောင်းခံမှု 3 ခု ပို့ပြီးပါပြီ။ နောက်မှ ထပ်ကြိုးစားပါ။"
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "ပို့၍ မရပါ။ ဆရာ/ဆရာမ တစ်ဦးကို ပြောပြပါ။"
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT သည် ဤကွန်ပျူတာမှ ချို့ယွင်းချက်ရှာဖွေရေး အချက်အလက်များကို စုဆောင်းနေသည်။"

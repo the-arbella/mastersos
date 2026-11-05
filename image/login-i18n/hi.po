@@ -118,3 +118,60 @@ msgstr "नाम या स्कूल ईमेल"
 
 msgid "Keep typing to narrow down"
 msgstr "सूची छोटी करने के लिए टाइप करते रहें"
+
+msgid "Get help"
+msgstr "मदद लें"
+
+msgid "Get help from IT"
+msgstr "IT से मदद लें"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "साइन इन नहीं हो रहा"
+
+msgid "An app"
+msgstr "कोई ऐप"
+
+msgid "Screen, keys or sound"
+msgstr "स्क्रीन, कुंजियाँ या आवाज़"
+
+msgid "Battery"
+msgstr "बैटरी"
+
+msgid "Other"
+msgstr "अन्य"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "क्या हुआ? कृपया पासवर्ड या निजी जानकारी न लिखें।"
+
+msgid "Attach a screenshot"
+msgstr "स्क्रीनशॉट संलग्न करें"
+
+msgid "Send"
+msgstr "भेजें"
+
+msgid "Close"
+msgstr "बंद करें"
+
+msgid "Sending…"
+msgstr "भेजा जा रहा है…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "भेज दिया गया। टिकट #%s। IT को सूचित कर दिया गया है।"
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "सहेजा गया। यह कंप्यूटर ऑनलाइन होने पर भेज दिया जाएगा।"
+
+msgid "Help requests are turned off at this school."
+msgstr "इस स्कूल में मदद अनुरोध बंद हैं।"
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "आपने इस घंटे 3 अनुरोध भेजे हैं। कृपया बाद में फिर से कोशिश करें।"
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "भेजा नहीं जा सका। कृपया किसी शिक्षक को बताएँ।"
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT इस कंप्यूटर से निदान जानकारी इकट्ठा कर रहा है।"

@@ -118,3 +118,60 @@ msgstr "Nav an e-peyama dibistanê"
 
 msgid "Keep typing to narrow down"
 msgstr "Ji bo teng kirina lîsteyê nivîsandinê bidomînin"
+
+msgid "Get help"
+msgstr "Alîkarî bixwaze"
+
+msgid "Get help from IT"
+msgstr "Ji IT alîkarî bixwaze"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Nikarim têkevim"
+
+msgid "An app"
+msgstr "Sepanek"
+
+msgid "Screen, keys or sound"
+msgstr "Dîmender, bişkok an deng"
+
+msgid "Battery"
+msgstr "Pîl"
+
+msgid "Other"
+msgstr "Yên din"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Çi qewimî? Ji kerema xwe şîfre an agahiyên kesane nenivîse."
+
+msgid "Attach a screenshot"
+msgstr "Wêneyê dîmenderê pêve bike"
+
+msgid "Send"
+msgstr "Bişîne"
+
+msgid "Close"
+msgstr "Bigire"
+
+msgid "Sending…"
+msgstr "Tê şandin…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Hat şandin. Daxwaz #%s. IT hat agahdarkirin."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Hat tomarkirin. Dema ev komputer girêdayî înternetê be, wê bê şandin."
+
+msgid "Help requests are turned off at this school."
+msgstr "Daxwazên alîkariyê li vê dibistanê girtî ne."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Te vê saetê 3 daxwaz şandin. Ji kerema xwe paşê dîsa biceribîne."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Nehat şandin. Ji kerema xwe ji mamosteyekî re bêje."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT ji vî komputerî agahiyên teşhîsê berhev dike."

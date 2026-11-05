@@ -118,3 +118,60 @@ msgstr "Имя или школьная электронная почта"
 
 msgid "Keep typing to narrow down"
 msgstr "Продолжайте вводить, чтобы сузить список"
+
+msgid "Get help"
+msgstr "Попросить помощи"
+
+msgid "Get help from IT"
+msgstr "Обратиться в ИТ-отдел"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Не удаётся войти"
+
+msgid "An app"
+msgstr "Приложение"
+
+msgid "Screen, keys or sound"
+msgstr "Экран, клавиши или звук"
+
+msgid "Battery"
+msgstr "Аккумулятор"
+
+msgid "Other"
+msgstr "Другое"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Что случилось? Не указывайте пароли и личные данные."
+
+msgid "Attach a screenshot"
+msgstr "Приложить снимок экрана"
+
+msgid "Send"
+msgstr "Отправить"
+
+msgid "Close"
+msgstr "Закрыть"
+
+msgid "Sending…"
+msgstr "Отправка…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Отправлено. Заявка #%s. ИТ-отдел уведомлён."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Сохранено. Будет отправлено, когда компьютер подключится к сети."
+
+msgid "Help requests are turned off at this school."
+msgstr "В этой школе запросы о помощи отключены."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Вы отправили 3 запроса за этот час. Повторите попытку позже."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Не удалось отправить. Сообщите учителю."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "ИТ-отдел собирает диагностические данные с этого компьютера."

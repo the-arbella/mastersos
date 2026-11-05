@@ -118,3 +118,60 @@ msgstr "Izena edo ikastetxeko posta elektronikoa"
 
 msgid "Keep typing to narrow down"
 msgstr "Jarraitu idazten zerrenda murrizteko"
+
+msgid "Get help"
+msgstr "Eskatu laguntza"
+
+msgid "Get help from IT"
+msgstr "Eskatu laguntza IT sailari"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Ezin dut saioa hasi"
+
+msgid "An app"
+msgstr "Aplikazio bat"
+
+msgid "Screen, keys or sound"
+msgstr "Pantaila, teklak edo soinua"
+
+msgid "Battery"
+msgstr "Bateria"
+
+msgid "Other"
+msgstr "Bestelakoa"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Zer gertatu da? Ez idatzi pasahitzik edo datu pertsonalik."
+
+msgid "Attach a screenshot"
+msgstr "Erantsi pantaila-argazki bat"
+
+msgid "Send"
+msgstr "Bidali"
+
+msgid "Close"
+msgstr "Itxi"
+
+msgid "Sending…"
+msgstr "Bidaltzen…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Bidalita. #%s txartela. IT saila jakinaren gainean dago."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Gordeta. Ordenagailu hau linean dagoenean bidaliko da."
+
+msgid "Help requests are turned off at this school."
+msgstr "Laguntza-eskaerak desaktibatuta daude ikastetxe honetan."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "3 eskaera bidali dituzu ordu honetan. Saiatu berriro geroago."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Ezin izan da bidali. Esan irakasle bati."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT saila ordenagailu honetako diagnostiko-informazioa biltzen ari da."

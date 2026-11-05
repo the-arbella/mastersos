@@ -119,3 +119,60 @@ msgstr "མིང་ ཡང་ན་ སློབ་གྲྭའི་ གློ
 
 msgid "Keep typing to narrow down"
 msgstr "ཐོ་ཡིག་ ཆུང་སུ་བཟོ་ནིའི་དོན་ལུ་ ཡིག་དཔར་ མུ་མཐུད་དེ་ རྐྱབ།"
+
+msgid "Get help"
+msgstr "རོགས་རམ་ཞུ།"
+
+msgid "Get help from IT"
+msgstr "IT ལས་ རོགས་རམ་ཞུ།"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "ནང་འཛུལ་འབད་མི་ཚུགས།"
+
+msgid "An app"
+msgstr "གློག་རིམ་ཅིག"
+
+msgid "Screen, keys or sound"
+msgstr "གསལ་གཞི་ ལྡེ་མིག་ ཡང་ན་ སྒྲ།"
+
+msgid "Battery"
+msgstr "གློག་རྫས།"
+
+msgid "Other"
+msgstr "གཞན།"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "ག་ཅི་བྱུང་ཡི? གནངམ་འབད་ གསང་ཡིག་དང་ རང་དོན་གྱི་ བརྡ་དོན་ མ་བཙུགས།"
+
+msgid "Attach a screenshot"
+msgstr "གསལ་གཞིའི་པར་ མཉམ་སྦྲགས་འབད།"
+
+msgid "Send"
+msgstr "གཏང་།"
+
+msgid "Close"
+msgstr "ཁ་བསྡམས།"
+
+msgid "Sending…"
+msgstr "གཏང་དོ…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "བཏང་ཡོད། ཤོག་འཛིན་ #%s། IT ལུ་ བརྡ་སྤྲོད་འབད་ཡོད།"
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "སྲུང་བཞག་འབད་ཡོད། གློག་ཀླད་འདི་ ཡོངས་འབྲེལ་ལུ་ མཐུད་པའི་སྐབས་ གཏང་འོང་།"
+
+msgid "Help requests are turned off at this school."
+msgstr "སློབ་གྲྭ་འདི་ནང་ རོགས་རམ་གྱི་ཞུ་བ་ ཁ་བསྡམས་ཡོད།"
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "ཁྱོད་ཀྱིས་ ཆུ་ཚོད་འདི་ནང་ ཞུ་བ་ 3 བཏང་ཡོད། གནངམ་འབད་ ཤུལ་ལས་ ལོག་ཚོད་ལྟ་འབད།"
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "གཏང་མ་ཚུགས། གནངམ་འབད་ སློབ་དཔོན་ལུ་ སླབ།"
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT གིས་ གློག་ཀླད་འདི་ལས་ བརྟག་དཔྱད་ཀྱི་ བརྡ་དོན་ བསྡུ་དོ།"

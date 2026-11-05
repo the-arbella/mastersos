@@ -118,3 +118,60 @@ msgstr "Імя або школьная электронная пошта"
 
 msgid "Keep typing to narrow down"
 msgstr "Працягвайце ўводзіць, каб звузіць спіс"
+
+msgid "Get help"
+msgstr "Атрымаць дапамогу"
+
+msgid "Get help from IT"
+msgstr "Дапамога ад ІТ-службы"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Не атрымліваецца ўвайсці"
+
+msgid "An app"
+msgstr "Праграма"
+
+msgid "Screen, keys or sound"
+msgstr "Экран, клавішы або гук"
+
+msgid "Battery"
+msgstr "Акумулятар"
+
+msgid "Other"
+msgstr "Іншае"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Што здарылася? Не пішыце пароляў і асабістых даных."
+
+msgid "Attach a screenshot"
+msgstr "Далучыць здымак экрана"
+
+msgid "Send"
+msgstr "Адправіць"
+
+msgid "Close"
+msgstr "Закрыць"
+
+msgid "Sending…"
+msgstr "Адпраўка…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Адпраўлена. Заяўка №%s. ІТ-службе паведамлена."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Захавана. Будзе адпраўлена, калі гэты кампутар падключыцца да сеткі."
+
+msgid "Help requests are turned off at this school."
+msgstr "Запыты аб дапамозе ў гэтай школе адключаныя."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Вы адправілі 3 запыты за гэтую гадзіну. Паспрабуйце пазней."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Не ўдалося адправіць. Скажыце настаўніку."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "ІТ-служба збірае дыягнастычныя даныя з гэтага кампутара."

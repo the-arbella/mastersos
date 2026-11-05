@@ -118,3 +118,60 @@ msgstr "Vardas arba mokyklos el. paštas"
 
 msgid "Keep typing to narrow down"
 msgstr "Rašykite toliau, kad susiaurintumėte sąrašą"
+
+msgid "Get help"
+msgstr "Gauti pagalbos"
+
+msgid "Get help from IT"
+msgstr "Kreiptis pagalbos į IT specialistus"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Nepavyksta prisijungti"
+
+msgid "An app"
+msgstr "Programėlė"
+
+msgid "Screen, keys or sound"
+msgstr "Ekranas, klavišai ar garsas"
+
+msgid "Battery"
+msgstr "Baterija"
+
+msgid "Other"
+msgstr "Kita"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Kas nutiko? Nerašykite slaptažodžių ar asmeninių duomenų."
+
+msgid "Attach a screenshot"
+msgstr "Pridėti ekrano kopiją"
+
+msgid "Send"
+msgstr "Siųsti"
+
+msgid "Close"
+msgstr "Uždaryti"
+
+msgid "Sending…"
+msgstr "Siunčiama…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Išsiųsta. Užklausa Nr. %s. IT specialistams pranešta."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Išsaugota. Bus išsiųsta, kai šis kompiuteris prisijungs prie interneto."
+
+msgid "Help requests are turned off at this school."
+msgstr "Šioje mokykloje pagalbos užklausos išjungtos."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Per šią valandą išsiuntėte 3 užklausas. Bandykite vėliau."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Išsiųsti nepavyko. Pasakykite mokytojui."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT specialistai renka diagnostinę informaciją iš šio kompiuterio."

@@ -118,3 +118,60 @@ msgstr "Nama atau email sekolah"
 
 msgid "Keep typing to narrow down"
 msgstr "Terus mengetik untuk mempersempit daftar"
+
+msgid "Get help"
+msgstr "Minta bantuan"
+
+msgid "Get help from IT"
+msgstr "Minta bantuan IT"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Tidak bisa masuk"
+
+msgid "An app"
+msgstr "Aplikasi"
+
+msgid "Screen, keys or sound"
+msgstr "Layar, tombol, atau suara"
+
+msgid "Battery"
+msgstr "Baterai"
+
+msgid "Other"
+msgstr "Lainnya"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Apa yang terjadi? Jangan sertakan kata sandi atau data pribadi."
+
+msgid "Attach a screenshot"
+msgstr "Lampirkan tangkapan layar"
+
+msgid "Send"
+msgstr "Kirim"
+
+msgid "Close"
+msgstr "Tutup"
+
+msgid "Sending…"
+msgstr "Mengirim…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Terkirim. Tiket #%s. IT sudah diberi tahu."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Disimpan. Akan dikirim saat komputer ini online."
+
+msgid "Help requests are turned off at this school."
+msgstr "Permintaan bantuan dinonaktifkan di sekolah ini."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Anda sudah mengirim 3 permintaan dalam jam ini. Silakan coba lagi nanti."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Tidak dapat mengirim. Silakan beri tahu guru."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT sedang mengumpulkan info diagnostik dari komputer ini."

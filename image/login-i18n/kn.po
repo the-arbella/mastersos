@@ -118,3 +118,60 @@ msgstr "ಹೆಸರು ಅಥವಾ ಶಾಲೆಯ ಇಮೇಲ್"
 
 msgid "Keep typing to narrow down"
 msgstr "ಪಟ್ಟಿಯನ್ನು ಕಿರಿದಾಗಿಸಲು ಟೈಪ್ ಮಾಡುತ್ತಲೇ ಇರಿ"
+
+msgid "Get help"
+msgstr "ಸಹಾಯ ಪಡೆಯಿರಿ"
+
+msgid "Get help from IT"
+msgstr "IT ಯಿಂದ ಸಹಾಯ ಪಡೆಯಿರಿ"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "ಸೈನ್ ಇನ್ ಆಗುತ್ತಿಲ್ಲ"
+
+msgid "An app"
+msgstr "ಒಂದು ಆ್ಯಪ್"
+
+msgid "Screen, keys or sound"
+msgstr "ಪರದೆ, ಕೀಗಳು ಅಥವಾ ಧ್ವನಿ"
+
+msgid "Battery"
+msgstr "ಬ್ಯಾಟರಿ"
+
+msgid "Other"
+msgstr "ಇತರೆ"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "ಏನಾಯಿತು? ದಯವಿಟ್ಟು ಪಾಸ್‌ವರ್ಡ್‌ಗಳು ಅಥವಾ ವೈಯಕ್ತಿಕ ವಿವರಗಳನ್ನು ಸೇರಿಸಬೇಡಿ."
+
+msgid "Attach a screenshot"
+msgstr "ಸ್ಕ್ರೀನ್‌ಶಾಟ್ ಲಗತ್ತಿಸಿ"
+
+msgid "Send"
+msgstr "ಕಳುಹಿಸಿ"
+
+msgid "Close"
+msgstr "ಮುಚ್ಚಿ"
+
+msgid "Sending…"
+msgstr "ಕಳುಹಿಸಲಾಗುತ್ತಿದೆ…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "ಕಳುಹಿಸಲಾಗಿದೆ. ಟಿಕೆಟ್ #%s. IT ಗೆ ತಿಳಿಸಲಾಗಿದೆ."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "ಉಳಿಸಲಾಗಿದೆ. ಈ ಕಂಪ್ಯೂಟರ್ ಆನ್‌ಲೈನ್‌ಗೆ ಬಂದಾಗ ಕಳುಹಿಸಲಾಗುತ್ತದೆ."
+
+msgid "Help requests are turned off at this school."
+msgstr "ಈ ಶಾಲೆಯಲ್ಲಿ ಸಹಾಯ ವಿನಂತಿಗಳನ್ನು ಆಫ್ ಮಾಡಲಾಗಿದೆ."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "ನೀವು ಈ ಗಂಟೆಯಲ್ಲಿ 3 ವಿನಂತಿಗಳನ್ನು ಕಳುಹಿಸಿದ್ದೀರಿ. ದಯವಿಟ್ಟು ನಂತರ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "ಕಳುಹಿಸಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ. ದಯವಿಟ್ಟು ಶಿಕ್ಷಕರಿಗೆ ತಿಳಿಸಿ."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT ಈ ಕಂಪ್ಯೂಟರ್‌ನಿಂದ ರೋಗನಿರ್ಣಯ ಮಾಹಿತಿಯನ್ನು ಸಂಗ್ರಹಿಸುತ್ತಿದೆ."

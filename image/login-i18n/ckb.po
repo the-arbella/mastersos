@@ -118,3 +118,60 @@ msgstr "ناو یان ئیمەیڵی قوتابخانە"
 
 msgid "Keep typing to narrow down"
 msgstr "بەردەوام بە لە نووسین بۆ کەمکردنەوەی لیستەکە"
+
+msgid "Get help"
+msgstr "یارمەتی وەربگرە"
+
+msgid "Get help from IT"
+msgstr "یارمەتی لە IT وەربگرە"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "ناتوانم بچمە ژوورەوە"
+
+msgid "An app"
+msgstr "ئەپێک"
+
+msgid "Screen, keys or sound"
+msgstr "شاشە، دوگمەکان یان دەنگ"
+
+msgid "Battery"
+msgstr "پاتری"
+
+msgid "Other"
+msgstr "هیتر"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "چی ڕوویدا؟ تکایە وشەی نهێنی یان زانیاریی کەسی مەنووسە."
+
+msgid "Attach a screenshot"
+msgstr "وێنەی شاشە هاوپێچ بکە"
+
+msgid "Send"
+msgstr "بنێرە"
+
+msgid "Close"
+msgstr "داخستن"
+
+msgid "Sending…"
+msgstr "دەنێردرێت…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "نێردرا. تیکێتی #%s. IT ئاگادار کرایەوە."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "پاشەکەوت کرا. کاتێک ئەم کۆمپیوتەرە بە ئینتەرنێت بەسترا، دەنێردرێت."
+
+msgid "Help requests are turned off at this school."
+msgstr "داواکاریی یارمەتی لەم قوتابخانەیەدا ناچالاک کراوە."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "لەم کاتژمێرەدا 3 داواکاریت ناردووە. تکایە دواتر دووبارە هەوڵبدەرەوە."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "نەتوانرا بنێردرێت. تکایە بە مامۆستایەک بڵێ."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT زانیاریی دەستنیشانکردن لەم کۆمپیوتەرە کۆدەکاتەوە."

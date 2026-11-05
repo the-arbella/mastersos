@@ -118,3 +118,60 @@ msgstr "Nafn eða skólanetfang"
 
 msgid "Keep typing to narrow down"
 msgstr "Haltu áfram að skrifa til að þrengja listann"
+
+msgid "Get help"
+msgstr "Fá aðstoð"
+
+msgid "Get help from IT"
+msgstr "Fá aðstoð frá tæknideild"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Get ekki skráð mig inn"
+
+msgid "An app"
+msgstr "Forrit"
+
+msgid "Screen, keys or sound"
+msgstr "Skjár, lyklar eða hljóð"
+
+msgid "Battery"
+msgstr "Rafhlaða"
+
+msgid "Other"
+msgstr "Annað"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Hvað gerðist? Ekki skrifa lykilorð eða persónuupplýsingar."
+
+msgid "Attach a screenshot"
+msgstr "Hengja skjámynd við"
+
+msgid "Send"
+msgstr "Senda"
+
+msgid "Close"
+msgstr "Loka"
+
+msgid "Sending…"
+msgstr "Sendi…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Sent. Beiðni #%s. Tæknideild hefur verið látin vita."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Vistað. Þetta verður sent þegar tölvan tengist netinu."
+
+msgid "Help requests are turned off at this school."
+msgstr "Slökkt er á hjálparbeiðnum í þessum skóla."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Þú hefur sent 3 beiðnir á þessari klukkustund. Reyndu aftur síðar."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Ekki tókst að senda. Láttu kennara vita."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "Tæknideild er að safna greiningarupplýsingum úr þessari tölvu."

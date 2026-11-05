@@ -118,3 +118,60 @@ msgstr "பெயர் அல்லது பள்ளி மின்னஞ்
 
 msgid "Keep typing to narrow down"
 msgstr "பட்டியலைக் குறைக்கத் தொடர்ந்து தட்டச்சு செய்யுங்கள்"
+
+msgid "Get help"
+msgstr "உதவி பெறுக"
+
+msgid "Get help from IT"
+msgstr "IT-இடம் உதவி பெறுக"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "உள்நுழைய முடியவில்லை"
+
+msgid "An app"
+msgstr "ஒரு பயன்பாடு"
+
+msgid "Screen, keys or sound"
+msgstr "திரை, விசைகள் அல்லது ஒலி"
+
+msgid "Battery"
+msgstr "பேட்டரி"
+
+msgid "Other"
+msgstr "மற்றவை"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "என்ன நடந்தது? கடவுச்சொற்களையோ தனிப்பட்ட விவரங்களையோ சேர்க்க வேண்டாம்."
+
+msgid "Attach a screenshot"
+msgstr "திரைப்பிடிப்பை இணைக்கவும்"
+
+msgid "Send"
+msgstr "அனுப்பு"
+
+msgid "Close"
+msgstr "மூடு"
+
+msgid "Sending…"
+msgstr "அனுப்புகிறது…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "அனுப்பப்பட்டது. டிக்கெட் #%s. IT-க்குத் தெரிவிக்கப்பட்டது."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "சேமிக்கப்பட்டது. இந்தக் கணினி இணையத்தில் இணைந்ததும் அனுப்பப்படும்."
+
+msgid "Help requests are turned off at this school."
+msgstr "இந்தப் பள்ளியில் உதவிக் கோரிக்கைகள் முடக்கப்பட்டுள்ளன."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "இந்த மணிநேரத்தில் 3 கோரிக்கைகளை அனுப்பியுள்ளீர்கள். பிறகு மீண்டும் முயலவும்."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "அனுப்ப முடியவில்லை. ஓர் ஆசிரியரிடம் சொல்லவும்."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT இந்தக் கணினியிலிருந்து கண்டறிதல் தகவல்களைச் சேகரிக்கிறது."
