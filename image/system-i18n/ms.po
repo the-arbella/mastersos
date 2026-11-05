@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Kemas kini sistem sudah sedia. Mulakan semula komputer untuk menyelesaikan pemasangannya."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Fail sistem perlu dibaiki. Ini akan berlaku secara automatik apabila komputer dimulakan semula nanti."
+
+msgid "The web browser is not installed yet."
+msgstr "Pelayar web belum dipasang."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Pelayar web sudah sedia. Log keluar dan log masuk semula untuk melihatnya."
+
+msgid "This app is not available on this device"
+msgstr "Aplikasi ini tidak tersedia pada peranti ini"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Tetapan kunci aplikasi ini tidak berkuat kuasa, jadi ia tidak boleh dimulakan. Sila tanya guru anda."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Sesi anda tidak dapat ditamatkan. Sila log keluar dan buka aplikasi ini dari skrin log masuk."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Ini akan menamatkan sesi anda dan membuka %s dalam mod berkunci."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Tetapan yang lebih baharu tidak dapat diambil. Sila hubungi IT."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Sudah %s hari tetapan tidak disahkan terkini. Sila sambung ke rangkaian; jika berterusan, hubungi IT."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT sedang mengumpul maklumat diagnostik daripada komputer ini."

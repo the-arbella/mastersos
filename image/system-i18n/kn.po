@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "ಸಿಸ್ಟಮ್ ಅಪ್‌ಡೇಟ್ ಸಿದ್ಧವಾಗಿದೆ. ಸ್ಥಾಪನೆ ಪೂರ್ಣಗೊಳಿಸಲು ಕಂಪ್ಯೂಟರ್ ಅನ್ನು ಮರುಪ್ರಾರಂಭಿಸಿ."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "ಸಿಸ್ಟಮ್ ಫೈಲ್‌ಗಳನ್ನು ದುರಸ್ತಿ ಮಾಡಬೇಕಾಗಿದೆ. ಮುಂದಿನ ಬಾರಿ ಕಂಪ್ಯೂಟರ್ ಮರುಪ್ರಾರಂಭವಾದಾಗ ಇದು ಸ್ವಯಂಚಾಲಿತವಾಗಿ ನಡೆಯುತ್ತದೆ."
+
+msgid "The web browser is not installed yet."
+msgstr "ವೆಬ್ ಬ್ರೌಸರ್ ಇನ್ನೂ ಸ್ಥಾಪನೆಯಾಗಿಲ್ಲ."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "ವೆಬ್ ಬ್ರೌಸರ್ ಸಿದ್ಧವಾಗಿದೆ. ಅದನ್ನು ನೋಡಲು ಸೈನ್ ಔಟ್ ಮಾಡಿ ಮತ್ತೆ ಸೈನ್ ಇನ್ ಮಾಡಿ."
+
+msgid "This app is not available on this device"
+msgstr "ಈ ಆ್ಯಪ್ ಈ ಸಾಧನದಲ್ಲಿ ಲಭ್ಯವಿಲ್ಲ"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "ಈ ಆ್ಯಪ್‌ನ ಲಾಕ್ ಸೆಟ್ಟಿಂಗ್‌ಗಳು ಜಾರಿಯಲ್ಲಿಲ್ಲ, ಆದ್ದರಿಂದ ಇದು ಪ್ರಾರಂಭವಾಗಲು ಸಾಧ್ಯವಿಲ್ಲ. ದಯವಿಟ್ಟು ನಿಮ್ಮ ಶಿಕ್ಷಕರನ್ನು ಕೇಳಿ."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "ನಿಮ್ಮ ಸೆಷನ್ ಅನ್ನು ಕೊನೆಗೊಳಿಸಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ. ದಯವಿಟ್ಟು ಸೈನ್ ಔಟ್ ಮಾಡಿ ಮತ್ತು ಸೈನ್-ಇನ್ ಪರದೆಯಿಂದ ಈ ಆ್ಯಪ್ ತೆರೆಯಿರಿ."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "ಇದು ನಿಮ್ಮ ಸೆಷನ್ ಅನ್ನು ಕೊನೆಗೊಳಿಸಿ %s ಅನ್ನು ಲಾಕ್ ಮೋಡ್‌ನಲ್ಲಿ ತೆರೆಯುತ್ತದೆ."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "ಹೊಸ ಸೆಟ್ಟಿಂಗ್‌ಗಳನ್ನು ಪಡೆಯಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ. ದಯವಿಟ್ಟು IT ಅನ್ನು ಸಂಪರ್ಕಿಸಿ."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "%s ದಿನಗಳಿಂದ ಸೆಟ್ಟಿಂಗ್‌ಗಳು ಅಪ್‌ಡೇಟ್ ಆಗಿವೆ ಎಂದು ದೃಢಪಡಿಸಲಾಗಿಲ್ಲ. ದಯವಿಟ್ಟು ನೆಟ್‌ವರ್ಕ್‌ಗೆ ಸಂಪರ್ಕಿಸಿ; ಹೀಗೇ ಮುಂದುವರಿದರೆ IT ಅನ್ನು ಸಂಪರ್ಕಿಸಿ."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT ಈ ಕಂಪ್ಯೂಟರ್‌ನಿಂದ ರೋಗನಿರ್ಣಯ ಮಾಹಿತಿಯನ್ನು ಸಂಗ್ರಹಿಸುತ್ತಿದೆ."

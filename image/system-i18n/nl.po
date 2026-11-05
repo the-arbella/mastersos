@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Er staat een systeemupdate klaar. Start de computer opnieuw op om de installatie te voltooien."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Systeembestanden moeten worden hersteld. Dit gebeurt automatisch de volgende keer dat de computer opnieuw opstart."
+
+msgid "The web browser is not installed yet."
+msgstr "De webbrowser is nog niet geïnstalleerd."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "De webbrowser is klaar. Meld je af en weer aan om hem te zien."
+
+msgid "This app is not available on this device"
+msgstr "Deze app is niet beschikbaar op dit apparaat"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "De vergrendelingsinstellingen van deze app zijn niet actief, dus kan hij niet starten. Vraag het je docent."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Je sessie kon niet worden beëindigd. Meld je af en open deze app vanaf het aanmeldscherm."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Hiermee wordt je sessie beëindigd en wordt %s geopend in de vergrendelde modus."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Nieuwere instellingen konden niet worden opgehaald. Neem contact op met IT."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Al %s dagen is niet bevestigd dat de instellingen actueel zijn. Maak verbinding met het netwerk; neem contact op met IT als dit zo blijft."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "ICT verzamelt diagnostische gegevens van deze computer."

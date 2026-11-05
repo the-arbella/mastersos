@@ -41,7 +41,13 @@ while IFS= read -r l; do
 done
 exit 0
 EOF
-chmod +x "$bin/notify-send" "$bin/zenity"
+# gettext (MASTERSOS_GETTEXT): English sessions get the msgid back, the others "[<LANGUAGE>] <msgid>"
+cat >"$bin/gettext-stub" <<'EOF'
+#!/bin/bash
+[ "$1" = -- ] && shift
+case $LANGUAGE in en*) printf '%s' "$1" ;; *) printf '[%s] %s' "$LANGUAGE" "$1" ;; esac
+EOF
+chmod +x "$bin/notify-send" "$bin/zenity" "$bin/gettext-stub"
 
 # run <case dir> [env...]: runs browser-wait with a 5 s cap; prints its exit code
 run() {
@@ -50,6 +56,7 @@ run() {
 	mkdir -p "$c/log" "$c/pub"
 	local rc=0
 	env PATH="$bin:$PATH" FAKE_LOG="$c/log" MASTERSOS_PUBLIC="$c/pub" MASTERSOS_CHROME_BIN="$c/chrome" MASTERSOS_POLL=0.2 MASTERSOS_READY_HOLD=0.2 \
+		MASTERSOS_NOTICE_LIB="$here/../mkosi.extra/usr/lib/mastersos/notice-lib" MASTERSOS_GETTEXT="$bin/gettext-stub" \
 		USER=student LANG=en_US.UTF-8 "$@" timeout 5 bash "$bw" >"$c/out" 2>&1 || rc=$?
 	echo "$rc"
 }
@@ -192,20 +199,26 @@ check "closed: one window only" 1 "$(count "$c/log/zenity")"
 check "closed: one notification" 1 "$(count "$c/log/notify")"
 check "closed: notification body" yes "$(has "ARG $msg_net" "$c/log/notify")"
 
-# 6. Thai and Chinese first lines
+# 6. Thai and Chinese first lines: notice-lib asks gettext (the stub marks its answer with the LANGUAGE it was given)
 c=$tmp/c6
 mkdir -p "$c/pub"
 status_json "$c" "$msg_net" null
 run "$c" LANG=th_TH.UTF-8 >/dev/null
-check "th: Thai first line" yes "$(has 'ARG ยังไม่ได้ติดตั้งเว็บเบราว์เซอร์' "$c/log/notify")"
+check "th: first line through gettext in th_TH" yes "$(has 'ARG [th_TH] The web browser is not installed yet.' "$c/log/notify")"
 c=$tmp/c6z
 mkdir -p "$c/pub"
 status_json "$c" "$msg_net" null
 run "$c" LANG=zh_CN.UTF-8 >/dev/null
-check "zh: Chinese first line" yes "$(has 'ARG 浏览器还没有安装好。' "$c/log/notify")"
+check "zh: first line through gettext in zh_CN" yes "$(has 'ARG [zh_CN] The web browser is not installed yet.' "$c/log/notify")"
+c=$tmp/c6n
+mkdir -p "$c/pub"
+status_json "$c" "$msg_net" null
+run "$c" LANG=th_TH.UTF-8 MASTERSOS_NOTICE_LIB="$tmp/no-lib" >/dev/null
+check "no notice-lib: English first line" yes "$(has 'ARG The web browser is not installed yet.' "$c/log/notify")"
 
 # 6b. the last screen in Chinese and Thai too
-for l in 'zh_CN.UTF-8:浏览器已经装好。请注销后重新登录才能看到它。' 'th_TH.UTF-8:เว็บเบราว์เซอร์พร้อมแล้ว ออกจากระบบแล้วเข้าสู่ระบบใหม่เพื่อดูเบราว์เซอร์'; do
+for l in 'zh_CN.UTF-8:[zh_CN] The web browser is ready. Sign out and sign in again to see it.' \
+	'th_TH.UTF-8:[th_TH] The web browser is ready. Sign out and sign in again to see it.'; do
 	c=$tmp/c6r-${l%%_*}
 	mkdir -p "$c/pub"
 	echo learning >"$c/pub/session-mode"

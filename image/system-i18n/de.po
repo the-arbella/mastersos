@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Ein Systemupdate ist bereit. Starten Sie den Computer neu, um die Installation abzuschließen."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Systemdateien müssen repariert werden. Das geschieht automatisch beim nächsten Neustart des Computers."
+
+msgid "The web browser is not installed yet."
+msgstr "Der Webbrowser ist noch nicht installiert."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Der Webbrowser ist bereit. Melden Sie sich ab und wieder an, um ihn zu sehen."
+
+msgid "This app is not available on this device"
+msgstr "Diese App ist auf diesem Gerät nicht verfügbar"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Die Sperreinstellungen dieser App sind nicht aktiv, daher kann sie nicht starten. Bitte fragen Sie Ihre Lehrkraft."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Ihre Sitzung konnte nicht beendet werden. Bitte melden Sie sich ab und öffnen Sie diese App über den Anmeldebildschirm."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Dadurch wird Ihre Sitzung beendet und %s im gesperrten Modus geöffnet."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Neuere Einstellungen konnten nicht abgerufen werden. Bitte wenden Sie sich an die IT."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Seit %s Tagen wurde nicht bestätigt, dass die Einstellungen aktuell sind. Bitte verbinden Sie sich mit dem Netzwerk; wenn das so bleibt, wenden Sie sich an die IT."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "Die IT sammelt Diagnosedaten von diesem Computer."

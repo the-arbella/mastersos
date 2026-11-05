@@ -67,6 +67,10 @@ protos=http,https
 # the restart prompt (update_pending, remind)
 pending=${MASTERSOS_UPDATE_PENDING:-/run/mastersos-update-pending}
 NOTIFY_TIMEOUT=${MASTERSOS_NOTIFY_TIMEOUT:-10} # seconds; the session bus belongs to the user, a hung bus must not stall us
+UPDATE_READY='A system update is ready. Restart the computer to finish installing it.'
+# notice_text: the notification in the system language (notice-lib; English when the library is missing)
+# shellcheck source-path=SCRIPTDIR source=notice-lib
+. "${MASTERSOS_NOTICE_LIB:-/usr/lib/mastersos/notice-lib}" 2>/dev/null || notice_text() { printf '%s\n' "$1"; }
 
 # write_status <text>: atomically replace the record with "<UTC time> <text>".
 write_status() {
@@ -424,31 +428,12 @@ pending_version() {
 	return 0
 }
 
-# notify_text <key> <lang> -> the text for the key in zh / th, English otherwise (integrity's scheme)
-notify_text() {
-	case $1:$2 in
-	update-ready:zh*) echo "系统更新已准备好。重新启动电脑即可完成安装。" ;;
-	update-ready:th*) echo "การอัปเดตระบบพร้อมแล้ว รีสตาร์ทคอมพิวเตอร์เพื่อติดตั้งให้เสร็จสมบูรณ์" ;;
-	update-ready:*) echo "A system update is ready. Restart the computer to finish installing it." ;;
-	*) return 1 ;;
-	esac
-}
-
-# notify_lang: LANG, else the system locale
-notify_lang() {
-	if [ -n "${LANG:-}" ]; then
-		echo "$LANG"
-		return 0
-	fi
-	sed -nE 's/^LANG=//p' "${MASTERSOS_LOCALE_CONF:-/etc/locale.conf}" 2>/dev/null | tr -d '"' | head -n 1 || true
-}
-
-# notify_user <key>: show a desktop notification to the user of the active graphical session; no such session = skip
-# (integrity's notify_user)
+# notify_user <msgid>: show a desktop notification (notice_text of <msgid>) to the user of the active graphical session;
+# no such session = skip (integrity's notify_user)
 notify_user() {
-	local key=$1 text loginctl=${MASTERSOS_LOGINCTL:-loginctl} runuser=${MASTERSOS_RUNUSER:-runuser} notify=${MASTERSOS_NOTIFY:-notify-send}
+	local text loginctl=${MASTERSOS_LOGINCTL:-loginctl} runuser=${MASTERSOS_RUNUSER:-runuser} notify=${MASTERSOS_NOTIFY:-notify-send}
 	local id line active type name uid class
-	text=$(notify_text "$key" "$(notify_lang)") || return 0
+	text=$(notice_text "$1")
 	while read -r id _; do
 		[ -n "$id" ] || continue
 		active="" type="" name="" uid="" class=""
@@ -494,7 +479,7 @@ update_pending() {
 		return 0
 	fi
 	echo "update-run: $v is installed and starts at the next restart" >&2
-	notify_user update-ready
+	notify_user "$UPDATE_READY"
 }
 
 # remind: mastersos-update-reminder.service at the start of a desktop session, as that user (its own session bus)
@@ -508,7 +493,7 @@ remind() {
 	ver_ok "$v" || return 0
 	cur=$(running_version)
 	if ver_ok "$cur" && ! ver_gt "$v" "$cur"; then return 0; fi
-	text=$(notify_text update-ready "$(notify_lang)") || return 0
+	text=$(notice_text "$UPDATE_READY")
 	timeout -k 2 "$NOTIFY_TIMEOUT" "$notify" --app-name=MastersOS --urgency=normal "MastersOS" "$text" ||
 		echo "update-run: notify-send failed" >&2
 	return 0

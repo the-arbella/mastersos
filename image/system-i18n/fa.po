@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "یک به‌روزرسانی سیستم آماده است. برای پایان نصب، رایانه را دوباره راه‌اندازی کنید."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "پرونده‌های سیستم نیاز به تعمیر دارند. این کار دفعهٔ بعد که رایانه دوباره راه‌اندازی شود، خودکار انجام می‌شود."
+
+msgid "The web browser is not installed yet."
+msgstr "مرورگر وب هنوز نصب نشده است."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "مرورگر وب آماده است. برای دیدن آن، خارج شوید و دوباره وارد شوید."
+
+msgid "This app is not available on this device"
+msgstr "این برنامه روی این دستگاه در دسترس نیست"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "تنظیمات قفل این برنامه اعمال نشده است، بنابراین نمی‌تواند اجرا شود. لطفاً از معلم خود بپرسید."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "پایان دادن به نشست شما ممکن نشد. لطفاً خارج شوید و این برنامه را از صفحهٔ ورود باز کنید."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "این کار نشست شما را پایان می‌دهد و %s را در حالت قفل‌شده باز می‌کند."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "دریافت تنظیمات جدیدتر ممکن نشد. لطفاً با واحد فناوری اطلاعات تماس بگیرید."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "%s روز است که به‌روز بودن تنظیمات تأیید نشده است. لطفاً به شبکه وصل شوید؛ اگر ادامه داشت، با واحد فناوری اطلاعات تماس بگیرید."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "فناوری اطلاعات در حال جمع‌آوری اطلاعات عیب‌یابی از این رایانه است."

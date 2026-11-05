@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "கணினிப் புதுப்பிப்பு தயாராக உள்ளது. நிறுவலை முடிக்க கணினியை மறுதொடக்கம் செய்யவும்."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "கணினிக் கோப்புகளைச் சரிசெய்ய வேண்டும். அடுத்த முறை கணினி மறுதொடக்கம் செய்யப்படும்போது இது தானாக நடக்கும்."
+
+msgid "The web browser is not installed yet."
+msgstr "இணைய உலாவி இன்னும் நிறுவப்படவில்லை."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "இணைய உலாவி தயாராக உள்ளது. அதைப் பார்க்க வெளியேறி மீண்டும் உள்நுழையவும்."
+
+msgid "This app is not available on this device"
+msgstr "இந்தப் பயன்பாடு இந்தச் சாதனத்தில் கிடைக்காது"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "இந்தப் பயன்பாட்டின் பூட்டு அமைப்புகள் நடைமுறையில் இல்லை, எனவே இதைத் தொடங்க முடியாது. உங்கள் ஆசிரியரிடம் கேளுங்கள்."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "உங்கள் அமர்வை முடிக்க முடியவில்லை. வெளியேறி, உள்நுழைவுத் திரையிலிருந்து இந்தப் பயன்பாட்டைத் திறக்கவும்."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "இது உங்கள் அமர்வை முடித்து %s ஐப் பூட்டிய பயன்முறையில் திறக்கும்."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "புதிய அமைப்புகளைப் பெற முடியவில்லை. IT-ஐத் தொடர்புகொள்ளவும்."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "அமைப்புகள் புதுப்பித்த நிலையில் உள்ளன என்பது %s நாட்களாக உறுதிப்படுத்தப்படவில்லை. நெட்வொர்க்குடன் இணைக்கவும்; இது தொடர்ந்தால் IT-ஐத் தொடர்புகொள்ளவும்."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT இந்தக் கணினியிலிருந்து கண்டறிதல் தகவல்களைச் சேகரிக்கிறது."

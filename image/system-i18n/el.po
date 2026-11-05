@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Μια ενημέρωση συστήματος είναι έτοιμη. Επανεκκινήστε τον υπολογιστή για να ολοκληρωθεί η εγκατάσταση."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Αρχεία του συστήματος χρειάζονται επιδιόρθωση. Αυτό γίνεται αυτόματα την επόμενη φορά που θα επανεκκινηθεί ο υπολογιστής."
+
+msgid "The web browser is not installed yet."
+msgstr "Το πρόγραμμα περιήγησης δεν έχει εγκατασταθεί ακόμα."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Το πρόγραμμα περιήγησης είναι έτοιμο. Αποσυνδεθείτε και συνδεθείτε ξανά για να το δείτε."
+
+msgid "This app is not available on this device"
+msgstr "Αυτή η εφαρμογή δεν είναι διαθέσιμη σε αυτή τη συσκευή"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Οι ρυθμίσεις κλειδώματος αυτής της εφαρμογής δεν ισχύουν, οπότε δεν μπορεί να ξεκινήσει. Ρωτήστε τον εκπαιδευτικό σας."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Δεν ήταν δυνατός ο τερματισμός της συνεδρίας σας. Αποσυνδεθείτε και ανοίξτε αυτή την εφαρμογή από την οθόνη σύνδεσης."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Αυτό θα τερματίσει τη συνεδρία σας και θα ανοίξει το %s σε κλειδωμένη λειτουργία."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Δεν ήταν δυνατή η λήψη νεότερων ρυθμίσεων. Επικοινωνήστε με το τμήμα πληροφορικής."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Εδώ και %s ημέρες δεν έχει επιβεβαιωθεί ότι οι ρυθμίσεις είναι ενημερωμένες. Συνδεθείτε στο δίκτυο· αν αυτό συνεχιστεί, επικοινωνήστε με το τμήμα πληροφορικής."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "Το τμήμα IT συλλέγει διαγνωστικές πληροφορίες από αυτόν τον υπολογιστή."

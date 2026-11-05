@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Egy rendszerfrissítés készen áll. A telepítés befejezéséhez indítsa újra a számítógépet."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "A rendszerfájlokat javítani kell. Ez automatikusan megtörténik, amikor a számítógép legközelebb újraindul."
+
+msgid "The web browser is not installed yet."
+msgstr "A webböngésző még nincs telepítve."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "A webböngésző készen áll. Jelentkezzen ki, majd be újra, hogy lássa."
+
+msgid "This app is not available on this device"
+msgstr "Ez az alkalmazás nem érhető el ezen az eszközön"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Az alkalmazás zárolási beállításai nem érvényesek, ezért nem indulhat el. Kérdezze meg a tanárát."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Nem sikerült befejezni a munkamenetét. Jelentkezzen ki, és nyissa meg ezt az alkalmazást a bejelentkezési képernyőről."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Ez befejezi a munkamenetét, és zárolt módban megnyitja ezt: %s."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Nem sikerült újabb beállításokat letölteni. Forduljon az informatikához."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "%s napja nincs megerősítve, hogy a beállítások naprakészek. Csatlakozzon a hálózathoz; ha ez így marad, forduljon az informatikához."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "Az informatikus diagnosztikai adatokat gyűjt erről a számítógépről."

@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Ажурирањето на системот е подготвено. Рестартирајте го компјутерот за да ја завршите инсталацијата."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Системските датотеки треба да се поправат. Ова ќе се случи автоматски при следното рестартирање на компјутерот."
+
+msgid "The web browser is not installed yet."
+msgstr "Веб-прелистувачот сè уште не е инсталиран."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Веб-прелистувачот е подготвен. Одјавете се и најавете се повторно за да го видите."
+
+msgid "This app is not available on this device"
+msgstr "Оваа апликација не е достапна на овој уред"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Поставките за заклучување на оваа апликација не се во сила, па не може да се стартува. Ве молиме прашајте го наставникот."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Не може да се заврши вашата сесија. Одјавете се и отворете ја оваа апликација од екранот за најава."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Ова ќе ја заврши вашата сесија и ќе го отвори %s во заклучен режим."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Не може да се преземат понови поставки. Ве молиме контактирајте со ИТ."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Веќе %s дена не е потврдено дека поставките се ажурни. Поврзете се на мрежата; ако ова продолжи, контактирајте со ИТ."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT собира дијагностички информации од овој компјутер."

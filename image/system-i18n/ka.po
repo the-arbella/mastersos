@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "სისტემის განახლება მზადაა. ინსტალაციის დასასრულებლად გადატვირთეთ კომპიუტერი."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "სისტემის ფაილებს შეკეთება სჭირდება. ეს ავტომატურად მოხდება კომპიუტერის მომდევნო გადატვირთვისას."
+
+msgid "The web browser is not installed yet."
+msgstr "ვებბრაუზერი ჯერ არ არის დაინსტალირებული."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "ვებბრაუზერი მზადაა. მის სანახავად გამოდით და ხელახლა შედით."
+
+msgid "This app is not available on this device"
+msgstr "ეს აპი ამ მოწყობილობაზე მიუწვდომელია"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "ამ აპის ჩაკეტვის პარამეტრები არ მოქმედებს, ამიტომ ის ვერ გაეშვება. გთხოვთ, ჰკითხოთ მასწავლებელს."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "თქვენი სეანსის დასრულება ვერ მოხერხდა. გამოდით და გახსენით ეს აპი შესვლის ეკრანიდან."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "ეს დაასრულებს თქვენს სეანსს და გახსნის %s-ს ჩაკეტილ რეჟიმში."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "უფრო ახალი პარამეტრების მიღება ვერ მოხერხდა. გთხოვთ, დაუკავშირდეთ IT-ს."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "უკვე %s დღეა არ დადასტურებულა, რომ პარამეტრები განახლებულია. დაუკავშირდით ქსელს; თუ ეს გაგრძელდა, მიმართეთ IT-ს."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT განყოფილება ამ კომპიუტერიდან დიაგნოსტიკურ ინფორმაციას აგროვებს."

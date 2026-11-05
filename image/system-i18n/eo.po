@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Sistema ĝisdatigo estas preta. Restartigu la komputilon por fini ĝian instaladon."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Sistemaj dosieroj bezonas riparon. Tio okazos aŭtomate je la sekva restartigo de la komputilo."
+
+msgid "The web browser is not installed yet."
+msgstr "La retumilo ankoraŭ ne estas instalita."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "La retumilo estas preta. Elsalutu kaj ensalutu denove por vidi ĝin."
+
+msgid "This app is not available on this device"
+msgstr "Ĉi tiu aplikaĵo ne disponeblas en ĉi tiu aparato"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "La ŝlosaj agordoj de ĉi tiu aplikaĵo ne validas, do ĝi ne povas starti. Bonvolu demandi vian instruiston."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Ne eblis fini vian seancon. Bonvolu elsaluti kaj malfermi ĉi tiun aplikaĵon el la ensaluta ekrano."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Tio finos vian seancon kaj malfermos %s en ŝlosita reĝimo."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Ne eblis akiri pli novajn agordojn. Bonvolu kontakti IT."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Jam de %s tagoj ne estas konfirmite, ke la agordoj estas ĝisdataj. Bonvolu konektiĝi al la reto; se tio daŭras, kontaktu IT."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT kolektas diagnozajn informojn de ĉi tiu komputilo."

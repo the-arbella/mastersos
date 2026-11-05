@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "En Systemupdate is praat. Start den Reekner nee, üm dat Installeren aftosluten."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Systemdateien mööt repareert warrn. Dat passeert automaatsch, wenn de Reekner dat nächste Maal nee start."
+
+msgid "The web browser is not installed yet."
+msgstr "De Webbrowser is noch nich installeert."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "De Webbrowser is praat. Mell di af un weer an, üm em to sehn."
+
+msgid "This app is not available on this device"
+msgstr "Disse App is op dissem Reedschap nich verfögbar"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "De Sperr-Instellens vun disse App gellt nich, dorüm kann se nich starten. Fraag bitte dien Lehrer."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Dien Törn kunn nich beendt warrn. Mell di bitte af un maak disse App vun den Anmell-Billschirm op."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Dat beendt dien Törn un maakt %s in'n sperrten Modus op."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Nieger Instellens kunnen nich haalt warrn. Mell di bitte bi de IT."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Siet %s Daag is nich bestätigt, dat de Instellens aktuell sünd. Verbinn di bitte mit dat Nettwark; wenn dat so blifft, mell di bi de IT."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT sammelt Diagnose-Infos vun dissen Reekner."

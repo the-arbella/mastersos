@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "تحديث النظام جاهز. أعد تشغيل الحاسوب لإكمال تثبيته."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "تحتاج ملفات النظام إلى إصلاح. سيتم ذلك تلقائيًا عند إعادة تشغيل الحاسوب في المرة القادمة."
+
+msgid "The web browser is not installed yet."
+msgstr "لم يُثبَّت متصفح الويب بعد."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "متصفح الويب جاهز. سجّل الخروج ثم سجّل الدخول مجددًا لتراه."
+
+msgid "This app is not available on this device"
+msgstr "هذا التطبيق غير متاح على هذا الجهاز"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "إعدادات القفل لهذا التطبيق غير مفعّلة، لذا لا يمكن تشغيله. يُرجى سؤال معلمك."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "تعذّر إنهاء جلستك. يُرجى تسجيل الخروج وفتح هذا التطبيق من شاشة تسجيل الدخول."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "سيؤدي هذا إلى إنهاء جلستك وفتح %s في الوضع المقفل."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "تعذّر جلب إعدادات أحدث. يُرجى التواصل مع قسم تقنية المعلومات."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "لم يُتأكَّد من أن الإعدادات محدّثة منذ %s يومًا. يُرجى الاتصال بالشبكة؛ وإذا استمر ذلك فتواصل مع قسم تقنية المعلومات."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "يجمع قسم تقنية المعلومات معلومات تشخيصية من هذا الحاسوب."

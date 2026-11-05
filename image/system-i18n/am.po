@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "የሥርዓት ዝማኔ ዝግጁ ነው። ጭነቱን ለመጨረስ ኮምፒውተሩን እንደገና ያስጀምሩ።"
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "የሥርዓት ፋይሎች መጠገን አለባቸው። ኮምፒውተሩ በሚቀጥለው ጊዜ እንደገና ሲጀምር በራስ-ሰር ይጠገናሉ።"
+
+msgid "The web browser is not installed yet."
+msgstr "የድር አሳሹ ገና አልተጫነም።"
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "የድር አሳሹ ዝግጁ ነው። እሱን ለማየት ዘግተው ይውጡና እንደገና ይግቡ።"
+
+msgid "This app is not available on this device"
+msgstr "ይህ መተግበሪያ በዚህ መሣሪያ ላይ አይገኝም"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "የዚህ መተግበሪያ የመቆለፊያ ቅንብሮች አልሠሩም፣ ስለዚህ መጀመር አይችልም። እባክዎ መምህርዎን ይጠይቁ።"
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "ክፍለ-ጊዜዎን መዝጋት አልተቻለም። እባክዎ ዘግተው ይውጡና ይህን መተግበሪያ ከመግቢያ ገጹ ይክፈቱ።"
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "ይህ ክፍለ-ጊዜዎን ይዘጋና %sን በተቆለፈ ሁነታ ይከፍታል።"
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "አዳዲስ ቅንብሮችን ማምጣት አልተቻለም። እባክዎ የአይቲ ክፍሉን ያነጋግሩ።"
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "ቅንብሮቹ ወቅታዊ መሆናቸው ለ%s ቀናት አልተረጋገጠም። እባክዎ ከአውታረ መረቡ ጋር ይገናኙ፤ ይህ ከቀጠለ የአይቲ ክፍሉን ያነጋግሩ።"
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "አይቲ ከዚህ ኮምፒውተር የምርመራ መረጃ እየሰበሰበ ነው።"

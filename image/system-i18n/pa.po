@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "ਸਿਸਟਮ ਅੱਪਡੇਟ ਤਿਆਰ ਹੈ। ਇੰਸਟਾਲੇਸ਼ਨ ਪੂਰੀ ਕਰਨ ਲਈ ਕੰਪਿਊਟਰ ਨੂੰ ਮੁੜ-ਚਾਲੂ ਕਰੋ।"
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "ਸਿਸਟਮ ਫ਼ਾਈਲਾਂ ਦੀ ਮੁਰੰਮਤ ਦੀ ਲੋੜ ਹੈ। ਅਗਲੀ ਵਾਰ ਕੰਪਿਊਟਰ ਮੁੜ-ਚਾਲੂ ਹੋਣ 'ਤੇ ਇਹ ਆਪਣੇ-ਆਪ ਹੋ ਜਾਵੇਗਾ।"
+
+msgid "The web browser is not installed yet."
+msgstr "ਵੈੱਬ ਬ੍ਰਾਊਜ਼ਰ ਹਾਲੇ ਇੰਸਟਾਲ ਨਹੀਂ ਹੋਇਆ।"
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "ਵੈੱਬ ਬ੍ਰਾਊਜ਼ਰ ਤਿਆਰ ਹੈ। ਇਸਨੂੰ ਦੇਖਣ ਲਈ ਸਾਈਨ ਆਉਟ ਕਰਕੇ ਦੁਬਾਰਾ ਸਾਈਨ ਇਨ ਕਰੋ।"
+
+msgid "This app is not available on this device"
+msgstr "ਇਹ ਐਪ ਇਸ ਡੀਵਾਈਸ 'ਤੇ ਉਪਲਬਧ ਨਹੀਂ ਹੈ"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "ਇਸ ਐਪ ਦੀਆਂ ਲਾਕ ਸੈਟਿੰਗਾਂ ਲਾਗੂ ਨਹੀਂ ਹਨ, ਇਸ ਲਈ ਇਹ ਸ਼ੁਰੂ ਨਹੀਂ ਹੋ ਸਕਦੀ। ਕਿਰਪਾ ਕਰਕੇ ਆਪਣੇ ਅਧਿਆਪਕ ਨੂੰ ਪੁੱਛੋ।"
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "ਤੁਹਾਡਾ ਸੈਸ਼ਨ ਖ਼ਤਮ ਨਹੀਂ ਕੀਤਾ ਜਾ ਸਕਿਆ। ਕਿਰਪਾ ਕਰਕੇ ਸਾਈਨ ਆਉਟ ਕਰੋ ਅਤੇ ਸਾਈਨ-ਇਨ ਸਕ੍ਰੀਨ ਤੋਂ ਇਹ ਐਪ ਖੋਲ੍ਹੋ।"
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "ਇਹ ਤੁਹਾਡਾ ਸੈਸ਼ਨ ਖ਼ਤਮ ਕਰੇਗਾ ਅਤੇ %s ਨੂੰ ਲਾਕ ਮੋਡ ਵਿੱਚ ਖੋਲ੍ਹੇਗਾ।"
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "ਨਵੀਆਂ ਸੈਟਿੰਗਾਂ ਪ੍ਰਾਪਤ ਨਹੀਂ ਕੀਤੀਆਂ ਜਾ ਸਕੀਆਂ। ਕਿਰਪਾ ਕਰਕੇ IT ਨਾਲ ਸੰਪਰਕ ਕਰੋ।"
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "%s ਦਿਨਾਂ ਤੋਂ ਪੁਸ਼ਟੀ ਨਹੀਂ ਹੋਈ ਕਿ ਸੈਟਿੰਗਾਂ ਅੱਪ-ਟੂ-ਡੇਟ ਹਨ। ਕਿਰਪਾ ਕਰਕੇ ਨੈੱਟਵਰਕ ਨਾਲ ਕਨੈਕਟ ਕਰੋ; ਜੇ ਇਹ ਜਾਰੀ ਰਹੇ, ਤਾਂ IT ਨਾਲ ਸੰਪਰਕ ਕਰੋ।"
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT ਇਸ ਕੰਪਿਊਟਰ ਤੋਂ ਨਿਦਾਨ ਜਾਣਕਾਰੀ ਇਕੱਠੀ ਕਰ ਰਿਹਾ ਹੈ।"

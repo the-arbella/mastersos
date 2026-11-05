@@ -8,7 +8,8 @@
 # When Chrome appears the window's last screen says to sign out and in again before it closes: a sysext merged mid-session
 # does not reach the running GNOME Shell, so the Dock shows Chrome only in the next session (PVE, 2026-10-30).
 # Overridable for tests: MASTERSOS_PUBLIC, MASTERSOS_CHROME_BIN, MASTERSOS_POLL (seconds, default 3),
-# MASTERSOS_READY_HOLD (seconds the last screen stays, default 15).
+# MASTERSOS_READY_HOLD (seconds the last screen stays, default 15), MASTERSOS_NOTICE_LIB (default /usr/lib/mastersos/notice-lib)
+# and notice-lib's own.
 set -euo pipefail
 public=${MASTERSOS_PUBLIC:-/var/lib/mastersos-public}
 chrome=${MASTERSOS_CHROME_BIN:-/usr/bin/google-chrome-stable}
@@ -21,20 +22,11 @@ case ${USER:-$(id -un 2>/dev/null || :)} in
 kiosk-*) exit 0 ;;
 esac
 
-case ${LANG:-} in
-zh*)
-	title='浏览器还没有安装好。'
-	ready='浏览器已经装好。请注销后重新登录才能看到它。'
-	;;
-th*)
-	title='ยังไม่ได้ติดตั้งเว็บเบราว์เซอร์'
-	ready='เว็บเบราว์เซอร์พร้อมแล้ว ออกจากระบบแล้วเข้าสู่ระบบใหม่เพื่อดูเบราว์เซอร์'
-	;;
-*)
-	title='The web browser is not installed yet.'
-	ready='The web browser is ready. Sign out and sign in again to see it.'
-	;;
-esac
+# the two sentences of our own, in the session's language (notice-lib; English when the library is missing)
+# shellcheck source-path=SCRIPTDIR source=notice-lib
+. "${MASTERSOS_NOTICE_LIB:-/usr/lib/mastersos/notice-lib}" 2>/dev/null || notice_text() { printf '%s\n' "$1"; }
+title=$(notice_text 'The web browser is not installed yet.')
+ready=$(notice_text 'The web browser is ready. Sign out and sign in again to see it.')
 
 # field <name>: the JSON string value of <name> in status.json, unescaped; empty for null, a missing key or no file.
 # No python3 in the image: sed takes "name": "..." where the value is a run of escapes or non-quote characters. The agent

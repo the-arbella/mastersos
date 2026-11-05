@@ -38,6 +38,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use mastersos_bundle::kiosk;
 
+use crate::i18n::{self, Locale};
 use crate::runner::{run_ok, Cmd, RealRunner, Runner};
 use crate::system::desktop::CHROME_BIN;
 use crate::system::ephemeral::KIOSK_UIDS;
@@ -309,8 +310,14 @@ fn end_session(ctx: &Ctx) {
     }
 }
 
-/// 托管策略没有隔离好时的错误框（复审 C1）。
-pub const POLICY_NOT_ISOLATED: &str = "这个应用的锁定设置没有生效，不能启动，请举手找老师 / This app's lock settings are not in effect, so it cannot start. Please ask your teacher.";
+/// The error dialog when the managed policy is not isolated (review C1). A msgid of `mastersos-system` ([`crate::i18n`]).
+pub const POLICY_NOT_ISOLATED: &str =
+    "This app's lock settings are not in effect, so it cannot start. Please ask your teacher.";
+
+/// The language of this session's dialogs: the session's own `LANG`, else the system locale ([`crate::i18n`]).
+fn locale(ctx: &Ctx) -> Option<Locale> {
+    i18n::system_language((ctx.env)("LANG").as_deref(), ctx.root)
+}
 /// 策略文件的读取上限。
 const MAX_POLICY_BYTES: u64 = 1024 * 1024;
 
@@ -435,7 +442,8 @@ pub fn run(
         let detail = format!("the Chrome managed policy is not the one for this app ({e:#}); not starting the app, ending the session");
         eprintln!("mastersos-kiosk run: {detail}");
         (ctx.journal)(&id, MSG_ABNORMAL, Some(&detail));
-        if let Err(e) = spawn(&zenity_error_argv(POLICY_NOT_ISOLATED)) {
+        let text = i18n::text(ctx.runner, locale(ctx).as_ref(), POLICY_NOT_ISOLATED);
+        if let Err(e) = spawn(&zenity_error_argv(&text)) {
             eprintln!("mastersos-kiosk run: cannot show the error dialog: {e}");
         }
         end_session(ctx);
@@ -556,12 +564,16 @@ pub fn exit_host(input: &mut dyn Read, output: &mut dyn Write, ctx: &Ctx) -> boo
 // enter
 // ---------------------------------------------------------------------------
 
-/// 结束不了当前会话时错误框的文字（中英）。
-pub const ENTER_FAILED: &str = "结束不了当前会话，请注销后在登录界面点这个应用 / Could not end your session. Please sign out and open this app from the sign-in screen";
+/// The error dialog when the current session cannot be ended. A msgid of `mastersos-system` ([`crate::i18n`]).
+pub const ENTER_FAILED: &str =
+    "Could not end your session. Please sign out and open this app from the sign-in screen.";
 
-/// 确认框的文字（中英）。
-pub fn enter_text(name: &str) -> String {
-    format!("将结束当前会话，进入 {name} 锁定模式 / This will end your session and open {name}")
+/// The confirmation dialog; `%s` is the app's name. A msgid of `mastersos-system` ([`crate::i18n`]).
+pub const ENTER_CONFIRM: &str = "This will end your session and open %s in locked mode.";
+
+/// The confirmation dialog's text for the app `name`, in `locale`.
+pub fn enter_text(runner: &dyn Runner, locale: Option<&Locale>, name: &str) -> String {
+    i18n::text1(runner, locale, ENTER_CONFIRM, name)
 }
 
 /// zenity 的确认框。`--no-markup`：应用名里的 `<`、`&` 原样显示，不当 Pango 标记。
@@ -596,7 +608,8 @@ pub fn enter(
 ) -> Result<()> {
     kiosk::check_id(id).map_err(|e| anyhow!(e.message))?;
     let l = read_launch(ctx.root, id)?;
-    if !confirm(&enter_text(&l.name)) {
+    let loc = locale(ctx);
+    if !confirm(&enter_text(ctx.runner, loc.as_ref(), &l.name)) {
         return Ok(());
     }
     let r = terminate_target(ctx)
@@ -607,7 +620,7 @@ pub fn enter(
         })
         .and_then(|t| terminate(ctx.runner, &t));
     if r.is_err() {
-        error(ENTER_FAILED);
+        error(&i18n::text(ctx.runner, loc.as_ref(), ENTER_FAILED));
     }
     r
 }

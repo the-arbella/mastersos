@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Bản cập nhật hệ thống đã sẵn sàng. Khởi động lại máy tính để hoàn tất cài đặt."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Các tệp hệ thống cần được sửa chữa. Việc này sẽ tự động diễn ra vào lần khởi động lại máy tính tiếp theo."
+
+msgid "The web browser is not installed yet."
+msgstr "Trình duyệt web chưa được cài đặt."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Trình duyệt web đã sẵn sàng. Đăng xuất rồi đăng nhập lại để thấy nó."
+
+msgid "This app is not available on this device"
+msgstr "Ứng dụng này không khả dụng trên thiết bị này"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Cài đặt khóa của ứng dụng này không có hiệu lực nên ứng dụng không thể khởi động. Vui lòng hỏi giáo viên của bạn."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Không thể kết thúc phiên của bạn. Vui lòng đăng xuất và mở ứng dụng này từ màn hình đăng nhập."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Thao tác này sẽ kết thúc phiên của bạn và mở %s ở chế độ khóa."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Không thể tải cài đặt mới hơn. Vui lòng liên hệ bộ phận IT."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Đã %s ngày chưa xác nhận được cài đặt là mới nhất. Vui lòng kết nối mạng; nếu vẫn như vậy, hãy liên hệ bộ phận IT."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "Bộ phận IT đang thu thập thông tin chẩn đoán từ máy tính này."

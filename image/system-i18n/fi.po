@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Järjestelmäpäivitys on valmis. Viimeistele asennus käynnistämällä tietokone uudelleen."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Järjestelmätiedostot on korjattava. Tämä tapahtuu automaattisesti, kun tietokone käynnistetään seuraavan kerran uudelleen."
+
+msgid "The web browser is not installed yet."
+msgstr "Verkkoselainta ei ole vielä asennettu."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Verkkoselain on valmis. Kirjaudu ulos ja takaisin sisään nähdäksesi sen."
+
+msgid "This app is not available on this device"
+msgstr "Tämä sovellus ei ole käytettävissä tällä laitteella"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Tämän sovelluksen lukitusasetukset eivät ole voimassa, joten sitä ei voi käynnistää. Kysy opettajaltasi."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Istuntoasi ei voitu lopettaa. Kirjaudu ulos ja avaa tämä sovellus kirjautumisnäytöltä."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Tämä lopettaa istuntosi ja avaa sovelluksen %s lukitussa tilassa."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Uudempia asetuksia ei voitu hakea. Ota yhteyttä IT-tukeen."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Asetusten ajantasaisuutta ei ole vahvistettu %s päivään. Yhdistä verkkoon; jos tilanne jatkuu, ota yhteyttä IT-tukeen."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT-tuki kerää diagnostiikkatietoja tästä tietokoneesta."

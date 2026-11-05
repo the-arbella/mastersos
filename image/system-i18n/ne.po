@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "प्रणाली अद्यावधिक तयार छ। स्थापना पूरा गर्न कम्प्युटर पुनः सुरु गर्नुहोस्।"
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "प्रणाली फाइलहरू मर्मत गर्नुपर्छ। अर्को पटक कम्प्युटर पुनः सुरु हुँदा यो स्वचालित रूपमा हुन्छ।"
+
+msgid "The web browser is not installed yet."
+msgstr "वेब ब्राउजर अझै स्थापना भएको छैन।"
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "वेब ब्राउजर तयार छ। यसलाई हेर्न साइन आउट गरेर फेरि साइन इन गर्नुहोस्।"
+
+msgid "This app is not available on this device"
+msgstr "यो एप यो उपकरणमा उपलब्ध छैन"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "यो एपको लक सेटिङहरू लागू भएका छैनन्, त्यसैले यो सुरु हुन सक्दैन। कृपया आफ्नो शिक्षकलाई सोध्नुहोस्।"
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "तपाईंको सत्र अन्त्य गर्न सकिएन। कृपया साइन आउट गरेर साइन-इन स्क्रिनबाट यो एप खोल्नुहोस्।"
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "यसले तपाईंको सत्र अन्त्य गर्नेछ र %s लक गरिएको मोडमा खोल्नेछ।"
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "नयाँ सेटिङहरू ल्याउन सकिएन। कृपया IT लाई सम्पर्क गर्नुहोस्।"
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "%s दिनदेखि सेटिङहरू अद्यावधिक छन् भनी पुष्टि भएको छैन। कृपया नेटवर्कमा जडान गर्नुहोस्; यस्तै भइरहे IT लाई सम्पर्क गर्नुहोस्।"
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT ले यो कम्प्युटरबाट निदान जानकारी सङ्कलन गर्दैछ।"

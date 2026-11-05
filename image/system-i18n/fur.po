@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Un inzornament dal sisteme al è pront. Torne invie il computer par finî di instalâlu."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "I files dal sisteme a àn bisugne di jessi comedâts. Al sucêt in automatic la prossime volte che il computer al tornarà a inviâsi."
+
+msgid "The web browser is not installed yet."
+msgstr "Il navigadôr web nol è ancjemò instalât."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Il navigadôr web al è pront. Jes de session e torne a jentrâ par viodilu."
+
+msgid "This app is not available on this device"
+msgstr "Cheste aplicazion no je disponibil su chest dispositîf"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Lis impostazions di bloc di cheste aplicazion no son ativis, duncje no pues partî. Domande al to insegnant."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "No si è rivâts a sierâ la tô session. Jes de session e vierç cheste aplicazion de schermade di acès."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Chest al sierarà la tô session e al vierzarà %s in modalitât blocade."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "No si è rivâts a otignî impostazions plui gnovis. Contate l'IT."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "A son %s dîs che nol ven confermât che lis impostazions a sedin inzornadis. Coleghiti a la rêt; se al continue, contate l'IT."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "Il IT al sta tirant dongje informazions diagnostichis di chest computer."

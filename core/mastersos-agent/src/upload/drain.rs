@@ -43,7 +43,8 @@ use crate::fetch::{DeviceCred, Fetcher, InboxSeqUnknown};
 use crate::runner::Runner;
 use crate::system::SysPaths;
 
-/// Shown in every session (and as the login screen's line) when a collection starts.
+/// Shown in every session (and as the login screen's line) when a collection starts. A msgid of both `mastersos-system`
+/// (the notification, [`crate::i18n`]) and `mastersos-login` (the login screen's line).
 pub const NOTICE: &str = "IT is collecting diagnostic info from this computer.";
 /// The login screen's line stays up at most this long from the start of a collection (it is
 /// cleared as soon as the collection ends).
@@ -346,9 +347,11 @@ async fn run_collect(
     let runner = cx.runner.clone();
     let device_id = cx.device_id.to_string();
     let out = cx.queue.dir().to_path_buf();
+    let locale = crate::i18n::system_language(None, &cx.paths.root);
     cx.queue.ensure()?;
     tokio::task::spawn_blocking(move || {
-        crate::login_queue::notify_sessions(NOTICE, runner.as_ref());
+        let text = crate::i18n::text(runner.as_ref(), locale.as_ref(), NOTICE);
+        crate::login_queue::notify_sessions(&text, runner.as_ref());
         collect(&o, &device_id, &out, runner.as_ref(), now)
     })
     .await

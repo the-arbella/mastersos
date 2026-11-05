@@ -918,7 +918,7 @@ grep -qxF '      - run: bash image/tests/pam-password-test.sh' .github/workflows
 #     由 systemd-sysext.service 的 drop-in 之后重挂
 r=0
 stub=$rel/mkosi.extra/usr/lib/mastersos/interface-denied
-if [ ! -x "$stub" ] || ! grep -qF "*) msg='This app is not available on this device' ;;" "$stub" || ! grep -qxF 'exit 126' "$stub"; then
+if [ ! -x "$stub" ] || ! grep -qxF "msg=\$(notice_text 'This app is not available on this device')" "$stub" || ! grep -qxF 'exit 126' "$stub"; then
 	bad 19 "$stub should be executable, say 'This app is not available on this device' by default and exit 126"
 	r=1
 fi
@@ -3231,5 +3231,107 @@ if grep -rlF 'mastersos-update-reminder.service' "$su" | grep -vE '/(mastersos-u
 	r=1
 fi
 [ "$r" = 0 ] && ok 72 "restart prompt: update-run writes the pending file and reminds, the agent reads the same path, user unit only in desktop sessions"
+
+# 73. System notices go through i18n (system-i18n/README.md): the catalogues of mastersos-system are exactly login-i18n's set,
+#     each has every msgid of the template with the same %s; every notice_text '...' of the scripts and every AGENT_MSGIDS entry
+#     of the agent is in the template; mkosi.build compiles them into /usr/share/locale and the image has gettext(1); the scripts
+#     that show notices source notice-lib and hold no Chinese or Thai text, and no script under /usr/lib/mastersos picks a
+#     language by hand (a zh*) / th*) case on LANG).
+r=0
+si=$rel/system-i18n
+ml=$rel/mkosi.extra/usr/lib/mastersos
+notice_scripts=("$ml/notice-lib" "$ml/update-run" "$ml/integrity" "$ml/browser-wait" "$ml/interface-denied")
+if ! why=$(python3 -I - "$si" "$rel/login-i18n" "$core/mastersos-agent/src" "${notice_scripts[@]}" <<'SYSTEM_I18N'
+import glob, os, re, sys
+
+def entries(path):
+    text = open(path, encoding="utf-8").read()
+    pairs = re.findall(r'^msgid "(.*)"\nmsgstr "(.*)"$', text, re.M)
+    return {k.replace('\\"', '"'): v.replace('\\"', '"') for k, v in pairs if k}
+
+si, login, src, *scripts = sys.argv[1:]
+errs = []
+want = entries(os.path.join(si, "mastersos-system.pot"))
+if not want:
+    errs.append("mastersos-system.pot has no msgid")
+names = lambda d: sorted(os.path.basename(p) for p in glob.glob(os.path.join(d, "*.po")))
+if names(si) != names(login):
+    errs.append(f"catalogues differ from login-i18n: {sorted(set(names(si)) ^ set(names(login)))}")
+for po in names(si):
+    got = entries(os.path.join(si, po))
+    for k in want:
+        v = got.get(k, "")
+        if not v.strip():
+            errs.append(f"{po}: {k!r} not translated")
+        elif v.count("%s") != k.count("%s"):
+            errs.append(f"{po}: {k!r} has the wrong %s")
+    for k in set(got) - set(want):
+        errs.append(f"{po}: {k!r} is not in the template")
+# the scripts' msgids
+for s in scripts:
+    for m in re.findall(r"notice_text '([^']*)'", open(s, encoding="utf-8").read()):
+        if m not in want:
+            errs.append(f"{os.path.basename(s)}: {m!r} not in mastersos-system.pot")
+    for m in re.findall(r"^[A-Z_]+='([^']*)'$", open(s, encoding="utf-8").read(), re.M):
+        if m not in want:
+            errs.append(f"{os.path.basename(s)}: the notice {m!r} is not in mastersos-system.pot")
+# the agent's msgids: AGENT_MSGIDS names consts, each `pub const NAME: &str = "...";` somewhere in src
+i18n = open(os.path.join(src, "i18n.rs"), encoding="utf-8").read()
+arr = re.search(r"AGENT_MSGIDS: \[&str; \d+\] = \[([^\]]*)\]", i18n)
+if not arr:
+    errs.append("i18n.rs has no AGENT_MSGIDS")
+else:
+    consts = {}
+    for p in glob.glob(os.path.join(src, "**", "*.rs"), recursive=True):
+        for n, v in re.findall(r'pub const ([A-Z_]+): &str =\s*"((?:[^"\\]|\\.)*)";', open(p, encoding="utf-8").read()):
+            consts.setdefault(n, v)
+    for path in [x.strip() for x in arr.group(1).split(",") if x.strip()]:
+        n = path.rsplit("::", 1)[-1]
+        v = consts.get(n)
+        if v is None:
+            errs.append(f"AGENT_MSGIDS: no pub const {n}")
+        elif v.replace('\\"', '"') not in want:
+            errs.append(f"AGENT_MSGIDS: {n} = {v!r} not in mastersos-system.pot")
+if errs:
+    print("; ".join(errs[:6]), f"({len(errs)} in all)")
+    sys.exit(1)
+SYSTEM_I18N
+); then
+	bad 73 "system-i18n: $why"
+	r=1
+fi
+# shellcheck disable=SC2016 # literal text of mkosi.build
+for l in 'for po in "$SRCDIR"/system-i18n/*.po; do' \
+	'	msgfmt --check -o "$DESTDIR/usr/share/locale/$lang/LC_MESSAGES/mastersos-system.mo" "$po"'; do
+	grep -qxF -- "$l" "$rel/mkosi.build" || {
+		bad 73 "mkosi.build should have the line: $l"
+		r=1
+	}
+done
+grep -qE '^ +gettext-base$' "$rel/mkosi.conf" || {
+	bad 73 "mkosi.conf Packages= should have gettext-base (/usr/bin/gettext for notice-lib and the agent)"
+	r=1
+}
+for s in "${notice_scripts[@]:1}"; do
+	# shellcheck disable=SC2016 # literal text of the scripts
+	grep -qxF '. "${MASTERSOS_NOTICE_LIB:-/usr/lib/mastersos/notice-lib}" 2>/dev/null || notice_text() { printf '"'"'%s\n'"'"' "$1"; }' "$s" || {
+		bad 73 "$s should source notice-lib (with the English fallback)"
+		r=1
+	}
+done
+for s in "${notice_scripts[@]}"; do
+	if LC_ALL=C.UTF-8 grep -nP '[\x{2E80}-\x{9FFF}\x{F900}-\x{FAFF}\x{FF00}-\x{FFEF}\x{0E00}-\x{0E7F}]' "$s" >/dev/null 2>&1; then
+		bad 73 "$s has Chinese or Thai text: notices are English msgids of system-i18n"
+		r=1
+	fi
+done
+for s in "$ml"/*; do
+	[ -f "$s" ] || continue
+	if grep -nE '^[[:space:]]*(zh|th)\*\)|:(zh|th)\*\)' "$s" >/dev/null; then
+		bad 73 "$s picks a language by hand: use notice_text (notice-lib)"
+		r=1
+	fi
+done
+[ "$r" = 0 ] && ok 73 "system notices: catalogues complete with login-i18n's language set, every script and agent msgid in the template, compiled into /usr/share/locale, gettext in the image, no hand-picked languages"
 
 exit $fail

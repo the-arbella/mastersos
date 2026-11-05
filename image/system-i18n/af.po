@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "'n Stelselopdatering is gereed. Herbegin die rekenaar om die installering te voltooi."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Stelsellêers moet herstel word. Dit gebeur outomaties die volgende keer dat die rekenaar herbegin."
+
+msgid "The web browser is not installed yet."
+msgstr "Die webblaaier is nog nie geïnstalleer nie."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Die webblaaier is gereed. Meld af en meld weer aan om dit te sien."
+
+msgid "This app is not available on this device"
+msgstr "Hierdie toep is nie op hierdie toestel beskikbaar nie"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Hierdie toep se sluitinstellings is nie van krag nie, dus kan dit nie begin nie. Vra asseblief jou onderwyser."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Kon nie jou sessie beëindig nie. Meld asseblief af en maak hierdie toep oop vanaf die aanmeldskerm."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Dit sal jou sessie beëindig en %s in gesluitte modus oopmaak."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Nuwer instellings kon nie gekry word nie. Kontak asseblief IT."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Instellings is al %s dae nie as op datum bevestig nie. Koppel asseblief aan die netwerk; as dit aanhou, kontak IT."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT versamel diagnostiese inligting van hierdie rekenaar af."

@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Aktualizace systému je připravena. Restartujte počítač a dokončete tak její instalaci."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Systémové soubory je třeba opravit. Stane se to automaticky při příštím restartu počítače."
+
+msgid "The web browser is not installed yet."
+msgstr "Webový prohlížeč ještě není nainstalován."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Webový prohlížeč je připraven. Odhlaste se a znovu se přihlaste, abyste ho viděli."
+
+msgid "This app is not available on this device"
+msgstr "Tato aplikace není na tomto zařízení dostupná"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Nastavení uzamčení této aplikace nejsou v platnosti, proto ji nelze spustit. Požádejte prosím svého učitele."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Vaši relaci se nepodařilo ukončit. Odhlaste se prosím a otevřete tuto aplikaci z přihlašovací obrazovky."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Tím se ukončí vaše relace a otevře se %s v uzamčeném režimu."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Novější nastavení se nepodařilo získat. Kontaktujte prosím IT."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Již %s dní nebylo potvrzeno, že je nastavení aktuální. Připojte se prosím k síti; pokud to bude pokračovat, kontaktujte IT."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT shromažďuje diagnostické informace z tohoto počítače."

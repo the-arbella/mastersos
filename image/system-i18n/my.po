@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "စနစ်အပ်ဒိတ် အသင့်ဖြစ်ပါပြီ။ ထည့်သွင်းမှု ပြီးဆုံးရန် ကွန်ပျူတာကို ပြန်စတင်ပါ။"
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "စနစ်ဖိုင်များကို ပြင်ဆင်ရန် လိုအပ်ပါသည်။ နောက်တစ်ကြိမ် ကွန်ပျူတာ ပြန်စတင်သည့်အခါ အလိုအလျောက် ပြင်ဆင်ပါမည်။"
+
+msgid "The web browser is not installed yet."
+msgstr "ဝဘ်ဘရောက်ဇာကို မထည့်သွင်းရသေးပါ။"
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "ဝဘ်ဘရောက်ဇာ အသင့်ဖြစ်ပါပြီ။ မြင်ရရန် ထွက်ပြီး ပြန်ဝင်ပါ။"
+
+msgid "This app is not available on this device"
+msgstr "ဤအက်ပ်ကို ဤစက်ပေါ်တွင် အသုံးမပြုနိုင်ပါ"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "ဤအက်ပ်၏ လော့ခ်ဆက်တင်များ အသက်မဝင်သေးသဖြင့် စတင်၍မရပါ။ သင့်ဆရာကို မေးပါ။"
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "သင့်ဆက်ရှင်ကို အဆုံးသတ်၍ မရပါ။ ထွက်ပြီး ဝင်ရောက်ရန် စခရင်မှ ဤအက်ပ်ကို ဖွင့်ပါ။"
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "၎င်းသည် သင့်ဆက်ရှင်ကို အဆုံးသတ်ပြီး %s ကို လော့ခ်ချထားသည့်မုဒ်ဖြင့် ဖွင့်ပါမည်။"
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "ပိုသစ်သော ဆက်တင်များကို ရယူ၍ မရပါ။ IT ကို ဆက်သွယ်ပါ။"
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "ဆက်တင်များ နောက်ဆုံးပေါ်ဖြစ်ကြောင်း %s ရက်ကြာ အတည်မပြုရသေးပါ။ ကွန်ရက်သို့ ချိတ်ဆက်ပါ။ ဆက်ဖြစ်နေပါက IT ကို ဆက်သွယ်ပါ။"
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT သည် ဤကွန်ပျူတာမှ ချို့ယွင်းချက်ရှာဖွေရေး အချက်အလက်များကို စုဆောင်းနေသည်။"

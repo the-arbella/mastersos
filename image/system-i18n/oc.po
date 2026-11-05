@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Una mesa a jorn del sistèma es prèsta. Reaviatz l'ordenador per acabar de l'installar."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "De fichièrs del sistèma devon èsser reparats. Se farà automaticament a la propdana reaviada de l'ordenador."
+
+msgid "The web browser is not installed yet."
+msgstr "Lo navegador web es pas encara installat."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Lo navegador web es prèst. Desconnectatz-vos e tornatz vos connectar per lo veire."
+
+msgid "This app is not available on this device"
+msgstr "Aquesta aplicacion es pas disponibla sus aqueste aparelh"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Los paramètres de verrolhatge d'aquesta aplicacion son pas aplicats, doncas pòt pas aviar. Demandatz a vòstre ensenhaire."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Impossible de tampar vòstra session. Desconnectatz-vos e dobrissètz aquesta aplicacion a partir de l'ecran de connexion."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Aquò tamparà vòstra session e dobrirà %s en mòde verrolhat."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Impossible de recuperar de paramètres mai recents. Contactatz l'informatica."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Dempuèi %s jorns, res confirma pas que los paramètres son a jorn. Connectatz-vos al ret ; se contunha, contactatz l'informatica."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "Lo servici informatic recampa d'informacions de diagnostic d'aqueste ordenador."

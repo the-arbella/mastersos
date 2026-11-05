@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "システムの更新の準備ができました。インストールを完了するにはコンピューターを再起動してください。"
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "システムファイルの修復が必要です。次にコンピューターを再起動したときに自動的に修復されます。"
+
+msgid "The web browser is not installed yet."
+msgstr "Web ブラウザーはまだインストールされていません。"
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Web ブラウザーの準備ができました。表示するには、サインアウトしてもう一度サインインしてください。"
+
+msgid "This app is not available on this device"
+msgstr "このアプリはこのデバイスでは使用できません"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "このアプリのロック設定が有効になっていないため、起動できません。先生に聞いてください。"
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "セッションを終了できませんでした。サインアウトして、サインイン画面からこのアプリを開いてください。"
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "セッションを終了し、%s をロックモードで開きます。"
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "新しい設定を取得できませんでした。IT 担当者に連絡してください。"
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "設定が最新であることが %s 日間確認されていません。ネットワークに接続してください。このままの場合は IT 担当者に連絡してください。"
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT 担当者がこのコンピューターの診断情報を収集しています。"

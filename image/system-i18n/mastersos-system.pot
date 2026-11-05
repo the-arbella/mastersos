@@ -1,0 +1,50 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#. update-run: a newer system version is installed and starts at the next restart
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr ""
+
+#. integrity: the next boot repairs the system partition
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr ""
+
+#. browser-wait: first line of the notification and of the progress window
+msgid "The web browser is not installed yet."
+msgstr ""
+
+#. browser-wait: last screen of the progress window
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr ""
+
+#. interface-denied: a blocked app (terminal, file manager, settings) in a locked session
+msgid "This app is not available on this device"
+msgstr ""
+
+#. mastersos-agent kiosk run: error dialog
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr ""
+
+#. mastersos-agent kiosk enter: error dialog
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr ""
+
+#. mastersos-agent kiosk enter: confirmation dialog; %s is the app's name
+msgid "This will end your session and open %s in locked mode."
+msgstr ""
+
+#. mastersos-agent: stale settings notice, a newer bundle was withheld
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr ""
+
+#. mastersos-agent: stale settings notice; %s is a number of days (2 or more in practice)
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr ""
+
+#. mastersos-agent: diagnostics are being collected (also in mastersos-login)
+msgid "IT is collecting diagnostic info from this computer."
+msgstr ""

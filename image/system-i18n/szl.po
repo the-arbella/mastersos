@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Aktualizacyjo systymu je fertich. Uruchōm kōmputer jeszcze roz, coby skōńczyć instalacyjo."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Zbiory systymu trza naprawić. Stanie sie to autōmatycznie przi nastympnym uruchōmiyniu kōmputera."
+
+msgid "The web browser is not installed yet."
+msgstr "Przeglōndarka internetowo niy ma jeszcze zainstalowano."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Przeglōndarka internetowo je fertich. Ôdloguj sie i zaloguj zaś, coby jōm ôbejrzeć."
+
+msgid "This app is not available on this device"
+msgstr "Ta aplikacyjo niy ma dostympno na tym masinie"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Sztelōnki blokady tyj aplikacyje niy działajōm, tōż niy poradzi sie uruchōmić. Spytej sie swojigo szkolnego."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Niy szło skōńczyć twojij sesyje. Ôdloguj sie i ôtwōrz ta aplikacyjo ze ekranu logowanio."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "To skōńczy twoja sesyjo i ôtworzi %s we trybie zablokowanym."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Niy szło pobrać nowszych sztelōnkōw. Skōntaktuj sie z IT."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Ôd %s dni niy ma potwierdzōne, iże sztelōnki sōm aktualne. Połōncz sie ze necym; jak to bydzie dalij, skōntaktuj sie z IT."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT zbiyro diagnostyczne informacyje z tego kōmputra."

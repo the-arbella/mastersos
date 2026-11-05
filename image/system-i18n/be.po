@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Абнаўленне сістэмы гатовае. Перазапусціце камп'ютар, каб завяршыць усталяванне."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Сістэмныя файлы трэба аднавіць. Гэта адбудзецца аўтаматычна пры наступным перазапуску камп'ютара."
+
+msgid "The web browser is not installed yet."
+msgstr "Вэб-браўзер яшчэ не ўсталяваны."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Вэб-браўзер гатовы. Выйдзіце і ўвайдзіце зноў, каб убачыць яго."
+
+msgid "This app is not available on this device"
+msgstr "Гэта праграма недаступная на гэтай прыладзе"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Налады блакіроўкі гэтай праграмы не дзейнічаюць, таму яна не можа запусціцца. Звярніцеся да настаўніка."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Не ўдалося завяршыць ваш сеанс. Выйдзіце і адкрыйце гэту праграму з экрана ўваходу."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Гэта завершыць ваш сеанс і адкрые %s у заблакіраваным рэжыме."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Не ўдалося атрымаць навейшыя налады. Звярніцеся ў IT-службу."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Ужо %s дзён не пацверджана, што налады актуальныя. Падключыцеся да сеткі; калі гэта не мінае, звярніцеся ў IT-службу."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "ІТ-служба збірае дыягнастычныя даныя з гэтага кампутара."

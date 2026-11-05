@@ -202,10 +202,14 @@ printf '#!/bin/bash\nshift 3\nexec "$@"\n' >"$bin/runuser"
 printf '#!/bin/bash\nprintf "%%s|" "${DBUS_SESSION_BUS_ADDRESS:-}" "$@" >>"$NOTIFY_LOG"\necho >>"$NOTIFY_LOG"\n' >"$bin/notify-send"
 printf '#!/bin/bash\nexec sleep 30\n' >"$bin/notify-hang"
 printf '#!/bin/bash\nexit 3\n' >"$bin/notify-fail"
+# gettext stub: shows the environment notice-lib gave it around the msgid (notice-lib-test.sh runs the real one)
+# shellcheck disable=SC2016 # the stub is written from single-quoted text on purpose
+printf '#!/bin/bash\n[ "$1" = -- ] && shift\nprintf "[%%s %%s %%s %%s] %%s" "$LANGUAGE" "$LC_ALL" "$TEXTDOMAIN" "$TEXTDOMAINDIR" "$1"\n' >"$bin/gettext"
 chmod +x "$bin"/*
 export MASTERSOS_LOGINCTL=$bin/loginctl MASTERSOS_RUNUSER=$bin/runuser MASTERSOS_NOTIFY=$bin/notify-send
 export NOTIFY_LOG=$tmp/notify.log SESSIONS_FILE=$tmp/sessions SESSION_INFO=$tmp/session-info
 export MASTERSOS_LOCALE_CONF=$tmp/locale.conf
+export MASTERSOS_NOTICE_LIB=$here/../mkosi.extra/usr/lib/mastersos/notice-lib MASTERSOS_GETTEXT=$bin/gettext
 printf 'c1 120 gdm seat0\n2 1000 alice seat0 tty2\n' >"$SESSIONS_FILE"
 printf 'c1: Active=yes Type=wayland Class=greeter Name=gdm User=120\n2: Active=yes Type=wayland Class=user Name=alice User=1000\n' >"$SESSION_INFO"
 unset LANG
@@ -289,12 +293,20 @@ absent "running version unreadable: no prompt" "$p"
 # the language: LANG first, then /etc/locale.conf
 : >"$NOTIFY_LOG"
 LANG=zh_CN.UTF-8 prun >/dev/null
-check "LANG=zh_CN.UTF-8: Chinese" "系统更新已准备好。重新启动电脑即可完成安装。" "$(cut -d'|' -f5 "$NOTIFY_LOG")"
+check "LANG=zh_CN.UTF-8: gettext asked in zh_CN" "[zh_CN zh_CN.UTF-8 mastersos-system /usr/share/locale] $want_en" "$(cut -d'|' -f5 "$NOTIFY_LOG")"
 rm -f "$p"
 : >"$NOTIFY_LOG"
 printf 'LANG="th_TH.UTF-8"\n' >"$MASTERSOS_LOCALE_CONF"
 prun >/dev/null
-check "/etc/locale.conf th: Thai" "การอัปเดตระบบพร้อมแล้ว รีสตาร์ทคอมพิวเตอร์เพื่อติดตั้งให้เสร็จสมบูรณ์" "$(cut -d'|' -f5 "$NOTIFY_LOG")"
+check "/etc/locale.conf th: gettext asked in th_TH" "[th_TH th_TH.UTF-8 mastersos-system /usr/share/locale] $want_en" "$(cut -d'|' -f5 "$NOTIFY_LOG")"
+rm -f "$p"
+: >"$NOTIFY_LOG"
+MASTERSOS_GETTEXT=$tmp/no-gettext prun >/dev/null
+check "no gettext: English" "$want_en" "$(cut -d'|' -f5 "$NOTIFY_LOG")"
+rm -f "$p"
+: >"$NOTIFY_LOG"
+MASTERSOS_NOTICE_LIB=$tmp/no-lib prun >/dev/null
+check "no notice-lib: English" "$want_en" "$(cut -d'|' -f5 "$NOTIFY_LOG")"
 rm -f "$MASTERSOS_LOCALE_CONF"
 
 # the prompt can never fail a round
@@ -345,7 +357,7 @@ check "remind: one notification on the user's own bus, English" \
 	"unix:path=/run/user/1000/bus|--app-name=MastersOS|--urgency=normal|MastersOS|$want_en|" "$(tr -d '\n' <"$NOTIFY_LOG")"
 : >"$NOTIFY_LOG"
 remind USER=alice LANG=th_TH.UTF-8 >/dev/null
-check "remind: LANG=th -> Thai" "การอัปเดตระบบพร้อมแล้ว รีสตาร์ทคอมพิวเตอร์เพื่อติดตั้งให้เสร็จสมบูรณ์" "$(cut -d'|' -f5 "$NOTIFY_LOG")"
+check "remind: LANG=th -> gettext asked in th_TH" "[th_TH th_TH.UTF-8 mastersos-system /usr/share/locale] $want_en" "$(cut -d'|' -f5 "$NOTIFY_LOG")"
 : >"$NOTIFY_LOG"
 remind USER=kiosk-exam >/dev/null
 check "remind: locked-app account gets nothing" 0 "$(notes)"

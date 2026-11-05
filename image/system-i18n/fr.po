@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Une mise à jour du système est prête. Redémarrez l'ordinateur pour terminer son installation."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Des fichiers système doivent être réparés. Cela se fera automatiquement au prochain redémarrage de l'ordinateur."
+
+msgid "The web browser is not installed yet."
+msgstr "Le navigateur web n'est pas encore installé."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Le navigateur web est prêt. Déconnectez-vous puis reconnectez-vous pour le voir."
+
+msgid "This app is not available on this device"
+msgstr "Cette application n'est pas disponible sur cet appareil"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Les paramètres de verrouillage de cette application ne sont pas appliqués, elle ne peut donc pas démarrer. Demandez à votre enseignant."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Impossible de fermer votre session. Déconnectez-vous et ouvrez cette application depuis l'écran de connexion."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Cela fermera votre session et ouvrira %s en mode verrouillé."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Impossible de récupérer des paramètres plus récents. Contactez le service informatique."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Depuis %s jours, rien ne confirme que les paramètres sont à jour. Connectez-vous au réseau ; si cela persiste, contactez le service informatique."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "Le service informatique collecte des informations de diagnostic sur cet ordinateur."

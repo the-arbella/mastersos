@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Süsteemiuuendus on valmis. Paigaldamise lõpetamiseks taaskäivita arvuti."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Süsteemifaile tuleb parandada. See toimub automaatselt arvuti järgmisel taaskäivitamisel."
+
+msgid "The web browser is not installed yet."
+msgstr "Veebibrauser pole veel paigaldatud."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Veebibrauser on valmis. Selle nägemiseks logi välja ja uuesti sisse."
+
+msgid "This app is not available on this device"
+msgstr "See rakendus pole selles seadmes saadaval"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Selle rakenduse lukustusseaded ei kehti, seega ei saa see käivituda. Palun küsi oma õpetajalt."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Sinu seanssi ei õnnestunud lõpetada. Logi välja ja ava see rakendus sisselogimiskuvalt."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "See lõpetab sinu seansi ja avab %s lukustatud režiimis."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Uuemaid seadeid ei õnnestunud hankida. Palun võta ühendust IT-ga."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Juba %s päeva pole kinnitatud, et seaded on ajakohased. Palun loo võrguühendus; kui see jätkub, võta ühendust IT-ga."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT-osakond kogub sellest arvutist diagnostikateavet."

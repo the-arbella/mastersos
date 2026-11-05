@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "系统更新已准备好。重新启动电脑即可完成安装。"
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "系统文件需要修复。下次重新启动电脑时会自动修复。"
+
+msgid "The web browser is not installed yet."
+msgstr "浏览器还没有安装好。"
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "浏览器已经装好。请注销后重新登录才能看到它。"
+
+msgid "This app is not available on this device"
+msgstr "这台设备上不能使用此应用"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "这个应用的锁定设置没有生效，不能启动，请举手找老师。"
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "结束不了当前会话，请注销后在登录界面点这个应用。"
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "将结束当前会话，以锁定模式打开 %s。"
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "有新的设置没能拿到，请联系 IT。"
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "设置已 %s 天未确认是最新的，请连上网络；一直这样请联系 IT。"
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT 正在收集这台电脑的诊断信息。"

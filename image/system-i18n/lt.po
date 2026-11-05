@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Sistemos naujinys paruoštas. Iš naujo paleiskite kompiuterį, kad užbaigtumėte diegimą."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Sistemos failus reikia pataisyti. Tai įvyks automatiškai kitą kartą iš naujo paleidus kompiuterį."
+
+msgid "The web browser is not installed yet."
+msgstr "Žiniatinklio naršyklė dar neįdiegta."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Žiniatinklio naršyklė paruošta. Atsijunkite ir vėl prisijunkite, kad ją pamatytumėte."
+
+msgid "This app is not available on this device"
+msgstr "Ši programa šiame įrenginyje nepasiekiama"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Šios programos užrakinimo nustatymai negalioja, todėl ji negali pasileisti. Paklauskite savo mokytojo."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Nepavyko užbaigti jūsų seanso. Atsijunkite ir atverkite šią programą iš prisijungimo ekrano."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Tai užbaigs jūsų seansą ir atvers %s užrakintu režimu."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Nepavyko gauti naujesnių nustatymų. Susisiekite su IT."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Jau %s d. nepatvirtinta, kad nustatymai yra naujausi. Prisijunkite prie tinklo; jei tai tęsiasi, susisiekite su IT."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT specialistai renka diagnostinę informaciją iš šio kompiuterio."

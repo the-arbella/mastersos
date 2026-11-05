@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Kerfisuppfærsla er tilbúin. Endurræstu tölvuna til að ljúka uppsetningunni."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Gera þarf við kerfisskrár. Það gerist sjálfkrafa næst þegar tölvan er endurræst."
+
+msgid "The web browser is not installed yet."
+msgstr "Vafrinn hefur ekki verið settur upp enn."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Vafrinn er tilbúinn. Skráðu þig út og aftur inn til að sjá hann."
+
+msgid "This app is not available on this device"
+msgstr "Þetta forrit er ekki í boði á þessu tæki"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Læsingarstillingar þessa forrits eru ekki virkar, svo það getur ekki ræst. Spurðu kennarann þinn."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Ekki tókst að ljúka setunni þinni. Skráðu þig út og opnaðu þetta forrit af innskráningarskjánum."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Þetta lýkur setunni þinni og opnar %s í læstum ham."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Ekki tókst að sækja nýrri stillingar. Hafðu samband við tölvudeildina."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Ekki hefur verið staðfest í %s daga að stillingarnar séu uppfærðar. Tengstu netinu; ef þetta heldur áfram skaltu hafa samband við tölvudeildina."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "Tæknideild er að safna greiningarupplýsingum úr þessari tölvu."

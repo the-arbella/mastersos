@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "การอัปเดตระบบพร้อมแล้ว รีสตาร์ทคอมพิวเตอร์เพื่อติดตั้งให้เสร็จสมบูรณ์"
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "ไฟล์ระบบต้องได้รับการซ่อมแซม ระบบจะซ่อมแซมให้อัตโนมัติเมื่อรีสตาร์ทคอมพิวเตอร์ครั้งถัดไป"
+
+msgid "The web browser is not installed yet."
+msgstr "ยังไม่ได้ติดตั้งเว็บเบราว์เซอร์"
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "เว็บเบราว์เซอร์พร้อมแล้ว ออกจากระบบแล้วเข้าสู่ระบบใหม่เพื่อดูเบราว์เซอร์"
+
+msgid "This app is not available on this device"
+msgstr "แอปนี้ใช้ไม่ได้บนอุปกรณ์นี้"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "การตั้งค่าการล็อกของแอปนี้ไม่มีผล จึงเปิดแอปไม่ได้ โปรดยกมือถามครู"
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "ไม่สามารถจบเซสชันของคุณได้ โปรดออกจากระบบแล้วเปิดแอปนี้จากหน้าลงชื่อเข้าใช้"
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "การดำเนินการนี้จะจบเซสชันของคุณและเปิด %s ในโหมดล็อก"
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "ไม่สามารถดึงการตั้งค่าที่ใหม่กว่าได้ โปรดติดต่อฝ่าย IT"
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "การตั้งค่ายังไม่ได้รับการยืนยันว่าเป็นปัจจุบันมา %s วันแล้ว โปรดเชื่อมต่อเครือข่าย หากยังเป็นเช่นนี้ โปรดติดต่อฝ่าย IT"
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "ฝ่าย IT กำลังเก็บข้อมูลการวินิจฉัยจากคอมพิวเตอร์เครื่องนี้"

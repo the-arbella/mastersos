@@ -446,7 +446,7 @@ fn write_launch(root: &Path, l: &Launch) {
 }
 
 /// 复审 C1（纵深防御）：会话里 Chrome 读的托管策略目录不是恰好这个应用的那一份（pam_namespace 没生效、实例是空的、
-/// 多了别的文件、字节不同、是符号链接、agent 那份不见了），网页应用一律不起：弹中英错误框、写一行 journald、结束会话。
+/// 多了别的文件、字节不同、是符号链接、agent 那份不见了），网页应用一律不起：弹错误框、写一行 journald、结束会话。
 /// 终审 I1：本地程序同样核对——程序里的链接会在同一个命名空间里起 Chrome，策略不对就是一个没锁的浏览器。
 #[test]
 fn run_refuses_app_when_policy_not_isolated() {
@@ -461,10 +461,56 @@ fn run_refuses_app_when_policy_not_isolated() {
     for launch in [web("https://test.mapnwea.org/", None), calc] {
         policy_not_isolated_cases(&launch);
     }
-    assert!(
-        POLICY_NOT_ISOLATED.contains("请举手找老师")
-            && POLICY_NOT_ISOLATED.contains("Please ask your teacher")
+    assert!(POLICY_NOT_ISOLATED.contains("Please ask your teacher"));
+}
+
+/// The session's LANG picks the dialog's language: gettext is asked with that locale and its answer is shown.
+#[test]
+fn policy_not_isolated_dialog_is_translated() {
+    let root = tempfile::tempdir().unwrap();
+    write_launch(root.path(), &web("https://test.mapnwea.org/", None));
+    // the managed policy directory does not exist: not isolated
+    fs::remove_dir_all(root.path().join("managed")).unwrap();
+    let r = FakeRunner::new();
+    r.respond(
+        "/usr/bin/env LC_ALL=th_TH.UTF-8 LANGUAGE=th_TH ",
+        Output::ok("การตั้งค่าล็อกของแอปนี้ไม่มีผล"),
     );
+    let j = Journal::default();
+    let env = vars(&[
+        ("USER", "kiosk-nwea"),
+        ("XDG_SESSION_ID", "c3"),
+        ("XDG_SESSION_DESKTOP", "mastersos-kiosk"),
+        ("LANG", "th_TH.UTF-8"),
+    ]);
+    let spawned = RefCell::new(Vec::<Vec<String>>::new());
+    let ok = run(
+        &Ctx {
+            env: &env,
+            runner: &r,
+            journal: &j.sink(),
+            root: root.path(),
+            managed_dir: &root.path().join("managed"),
+        },
+        None,
+        &mut |argv: &[String]| {
+            spawned.borrow_mut().push(argv.to_vec());
+            Ok(())
+        },
+        &mut Instant::now,
+    );
+    assert!(!ok);
+    assert_eq!(
+        *spawned.borrow(),
+        [zenity_error_argv("การตั้งค่าล็อกของแอปนี้ไม่มีผล")]
+    );
+    let calls = r.calls();
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert!(
+        calls[0].ends_with(&format!("/usr/bin/gettext -- {POLICY_NOT_ISOLATED}")),
+        "{calls:?}"
+    );
+    assert_eq!(calls[1], "loginctl terminate-session c3");
 }
 
 fn policy_not_isolated_cases(launch: &Launch) {
@@ -781,10 +827,10 @@ fn enter_confirms_then_ends_session() {
     };
     let (res, asked, calls) = go("nwea", true);
     assert!(res.is_ok(), "{res:?}");
-    assert_eq!(asked, [enter_text("NWEA <b>MAP</b> & \"ห้องสอบ\"")]);
+    // no LANG and no locale.conf: English, and gettext is not run
     assert_eq!(
-        enter_text("X"),
-        "将结束当前会话，进入 X 锁定模式 / This will end your session and open X"
+        asked,
+        ["This will end your session and open NWEA <b>MAP</b> & \"ห้องสอบ\" in locked mode."]
     );
     assert_eq!(calls, ["loginctl terminate-session 5"]);
     let (res, asked, calls) = go("nwea", false);
@@ -840,7 +886,6 @@ fn enter_confirms_then_ends_session() {
     let (res, errors, _) = go2(Output::ok("c2\n"), Output::fail(1, "denied"));
     assert!(res.is_err());
     assert_eq!(errors, [ENTER_FAILED]);
-    assert!(ENTER_FAILED.contains(" / "));
     let z = zenity_error_argv(ENTER_FAILED);
     assert_eq!(z[..3], ["zenity", "--error", "--no-markup"]);
 
@@ -849,6 +894,64 @@ fn enter_confirms_then_ends_session() {
     assert!(z.contains(&"--no-markup".to_string()), "{z:?}");
     assert!(z.contains(&"--text=a <b> & c".to_string()), "{z:?}");
     assert_eq!(z[0], "zenity");
+}
+
+/// Without LANG in the session the dialogs follow /etc/locale.conf; the app name goes into the translated sentence.
+#[test]
+fn enter_dialogs_follow_the_system_locale() {
+    let root = tempfile::tempdir().unwrap();
+    write_launch(root.path(), &web("https://test.mapnwea.org/", None));
+    fs::create_dir_all(root.path().join("etc")).unwrap();
+    fs::write(
+        root.path().join("etc/locale.conf"),
+        "LANG=\"zh_CN.UTF-8\"\n",
+    )
+    .unwrap();
+    let gt = |msgid: &str| {
+        format!(
+            "/usr/bin/env LC_ALL=zh_CN.UTF-8 LANGUAGE=zh_CN TEXTDOMAIN=mastersos-system \
+             TEXTDOMAINDIR=/usr/share/locale /usr/bin/gettext -- {msgid}"
+        )
+    };
+    let r = FakeRunner::new();
+    r.respond(
+        &gt(ENTER_CONFIRM),
+        Output::ok("将结束当前会话，以锁定模式打开 %s。"),
+    );
+    r.respond(&gt(ENTER_FAILED), Output::ok("无法结束你的会话。"));
+    r.respond("loginctl terminate-session", Output::fail(1, "denied"));
+    let env = vars(&[("USER", "alice"), ("XDG_SESSION_ID", "5")]);
+    let j = Journal::default();
+    let (asked, errors) = (RefCell::new(Vec::new()), RefCell::new(Vec::new()));
+    let res = enter(
+        &Ctx {
+            env: &env,
+            runner: &r,
+            journal: &j.sink(),
+            root: root.path(),
+            managed_dir: &root.path().join("managed"),
+        },
+        "nwea",
+        &mut |t: &str| {
+            asked.borrow_mut().push(t.to_string());
+            true
+        },
+        &mut |e: &str| errors.borrow_mut().push(e.to_string()),
+    );
+    assert!(res.is_err());
+    assert_eq!(
+        *asked.borrow(),
+        ["将结束当前会话，以锁定模式打开 NWEA MAP。"]
+    );
+    assert_eq!(*errors.borrow(), ["无法结束你的会话。"]);
+    assert_eq!(
+        r.calls(),
+        [
+            gt(ENTER_CONFIRM),
+            "loginctl terminate-session 5".to_string(),
+            gt(ENTER_FAILED)
+        ]
+    );
 }
 
 /// journald 原生协议的一条：字段一行一个，只有已校验的 id 与固定的文字。

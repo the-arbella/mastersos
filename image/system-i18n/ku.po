@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Nûvekirina pergalê amade ye. Ji bo qedandina sazkirinê komputerê ji nû ve bide destpêkirin."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Pelên pergalê divê bên tamîrkirin. Ev ê cara din ku komputer ji nû ve dest pê bike bixweber pêk were."
+
+msgid "The web browser is not installed yet."
+msgstr "Geroka webê hîn nehatiye sazkirin."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Geroka webê amade ye. Ji bo dîtina wê derkeve û dîsa têkeve."
+
+msgid "This app is not available on this device"
+msgstr "Ev sepan li ser vê amûrê tune ye"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Mîhengên kilîtkirinê yên vê sepanê ne di meriyetê de ne, ji ber vê yekê ew nikare dest pê bike. Ji kerema xwe ji mamosteyê xwe bipirse."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Rûniştina te nehat qedandin. Ji kerema xwe derkeve û vê sepanê ji ekrana têketinê veke."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Ev ê rûniştina te biqedîne û %s di moda kilîtkirî de veke."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Mîhengên nûtir nehatin standin. Ji kerema xwe bi IT re têkilî daynin."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "%s roj in nehatiye piştrastkirin ku mîheng rojane ne. Ji kerema xwe bi torê ve girê bide; ger ev berdewam bike, bi IT re têkilî daynin."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT ji vî komputerî agahiyên teşhîsê berhev dike."

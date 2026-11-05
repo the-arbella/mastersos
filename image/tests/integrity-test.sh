@@ -69,6 +69,9 @@ EOF
 # runuser stub: runuser -u USER -- CMD... runs CMD (the notify stub) without switching user
 printf '#!/bin/bash\nshift 3\nexec "$@"\n' >"$bin/runuser"
 printf '#!/bin/bash\nprintf "%%s|" "$DBUS_SESSION_BUS_ADDRESS" "$@" >>"$NOTIFY_LOG"\necho >>"$NOTIFY_LOG"\n' >"$bin/notify-send"
+# gettext stub (MASTERSOS_GETTEXT): shows the environment notice-lib gave it around the msgid
+# shellcheck disable=SC2016 # the stub is written from single-quoted text on purpose
+printf '#!/bin/bash\n[ "$1" = -- ] && shift\nprintf "[%%s %%s %%s] %%s" "$LANGUAGE" "$LC_ALL" "$TEXTDOMAIN" "$1"\n' >"$bin/gettext-stub"
 # dd recorder (MASTERSOS_DD): logs its operands and whether the whole-disk lock ($MASTERSOS_WHOLE_DISK) is held, fails for
 # of=$DD_FAIL_OF, otherwise runs the real dd
 cat >"$bin/dd-rec" <<'EOF'
@@ -142,6 +145,7 @@ run() {
 		MASTERSOS_GOLDEN_SIG="$d/gsig" MASTERSOS_GOLDEN_VERITY="$d/gverity" MASTERSOS_GOLDEN_USR="$d/gusr" MASTERSOS_GOLDEN_ESP_DIR="$d/gesp" \
 		MASTERSOS_ACTIVE_OK="${ACTIVE:-1}" MASTERSOS_CMDLINE="$d/cmdline" MASTERSOS_IMAGE_VERSION="${BOOTED:-20261027.2}" MASTERSOS_NOW="$NOW" \
 		MASTERSOS_MOK_DER="$tmp/mok.der" MASTERSOS_LOGINCTL="$bin/loginctl" MASTERSOS_LOCALE_CONF="$d/locale.conf" \
+		MASTERSOS_NOTICE_LIB="$here/../mkosi.extra/usr/lib/mastersos/notice-lib" MASTERSOS_GETTEXT="$bin/gettext-stub" \
 		VC_LOG="$d/vc.log" NOTIFY_LOG="$d/notify.log" SESSIONS_FILE="$d/sessions" SESSION_INFO="$d/session-info" \
 		MASTERSOS_ACTIVE_SIG="$d/asig" MASTERSOS_ACTIVE_VERITY="$d/averity" MASTERSOS_ACTIVE_USR="$d/ausr" \
 		MASTERSOS_DD="$bin/dd-rec" MASTERSOS_WHOLE_DISK="$d/disk" DD_LOG="$d/dd.log" \
@@ -340,11 +344,15 @@ check "notify: one call, English, MastersOS title, session bus of uid 1000" \
 check "notify: exactly one notification" 1 "$(wc -l <"$d/notify.log" | tr -d ' ')"
 d=$(notify_case notify_zh)
 EXTRA_ENV="LANG=zh_CN.UTF-8" ACTIVE=0 run "$d"
-check "notify: LANG=zh_CN.UTF-8 -> Chinese" "系统文件需要修复。下次重新启动电脑时会自动修复。" "$(cut -d'|' -f5 "$d/notify.log")"
+check "notify: LANG=zh_CN.UTF-8 -> gettext asked in zh_CN" "[zh_CN zh_CN.UTF-8 mastersos-system] $want_en" "$(cut -d'|' -f5 "$d/notify.log")"
 d=$(notify_case notify_th)
 echo 'LANG=th_TH.UTF-8' >"$d/locale.conf"
 ACTIVE=0 run "$d"
-check "notify: /etc/locale.conf th -> Thai" "ไฟล์ระบบต้องได้รับการซ่อมแซม ระบบจะซ่อมแซมให้อัตโนมัติเมื่อรีสตาร์ทคอมพิวเตอร์ครั้งถัดไป" "$(cut -d'|' -f5 "$d/notify.log")"
+check "notify: /etc/locale.conf th -> gettext asked in th_TH" "[th_TH th_TH.UTF-8 mastersos-system] $want_en" "$(cut -d'|' -f5 "$d/notify.log")"
+d=$(notify_case notify_nogettext)
+echo 'LANG=th_TH.UTF-8' >"$d/locale.conf"
+EXTRA_ENV="MASTERSOS_GETTEXT=$tmp/no-gettext" ACTIVE=0 run "$d"
+check "notify: th but no gettext -> English" "$want_en" "$(cut -d'|' -f5 "$d/notify.log")"
 d=$(notify_case notify_nosession)
 : >"$d/sessions"
 rc=0

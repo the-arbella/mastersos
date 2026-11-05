@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Aktualizacja systemu jest gotowa. Uruchom ponownie komputer, aby dokończyć instalację."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Pliki systemowe wymagają naprawy. Nastąpi to automatycznie przy następnym ponownym uruchomieniu komputera."
+
+msgid "The web browser is not installed yet."
+msgstr "Przeglądarka internetowa nie jest jeszcze zainstalowana."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Przeglądarka internetowa jest gotowa. Wyloguj się i zaloguj ponownie, aby ją zobaczyć."
+
+msgid "This app is not available on this device"
+msgstr "Ta aplikacja nie jest dostępna na tym urządzeniu"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Ustawienia blokady tej aplikacji nie działają, więc nie może się uruchomić. Zapytaj nauczyciela."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Nie udało się zakończyć sesji. Wyloguj się i otwórz tę aplikację z ekranu logowania."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Spowoduje to zakończenie sesji i otwarcie %s w trybie zablokowanym."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Nie udało się pobrać nowszych ustawień. Skontaktuj się z działem IT."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Od %s dni nie potwierdzono, że ustawienia są aktualne. Połącz się z siecią; jeśli to się utrzyma, skontaktuj się z działem IT."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "Dział IT zbiera dane diagnostyczne z tego komputera."

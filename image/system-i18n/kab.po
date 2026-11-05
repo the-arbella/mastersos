@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Aleqqem n unagraw yewjed. Ales asenker n uselkim akken ad yemmed usebded-ines."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Ifuyla n unagraw ḥwaǧen ad ttwaseggmen. Ayagi ad yeḍru s wudem awurman tikkelt i d-iteddun ara yales usenker uselkim."
+
+msgid "The web browser is not installed yet."
+msgstr "Iminig web ur yettwasbedd ara yakan."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Iminig web yewjed. Ffeɣ syen kcem tikkelt nniḍen akken ad t-twaliḍ."
+
+msgid "This app is not available on this device"
+msgstr "Asnas-agi ulac-it deg ibenk-agi"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Iɣewwaren n usekkeṛ n usnas-agi ur teddun ara, ihi ur yezmir ara ad yekker. Ttxil-k, steqsi aselmad-ik."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Ur yezmir ara ad yekfu tiɣimit-ik. Ttxil-k, ffeɣ syen ldi asnas-agi seg ugdil n tuqqna."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Ayagi ad yekfu tiɣimit-ik u ad yeldi %s deg uskar yettwasekkṛen."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Ur nezmir ara ad d-nawi iɣewwaren imaynuten. Ttxil-k, nermes IT."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Ɛeddan %s n wussan ur yettwasentem ara d akken iɣewwaren ttwaleqqmen. Ttxil-k, qqen ɣer uẓeṭṭa; ma ikemmel ayagi, nermes IT."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT la yesseggra talɣut n usenqed seg uselkim-agi."

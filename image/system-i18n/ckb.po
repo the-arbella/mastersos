@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "نوێکردنەوەیەکی سیستەم ئامادەیە. کۆمپیوتەرەکە دووبارە دەستپێبکەرەوە بۆ تەواوکردنی دامەزراندنەکەی."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "پەڕگەکانی سیستەم پێویستیان بە چاککردنەوە هەیە. ئەمە بە شێوەی خۆکار ڕوودەدات کاتێک کۆمپیوتەرەکە جاری داهاتوو دەستپێدەکاتەوە."
+
+msgid "The web browser is not installed yet."
+msgstr "وێبگەڕەکە هێشتا دانەمەزراوە."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "وێبگەڕەکە ئامادەیە. دەربچۆ و دووبارە بچۆرەوە ژوورەوە بۆ بینینی."
+
+msgid "This app is not available on this device"
+msgstr "ئەم ئەپە لەسەر ئەم ئامێرە بەردەست نییە"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "ڕێکخستنەکانی قوفڵی ئەم ئەپە کاریگەر نین، بۆیە ناتوانێت دەستپێبکات. تکایە لە مامۆستاکەت بپرسە."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "نەتوانرا دانیشتنەکەت کۆتایی پێبهێنرێت. تکایە دەربچۆ و ئەم ئەپە لە شاشەی چوونەژوورەوە بکەرەوە."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "ئەمە دانیشتنەکەت کۆتایی پێدەهێنێت و %s لە دۆخی قوفڵکراودا دەکاتەوە."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "نەتوانرا ڕێکخستنە نوێترەکان وەربگیرێن. تکایە پەیوەندی بە IT بکە."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "ماوەی %s ڕۆژە پشتڕاست نەکراوەتەوە کە ڕێکخستنەکان نوێن. تکایە پەیوەست بە بە تۆڕەکەوە؛ ئەگەر بەردەوام بوو، پەیوەندی بە IT بکە."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT زانیاریی دەستنیشانکردن لەم کۆمپیوتەرە کۆدەکاتەوە."

@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Mae diweddariad system yn barod. Ailgychwynnwch y cyfrifiadur i orffen ei osod."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Mae angen trwsio ffeiliau'r system. Bydd hyn yn digwydd yn awtomatig y tro nesaf y bydd y cyfrifiadur yn ailgychwyn."
+
+msgid "The web browser is not installed yet."
+msgstr "Nid yw'r porwr gwe wedi'i osod eto."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Mae'r porwr gwe yn barod. Allgofnodwch a mewngofnodwch eto i'w weld."
+
+msgid "This app is not available on this device"
+msgstr "Nid yw'r ap hwn ar gael ar y ddyfais hon"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Nid yw gosodiadau cloi'r ap hwn ar waith, felly nid yw'n gallu cychwyn. Gofynnwch i'ch athro."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Methu dod â'ch sesiwn i ben. Allgofnodwch ac agorwch yr ap hwn o'r sgrin mewngofnodi."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Bydd hyn yn dod â'ch sesiwn i ben ac yn agor %s yn y modd cloi."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Methu nôl gosodiadau mwy newydd. Cysylltwch ag TG."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Nid yw wedi'i gadarnhau ers %s diwrnod fod y gosodiadau'n gyfredol. Cysylltwch â'r rhwydwaith; os bydd hyn yn parhau, cysylltwch ag TG."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "Mae TG yn casglu gwybodaeth ddiagnostig o'r cyfrifiadur hwn."

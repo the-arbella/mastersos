@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Ажурирање система је спремно. Поново покрените рачунар да бисте завршили инсталацију."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Системске датотеке треба поправити. То ће се десити аутоматски при следећем поновном покретању рачунара."
+
+msgid "The web browser is not installed yet."
+msgstr "Веб прегледач још није инсталиран."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Веб прегледач је спреман. Одјавите се и поново се пријавите да бисте га видели."
+
+msgid "This app is not available on this device"
+msgstr "Ова апликација није доступна на овом уређају"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Подешавања закључавања ове апликације нису на снази, па не може да се покрене. Питајте свог наставника."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Није могуће завршити вашу сесију. Одјавите се и отворите ову апликацију са екрана за пријаву."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Ово ће завршити вашу сесију и отворити %s у закључаном режиму."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Новија подешавања није било могуће преузети. Обратите се ИТ служби."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Већ %s дана није потврђено да су подешавања ажурна. Повежите се на мрежу; ако се ово настави, обратите се ИТ служби."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "ИТ служба прикупља дијагностичке податке са овог рачунара."

@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Ei systemoppdatering er klar. Start datamaskina på nytt for å fullføre installasjonen."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Systemfiler må reparerast. Dette skjer automatisk neste gong datamaskina vert starta på nytt."
+
+msgid "The web browser is not installed yet."
+msgstr "Nettlesaren er ikkje installert enno."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Nettlesaren er klar. Logg ut og inn att for å sjå han."
+
+msgid "This app is not available on this device"
+msgstr "Denne appen er ikkje tilgjengeleg på denne eininga"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Låseinnstillingane for denne appen er ikkje aktive, så han kan ikkje starte. Spør læraren din."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Klarte ikkje å avslutte økta di. Logg ut og opne denne appen frå innloggingsskjermen."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Dette avsluttar økta di og opnar %s i låst modus."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Klarte ikkje å hente nyare innstillingar. Kontakt IT."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Det er ikkje stadfesta på %s dagar at innstillingane er oppdaterte. Kopla til nettverket; kontakt IT om det held fram."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT samlar inn diagnoseinformasjon frå denne datamaskina."

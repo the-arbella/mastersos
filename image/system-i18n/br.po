@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Un hizivadur reizhiad a zo prest. Adloc'hit an urzhiataer evit echuiñ e staliañ."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Restroù ar reizhiad o deus ezhomm da vezañ dresset. Graet e vo ent emgefreek ar wech a zeu ma vo adloc'het an urzhiataer."
+
+msgid "The web browser is not installed yet."
+msgstr "N'eo ket staliet ar merdeer web c'hoazh."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Prest eo ar merdeer web. Digennaskit hag adkennaskit evit e welet."
+
+msgid "This app is not available on this device"
+msgstr "N'eo ket hegerz an arload-mañ war an trevnad-mañ"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Arventennoù prennañ an arload-mañ n'int ket e talvoud, n'hall ket loc'hañ neuze. Goulennit gant ho kelenner, mar plij."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "N'haller ket echuiñ hoc'h estez. Digennaskit ha digorit an arload-mañ adalek ar skramm kennaskañ."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Echuiñ a raio an dra-se hoc'h estez ha digeriñ %s er mod prennet."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "N'haller ket kaout arventennoù nevesoc'h. Kit e darempred gant IT, mar plij."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "N'eo ket bet kadarnaet abaoe %s devezh ez eo hizivaet an arventennoù. Kennaskit ouzh ar rouedad; ma kendalc'h, kit e darempred gant IT."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "An TIC a zastum titouroù diagnostik diwar ar mikrourzhiataer-mañ."

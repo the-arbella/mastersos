@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Sistēmas atjauninājums ir gatavs. Restartējiet datoru, lai pabeigtu instalēšanu."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Sistēmas faili ir jālabo. Tas notiks automātiski nākamajā datora restartēšanas reizē."
+
+msgid "The web browser is not installed yet."
+msgstr "Tīmekļa pārlūks vēl nav instalēts."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Tīmekļa pārlūks ir gatavs. Izrakstieties un pierakstieties vēlreiz, lai to redzētu."
+
+msgid "This app is not available on this device"
+msgstr "Šī lietotne šajā ierīcē nav pieejama"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Šīs lietotnes bloķēšanas iestatījumi nav spēkā, tāpēc to nevar palaist. Lūdzu, pajautājiet skolotājam."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Neizdevās beigt jūsu sesiju. Lūdzu, izrakstieties un atveriet šo lietotni no pierakstīšanās ekrāna."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Tas beigs jūsu sesiju un atvērs %s bloķētā režīmā."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Neizdevās iegūt jaunākus iestatījumus. Lūdzu, sazinieties ar IT."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Jau %s dienas nav apstiprināts, ka iestatījumi ir aktuāli. Lūdzu, pievienojieties tīklam; ja tas turpinās, sazinieties ar IT."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT speciālisti vāc diagnostikas informāciju no šī datora."

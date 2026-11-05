@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "རིམ་ལུགས་དུས་མཐུན་བཟོ་ནི་གྲ་སྒྲིག་འབད་ཡོདཔ། གཞི་བཙུགས་མཇུག་བསྡུ་ནིའི་དོན་ལུ་གློག་རིག་ལོག་འགོ་བཙུགས།"
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "རིམ་ལུགས་ཀྱི་ཡིག་སྣོད་ཚུ་བཅོ་ཁ་རྐྱབ་དགོཔ་ཨིན། གློག་རིག་ཤུལ་མ་ལོག་འགོ་བཙུགས་པའི་སྐབས་ རང་བཞིན་གྱིས་འབད་འོང་།"
+
+msgid "The web browser is not installed yet."
+msgstr "ཝེབ་བརའུ་ཟར་ད་ལྟོ་ཡང་གཞི་བཙུགས་མ་འབད་བས།"
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "ཝེབ་བརའུ་ཟར་གྲ་སྒྲིག་འབད་ཡོདཔ། མཐོང་ནིའི་དོན་ལུ་ ཕྱིར་ཐོན་འབད་ཞིནམ་ལས་ ལོག་ནང་བསྐྱོད་འབད།"
+
+msgid "This app is not available on this device"
+msgstr "གློག་རིམ་འདི་ ཐབས་འཕྲུལ་འདི་གུ་མེད།"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "གློག་རིམ་འདིའི་ལྡེ་མིག་སྒྲིག་སྟངས་ཚུ་ ལག་ལེན་འཐབ་མ་ཚུགས་ལས་ འགོ་བཙུགས་མི་ཚུགས། ཁྱོད་ཀྱི་སློབ་དཔོན་ལུ་དྲི།"
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "ཁྱོད་ཀྱི་ལཱ་ཡུན་མཇུག་བསྡུ་མ་ཚུགས། ཕྱིར་ཐོན་འབད་ཞིནམ་ལས་ ནང་བསྐྱོད་གསལ་གཞི་ནང་ལས་ གློག་རིམ་འདི་ཁ་ཕྱེ།"
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "འདི་གིས་ ཁྱོད་ཀྱི་ལཱ་ཡུན་མཇུག་བསྡུ་སྟེ་ %s ལྡེ་མིག་བརྐྱབ་པའི་ཐབས་ལམ་ནང་ཁ་ཕྱེ་འོང་།"
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "སྒྲིག་སྟངས་གསརཔ་ཚུ་ ལེན་མ་ཚུགས། IT ལུ་འབྲེལ་བ་འཐབ།"
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "སྒྲིག་སྟངས་ཚུ་ དུས་མཐུན་ཨིན་ན་ ཉིན་གྲངས་ %s རིང་ ངེས་གཏན་མ་འབད་བས། ཡོངས་འབྲེལ་ལུ་མཐུད། འདི་བཟུམ་འབད་སྡོད་པ་ཅིན་ IT ལུ་འབྲེལ་བ་འཐབ།"
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT གིས་ གློག་ཀླད་འདི་ལས་ བརྟག་དཔྱད་ཀྱི་ བརྡ་དོན་ བསྡུ་དོ།"

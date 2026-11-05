@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Hai un anovamientu del sistema preparáu. Reanicia l'ordenador pa terminar d'instalalu."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Hai ficheros del sistema que precisen reparase. Esto fadrase automáticamente la próxima vegada que se reanicie l'ordenador."
+
+msgid "The web browser is not installed yet."
+msgstr "El restolador web entá nun ta instaláu."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "El restolador web ta preparáu. Zarra la sesión y vuelvi aniciala pa velu."
+
+msgid "This app is not available on this device"
+msgstr "Esta aplicación nun ta disponible nesti preséu"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "La configuración de bloquéu d'esta aplicación nun ta activa, polo que nun pue aniciase. Entruga al to profesor."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Nun pudo zarrase la to sesión. Zarra la sesión y abri esta aplicación dende la pantalla d'aniciu de sesión."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Esto va zarrar la to sesión y abrir %s en mou bloquiáu."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Nun pudieron consiguise configuraciones más nueves. Ponte en contautu con IT."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Hai %s díes que nun se confirma que la configuración tea anovada. Conéutate a la rede; si sigue asina, ponte en contautu con IT."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "TI ta recoyendo información de diagnósticu d'esti ordenador."

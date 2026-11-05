@@ -23,8 +23,10 @@
 //!   `~/.config/systemd/user` 改它的单元、让它不做事或回报成功/失败。必须做到的事放 `apply` 脚本与设置项。
 //! - 已知限制（复审 M7）：队列取出即删、等着的 uid 与跑完未合并的哈希只在内存里；agent 恰在这之间重启，这次登录的脚本
 //!   要到下次登录才跑，或已跑过的会再跑一次。
-//! - 过期提示（[`notify_if_stale`]）：`report::is_stale`（计划 2 Ruling 10、11：签名心跳延长新鲜期）为真时，以同样的
-//!   `systemd-run` 发一条 `notify-send`，中英双语带天数；有 `newer_withheld` 时改为「有新的设置没能拿到」。
+//! - Stale-settings notice ([`notify_if_stale`]): when `report::is_stale` holds (plan 2 Rulings 10, 11: a signed heartbeat
+//!   extends freshness), the same `systemd-run` sends one `notify-send` with the number of days; with `newer_withheld` it
+//!   says that newer settings could not be fetched instead. The text is in the system language through the
+//!   `mastersos-system` catalogue ([`crate::i18n`], [`StaleNotice`]).
 
 #![cfg_attr(
     not(test),
@@ -43,6 +45,7 @@ use serde::Serialize;
 
 use crate::apply::{sha256_hex, ApplyContext};
 use crate::config::DEFAULT_SCRIPT_TIMEOUT_SECS;
+use crate::i18n::{self, Locale};
 use crate::runner::{Cmd, RealRunner, Runner};
 use crate::safefs;
 use crate::state::State;
@@ -526,11 +529,36 @@ pub fn run_batch(
 // 过期提示
 // ---------------------------------------------------------------------------
 
-/// 设置可能过期时要发给用户的提示（中英双语）；不过期为 None。判断用 `report::is_stale`（计划 2 Ruling 10、11）。
-/// 天数是「上次确认设置是最新的」到现在（复审 M3，不照 brief 的 `max(accepted_at, fresh_until)`：`fresh_until` 是心跳给的
-/// 有效期的终点，不是确认的时刻，拿它算会少算）：有心跳证据（`fresh_until`）时取 `max(accepted_at, last_fetch_ok)`，
-/// 否则取 `accepted_at`（服务端说「没有新版本」不算确认），都没有时取 `last_fetch_ok`。
-pub fn stale_notice(state: &State, now: DateTime<Utc>) -> Option<String> {
+/// The stale-settings notice when a newer bundle was withheld. A msgid of `mastersos-system` ([`crate::i18n`]).
+pub const MSG_WITHHELD: &str = "Newer settings could not be fetched. Please contact IT.";
+/// The stale-settings notice; `%s` is the number of days. A msgid of `mastersos-system` ([`crate::i18n`]).
+pub const MSG_STALE_DAYS: &str = "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT.";
+
+/// Which stale-settings notice is due.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StaleNotice {
+    /// A newer bundle was withheld ([`MSG_WITHHELD`]).
+    Withheld,
+    /// Not confirmed up to date for this many days ([`MSG_STALE_DAYS`]).
+    Days(i64),
+}
+
+impl StaleNotice {
+    /// The notice's text in `locale` (English for `None`), see [`crate::i18n::text`].
+    pub fn text(self, runner: &dyn Runner, locale: Option<&Locale>) -> String {
+        match self {
+            StaleNotice::Withheld => i18n::text(runner, locale, MSG_WITHHELD),
+            StaleNotice::Days(d) => i18n::text1(runner, locale, MSG_STALE_DAYS, &d.to_string()),
+        }
+    }
+}
+
+/// The notice to show when the settings may be stale; `None` when they are not. Decided by `report::is_stale` (plan 2
+/// Rulings 10, 11). The days run from the last confirmation that the settings were current (review M3, not the brief's
+/// `max(accepted_at, fresh_until)`: `fresh_until` is the end of the validity a heartbeat gave, not the moment of a
+/// confirmation, and would undercount): with heartbeat evidence (`fresh_until`) `max(accepted_at, last_fetch_ok)`, else
+/// `accepted_at` (the server saying "no newer version" is no confirmation), else `last_fetch_ok`.
+pub fn stale_notice(state: &State, now: DateTime<Utc>) -> Option<StaleNotice> {
     if !crate::report::is_stale(
         state.last_fetch_ok,
         state.accepted_at,
@@ -540,10 +568,7 @@ pub fn stale_notice(state: &State, now: DateTime<Utc>) -> Option<String> {
         return None;
     }
     if state.newer_withheld.is_some() {
-        return Some(
-            "有新的设置没能拿到，请联系 IT。\nNewer settings could not be fetched. Please contact IT."
-                .into(),
-        );
+        return Some(StaleNotice::Withheld);
     }
     let confirmed = if state.fresh_until.is_some() {
         state.accepted_at.max(state.last_fetch_ok)
@@ -551,15 +576,20 @@ pub fn stale_notice(state: &State, now: DateTime<Utc>) -> Option<String> {
         state.accepted_at.or(state.last_fetch_ok)
     };
     let since = confirmed.filter(|t| *t < now).unwrap_or(now);
-    let days = (now - since).num_days().max(1);
-    Some(format!(
-        "设置已 {days} 天未确认是最新的，请连上网络；一直这样请联系 IT。\nSettings have not been confirmed up to date for {days} days. Please connect to the network; if this persists, contact IT."
-    ))
+    Some(StaleNotice::Days((now - since).num_days().max(1)))
 }
 
-/// 设置可能过期就给 `uid` 发一条桌面提示（等它的 user manager 起来；`notify-send` 失败隔几秒再试几次）。
-pub fn notify_if_stale(uid: u32, state: &State, now: DateTime<Utc>, runner: &dyn Runner) {
-    if let Some(text) = stale_notice(state, now) {
+/// When the settings may be stale, shows `uid` a desktop notice in `locale` (waits for the user manager; a failed
+/// `notify-send` is retried a few times, seconds apart).
+pub fn notify_if_stale(
+    uid: u32,
+    state: &State,
+    now: DateTime<Utc>,
+    locale: Option<&Locale>,
+    runner: &dyn Runner,
+) {
+    if let Some(n) = stale_notice(state, now) {
+        let text = n.text(runner, locale);
         notify_with(uid, &text, runner, USER_WAIT, NOTIFY_PAUSE, NOTIFY_TRIES);
     }
 }
@@ -931,7 +961,7 @@ mod tests {
             ]
         );
         let r = FakeRunner::new();
-        notify_if_stale(1001, &stale_state(), Utc::now(), &r);
+        notify_if_stale(1001, &stale_state(), Utc::now(), None, &r);
         let n = r.calls().pop().unwrap();
         assert!(
             n.starts_with("systemd-run --machine=1001@.host --user "),
@@ -954,16 +984,23 @@ mod tests {
             .collect()
     }
 
-    /// accepted_at 8 天前、fresh_until 为 None → 发 notify-send，带天数，中英双语。
+    /// accepted_at 8 days ago, fresh_until None → one notify-send with the days; English without a locale, and no gettext.
     #[test]
     fn stale_state_sends_notification() {
         let r = FakeRunner::new();
-        notify_if_stale(1001, &stale_state(), Utc::now(), &r);
+        notify_if_stale(1001, &stale_state(), Utc::now(), None, &r);
         let n = notices(&r);
         assert_eq!(n.len(), 1, "{:?}", r.calls());
         assert!(n[0].contains("/usr/bin/notify-send"), "{}", n[0]);
-        assert!(n[0].contains("8 天"), "{}", n[0]);
-        assert!(n[0].contains("8 days"), "{}", n[0]);
+        assert!(
+            n[0].ends_with(
+                " MastersOS Settings have not been confirmed up to date for 8 days. Please connect to the \
+                 network; if this persists, contact IT."
+            ),
+            "{}",
+            n[0]
+        );
+        assert!(!r.calls().iter().any(|c| c.contains("gettext")));
         // 不过期：什么都不发
         let r = FakeRunner::new();
         let fresh = State {
@@ -971,7 +1008,7 @@ mod tests {
             last_fetch_ok: Some(Utc::now()),
             ..State::default()
         };
-        notify_if_stale(1001, &fresh, Utc::now(), &r);
+        notify_if_stale(1001, &fresh, Utc::now(), None, &r);
         assert!(r.calls().is_empty());
     }
 
@@ -983,7 +1020,7 @@ mod tests {
             ..stale_state()
         };
         let r = FakeRunner::new();
-        notify_if_stale(1001, &st, Utc::now(), &r);
+        notify_if_stale(1001, &st, Utc::now(), None, &r);
         assert!(notices(&r).is_empty(), "{:?}", r.calls());
         assert_eq!(stale_notice(&st, Utc::now()), None);
     }
@@ -994,12 +1031,42 @@ mod tests {
             newer_withheld: Some(5),
             ..stale_state()
         };
-        let text = stale_notice(&st, Utc::now()).unwrap();
-        assert!(text.contains("有新的设置没能拿到"), "{text}");
-        assert!(!text.contains("8 天"), "{text}");
+        assert_eq!(stale_notice(&st, Utc::now()), Some(StaleNotice::Withheld));
         let r = FakeRunner::new();
-        notify_if_stale(1001, &st, Utc::now(), &r);
-        assert!(notices(&r)[0].contains("有新的设置没能拿到"));
+        notify_if_stale(1001, &st, Utc::now(), None, &r);
+        assert!(notices(&r)[0].ends_with(&format!(" MastersOS {MSG_WITHHELD}")));
+    }
+
+    /// With a locale the notice is gettext's translation, the number in place of %s, run before notify-send.
+    #[test]
+    fn stale_notice_is_translated() {
+        let th = Locale::from_name("th_TH.UTF-8").unwrap();
+        let r = FakeRunner::new();
+        r.respond(
+            &format!(
+                "/usr/bin/env LC_ALL=th_TH.UTF-8 LANGUAGE=th_TH TEXTDOMAIN=mastersos-system \
+                 TEXTDOMAINDIR=/usr/share/locale /usr/bin/gettext -- {MSG_STALE_DAYS}"
+            ),
+            Output::ok("ยังไม่ได้ยืนยันการตั้งค่า %s วัน"),
+        );
+        notify_if_stale(1001, &stale_state(), Utc::now(), Some(&th), &r);
+        let calls = r.calls();
+        assert!(
+            calls[0].contains("/usr/bin/gettext -- Settings"),
+            "{calls:?}"
+        );
+        let n = notices(&r);
+        assert_eq!(n.len(), 1, "{calls:?}");
+        assert!(
+            n[0].ends_with(" MastersOS ยังไม่ได้ยืนยันการตั้งค่า 8 วัน"),
+            "{}",
+            n[0]
+        );
+        // gettext missing or failing: English
+        let r = FakeRunner::new();
+        r.respond("/usr/bin/env", Output::fail(127, "no gettext"));
+        notify_if_stale(1001, &stale_state(), Utc::now(), Some(&th), &r);
+        assert!(notices(&r)[0].ends_with(" contact IT."), "{:?}", r.calls());
     }
 
     /// 队列目录不是 agent 自己的、或组与其他人有权限：一个都不取、记号原样留着（复审 M5）。
@@ -1147,14 +1214,13 @@ mod tests {
             last_fetch_ok: Some(now - chrono::TimeDelta::days(8)),
             ..State::default()
         };
-        let t = stale_notice(&st, now).unwrap();
-        assert!(t.contains("8 天") && t.contains("8 days"), "{t}");
+        assert_eq!(stale_notice(&st, now), Some(StaleNotice::Days(8)));
         // 没有心跳证据：服务端一直说「没有新版本」不算确认，从接受这一版算
         let st = State {
             accepted_at: Some(now - chrono::TimeDelta::days(9)),
             last_fetch_ok: Some(now),
             ..State::default()
         };
-        assert!(stale_notice(&st, now).unwrap().contains("9 天"));
+        assert_eq!(stale_notice(&st, now), Some(StaleNotice::Days(9)));
     }
 }

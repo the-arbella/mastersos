@@ -967,10 +967,16 @@ impl Agent {
         if self.resetting || login_queue::stale_notice(&self.state, now).is_none() {
             return;
         }
+        // the daemon's own LANG is the one systemd had at boot: the system locale is read afresh (crate::i18n)
+        let locale = crate::i18n::system_language(None, &self.cfg.root);
         for uid in uids {
-            let (st, r) = (self.state.clone(), self.login.runner.clone());
+            let (st, r, loc) = (
+                self.state.clone(),
+                self.login.runner.clone(),
+                locale.clone(),
+            );
             tokio::task::spawn_blocking(move || {
-                login_queue::notify_if_stale(uid, &st, now, r.as_ref())
+                login_queue::notify_if_stale(uid, &st, now, loc.as_ref(), r.as_ref())
             });
         }
     }

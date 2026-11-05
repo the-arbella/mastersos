@@ -123,6 +123,13 @@ for po in "$SRCDIR"/login-i18n/*.po; do
 	install -d "$ext/locale/$lang/LC_MESSAGES"
 	msgfmt --check -o "$ext/locale/$lang/LC_MESSAGES/mastersos-login.mo" "$po"
 done
+# The system notices (notice-lib, mastersos-agent): same languages, the system locale directory (system-i18n/README.md)
+for po in "$SRCDIR"/system-i18n/*.po; do
+	[ -e "$po" ] || continue
+	lang=$(basename "$po" .po)
+	install -d "$DESTDIR/usr/share/locale/$lang/LC_MESSAGES"
+	msgfmt --check -o "$DESTDIR/usr/share/locale/$lang/LC_MESSAGES/mastersos-system.mo" "$po"
+done
 
 install -d "$DESTDIR/usr/lib/mastersos"
 {

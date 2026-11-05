@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Uma atualização do sistema está pronta. Reinicie o computador para concluir a instalação."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Os arquivos do sistema precisam de reparo. Isso acontecerá automaticamente na próxima vez que o computador for reiniciado."
+
+msgid "The web browser is not installed yet."
+msgstr "O navegador web ainda não está instalado."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "O navegador web está pronto. Saia e entre novamente para vê-lo."
+
+msgid "This app is not available on this device"
+msgstr "Este aplicativo não está disponível neste dispositivo"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "As configurações de bloqueio deste aplicativo não estão em vigor, por isso ele não pode iniciar. Pergunte ao seu professor."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Não foi possível encerrar sua sessão. Saia e abra este aplicativo pela tela de entrada."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Isso encerrará sua sessão e abrirá %s no modo bloqueado."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Não foi possível obter configurações mais recentes. Entre em contato com a TI."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Há %s dias não se confirma que as configurações estão atualizadas. Conecte-se à rede; se continuar assim, entre em contato com a TI."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "Os serviços de TI estão a recolher informações de diagnóstico deste computador."

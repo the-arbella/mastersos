@@ -1,0 +1,54 @@
+# shellcheck shell=bash
+# notice-lib: the language of the desktop notices and dialogs that the system scripts show (image/system-i18n/README.md).
+# Source it, never execute it. It only defines functions.
+#
+# notice_text MSGID prints MSGID (an English sentence of image/system-i18n/mastersos-system.pot) translated into the system
+# language through the gettext domain mastersos-system, and English (MSGID itself) whenever that is not possible: no language,
+# the C locale, a locale that is not generated, no gettext, no catalogue, no entry, or a translation whose %s count differs.
+# The system language is LANG from the environment, else LANG= in /etc/locale.conf (a root service started at boot may carry a
+# stale LANG; the user's session carries the user's). gettext only honours LANGUAGE in a real locale (glibc ignores it in C and
+# C.UTF-8), so LC_ALL is set to the UTF-8 locale of that language too; the image generates every UTF-8 locale.
+# Overridable for tests: MASTERSOS_GETTEXT (default /usr/bin/gettext), MASTERSOS_TEXTDOMAINDIR (default /usr/share/locale),
+# MASTERSOS_LOCALE_CONF (default /etc/locale.conf).
+
+# notice_lang: the system locale name (th_TH.UTF-8, ...), or nothing
+notice_lang() {
+	if [ -n "${LANG:-}" ]; then
+		printf '%s\n' "$LANG"
+		return 0
+	fi
+	sed -nE 's/^LANG=//p' "${MASTERSOS_LOCALE_CONF:-/etc/locale.conf}" 2>/dev/null | tr -d "\"'" | head -n 1 || true
+}
+
+# notice_locale <locale>: prints "<LANGUAGE> <LC_ALL>" for a locale name (sr_RS.UTF-8@latin -> "sr_RS@latin sr_RS.UTF-8@latin");
+# fails for C, POSIX, an empty name or anything that does not look like a language
+notice_locale() {
+	local l=$1 mod="" base
+	if [[ $l == *@* ]]; then
+		mod=${l##*@}
+		l=${l%%@*}
+	fi
+	base=${l%%.*}
+	[[ $base =~ ^[a-z]{2,3}(_[A-Z]{2})?$ ]] || return 1
+	[[ $mod =~ ^[a-z]*$ ]] || return 1
+	printf '%s %s\n' "$base${mod:+@$mod}" "$base.UTF-8${mod:+@$mod}"
+}
+
+# notice_text <msgid>: the translation of <msgid> in the system language, English otherwise (see the top)
+notice_text() {
+	local msgid=$1 loc language lc_all out rest_in rest_out
+	if ! loc=$(notice_locale "$(notice_lang)"); then
+		printf '%s\n' "$msgid"
+		return 0
+	fi
+	read -r language lc_all <<<"$loc"
+	out=$(LC_ALL=$lc_all LANGUAGE=$language TEXTDOMAIN=mastersos-system TEXTDOMAINDIR=${MASTERSOS_TEXTDOMAINDIR:-/usr/share/locale} \
+		"${MASTERSOS_GETTEXT:-/usr/bin/gettext}" -- "$msgid" 2>/dev/null) || out=""
+	# a broken catalogue must not lose or add a placeholder
+	rest_in=${msgid//%s/}
+	rest_out=${out//%s/}
+	if [ -z "$out" ] || [ $((${#msgid} - ${#rest_in})) != $((${#out} - ${#rest_out})) ]; then
+		out=$msgid
+	fi
+	printf '%s\n' "$out"
+}

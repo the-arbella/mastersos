@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "En systemopdatering er klar. Genstart computeren for at fuldføre installationen."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Systemfiler skal repareres. Det sker automatisk, næste gang computeren genstartes."
+
+msgid "The web browser is not installed yet."
+msgstr "Webbrowseren er ikke installeret endnu."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Webbrowseren er klar. Log ud og ind igen for at se den."
+
+msgid "This app is not available on this device"
+msgstr "Denne app er ikke tilgængelig på denne enhed"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Denne apps låseindstillinger er ikke aktive, så den kan ikke starte. Spørg din lærer."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Din session kunne ikke afsluttes. Log ud, og åbn denne app fra login-skærmen."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Dette afslutter din session og åbner %s i låst tilstand."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Nyere indstillinger kunne ikke hentes. Kontakt IT."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Det er ikke bekræftet i %s dage, at indstillingerne er opdaterede. Opret forbindelse til netværket; kontakt IT, hvis det fortsætter."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT indsamler diagnosticeringsoplysninger fra denne computer."

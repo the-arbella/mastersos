@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "O actualizare a sistemului este pregătită. Reporniți calculatorul pentru a finaliza instalarea."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Fișierele sistemului trebuie reparate. Acest lucru se va face automat la următoarea repornire a calculatorului."
+
+msgid "The web browser is not installed yet."
+msgstr "Navigatorul web nu este încă instalat."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Navigatorul web este pregătit. Deconectați-vă și conectați-vă din nou pentru a-l vedea."
+
+msgid "This app is not available on this device"
+msgstr "Această aplicație nu este disponibilă pe acest dispozitiv"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Setările de blocare ale acestei aplicații nu sunt în vigoare, așa că nu poate porni. Vă rugăm să întrebați profesorul."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Sesiunea nu a putut fi încheiată. Deconectați-vă și deschideți această aplicație din ecranul de autentificare."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Aceasta va încheia sesiunea și va deschide %s în modul blocat."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Nu s-au putut obține setări mai noi. Vă rugăm să contactați IT."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "De %s zile nu s-a confirmat că setările sunt la zi. Conectați-vă la rețea; dacă situația persistă, contactați IT."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "Departamentul IT colectează informații de diagnosticare de la acest computer."

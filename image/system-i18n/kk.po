@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Жүйе жаңартуы дайын. Орнатуды аяқтау үшін компьютерді қайта іске қосыңыз."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Жүйелік файлдарды жөндеу керек. Бұл компьютер келесі рет қайта іске қосылғанда автоматты түрде орындалады."
+
+msgid "The web browser is not installed yet."
+msgstr "Веб-браузер әлі орнатылмаған."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Веб-браузер дайын. Оны көру үшін жүйеден шығып, қайта кіріңіз."
+
+msgid "This app is not available on this device"
+msgstr "Бұл қолданба осы құрылғыда қолжетімсіз"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Бұл қолданбаның құлыптау параметрлері күшінде емес, сондықтан ол іске қосыла алмайды. Мұғаліміңізден сұраңыз."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Сеансыңызды аяқтау мүмкін болмады. Жүйеден шығып, бұл қолданбаны кіру экранынан ашыңыз."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Бұл сеансыңызды аяқтап, %s қолданбасын құлыпталған режимде ашады."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Жаңарақ параметрлерді алу мүмкін болмады. IT бөліміне хабарласыңыз."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Параметрлердің өзекті екені %s күн бойы расталмады. Желіге қосылыңыз; бұл жалғасса, IT бөліміне хабарласыңыз."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT бөлімі осы компьютерден диагностикалық деректер жинап жатыр."

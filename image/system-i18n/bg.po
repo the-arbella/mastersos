@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Системна актуализация е готова. Рестартирайте компютъра, за да завършите инсталирането ѝ."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Системните файлове трябва да бъдат поправени. Това ще стане автоматично при следващото рестартиране на компютъра."
+
+msgid "The web browser is not installed yet."
+msgstr "Уеб браузърът все още не е инсталиран."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Уеб браузърът е готов. Излезте и влезте отново, за да го видите."
+
+msgid "This app is not available on this device"
+msgstr "Това приложение не е налично на това устройство"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Настройките за заключване на това приложение не са в сила, затова то не може да се стартира. Моля, попитайте учителя си."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Сесията ви не можа да бъде прекратена. Моля, излезте и отворете това приложение от екрана за вход."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Това ще прекрати сесията ви и ще отвори %s в заключен режим."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "По-новите настройки не можаха да бъдат изтеглени. Моля, свържете се с ИТ отдела."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "От %s дни не е потвърдено, че настройките са актуални. Моля, свържете се с мрежата; ако това продължи, свържете се с ИТ отдела."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "ИТ отделът събира диагностична информация от този компютър."

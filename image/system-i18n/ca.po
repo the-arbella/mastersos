@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Hi ha una actualització del sistema a punt. Reinicieu l'ordinador per acabar d'instal·lar-la."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Cal reparar fitxers del sistema. Es farà automàticament el pròxim cop que es reiniciï l'ordinador."
+
+msgid "The web browser is not installed yet."
+msgstr "El navegador web encara no està instal·lat."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "El navegador web està a punt. Tanqueu la sessió i torneu a iniciar-la per veure'l."
+
+msgid "This app is not available on this device"
+msgstr "Aquesta aplicació no està disponible en aquest dispositiu"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "La configuració de bloqueig d'aquesta aplicació no és activa, així que no es pot iniciar. Pregunteu-ho al vostre professor."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "No s'ha pogut tancar la vostra sessió. Tanqueu la sessió i obriu aquesta aplicació des de la pantalla d'inici de sessió."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Això tancarà la vostra sessió i obrirà %s en mode bloquejat."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "No s'ha pogut obtenir una configuració més nova. Poseu-vos en contacte amb TI."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Fa %s dies que no es confirma que la configuració estigui actualitzada. Connecteu-vos a la xarxa; si continua passant, poseu-vos en contacte amb TI."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "TI està recollint informació de diagnòstic d'aquest ordinador."

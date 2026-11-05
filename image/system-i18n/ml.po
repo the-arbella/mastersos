@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "ഒരു സിസ്റ്റം അപ്‌ഡേറ്റ് തയ്യാറാണ്. ഇൻസ്റ്റാളേഷൻ പൂർത്തിയാക്കാൻ കമ്പ്യൂട്ടർ റീസ്റ്റാർട്ട് ചെയ്യുക."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "സിസ്റ്റം ഫയലുകൾ നന്നാക്കേണ്ടതുണ്ട്. അടുത്ത തവണ കമ്പ്യൂട്ടർ റീസ്റ്റാർട്ട് ചെയ്യുമ്പോൾ ഇത് സ്വയമേവ നടക്കും."
+
+msgid "The web browser is not installed yet."
+msgstr "വെബ് ബ്രൗസർ ഇതുവരെ ഇൻസ്റ്റാൾ ചെയ്തിട്ടില്ല."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "വെബ് ബ്രൗസർ തയ്യാറാണ്. അത് കാണാൻ സൈൻ ഔട്ട് ചെയ്ത് വീണ്ടും സൈൻ ഇൻ ചെയ്യുക."
+
+msgid "This app is not available on this device"
+msgstr "ഈ ആപ്പ് ഈ ഉപകരണത്തിൽ ലഭ്യമല്ല"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "ഈ ആപ്പിന്റെ ലോക്ക് ക്രമീകരണങ്ങൾ പ്രാബല്യത്തിലില്ല, അതിനാൽ ഇതിന് ആരംഭിക്കാനാവില്ല. ദയവായി നിങ്ങളുടെ അധ്യാപകനോട് ചോദിക്കുക."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "നിങ്ങളുടെ സെഷൻ അവസാനിപ്പിക്കാനായില്ല. ദയവായി സൈൻ ഔട്ട് ചെയ്ത് സൈൻ-ഇൻ സ്ക്രീനിൽ നിന്ന് ഈ ആപ്പ് തുറക്കുക."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "ഇത് നിങ്ങളുടെ സെഷൻ അവസാനിപ്പിച്ച് %s ലോക്ക് ചെയ്ത മോഡിൽ തുറക്കും."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "പുതിയ ക്രമീകരണങ്ങൾ ലഭ്യമാക്കാനായില്ല. ദയവായി IT-യുമായി ബന്ധപ്പെടുക."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "%s ദിവസമായി ക്രമീകരണങ്ങൾ കാലികമാണെന്ന് സ്ഥിരീകരിച്ചിട്ടില്ല. ദയവായി നെറ്റ്‌വർക്കിലേക്ക് കണക്റ്റ് ചെയ്യുക; ഇത് തുടർന്നാൽ IT-യുമായി ബന്ധപ്പെടുക."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT ഈ കമ്പ്യൂട്ടറിൽ നിന്ന് ഡയഗ്നോസ്റ്റിക് വിവരങ്ങൾ ശേഖരിക്കുന്നു."

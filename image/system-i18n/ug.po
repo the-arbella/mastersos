@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "سىستېما يېڭىلانمىسى تەييار. ئورنىتىشنى تاماملاش ئۈچۈن كومپيۇتېرنى قايتا قوزغىتىڭ."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "سىستېما ھۆججەتلىرىنى ئوڭشاش كېرەك. بۇ كومپيۇتېر كېيىنكى قېتىم قايتا قوزغالغاندا ئاپتوماتىك ئېلىپ بېرىلىدۇ."
+
+msgid "The web browser is not installed yet."
+msgstr "توركۆرگۈ تېخى ئورنىتىلمىدى."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "توركۆرگۈ تەييار. ئۇنى كۆرۈش ئۈچۈن تىزىمدىن چىقىپ قايتا كىرىڭ."
+
+msgid "This app is not available on this device"
+msgstr "بۇ ئەپ بۇ ئۈسكۈنىدە يوق"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "بۇ ئەپنىڭ قۇلۇپلاش تەڭشىكى كۈچكە ئىگە ئەمەس، شۇڭا ئۇ قوزغالمايدۇ. ئوقۇتقۇچىڭىزدىن سوراڭ."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "ئەڭگىمىڭىزنى ئاخىرلاشتۇرغىلى بولمىدى. تىزىمدىن چىقىپ، بۇ ئەپنى كىرىش ئېكرانىدىن ئېچىڭ."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "بۇ ئەڭگىمىڭىزنى ئاخىرلاشتۇرۇپ، %s نى قۇلۇپلانغان ھالەتتە ئاچىدۇ."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "يېڭىراق تەڭشەكلەرنى ئالغىلى بولمىدى. IT بىلەن ئالاقىلىشىڭ."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "تەڭشەكلەرنىڭ ئەڭ يېڭى ئىكەنلىكى %s كۈندىن بېرى جەزملەشتۈرۈلمىدى. تورغا ئۇلىنىڭ؛ داۋاملاشسا IT بىلەن ئالاقىلىشىڭ."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT بۇ كومپيۇتېردىن دىياگنوز ئۇچۇرى توپلاۋاتىدۇ."

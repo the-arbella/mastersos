@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Una actualización d'o sistema ye preparada. Reinicia l'ordinador pa rematar a instalación."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Bels fichers d'o sistema han d'estar reparaus. Se fará automaticament la proxima vegada que se reinicie l'ordinador."
+
+msgid "The web browser is not installed yet."
+msgstr "O navegador web encara no ye instalau."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "O navegador web ye preparau. Zarra la sesión y torna a dentrar pa veyer-lo."
+
+msgid "This app is not available on this device"
+msgstr "Esta aplicación no ye disponible en este dispositivo"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "A configuración de bloqueyo d'esta aplicación no ye activa, asinas que no puede empecipiar. Pregunta a lo tuyo profesor."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "No s'ha puesto zarrar a tuya sesión. Zarra la sesión y ubre esta aplicación dende a pantalla d'acceso."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Esto zarrará a tuya sesión y ubrirá %s en modo bloqueyau."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "No s'han puesto obtener configuracions mas nuevas. Contacta con IT."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Fa %s días que no se confirma que a configuración siga actualizada. Connecta-te a la ret; si contina asinas, contacta con IT."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "TI ye replegando información de diagnostico d'este ordenador."

@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Tha ùrachadh an t-siostaim deiseil. Ath-thòisich an coimpiutair gus a stàladh a choileanadh."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Feumar faidhlichean an t-siostaim a chàradh. Thachras seo gu fèin-obrachail an ath thuras a thèid an coimpiutair ath-thòiseachadh."
+
+msgid "The web browser is not installed yet."
+msgstr "Cha deach am brabhsair-lìn a stàladh fhathast."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Tha am brabhsair-lìn deiseil. Clàraich a-mach is a-steach a-rithist airson fhaicinn."
+
+msgid "This app is not available on this device"
+msgstr "Chan eil an aplacaid seo ri fhaighinn air an uidheam seo"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Chan eil roghainnean glasaidh na h-aplacaid seo an sàs, mar sin chan urrainn dhi tòiseachadh. Faighnich dhen tidsear agad."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Cha b' urrainn dhuinn an seisean agad a chrìochnachadh. Clàraich a-mach is fosgail an aplacaid seo on sgrìn clàraidh a-steach."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Crìochnaichidh seo an seisean agad is fosglaidh e %s sa mhodh ghlaiste."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Cha b' urrainn dhuinn roghainnean nas ùire fhaighinn. Cuir fios gu IT."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Cha deach dearbhadh fad %s là gu bheil na roghainnean cho ùr 's a ghabhas. Ceangail ris an lìonra; ma leanas seo, cuir fios gu IT."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "Tha IT a’ cruinneachadh fiosrachadh breithneachaidh on choimpiutair seo."

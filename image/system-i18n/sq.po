@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "Një përditësim i sistemit është gati. Rinisni kompjuterin për të përfunduar instalimin."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "Skedarët e sistemit duhen riparuar. Kjo do të ndodhë automatikisht herën tjetër që rinis kompjuteri."
+
+msgid "The web browser is not installed yet."
+msgstr "Shfletuesi i uebit nuk është instaluar ende."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "Shfletuesi i uebit është gati. Dilni dhe hyni sërish për ta parë."
+
+msgid "This app is not available on this device"
+msgstr "Ky aplikacion nuk është i disponueshëm në këtë pajisje"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "Cilësimet e kyçjes së këtij aplikacioni nuk janë në fuqi, ndaj nuk mund të niset. Ju lutemi pyesni mësuesin tuaj."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "Seanca juaj nuk mund të përfundohej. Dilni dhe hapeni këtë aplikacion nga ekrani i hyrjes."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "Kjo do të përfundojë seancën tuaj dhe do të hapë %s në mënyrën e kyçur."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "Cilësimet më të reja nuk mund të merreshin. Ju lutemi kontaktoni IT-në."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "Prej %s ditësh nuk është konfirmuar që cilësimet janë të përditësuara. Lidhuni me rrjetin; nëse kjo vazhdon, kontaktoni IT-në."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT-ja po mbledh të dhëna diagnostikuese nga ky kompjuter."

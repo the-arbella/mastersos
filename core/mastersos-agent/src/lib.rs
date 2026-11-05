@@ -10,6 +10,7 @@ pub mod diag;
 pub mod fetch;
 pub mod homes;
 pub mod hw;
+pub mod i18n;
 pub mod ident;
 pub mod inbox;
 pub mod integrity;

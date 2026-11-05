@@ -1,0 +1,39 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: mastersos-system\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "A system update is ready. Restart the computer to finish installing it."
+msgstr "පද්ධති යාවත්කාලීනයක් සූදානම්. ස්ථාපනය අවසන් කිරීමට පරිගණකය නැවත අරඹන්න."
+
+msgid "System files need repair. This happens automatically the next time the computer restarts."
+msgstr "පද්ධති ගොනු අලුත්වැඩියා කළ යුතුයි. ඊළඟ වතාවේ පරිගණකය නැවත ආරම්භ වන විට මෙය ස්වයංක්‍රීයව සිදු වේ."
+
+msgid "The web browser is not installed yet."
+msgstr "වෙබ් බ්‍රව්සරය තවම ස්ථාපනය කර නැත."
+
+msgid "The web browser is ready. Sign out and sign in again to see it."
+msgstr "වෙබ් බ්‍රව්සරය සූදානම්. එය දැකීමට වරනන් වී නැවත පිවිසෙන්න."
+
+msgid "This app is not available on this device"
+msgstr "මෙම යෙදුම මෙම උපාංගයේ නොමැත"
+
+msgid "This app's lock settings are not in effect, so it cannot start. Please ask your teacher."
+msgstr "මෙම යෙදුමේ අගුළු සැකසුම් ක්‍රියාත්මක නැති නිසා එය ආරම්භ කළ නොහැක. කරුණාකර ඔබේ ගුරුවරයාගෙන් අසන්න."
+
+msgid "Could not end your session. Please sign out and open this app from the sign-in screen."
+msgstr "ඔබේ සැසිය අවසන් කළ නොහැකි විය. කරුණාකර වරනන් වී පිවිසුම් තිරයෙන් මෙම යෙදුම විවෘත කරන්න."
+
+msgid "This will end your session and open %s in locked mode."
+msgstr "මෙය ඔබේ සැසිය අවසන් කර %s අගුළු දැමූ ප්‍රකාරයෙන් විවෘත කරයි."
+
+msgid "Newer settings could not be fetched. Please contact IT."
+msgstr "නව සැකසුම් ලබා ගත නොහැකි විය. කරුණාකර IT අමතන්න."
+
+msgid "Settings have not been confirmed up to date for %s days. Please connect to the network; if this persists, contact IT."
+msgstr "සැකසුම් යාවත්කාලීන බව දින %s ක් තහවුරු කර නැත. කරුණාකර ජාලයට සම්බන්ධ වන්න; මෙය දිගටම සිදු වුවහොත් IT අමතන්න."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT මෙම පරිගණකයෙන් දෝෂ නිර්ණ තොරතුරු රැස් කරමින් සිටී."
