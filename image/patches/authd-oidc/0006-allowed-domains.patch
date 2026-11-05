@@ -1,0 +1,281 @@
+diff --git a/authd-oidc-brokers/internal/broker/config.go b/authd-oidc-brokers/internal/broker/config.go
+--- a/authd-oidc-brokers/internal/broker/config.go
++++ b/authd-oidc-brokers/internal/broker/config.go
+@@ -101,6 +101,8 @@
+ 			sshSuffixesKeyOld:   {},
+ 			extraGroupsKey:      {},
+ 			ownerExtraGroupsKey: {},
++			// MastersOS (0006): see mastersos_domains.go.
++			mastersosAllowedDomainsKey: {},
+ 		},
+ 		flowsSection: {
+ 			flowsDeviceAuthKey: {},
+@@ -143,6 +145,8 @@
+ 	extraGroups           []string
+ 	ownerExtraGroups      []string
+ 	extraScopes           []string
++	// MastersOS (0006): lower-case domains; when set, only explicitly listed users and users of these domains pass.
++	allowedDomains []string
+ 
+ 	flows flowsConfig
+ 
+@@ -251,6 +255,7 @@
+ 	uc.owner = uc.provider.NormalizeUsername(users.Key(ownerKey).String())
+ 
+ 	uc.extraGroups = users.Key(extraGroupsKey).Strings(",")
++	uc.allowedDomains = mastersosParseDomains(users)
+ 	uc.ownerExtraGroups = users.Key(ownerExtraGroupsKey).Strings(",")
+ }
+ 
+@@ -279,6 +284,7 @@
+ 	uc.extraGroups = slices.Clone(uc.extraGroups)
+ 	uc.ownerExtraGroups = slices.Clone(uc.ownerExtraGroups)
+ 	uc.extraScopes = slices.Clone(uc.extraScopes)
++	uc.allowedDomains = slices.Clone(uc.allowedDomains)
+ 
+ 	return uc
+ }
+@@ -460,10 +466,14 @@
+ 	// - the user's name is in the list of allowed_users
+ 	// - OWNER is in the allowed_users list and the user is the owner of the machine
+ 	// - The user will be registered as the owner
+-	if uc.allUsersAllowed {
++	if _, ok := uc.allowedUsers[userName]; ok {
+ 		return true
+ 	}
+-	if _, ok := uc.allowedUsers[userName]; ok {
++	// MastersOS (0006): with allowed_domains, everyone not listed by name must be of one of the domains.
++	if len(uc.allowedDomains) > 0 && !uc.mastersosAllowedByDomain(userName) {
++		return false
++	}
++	if uc.allUsersAllowed {
+ 		return true
+ 	}
+ 	if uc.ownerAllowed && uc.owner == userName {
+diff --git a/authd-oidc-brokers/internal/broker/config_test.go b/authd-oidc-brokers/internal/broker/config_test.go
+--- a/authd-oidc-brokers/internal/broker/config_test.go
++++ b/authd-oidc-brokers/internal/broker/config_test.go
+@@ -149,7 +149,8 @@
+ func TestParseConfig(t *testing.T) {
+ 	t.Parallel()
+ 	p := &testutils.MockProvider{}
+-	ignoredFields := map[string]struct{}{"provider": {}, "ownerMutex": {}}
++	// MastersOS (0006): allowedDomains has its own tests (mastersos_domains_internal_test.go) and stays out of the golden files.
++	ignoredFields := map[string]struct{}{"provider": {}, "ownerMutex": {}, "allowedDomains": {}}
+ 
+ 	tests := map[string]struct {
+ 		configType        string
+diff --git a/authd-oidc-brokers/internal/broker/mastersos_domains.go b/authd-oidc-brokers/internal/broker/mastersos_domains.go
+new file mode 100644
+--- /dev/null
++++ b/authd-oidc-brokers/internal/broker/mastersos_domains.go
+@@ -0,0 +1,54 @@
++package broker
++
++// MastersOS carried patch (image/patches/authd-oidc/0006-allowed-domains.patch).
++//
++// [users] allowed_domains = school.ac.th, staff.school.ac.th limits who the broker lets through to the school's email
++// domains. authd registers a user (name, uid, groups in its database) as soon as the broker grants access, before PAM's
++// account stage runs, so a refusal there still leaves a local user behind. Refusing here, before access is granted,
++// leaves nothing: no authd user and no token cache.
++//
++// A user passes when listed by name in allowed_users (compared case-insensitively here, as the school's administrators
++// are written in lower case), or when the part after the last '@' of the user name equals one of the domains (ASCII case
++// is ignored). Everything else in allowed_users (ALL, OWNER) applies only to users who pass this check. Without the key,
++// or with an empty value, nothing changes.
++
++import (
++	"strings"
++
++	"gopkg.in/ini.v1"
++)
++
++// mastersosAllowedDomainsKey is the key in the [users] section.
++const mastersosAllowedDomainsKey = "allowed_domains"
++
++// mastersosParseDomains reads allowed_domains: comma separated, trimmed, lower case, empty entries dropped.
++func mastersosParseDomains(users *ini.Section) []string {
++	var out []string
++	for _, d := range users.Key(mastersosAllowedDomainsKey).Strings(",") {
++		d = strings.ToLower(strings.TrimSpace(d))
++		if d != "" {
++			out = append(out, d)
++		}
++	}
++	return out
++}
++
++// mastersosAllowedByDomain reports whether userName is listed by name (in any ASCII case) or belongs to one of the
++// allowed domains. Only call this with the ownerMutex locked (for reading).
++func (uc *userConfig) mastersosAllowedByDomain(userName string) bool {
++	lower := strings.ToLower(userName)
++	if _, ok := uc.allowedUsers[lower]; ok {
++		return true
++	}
++	at := strings.LastIndexByte(lower, '@')
++	if at < 0 {
++		return false
++	}
++	domain := lower[at+1:]
++	for _, d := range uc.allowedDomains {
++		if d == domain {
++			return true
++		}
++	}
++	return false
++}
+diff --git a/authd-oidc-brokers/internal/broker/mastersos_domains_export_test.go b/authd-oidc-brokers/internal/broker/mastersos_domains_export_test.go
+new file mode 100644
+--- /dev/null
++++ b/authd-oidc-brokers/internal/broker/mastersos_domains_export_test.go
+@@ -0,0 +1,6 @@
++package broker
++
++// SetMastersOSAllowedDomains sets the [users] allowed_domains of patch 0006 for the broker tests.
++func (cfg *Config) SetMastersOSAllowedDomains(domains []string) {
++	cfg.allowedDomains = domains
++}
+diff --git a/authd-oidc-brokers/internal/broker/mastersos_domains_internal_test.go b/authd-oidc-brokers/internal/broker/mastersos_domains_internal_test.go
+new file mode 100644
+--- /dev/null
++++ b/authd-oidc-brokers/internal/broker/mastersos_domains_internal_test.go
+@@ -0,0 +1,74 @@
++package broker
++
++// MastersOS carried patch (image/patches/authd-oidc/0006-allowed-domains.patch): the [users] allowed_domains key.
++
++import (
++	"testing"
++
++	"github.com/canonical/authd/authd-oidc-brokers/internal/testutils"
++	"github.com/stretchr/testify/require"
++)
++
++func mastersosParse(t *testing.T, users string) userConfig {
++	t.Helper()
++	main := configFile{path: "broker.conf", content: []byte("[oidc]\n\n[users]\nallowed_users = ALL\n")}
++	dropIn := configFile{
++		path:    "broker.conf.d/10-mastersos.conf",
++		content: []byte("[oidc]\nissuer = https://issuer.example\nclient_id = laptops\n\n[users]\n" + users),
++	}
++	uc, err := parseConfig(main, []configFile{dropIn}, &testutils.MockProvider{}, false)
++	require.NoError(t, err, "allowed_domains must be a known key: an unknown one stops the broker from starting")
++	return uc
++}
++
++// The agent's drop-in: the school's administrators by name, everyone else only from the school's domains.
++func TestMastersOSAllowedDomainsLimitAllUsers(t *testing.T) {
++	uc := mastersosParse(t, "allowed_users = ALL, it@vendor.example\nallowed_domains = school.example, Staff.School.Example\n")
++	require.Equal(t, []string{"school.example", "staff.school.example"}, uc.allowedDomains)
++
++	for name, want := range map[string]bool{
++		"ann@school.example":         true,
++		"bob@staff.school.example":   true,
++		"Ann@SCHOOL.example":         true,
++		"it@vendor.example":          true,
++		"IT@Vendor.example":          true,
++		"evil.test@school.example":   true,
++		"someone@gmail.com":          false,
++		"guardian@other.example":     false,
++		"x@sub.school.example":       false,
++		"x@school.example.evil.test": false,
++		"x@school.example@evil.test": false,
++		"school.example":             false,
++		"":                           false,
++	} {
++		require.Equal(t, want, uc.userNameIsAllowed(name), "%q", name)
++	}
++}
++
++// Without the key (an old drop-in, a school without allowed_domains) ALL means everyone, as upstream.
++func TestMastersOSNoAllowedDomainsKeepsAll(t *testing.T) {
++	for _, users := range []string{
++		"allowed_users = ALL\n",
++		"allowed_users = ALL\nallowed_domains =\n",
++		"allowed_users = ALL\nallowed_domains = , \n",
++	} {
++		uc := mastersosParse(t, users)
++		require.Empty(t, uc.allowedDomains, "%q", users)
++		require.True(t, uc.userNameIsAllowed("someone@gmail.com"), "%q", users)
++	}
++}
++
++// Without ALL only the listed users pass, whatever their domain.
++func TestMastersOSAllowedDomainsWithoutAll(t *testing.T) {
++	uc := mastersosParse(t, "allowed_users = it@vendor.example\nallowed_domains = school.example\n")
++	require.True(t, uc.userNameIsAllowed("it@vendor.example"))
++	require.False(t, uc.userNameIsAllowed("ann@school.example"), "a domain alone does not stand in for ALL")
++	require.False(t, uc.userNameIsAllowed("someone@gmail.com"))
++}
++
++func TestMastersOSAllowedDomainsSurviveClone(t *testing.T) {
++	uc := mastersosParse(t, "allowed_users = ALL\nallowed_domains = school.example\n")
++	c := cloneUserConfig(uc)
++	c.allowedDomains[0] = "other.example"
++	require.Equal(t, []string{"school.example"}, uc.allowedDomains)
++}
+diff --git a/authd-oidc-brokers/internal/broker/mastersos_domains_test.go b/authd-oidc-brokers/internal/broker/mastersos_domains_test.go
+new file mode 100644
+--- /dev/null
++++ b/authd-oidc-brokers/internal/broker/mastersos_domains_test.go
+@@ -0,0 +1,60 @@
++package broker_test
++
++// MastersOS carried patch (image/patches/authd-oidc/0006-allowed-domains.patch): a user outside allowed_domains is denied
++// before access is granted, so authd never registers them. Not parallel: these tests set the process environment.
++
++import (
++	"os"
++	"testing"
++
++	"github.com/canonical/authd/authd-oidc-brokers/internal/broker"
++	"github.com/canonical/authd/authd-oidc-brokers/internal/broker/authmodes"
++	"github.com/canonical/authd/authd-oidc-brokers/internal/testutils"
++	"github.com/stretchr/testify/require"
++)
++
++func domainsBroker(t *testing.T, email string, domains []string) *broker.Broker {
++	t.Helper()
++	cfg := &brokerForTestConfig{
++		Config:                 broker.Config{DataDir: t.TempDir()},
++		allUsersAllowed:        true,
++		supportsFetchingGroups: true,
++		listenAddress:          cardOnlyAddress,
++		customHandlers: map[string]testutils.EndpointHandler{
++			"/token": testutils.TokenHandler("http://"+cardOnlyAddress, &testutils.TokenHandlerOptions{
++				IDTokenClaims: []map[string]interface{}{{"sub": "user-id", "email": email}},
++			}),
++		},
++	}
++	cfg.SetMastersOSAllowedDomains(domains)
++	return newBrokerForTests(t, cfg)
++}
++
++func TestMastersOSOtherDomainIsDeniedBeforeGrant(t *testing.T) {
++	t.Setenv("MASTERSOS_AUTH_CODE", "1")
++	b := domainsBroker(t, "someone@gmail.com", []string{"school.example", "staff.school.example"})
++
++	sessionID, _ := newSessionForTests(t, b, "someone@gmail.com", "")
++	requireAuthModes(t, b, sessionID, authmodes.DeviceQr)
++	signInOnCard(t, b, sessionID)
++	access, data, err := b.IsAuthenticated(sessionID, "{}")
++	require.NoError(t, err)
++	require.Equal(t, broker.AuthDenied, access, "data: %s", data)
++	require.Contains(t, data, "not allowed in broker configuration", "the login screen matches this text for its refusal")
++	require.NotContains(t, data, "userinfo", "a denied login hands authd no user to register")
++	_, statErr := os.Stat(b.TokenPathForSession(sessionID))
++	require.ErrorIs(t, statErr, os.ErrNotExist, "a refused login must not leave a token")
++}
++
++func TestMastersOSSchoolDomainIsGranted(t *testing.T) {
++	t.Setenv("MASTERSOS_AUTH_CODE", "1")
++	b := domainsBroker(t, "teacher@staff.school.example", []string{"school.example", "staff.school.example"})
++
++	sessionID, _ := newSessionForTests(t, b, "teacher@staff.school.example", "")
++	requireAuthModes(t, b, sessionID, authmodes.DeviceQr)
++	signInOnCard(t, b, sessionID)
++	access, data, err := b.IsAuthenticated(sessionID, "{}")
++	require.NoError(t, err)
++	require.Equal(t, broker.AuthGranted, access, "data: %s", data)
++	require.Contains(t, data, "teacher@staff.school.example")
++}
