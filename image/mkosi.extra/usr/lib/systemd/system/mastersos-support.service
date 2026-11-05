@@ -6,6 +6,8 @@ Description=MastersOS: Get help requests
 Documentation=file:/usr/bin/mastersos-agent
 Requires=mastersos-support.socket
 After=mastersos-support.socket
+# Any local user can make it start (and exit) often; a start limit would leave the socket without a service
+StartLimitIntervalSec=0
 
 [Service]
 ExecStart=/usr/bin/mastersos-agent support host
@@ -13,8 +15,11 @@ StandardInput=socket
 # StandardOutput would follow StandardInput onto the socket otherwise
 StandardOutput=journal
 StandardError=journal
-# A request line is at most 8 MiB (a 5 MiB screenshot in base64)
+# At most 16 connections, 2 of them with a large request (up to 8 MiB: a 5 MiB screenshot in base64), each about 16 MiB
+# at its peak (support/host.rs ServeOpts); the rest is small
 MemoryMax=64M
+# 16 connections, the runner's pipes, the queue: well under this
+LimitNOFILE=256
 
 # Hardening: it parses what any local user sends. It writes only its queue; it reads passwd entries (getent), logind
 # sessions (loginctl), /proc/<pid>/cgroup and support.json, and asks systemd to start the sender (systemctl over /run:

@@ -4,9 +4,10 @@
 //! 1. **The login screen → `none`, session `login`.** GDM runs the greeter as its own accounts: `gdm`, and on GDM 49+
 //!    dynamic `gdm-greeter`, `gdm-greeter-2`, … users (the same names `system/lock.rs` leaves alone). Their logind
 //!    session has `Class=greeter` (GDM opens it through pam_systemd with `XDG_SESSION_CLASS=greeter`). We ask logind
-//!    for the class of the pid's own session (`session-<id>.scope` in `/proc/<pid>/cgroup`) and, when the pid is not in
-//!    a session scope (GDM 50 runs the greeter's shell under the greeter user's systemd user manager, outside the
-//!    scope), for the classes of all sessions of the uid; any `greeter` decides. A passwd name `gdm` or `gdm-greeter*`
+//!    for the pid's session (`GetSessionByPID`, never the pid's cgroup path, which a user can fake with a scope of
+//!    their own) and, when the pid is in no session (GDM 50 runs the greeter's shell under the greeter user's systemd
+//!    user manager, outside the scope), for all sessions of the uid; any `greeter` decides. A session counts only when
+//!    logind says its `User` is the peer's uid. A passwd name `gdm` or `gdm-greeter*`
 //!    is the login screen too, whatever logind says: those accounts are never people. Not verified on a GDM 50
 //!    machine yet: plan Task 8 checks it on a VM.
 //! 2. **The guest → `guest`.** uid 1999 ([`GUEST_UID`]), named from passwd (`guest`).
@@ -114,10 +115,9 @@ pub fn identify(peer: &Peer, who: &dyn Who) -> Identity {
     }
 }
 
-/// The real lookups: `getent` and `loginctl` through the runner, `/proc` under `root`.
+/// The real lookups: `getent`, `busctl` and `loginctl` through the runner, the kiosk records under `root`.
 pub struct SystemWho {
     runner: Arc<dyn Runner>,
-    root: PathBuf,
     /// Where `system-state.json` is (`<root>/var/lib/mastersos-system`).
     sys: SysPaths,
 }
@@ -132,7 +132,7 @@ impl SystemWho {
             state_dir: under(&d.state_dir),
             root: root.clone(),
         };
-        SystemWho { runner, root, sys }
+        SystemWho { runner, sys }
     }
 
     fn run(&self, args: &[&str], program: &str) -> Option<String> {
@@ -157,23 +157,78 @@ impl SystemWho {
         (f.len() >= 7 && f[2] == uid_s && !f[0].is_empty()).then(|| f[0].to_string())
     }
 
-    fn session_class(&self, id: &str) -> Option<String> {
+    /// A session's `Class` and `User` (uid) from logind.
+    fn session(&self, id: &str) -> Option<(String, u32)> {
         if !session_id_ok(id) {
             return None;
         }
-        self.run(&["show-session", id, "-p", "Class", "--value"], "loginctl")
-            .map(|s| s.trim().to_string())
+        let out = self.run(
+            &["show-session", id, "-p", "Class", "-p", "User"],
+            "loginctl",
+        )?;
+        let (mut class, mut user) = (None, None);
+        for l in out.lines() {
+            match l.split_once('=') {
+                Some(("Class", v)) => class = Some(v.trim().to_string()),
+                Some(("User", v)) => user = v.trim().parse::<u32>().ok(),
+                _ => {}
+            }
+        }
+        Some((class?, user?))
     }
 
-    /// The logind session of the pid from its cgroup (`…/session-<id>.scope/…`).
+    /// logind's session for the pid (`GetSessionByPID`). Not the pid's cgroup path: a user can make a scope named
+    /// `session-<id>.scope` under their own user manager (`systemd-run --user --scope -u …`), logind cannot be told so.
     fn session_of_pid(&self, pid: u32) -> Option<String> {
-        let text = std::fs::read_to_string(self.root.join(format!("proc/{pid}/cgroup"))).ok()?;
-        let path = text.lines().find_map(|l| l.strip_prefix("0::"))?;
-        path.split('/').find_map(|c| {
-            let id = c.strip_prefix("session-")?.strip_suffix(".scope")?;
-            session_id_ok(id).then(|| id.to_string())
-        })
+        let pid = pid.to_string();
+        let out = self.run(
+            &[
+                "call",
+                "org.freedesktop.login1",
+                "/org/freedesktop/login1",
+                "org.freedesktop.login1.Manager",
+                "GetSessionByPID",
+                "u",
+                pid.as_str(),
+            ],
+            "busctl",
+        )?;
+        // `o "/org/freedesktop/login1/session/<escaped id>"`
+        let path = out.trim().strip_prefix("o ")?.trim_matches('"');
+        let id = unescape_object_path(path.strip_prefix("/org/freedesktop/login1/session/")?)?;
+        session_id_ok(&id).then_some(id)
     }
+
+    /// The class of session `id` when it is `uid`'s; a session of someone else is never trusted.
+    fn class_for(&self, id: &str, uid: u32) -> Option<String> {
+        match self.session(id)? {
+            (class, user) if user == uid => Some(class),
+            (_, user) => {
+                log::warn!(
+                    "support: session {id} is uid {user}'s, not the peer's ({uid}); ignoring it"
+                );
+                None
+            }
+        }
+    }
+}
+
+/// sd-bus object path labels escape every byte that is not a letter or digit as `_` and two hex digits.
+fn unescape_object_path(label: &str) -> Option<String> {
+    let b = label.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'_' {
+            let hex = std::str::from_utf8(b.get(i + 1..i + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 /// Session ids are letters and digits (never taken for an option).
@@ -205,7 +260,7 @@ impl Who for SystemWho {
 
     fn is_greeter(&self, peer: &Peer) -> bool {
         if let Some(id) = peer.pid.and_then(|p| self.session_of_pid(p)) {
-            if let Some(class) = self.session_class(&id) {
+            if let Some(class) = self.class_for(&id, peer.uid) {
                 return class == "greeter";
             }
         }
@@ -217,6 +272,6 @@ impl Who for SystemWho {
             return false;
         };
         ids.split_whitespace()
-            .any(|id| self.session_class(id).as_deref() == Some("greeter"))
+            .any(|id| self.class_for(id, peer.uid).as_deref() == Some("greeter"))
     }
 }

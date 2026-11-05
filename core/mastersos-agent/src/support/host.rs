@@ -12,13 +12,20 @@
 //!
 //! Each op takes exactly its fields (`deny_unknown_fields`): a request naming a user is refused, who sent it comes from
 //! the peer credentials only ([`super::identity`]). The session the dialog sends must look like one but is replaced by
-//! the derived one. Requests are handled one at a time (the rate limit and the queue are read-modify-write).
+//! the derived one. Only a submit may be longer than [`SMALL_REQUEST_BYTES`].
+//!
+//! Limits (any local user can connect): at most [`ServeOpts::max_open`] connections at once (more are closed at once,
+//! without a reply), at most [`ServeOpts::max_large`] of them reading or handling a request longer than
+//! [`SMALL_REQUEST_BYTES`] (the others wait for a place while their read time runs), so memory stays within the unit's
+//! `MemoryMax`. The budget (rate limit, queue room) is checked before anything costly, and again, under the queue's
+//! lock, when the item is written; nothing else is serialized. An `accept` error (out of file descriptors, a
+//! connection aborted) is logged and the service goes on.
 //!
 //! The service exits after [`IDLE`] without a connection; the socket stays and starts it again.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -28,8 +35,9 @@ use mastersos_bundle::diag::{
     SupportCategory, SupportRequest, SupportSnapshot, SUPPORT_TEXT_MAX_CHARS,
 };
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::identity::{identify, Peer, Who};
 use super::store::{Item, ItemState, Store};
@@ -40,6 +48,11 @@ use crate::runner::Runner;
 pub const IDLE: Duration = Duration::from_secs(120);
 /// A client has this long to send its line.
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
+/// The longest request other than a submit, and the size from which a request needs one of the
+/// [`ServeOpts::max_large`] places.
+pub const SMALL_REQUEST_BYTES: usize = 4096;
+/// After an `accept` error, wait this long before the next one.
+const ACCEPT_PAUSE: Duration = Duration::from_millis(200);
 const PNG_MAGIC: &[u8] = b"\x89PNG\r\n\x1a\n";
 
 const ERR_INVALID: &str = "invalid";
@@ -120,14 +133,27 @@ enum Request {
     Enabled,
 }
 
+/// Just the op (other fields are skipped, not kept).
+#[derive(Deserialize)]
+struct Op {
+    op: String,
+}
+
+/// Straight into the op's own struct (no intermediate JSON value). A JSON object only: serde would read a struct from
+/// an array too. Only a submit may be longer than [`SMALL_REQUEST_BYTES`].
 fn parse(line: &[u8]) -> Option<Request> {
     let line = line.strip_suffix(b"\n").unwrap_or(line);
-    let v: serde_json::Value = serde_json::from_slice(line).ok()?;
-    let op = v.as_object()?.get("op")?.as_str()?.to_owned();
-    match op.as_str() {
-        "submit" => serde_json::from_value(v).ok().map(Request::Submit),
-        "status" => serde_json::from_value(v).ok().map(Request::Status),
-        "enabled" => serde_json::from_value::<EnabledReq>(v)
+    if line.iter().find(|b| !b.is_ascii_whitespace()) != Some(&b'{') {
+        return None;
+    }
+    let op: Op = serde_json::from_slice(line).ok()?;
+    if op.op != "submit" && line.len() > SMALL_REQUEST_BYTES {
+        return None;
+    }
+    match op.op.as_str() {
+        "submit" => serde_json::from_slice(line).ok().map(Request::Submit),
+        "status" => serde_json::from_slice(line).ok().map(Request::Status),
+        "enabled" => serde_json::from_slice::<EnabledReq>(line)
             .ok()
             .map(|_| Request::Enabled),
         _ => None,
@@ -155,9 +181,12 @@ fn session_shape_ok(s: &str) -> bool {
             .is_some_and(|id| mastersos_bundle::kiosk::check_id(id).is_ok())
 }
 
+/// The longest base64 a [`MAX_SCREENSHOT_BYTES`] PNG takes.
+const MAX_SCREENSHOT_B64: usize = MAX_SCREENSHOT_BYTES.div_ceil(3) * 4;
+
 /// A PNG of at most [`MAX_SCREENSHOT_BYTES`], or `None`.
 fn decode_png(b64: &str) -> Option<Vec<u8>> {
-    if b64.len() > MAX_SCREENSHOT_BYTES.div_ceil(3) * 4 {
+    if b64.len() > MAX_SCREENSHOT_B64 {
         return None;
     }
     let png = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
@@ -192,7 +221,18 @@ impl Host {
 
     /// One request line from `peer` at `now` → the reply.
     pub fn handle(&self, line: &[u8], peer: Peer, now: DateTime<Utc>) -> Reply {
-        match parse(line) {
+        self.dispatch(parse(line), peer, now)
+    }
+
+    /// Like [`Host::handle`], but the line is freed as soon as it is parsed (a submit's line can be 8 MiB).
+    pub fn handle_owned(&self, line: Vec<u8>, peer: Peer, now: DateTime<Utc>) -> Reply {
+        let req = parse(&line);
+        drop(line);
+        self.dispatch(req, peer, now)
+    }
+
+    fn dispatch(&self, req: Option<Request>, peer: Peer, now: DateTime<Utc>) -> Reply {
+        match req {
             None => Reply::err(ERR_INVALID),
             Some(Request::Enabled) => Reply {
                 enabled: Some(self.enabled()),
@@ -207,6 +247,19 @@ impl Host {
                 }
             },
         }
+    }
+
+    /// Under the queue's lock: `peer` is within the rate limits and the queue has room. Refused for either reason
+    /// alike: the student is asked to try later.
+    fn budget_allows(&self, peer: Peer, now: DateTime<Utc>) -> Result<bool> {
+        let rate = self.store.rate_allows(now, peer.uid)?;
+        let room = self.store.has_room()?;
+        if rate && !room {
+            log::warn!(
+                "support: the help request queue is full; refusing new requests until it is sent"
+            );
+        }
+        Ok(rate && room)
     }
 
     fn status(&self, client_id: &str, peer: Peer) -> Reply {
@@ -224,7 +277,7 @@ impl Host {
         }
     }
 
-    fn submit(&self, r: SubmitReq, peer: Peer, now: DateTime<Utc>) -> Result<Reply> {
+    fn submit(&self, mut r: SubmitReq, peer: Peer, now: DateTime<Utc>) -> Result<Reply> {
         if !self.enabled() {
             return Ok(Reply::err(ERR_DISABLED));
         }
@@ -232,12 +285,24 @@ impl Host {
             return Ok(Reply::err(ERR_INVALID));
         };
         let text = r.text.trim().to_string();
-        if text.chars().count() > SUPPORT_TEXT_MAX_CHARS || !session_shape_ok(&r.session) {
+        if text.chars().count() > SUPPORT_TEXT_MAX_CHARS
+            || !session_shape_ok(&r.session)
+            || r.screenshot_png_b64
+                .as_ref()
+                .is_some_and(|b| b.len() > MAX_SCREENSHOT_B64)
+        {
             return Ok(Reply::err(ERR_INVALID));
         }
-        let png = match r.screenshot_png_b64.as_deref() {
+        // The budget first: a refused submit costs no decoding, no lookups and no snapshot.
+        {
+            let _lock = self.store.lock()?;
+            if !self.budget_allows(peer, now)? {
+                return Ok(Reply::err(ERR_RATE_LIMITED));
+            }
+        }
+        let png = match r.screenshot_png_b64.take() {
             None => None,
-            Some(b) => match decode_png(b) {
+            Some(b) => match decode_png(&b) {
                 Some(p) => Some(p),
                 None => return Ok(Reply::err(ERR_INVALID)),
             },
@@ -265,13 +330,14 @@ impl Host {
             return Ok(Reply::err(ERR_INVALID));
         }
         {
+            // Again under the lock: another request may have taken the last place meanwhile.
             let _lock = self.store.lock()?;
-            if !self.store.rate_allows(now)? {
+            if !self.budget_allows(peer, now)? {
                 return Ok(Reply::err(ERR_RATE_LIMITED));
             }
             self.store
                 .put_new(&Item::new(request.clone(), peer.uid, now), png.as_deref())?;
-            self.store.record_submit(now)?;
+            self.store.record_submit(now, peer.uid)?;
         }
         log::info!(
             "support: queued help request {} ({:?}, {})",
@@ -339,22 +405,84 @@ fn power(dir: &std::path::Path) -> (Option<u8>, Option<bool>) {
     (battery, ac)
 }
 
-/// Reads one line of at most [`MAX_REQUEST_BYTES`] (the newline not counted). `None` when it is longer, or the client
-/// closes or stalls first.
-async fn read_line(stream: &mut UnixStream) -> Option<Vec<u8>> {
-    let mut r = BufReader::new(stream.take(MAX_REQUEST_BYTES as u64 + 1));
-    let mut line = Vec::new();
-    tokio::time::timeout(READ_TIMEOUT, r.read_until(b'\n', &mut line))
-        .await
-        .ok()?
-        .ok()?;
-    match line.last() {
-        Some(b'\n') => Some(line),
-        _ => None,
+/// How [`serve`] limits its clients.
+#[derive(Debug, Clone, Copy)]
+pub struct ServeOpts {
+    /// Exit after this long without a connection.
+    pub idle: Duration,
+    /// A client has this long to send its line (and to take the reply).
+    pub read_timeout: Duration,
+    /// Connections open at once; one more is closed at once.
+    pub max_open: usize,
+    /// Requests longer than [`SMALL_REQUEST_BYTES`] read or handled at once. Each costs up to about 16 MiB (the line,
+    /// then the base64 and the decoded PNG); `MemoryMax=64M` in the unit is sized for two.
+    pub max_large: usize,
+}
+
+impl Default for ServeOpts {
+    fn default() -> Self {
+        ServeOpts {
+            idle: IDLE,
+            read_timeout: READ_TIMEOUT,
+            max_open: 16,
+            max_large: 2,
+        }
     }
 }
 
-async fn connection(mut stream: UnixStream, host: Arc<Host>, serial: Arc<Mutex<()>>) {
+/// Reads one line of at most [`MAX_REQUEST_BYTES`] (the newline not counted) within `timeout`. Past
+/// [`SMALL_REQUEST_BYTES`] it first takes a place from `large`, which the caller keeps until the request is handled.
+/// `None` when the line is longer, or the client closes or stalls first.
+async fn read_line(
+    stream: &mut UnixStream,
+    timeout: Duration,
+    large: &Arc<Semaphore>,
+) -> Option<(Vec<u8>, Option<OwnedSemaphorePermit>)> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut r = BufReader::new(stream);
+    let mut line = Vec::new();
+    let mut permit = None;
+    loop {
+        let chunk = tokio::time::timeout_at(deadline, r.fill_buf())
+            .await
+            .ok()?
+            .ok()?;
+        if chunk.is_empty() {
+            return None;
+        }
+        let (take, done) = match chunk.iter().position(|b| *b == b'\n') {
+            Some(i) => (i + 1, true),
+            None => (chunk.len(), false),
+        };
+        let len = line.len() + take;
+        if len > MAX_REQUEST_BYTES + 1 {
+            return None;
+        }
+        if permit.is_none() && len > SMALL_REQUEST_BYTES {
+            permit = Some(
+                tokio::time::timeout_at(deadline, large.clone().acquire_owned())
+                    .await
+                    .ok()?
+                    .ok()?,
+            );
+            // One allocation for the rest, not a doubling past the limit.
+            line.reserve_exact(MAX_REQUEST_BYTES + 1 - line.len());
+        }
+        let chunk = r.buffer();
+        line.extend_from_slice(&chunk[..take]);
+        r.consume(take);
+        if done {
+            return Some((line, permit));
+        }
+    }
+}
+
+async fn connection(
+    mut stream: UnixStream,
+    host: Arc<Host>,
+    opts: ServeOpts,
+    large: Arc<Semaphore>,
+) {
     let cred = match stream.peer_cred() {
         Ok(c) => c,
         Err(e) => {
@@ -366,40 +494,50 @@ async fn connection(mut stream: UnixStream, host: Arc<Host>, serial: Arc<Mutex<(
         uid: cred.uid(),
         pid: cred.pid().and_then(|p| u32::try_from(p).ok()),
     };
-    let reply = match read_line(&mut stream).await {
+    let reply = match read_line(&mut stream, opts.read_timeout, &large).await {
         None => Reply::err(ERR_INVALID),
-        Some(line) => {
-            let h = host.clone();
-            tokio::task::spawn_blocking(move || {
-                let _one = serial.lock().unwrap_or_else(|e| e.into_inner());
-                h.handle(&line, peer, Utc::now())
-            })
-            .await
-            .unwrap_or_else(|_| Reply::err(ERR_FAILED))
-        }
+        Some((line, permit)) => tokio::task::spawn_blocking(move || {
+            let _place = permit;
+            host.handle_owned(line, peer, Utc::now())
+        })
+        .await
+        .unwrap_or_else(|_| Reply::err(ERR_FAILED)),
     };
-    let _ = tokio::time::timeout(READ_TIMEOUT, async {
+    let _ = tokio::time::timeout(opts.read_timeout, async {
         stream.write_all(&reply.line()).await?;
         stream.shutdown().await
     })
     .await;
 }
 
-/// Accepts connections until none came for `idle` (and none is still open).
-pub async fn serve(listener: UnixListener, host: Arc<Host>, idle: Duration) -> Result<()> {
-    let serial = Arc::new(Mutex::new(()));
+/// Accepts connections until none came for `opts.idle` (and none is still open).
+pub async fn serve(listener: UnixListener, host: Arc<Host>, opts: ServeOpts) -> Result<()> {
+    let large = Arc::new(Semaphore::new(opts.max_large));
     let open = Arc::new(AtomicUsize::new(0));
     loop {
-        let accepted = tokio::time::timeout(idle, listener.accept()).await;
-        let stream = match accepted {
+        let stream = match tokio::time::timeout(opts.idle, listener.accept()).await {
             Err(_) if open.load(Ordering::SeqCst) == 0 => return Ok(()),
             Err(_) => continue,
-            Ok(r) => r.context("accepting a connection")?.0,
+            Ok(Ok((s, _))) => s,
+            Ok(Err(e)) => {
+                // EMFILE, ECONNABORTED, …: never the end of the service (the start limit would then leave it failed)
+                log::warn!("support: accepting a connection failed: {e}");
+                tokio::time::sleep(ACCEPT_PAUSE).await;
+                continue;
+            }
         };
-        let (h, s, o) = (host.clone(), serial.clone(), open.clone());
+        if open.load(Ordering::SeqCst) >= opts.max_open {
+            log::warn!(
+                "support: {} connections open; closing a new one",
+                opts.max_open
+            );
+            drop(stream);
+            continue;
+        }
+        let (h, l, o) = (host.clone(), large.clone(), open.clone());
         o.fetch_add(1, Ordering::SeqCst);
         tokio::spawn(async move {
-            connection(stream, h, s).await;
+            connection(stream, h, opts, l).await;
             o.fetch_sub(1, Ordering::SeqCst);
         });
     }
@@ -432,6 +570,6 @@ pub fn main() -> Result<()> {
         .context("building the tokio runtime")?;
     rt.block_on(async {
         let listener = UnixListener::from_std(std_listener)?;
-        serve(listener, Arc::new(host), IDLE).await
+        serve(listener, Arc::new(host), ServeOpts::default()).await
     })
 }

@@ -1,6 +1,8 @@
 //! The local support queue (plan 2026-11-05 Task 5): `/var/lib/mastersos/support-queue/` (root 0700), one
 //! `<client_id>.json` (0600, an [`Item`]) per help request and its `<client_id>.png` (0600) when the student attached a
-//! screenshot, plus `rate.json` (0600), the submit times of the last hour ([`SUPPORT_MAX_PER_HOUR`] per machine).
+//! screenshot, plus `rate.json` (0600), the submit times and uids of the last hour ([`SUPPORT_MAX_PER_HOUR`] per
+//! machine, [`MAX_PER_UID_PER_HOUR`] per uid). The queue holds at most [`MAX_QUEUE_ITEMS`] items or
+//! [`MAX_QUEUE_BYTES`]; when it is full new requests are refused, never queued ones dropped.
 //!
 //! Two processes write here: the support host (new items, the rate file) and the sender (Task 5b: ticket, state,
 //! attachment). Every read-modify-write holds [`Store::lock`] (`flock` on `.lock`), so the single-writer rule of
@@ -20,6 +22,13 @@ use serde::{Deserialize, Serialize};
 use crate::safefs;
 
 pub const RATE_FILE: &str = "rate.json";
+/// Most submits one uid makes per hour, inside the machine's [`SUPPORT_MAX_PER_HOUR`]: one account (the guest, a kiosk
+/// app) cannot use the whole budget.
+pub const MAX_PER_UID_PER_HOUR: usize = 2;
+/// Most items in the queue.
+pub const MAX_QUEUE_ITEMS: usize = 20;
+/// Most bytes of the queue's items and screenshots together.
+pub const MAX_QUEUE_BYTES: u64 = 50 * 1024 * 1024;
 const LOCK_FILE: &str = ".lock";
 const ITEM_EXT: &str = ".json";
 const SCREENSHOT_EXT: &str = ".png";
@@ -70,13 +79,21 @@ impl Item {
 #[derive(Serialize, Deserialize, Debug, Default)]
 struct Rate {
     #[serde(default)]
-    submitted: Vec<DateTime<Utc>>,
+    submitted: Vec<Submitted>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+struct Submitted {
+    at: DateTime<Utc>,
+    uid: u32,
 }
 
 /// The queue directory. Opening is lazy: every call opens the directory (creating it 0700) by its absolute path.
 #[derive(Debug, Clone)]
 pub struct Store {
     dir: PathBuf,
+    max_items: usize,
+    max_bytes: u64,
 }
 
 /// Held while reading and writing the queue; released on drop.
@@ -95,7 +112,44 @@ fn item_name(client_id: &str, ext: &str) -> Result<String> {
 
 impl Store {
     pub fn new(dir: impl Into<PathBuf>) -> Store {
-        Store { dir: dir.into() }
+        Store {
+            dir: dir.into(),
+            max_items: MAX_QUEUE_ITEMS,
+            max_bytes: MAX_QUEUE_BYTES,
+        }
+    }
+
+    /// Other queue limits than [`MAX_QUEUE_ITEMS`] and [`MAX_QUEUE_BYTES`] (tests).
+    pub fn with_limits(mut self, max_items: usize, max_bytes: u64) -> Store {
+        self.max_items = max_items;
+        self.max_bytes = max_bytes;
+        self
+    }
+
+    /// Whether the queue has room for one more item: fewer than its item limit, and its items and screenshots
+    /// together under its byte limit. Hold the lock.
+    pub fn has_room(&self) -> Result<bool> {
+        let d = self.open()?;
+        let (mut items, mut bytes) = (0usize, 0u64);
+        for name in safefs::list_at(&d)? {
+            let Some(id) = name
+                .strip_suffix(ITEM_EXT)
+                .or_else(|| name.strip_suffix(SCREENSHOT_EXT))
+            else {
+                continue;
+            };
+            if !mastersos_bundle::valid_school_id(id) {
+                continue;
+            }
+            if name.ends_with(ITEM_EXT) {
+                items += 1;
+            }
+            let st = rustix::fs::statat(&d, name.as_str(), rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(std::io::Error::from)
+                .with_context(|| format!("checking {name}"))?;
+            bytes = bytes.saturating_add(u64::try_from(st.st_size).unwrap_or(0));
+        }
+        Ok(items < self.max_items && bytes < self.max_bytes)
     }
 
     pub fn dir(&self) -> &Path {
@@ -209,9 +263,9 @@ impl Store {
         safefs::remove_at(&d, &item_name(client_id, ITEM_EXT)?)
     }
 
-    /// The submit times still inside the hour before `now`. Times after `now` (the clock was set back) are dropped, so
-    /// a clock change cannot lock the machine out. A rate file that does not parse counts as empty.
-    fn recent(&self, d: &OwnedFd, now: DateTime<Utc>) -> Result<Vec<DateTime<Utc>>> {
+    /// The submits still inside the hour before `now`. Times after `now` (the clock was set back) are dropped, so a
+    /// clock change cannot lock the machine out. A rate file that does not parse counts as empty.
+    fn recent(&self, d: &OwnedFd, now: DateTime<Utc>) -> Result<Vec<Submitted>> {
         let rate: Rate = match safefs::read_at(d, RATE_FILE)? {
             None => Rate::default(),
             Some(b) => serde_json::from_slice(&b).unwrap_or_else(|e| {
@@ -223,21 +277,24 @@ impl Store {
         Ok(rate
             .submitted
             .into_iter()
-            .filter(|t| *t > from && *t <= now)
+            .filter(|s| s.at > from && s.at <= now)
             .collect())
     }
 
-    /// Whether another submit is allowed at `now` ([`SUPPORT_MAX_PER_HOUR`] in any hour). Hold the lock.
-    pub fn rate_allows(&self, now: DateTime<Utc>) -> Result<bool> {
+    /// Whether `uid` may submit at `now`: under [`SUPPORT_MAX_PER_HOUR`] for the machine and
+    /// [`MAX_PER_UID_PER_HOUR`] for the uid in the last hour. Hold the lock.
+    pub fn rate_allows(&self, now: DateTime<Utc>, uid: u32) -> Result<bool> {
         let d = self.open()?;
-        Ok(self.recent(&d, now)?.len() < SUPPORT_MAX_PER_HOUR as usize)
+        let recent = self.recent(&d, now)?;
+        let mine = recent.iter().filter(|s| s.uid == uid).count();
+        Ok(recent.len() < SUPPORT_MAX_PER_HOUR as usize && mine < MAX_PER_UID_PER_HOUR)
     }
 
-    /// Counts a submit at `now`. Hold the lock.
-    pub fn record_submit(&self, now: DateTime<Utc>) -> Result<()> {
+    /// Counts a submit by `uid` at `now`. Hold the lock.
+    pub fn record_submit(&self, now: DateTime<Utc>, uid: u32) -> Result<()> {
         let d = self.open()?;
         let mut submitted = self.recent(&d, now)?;
-        submitted.push(now);
+        submitted.push(Submitted { at: now, uid });
         let bytes = serde_json::to_vec(&Rate { submitted })?;
         safefs::write_at(&d, RATE_FILE, &bytes, 0o600)?;
         Ok(())

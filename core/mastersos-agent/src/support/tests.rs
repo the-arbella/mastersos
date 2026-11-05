@@ -20,6 +20,8 @@ const OTHER: u32 = 1001;
 const GREETER: u32 = 60578;
 const KIOSK: u32 = 1900;
 const SSO: u32 = 10_042;
+const LOGIN1: &str =
+    "org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager";
 
 /// Accounts and greeter sessions by uid.
 #[derive(Default)]
@@ -28,10 +30,14 @@ struct FakeWho {
     greeters: Vec<u32>,
     /// The kiosk step's records: id → (uid, name).
     kiosk: BTreeMap<String, (u32, String)>,
+    /// How many times anyone asked for an account (identify ran).
+    lookups: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Who for FakeWho {
     fn account(&self, uid: u32) -> Option<Account> {
+        self.lookups
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.accounts.get(&uid).cloned()
     }
     fn is_greeter(&self, peer: &Peer) -> bool {
@@ -58,6 +64,7 @@ fn who() -> FakeWho {
         ]),
         greeters: vec![GREETER],
         kiosk: BTreeMap::from([("nwea".to_string(), (KIOSK, "kiosk-nwea".to_string()))]),
+        lookups: Arc::default(),
     }
 }
 
@@ -280,56 +287,105 @@ fn greeter_peer_is_none_guest_uid_is_guest() {
 #[test]
 fn system_who_reads_logind_and_authd() {
     let root = tempfile::tempdir().unwrap();
-    let proc_dir = root.path().join("proc/77");
-    std::fs::create_dir_all(&proc_dir).unwrap();
-    std::fs::write(
-        proc_dir.join("cgroup"),
-        "0::/user.slice/user-60578.slice/session-c1.scope\n",
-    )
-    .unwrap();
     let r = Arc::new(FakeRunner::new());
-    r.respond(
-        "loginctl show-session c1 -p Class --value",
-        Output::ok("greeter\n"),
-    );
     let w = SystemWho::new(r.clone(), root.path().to_path_buf());
+    let by_pid = |pid: u32| format!("busctl call {LOGIN1} GetSessionByPID u {pid}");
+    let session = |id: &str| format!("loginctl show-session {id} -p Class -p User");
+
+    // logind says which session the pid is in; that session is the greeter's and belongs to the peer's uid.
+    r.respond(
+        &by_pid(77),
+        Output::ok("o \"/org/freedesktop/login1/session/c1\"\n"),
+    );
+    r.respond(&session("c1"), Output::ok("Class=greeter\nUser=60578\n"));
     assert!(w.is_greeter(&Peer {
         uid: GREETER,
         pid: Some(77)
     }));
-    // No session scope for the pid (a greeter run by its user manager): the uid's sessions decide.
+    // Escaped object path (`_33` is "3").
     r.respond(
-        "loginctl show-user 60579 -p Sessions --value",
-        Output::ok("c2 c3\n"),
+        &by_pid(79),
+        Output::ok("o \"/org/freedesktop/login1/session/_33\"\n"),
     );
-    r.respond(
-        "loginctl show-session c2 -p Class --value",
-        Output::ok("user\n"),
-    );
-    r.respond(
-        "loginctl show-session c3 -p Class --value",
-        Output::ok("greeter\n"),
-    );
-    assert!(w.is_greeter(&Peer {
-        uid: 60579,
-        pid: Some(78)
+    r.respond(&session("3"), Output::ok("Class=user\nUser=1000\n"));
+    assert!(!w.is_greeter(&Peer {
+        uid: ME,
+        pid: Some(79)
     }));
+    assert!(
+        !r.calls().iter().any(|c| c.contains("show-user 1000")),
+        "the pid's own session decides"
+    );
+
+    // Review: a student runs `systemd-run --user --scope -u session-c1.scope …`. Its cgroup path names
+    // session-c1.scope (under user@1000.service), but nothing reads the cgroup any more: logind has no session for
+    // that pid, and the uid's own sessions are not the greeter's.
+    let proc_dir = root.path().join("proc/90");
+    std::fs::create_dir_all(&proc_dir).unwrap();
+    std::fs::write(
+        proc_dir.join("cgroup"),
+        "0::/user.slice/user-1000.slice/user@1000.service/app.slice/session-c1.scope\n",
+    )
+    .unwrap();
+    r.respond(
+        &by_pid(90),
+        Output::fail(
+            1,
+            "Call failed: PID 90 does not belong to any known session",
+        ),
+    );
     r.respond(
         "loginctl show-user 1000 -p Sessions --value",
         Output::ok("3\n"),
     );
+    r.respond(&session("3"), Output::ok("Class=user\nUser=1000\n"));
+    assert!(!w.is_greeter(&Peer {
+        uid: ME,
+        pid: Some(90)
+    }));
+    // Even when logind names a greeter session for the pid, it counts only if that session is the peer's own uid's.
     r.respond(
-        "loginctl show-session 3 -p Class --value",
-        Output::ok("user\n"),
+        &by_pid(91),
+        Output::ok("o \"/org/freedesktop/login1/session/c1\"\n"),
     );
-    assert!(!w.is_greeter(&peer(ME)));
+    r.respond(&session("c1"), Output::ok("Class=greeter\nUser=60578\n"));
+    r.respond(
+        "loginctl show-user 1000 -p Sessions --value",
+        Output::ok("c1 3\n"),
+    );
+    r.respond(&session("c1"), Output::ok("Class=greeter\nUser=60578\n"));
+    r.respond(&session("3"), Output::ok("Class=user\nUser=1000\n"));
+    assert!(!w.is_greeter(&Peer {
+        uid: ME,
+        pid: Some(91)
+    }));
+
+    // No pid session (the greeter's shell under its user manager): the uid's sessions decide, each checked for the uid.
+    r.respond(&by_pid(78), Output::fail(1, "no session"));
+    r.respond(
+        "loginctl show-user 60579 -p Sessions --value",
+        Output::ok("c2 c3\n"),
+    );
+    r.respond(&session("c2"), Output::ok("Class=user\nUser=60579\n"));
+    r.respond(&session("c3"), Output::ok("Class=greeter\nUser=60579\n"));
+    assert!(w.is_greeter(&Peer {
+        uid: 60579,
+        pid: Some(78)
+    }));
     // Nothing logind answers is a session id we pass on.
+    r.respond(
+        &by_pid(4242),
+        Output::ok("o \"/org/freedesktop/login1/session/-h\"\n"),
+    );
     r.respond(
         "loginctl show-user 1001 -p Sessions --value",
         Output::ok("--help\n"),
     );
     assert!(!w.is_greeter(&peer(OTHER)));
-    assert!(!r.calls().iter().any(|c| c.contains("--help")));
+    assert!(!r
+        .calls()
+        .iter()
+        .any(|c| c.contains("--help") || c.contains(" -h")));
 
     r.respond(
         "getent -s authd passwd 10042",
@@ -412,6 +468,103 @@ fn rate_limit_survives_restart() {
 
 /// Review focus 1: the request is on disk (0600 in a 0700 directory) before the reply, with its client id, and a
 /// restarted service (and later the sender) finds the same item under the same id.
+/// One account (the guest, a kiosk app) cannot use the machine's whole budget: two per uid per hour, three per machine.
+/// The budget is checked before anything costly: a refused submit never looks anyone up.
+#[test]
+fn rate_limit_per_uid_inside_machine_budget() {
+    let rig = Rig::new();
+    let at = |m: i64| now() + Duration::minutes(m);
+    let ask = |host: &Host, uid: u32, t| {
+        let line = format!("{}\n", submit("wifi", "", "desktop"));
+        reply_value(&host.handle(line.as_bytes(), peer(uid), t))
+    };
+    let w = who();
+    let lookups = w.lookups.clone();
+    let mut host = rig.host();
+    host.who = Box::new(w);
+    let guest = crate::system::guest::GUEST_UID;
+    assert_eq!(ask(&host, guest, at(0))["ok"], json!(true));
+    assert_eq!(ask(&host, guest, at(1))["ok"], json!(true));
+    let n = lookups.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(
+        ask(&host, guest, at(2)),
+        json!({"ok": false, "error": "rate_limited"})
+    );
+    assert_eq!(
+        lookups.load(std::sync::atomic::Ordering::SeqCst),
+        n,
+        "a refused submit must not run identify"
+    );
+    // Someone else still gets the machine's third.
+    assert_eq!(ask(&host, ME, at(3))["ok"], json!(true));
+    assert_eq!(ask(&host, OTHER, at(4))["error"], json!("rate_limited"));
+    assert_eq!(store::MAX_PER_UID_PER_HOUR, 2);
+}
+
+/// The queue holds at most 20 items or 50 MB; a full queue refuses new submits (rate_limited) and keeps every queued
+/// one: tickets already made matter more.
+#[test]
+fn queue_full_refuses_new_and_keeps_old() {
+    assert_eq!(store::MAX_QUEUE_ITEMS, 20);
+    assert_eq!(store::MAX_QUEUE_BYTES, 50 * 1024 * 1024);
+    let rig = Rig::new();
+    let line = format!("{}\n", submit("wifi", "", "desktop"));
+    // Hours apart, so only the queue's size is in the way.
+    let at = |h: i64| now() + Duration::hours(h);
+    let mut host = rig.host();
+    host.store = Store::new(rig.queue()).with_limits(2, u64::MAX);
+    for h in 0..2 {
+        assert_eq!(
+            reply_value(&host.handle(line.as_bytes(), peer(ME), at(h)))["ok"],
+            json!(true)
+        );
+    }
+    let before = host.store.list().unwrap();
+    assert_eq!(
+        reply_value(&host.handle(line.as_bytes(), peer(ME), at(5))),
+        json!({"ok": false, "error": "rate_limited"})
+    );
+    assert_eq!(host.store.list().unwrap(), before);
+    // Bytes count too (items and screenshots).
+    host.store = Store::new(rig.queue()).with_limits(100, 100);
+    assert_eq!(
+        reply_value(&host.handle(line.as_bytes(), peer(ME), at(6))),
+        json!({"ok": false, "error": "rate_limited"})
+    );
+    // Once the sender is done with one, there is room again.
+    host.store = Store::new(rig.queue()).with_limits(2, u64::MAX);
+    host.store.remove(&before[0].request.client_id).unwrap();
+    assert_eq!(
+        reply_value(&host.handle(line.as_bytes(), peer(ME), at(7)))["ok"],
+        json!(true)
+    );
+}
+
+/// Only a submit may be large (its screenshot); every other op is refused past a few KiB.
+#[test]
+fn non_submit_ops_are_small() {
+    let rig = Rig::new();
+    let host = rig.host();
+    let padded = |n: usize| format!("{{\"op\":\"enabled\"{}}}\n", " ".repeat(n));
+    assert_eq!(
+        reply_value(&host.handle(padded(10).as_bytes(), peer(ME), now())),
+        json!({"ok": true, "enabled": true})
+    );
+    assert_eq!(
+        reply_value(&host.handle(
+            padded(host::SMALL_REQUEST_BYTES).as_bytes(),
+            peer(ME),
+            now()
+        )),
+        json!({"ok": false, "error": "invalid"})
+    );
+    // JSON that is not an object is not a request, even when a struct could be read from it.
+    assert_eq!(
+        reply_value(&host.handle(b"[\"enabled\"]\n", peer(ME), now())),
+        json!({"ok": false, "error": "invalid"})
+    );
+}
+
 #[test]
 fn queue_survives_restart_and_reuses_client_id() {
     let rig = Rig::new();
@@ -702,7 +855,10 @@ async fn host_serves_one_line_per_connection() {
     let server = tokio::spawn(host::serve(
         listener,
         Arc::new(host),
-        std::time::Duration::from_millis(500),
+        host::ServeOpts {
+            idle: std::time::Duration::from_millis(500),
+            ..host::ServeOpts::default()
+        },
     ));
     let ask = |line: String| {
         let sock = sock.clone();
@@ -728,6 +884,67 @@ async fn host_serves_one_line_per_connection() {
     let out = ask("{\"op\":\"enabled\"}\n".into()).await;
     assert_eq!(out, "{\"ok\":true,\"enabled\":true}\n");
     // Idle for longer than the limit: the server returns (socket activation starts it again).
+    tokio::time::timeout(std::time::Duration::from_secs(10), server)
+        .await
+        .expect("the server should exit when idle")
+        .unwrap()
+        .unwrap();
+}
+
+/// At most `max_open` connections at once: one more is closed at once, without a reply, and the service keeps going.
+#[tokio::test]
+async fn host_drops_connections_over_the_cap() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let rig = Rig::new();
+    let mut w = who();
+    w.accounts.insert(
+        rustix::process::getuid().as_raw(),
+        Account {
+            name: "tester".into(),
+            authd: false,
+        },
+    );
+    let mut host = rig.host();
+    host.who = Box::new(w);
+    let sock = rig.dir.path().join("support.sock");
+    let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+    let opts = host::ServeOpts {
+        idle: std::time::Duration::from_millis(300),
+        read_timeout: std::time::Duration::from_secs(2),
+        max_open: 2,
+        max_large: 1,
+    };
+    let server = tokio::spawn(host::serve(listener, Arc::new(host), opts));
+    // Two clients that never send anything hold both places.
+    let mut quiet = Vec::new();
+    for _ in 0..2 {
+        quiet.push(tokio::net::UnixStream::connect(&sock).await.unwrap());
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let mut extra = tokio::net::UnixStream::connect(&sock).await.unwrap();
+    let _ = extra.write_all(b"{\"op\":\"enabled\"}\n").await;
+    let mut got = Vec::new();
+    let n = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        extra.read_to_end(&mut got),
+    )
+    .await
+    .expect("the extra connection should be closed at once");
+    assert!(
+        n.is_err() || got.is_empty(),
+        "no reply over the cap: {got:?}"
+    );
+    // The quiet ones run out of time and are told so; then there is room again.
+    for mut q in quiet {
+        let mut out = String::new();
+        q.read_to_string(&mut out).await.unwrap();
+        assert_eq!(out, "{\"ok\":false,\"error\":\"invalid\"}\n");
+    }
+    let mut s = tokio::net::UnixStream::connect(&sock).await.unwrap();
+    s.write_all(b"{\"op\":\"enabled\"}\n").await.unwrap();
+    let mut out = String::new();
+    s.read_to_string(&mut out).await.unwrap();
+    assert_eq!(out, "{\"ok\":true,\"enabled\":true}\n");
     tokio::time::timeout(std::time::Duration::from_secs(10), server)
         .await
         .expect("the server should exit when idle")

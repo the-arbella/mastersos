@@ -3041,7 +3041,8 @@ if [ "$(readlink "$sd/sockets.target.wants/mastersos-support.socket" 2>/dev/null
 	r=1
 fi
 for l in 'ExecStart=/usr/bin/mastersos-agent support host' 'StandardInput=socket' 'StandardOutput=journal' \
-	'Requires=mastersos-support.socket' 'StateDirectory=mastersos/support-queue' 'StateDirectoryMode=0700' 'ProtectSystem=strict'; do
+	'Requires=mastersos-support.socket' 'StateDirectory=mastersos/support-queue' 'StateDirectoryMode=0700' 'ProtectSystem=strict' \
+	'StartLimitIntervalSec=0' 'MemoryMax=64M' 'LimitNOFILE=256'; do
 	grep -qxF -- "$l" "$sv" 2>/dev/null || {
 		bad 69 "$sv should have the line: $l"
 		r=1
