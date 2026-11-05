@@ -44,6 +44,9 @@ msgstr "Kontu honek ezin du saioa hasi ordenagailu honetan."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Kontu honek ezin du saioa hasi ordenagailu honetan. Erabili zure ikastetxeko posta elektronikoa (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Kontu honek ezin du saioa hasi ordenagailu honetan. Bere helbide elektronikoa ez da egiaztatu."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Beste kontu batekin hasi duzu saioa. Hasi saioa berriro hemen aukeratu duzun kontuarekin."
 

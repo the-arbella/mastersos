@@ -44,6 +44,9 @@ msgstr "Denne konto kan ikke logge ind på denne computer."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Denne konto kan ikke logge ind på denne computer. Brug din skolemail (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Denne konto kan ikke logge ind på denne computer. Dens e-mailadresse er ikke bekræftet."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Du loggede ind med en anden konto. Log ind igen med den konto, du valgte her."
 

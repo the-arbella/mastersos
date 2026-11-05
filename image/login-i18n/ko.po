@@ -44,6 +44,9 @@ msgstr "이 계정은 이 컴퓨터에 로그인할 수 없습니다."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "이 계정은 이 컴퓨터에 로그인할 수 없습니다. 학교 이메일(%s)을 사용하세요."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "이 계정은 이 컴퓨터에 로그인할 수 없습니다. 이 계정의 이메일 주소가 인증되지 않았습니다."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "다른 계정으로 로그인했습니다. 여기서 선택한 계정으로 다시 로그인하세요."
 

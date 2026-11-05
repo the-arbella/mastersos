@@ -44,6 +44,9 @@ msgstr "Bu hesabla bu kompüterə daxil olmaq olmaz."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Bu hesabla bu kompüterə daxil olmaq olmaz. Məktəb e-poçtunuzdan (%s) istifadə edin."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Bu hesabla bu kompüterə daxil olmaq olmaz. Onun e-poçt ünvanı təsdiqlənməyib."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Başqa hesabla daxil oldunuz. Burada seçdiyiniz hesabla yenidən daxil olun."
 

@@ -45,6 +45,9 @@ msgstr "To kōnto niy może sie zalogować na tym kōmputrze."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "To kōnto niy może sie zalogować na tym kōmputrze. Użyj szkolnego e-mejla (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "To kōnto niy może sie zalogować na tym kōmputrze. Jego adresa e-mail niy była zweryfikowano."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Zalogowôłeś sie na inksze kōnto. Zaloguj sie zaś na kōnto, kere ôbrôłeś tukej."
 

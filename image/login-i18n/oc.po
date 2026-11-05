@@ -44,6 +44,9 @@ msgstr "Aqueste compte se pòt pas connectar a aqueste ordenador."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Aqueste compte se pòt pas connectar a aqueste ordenador. Utilizatz vòstre corrièr electronic de l'escòla (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Aqueste compte se pòt pas connectar a aqueste ordenador. Son adreça electronica es pas estada verificada."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Vos sètz connectat amb un autre compte. Connectatz-vos tornamai amb lo compte causit aicí."
 

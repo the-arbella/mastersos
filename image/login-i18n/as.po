@@ -44,6 +44,9 @@ msgstr "এই একাউণ্টে এই কমপিউটাৰত ছ�
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "এই একাউণ্টে এই কমপিউটাৰত ছাইন ইন কৰিব নোৱাৰে। আপোনাৰ বিদ্যালয়ৰ ইমেইল (%s) ব্যৱহাৰ কৰক।"
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "এই একাউণ্টে এই কমপিউটাৰত ছাইন ইন কৰিব নোৱাৰে। ইয়াৰ ইমেইল ঠিকনা সত্যাপন কৰা হোৱা নাই।"
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "আপুনি বেলেগ একাউণ্টেৰে ছাইন ইন কৰিছে। ইয়াত আপুনি বাছনি কৰা একাউণ্টেৰে পুনৰ ছাইন ইন কৰক।"
 

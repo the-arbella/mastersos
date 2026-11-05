@@ -44,6 +44,9 @@ msgstr "Αυτός ο λογαριασμός δεν μπορεί να συνδε
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Αυτός ο λογαριασμός δεν μπορεί να συνδεθεί σε αυτόν τον υπολογιστή. Χρησιμοποιήστε το σχολικό σας email (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Αυτός ο λογαριασμός δεν μπορεί να συνδεθεί σε αυτόν τον υπολογιστή. Η διεύθυνση ηλεκτρονικού ταχυδρομείου του δεν έχει επαληθευτεί."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Συνδεθήκατε με διαφορετικό λογαριασμό. Συνδεθείτε ξανά με τον λογαριασμό που επιλέξατε εδώ."
 

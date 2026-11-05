@@ -44,6 +44,9 @@ msgstr "חשבון זה אינו יכול להיכנס במחשב הזה."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "חשבון זה אינו יכול להיכנס במחשב הזה. השתמשו בדוא״ל בית הספר שלכם (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "חשבון זה אינו יכול להיכנס במחשב הזה. כתובת הדוא״ל שלו לא אומתה."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "נכנסתם עם חשבון אחר. היכנסו שוב עם החשבון שבחרתם כאן."
 

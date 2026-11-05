@@ -44,6 +44,9 @@ msgstr "Chest account nol pues jentrâ su chest computer."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Chest account nol pues jentrâ su chest computer. Dopre la tô pueste eletroniche di scuele (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Chest account nol pues jentrâ su chest computer. La sô direzion di pueste eletroniche no je stade verificade."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Tu às fat l'acès cuntun altri account. Torne a jentrâ cul account che tu âs sielt achì."
 

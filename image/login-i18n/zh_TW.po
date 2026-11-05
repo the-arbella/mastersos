@@ -44,6 +44,9 @@ msgstr "此帳號無法在這部電腦上登入。"
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "此帳號無法在這部電腦上登入。請使用你的學校電子郵件（%s）。"
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "此帳號無法在這部電腦上登入。此帳號的電子郵件地址尚未驗證。"
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "你登入的帳號與所選帳號不同。請使用你在這裡選擇的帳號重新登入。"
 

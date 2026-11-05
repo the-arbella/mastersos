@@ -44,6 +44,9 @@ msgstr "Esta cuenta no puede iniciar sesión en este equipo."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Esta cuenta no puede iniciar sesión en este equipo. Usa tu correo de la escuela (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Esta cuenta no puede iniciar sesión en este equipo. Su dirección de correo electrónico no se ha verificado."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Iniciaste sesión con otra cuenta. Vuelve a iniciar sesión con la cuenta que elegiste aquí."
 

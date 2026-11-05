@@ -45,6 +45,9 @@ msgstr "Amiḍan-agi ur izmir ara ad yekcem ɣer uselkim-agi."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Amiḍan-agi ur izmir ara ad yekcem ɣer uselkim-agi. Seqdec imayl n uɣerbaz-ik (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Amiḍan-agi ur izmir ara ad yekcem ɣer uselkim-agi. Tansa-ines n yimayl ur tettwasenqed ara."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Tekcmeḍ s umiḍan nniḍen. Kcem i tikelt-nniḍen s umiḍan i tferneḍ da."
 

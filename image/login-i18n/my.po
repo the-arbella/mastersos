@@ -44,6 +44,9 @@ msgstr "ဤအကောင့်ဖြင့် ဤကွန်ပျူတာ�
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "ဤအကောင့်ဖြင့် ဤကွန်ပျူတာတွင် လော့ဂ်အင်ဝင်၍ မရပါ။ သင့်ကျောင်းအီးမေးလ် (%s) ကို အသုံးပြုပါ။"
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "ဤအကောင့်ဖြင့် ဤကွန်ပျူတာတွင် လော့ဂ်အင်ဝင်၍ မရပါ။ ၎င်း၏ အီးမေးလ်လိပ်စာကို အတည်မပြုရသေးပါ။"
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "အခြားအကောင့်ဖြင့် လော့ဂ်အင်ဝင်ထားသည်။ ဤနေရာတွင် ရွေးထားသော အကောင့်ဖြင့် ပြန်လည် လော့ဂ်အင်ဝင်ပါ။"
 

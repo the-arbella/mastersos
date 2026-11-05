@@ -44,6 +44,9 @@ msgstr "Hierdie rekening kan nie op hierdie rekenaar aanmeld nie."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Hierdie rekening kan nie op hierdie rekenaar aanmeld nie. Gebruik jou skool-e-pos (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Hierdie rekening kan nie op hierdie rekenaar aanmeld nie. Sy e-posadres is nie geverifieer nie."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Jy het met 'n ander rekening aangemeld. Meld weer aan met die rekening wat jy hier gekies het."
 

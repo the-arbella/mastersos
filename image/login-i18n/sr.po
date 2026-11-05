@@ -44,6 +44,9 @@ msgstr "Овај налог не може да се пријави на овом
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Овај налог не може да се пријави на овом рачунару. Користите школску е-пошту (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Овај налог не може да се пријави на овом рачунару. Његова адреса е-поште није потврђена."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Пријавили сте се другим налогом. Пријавите се поново налогом који сте изабрали овде."
 

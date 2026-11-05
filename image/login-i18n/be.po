@@ -44,6 +44,9 @@ msgstr "Гэты акаўнт не можа ўвайсці на гэты кам�
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Гэты акаўнт не можа ўвайсці на гэты кампутар. Скарыстайце школьную электронную пошту (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Гэты акаўнт не можа ўвайсці на гэты кампутар. Яго адрас электроннай пошты не пацверджаны."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Вы ўвайшлі з іншым акаўнтам. Увайдзіце яшчэ раз з акаўнтам, які вы абралі тут."
 

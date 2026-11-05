@@ -44,6 +44,9 @@ msgstr "Su šia paskyra šiame kompiuteryje prisijungti negalima."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Su šia paskyra šiame kompiuteryje prisijungti negalima. Naudokite savo mokyklos el. paštą (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Su šia paskyra šiame kompiuteryje prisijungti negalima. Jos el. pašto adresas nepatvirtintas."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Prisijungėte su kita paskyra. Prisijunkite dar kartą su čia pasirinkta paskyra."
 

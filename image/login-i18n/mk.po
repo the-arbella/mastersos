@@ -44,6 +44,9 @@ msgstr "Оваа сметка не може да се најави на овој
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Оваа сметка не може да се најави на овој компјутер. Користете ја вашата училишна е-пошта (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Оваа сметка не може да се најави на овој компјутер. Нејзината адреса за е-пошта не е потврдена."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Се најавивте со друга сметка. Најавете се повторно со сметката што ја избравте овде."
 

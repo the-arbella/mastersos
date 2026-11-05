@@ -44,6 +44,9 @@ msgstr "Bu hesap bu kompyuterge kire bilmey."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Bu hesap bu kompyuterge kire bilmey. Mektep e-poçtañıznı (%s) qullanıñız."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Bu hesap bu kompyuterge kire bilmey. Onıñ e-poçta adresi tasdıqlanmağan."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Başqa bir hesap ile kirdiñiz. Mında saylağan hesabıñız ile yañıdan kiriñiz."
 

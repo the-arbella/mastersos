@@ -1,5 +1,5 @@
 // Who the login screen's one entry finds as the person types, and the school addresses it offers (design 2026-11-03, login
-// single field).
+// single field); why a person who signed in was refused.
 // Pure computation, no gi:// imports: extension.js and image/tests/login-people-test.mjs share it.
 
 export const LIMIT = 5;
@@ -58,4 +58,20 @@ export function suggestDomains(query, domains, taken = []) {
 // The person Enter signs in without arrow keys: none while an address is being typed (it may be someone new).
 export function preselect(query, shown) {
     return shown.length && !(query ?? '').includes('@') ? 0 : -1;
+}
+
+// Why the person was refused for who they are rather than for what they typed, from the broker's or the agent's English text:
+//   'not-allowed'   not of the school's domains: the broker's allowed_domains (patch 0006) or the agent's pam-check
+//                   (DENY_DOMAIN in core/mastersos-agent/src/system/login.rs, checked by login-people-test.mjs);
+//   'unverified'    the school's provider does not say the email address is verified (authd-oidc's generic provider);
+//   'wrong-account' the school's page signed in another account than the one picked here (patch 0004);
+//   null            anything else.
+const REFUSALS = [
+    ['not-allowed', /not allowed in broker configuration|Accounts from this domain cannot sign in/i],
+    ['unverified', /email not verified/i],
+    ['wrong-account', /does not match the authenticated user/i],
+];
+
+export function refusalKind(message) {
+    return REFUSALS.find(([, re]) => re.test(message ?? ''))?.[0] ?? null;
 }

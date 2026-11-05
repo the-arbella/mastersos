@@ -44,6 +44,9 @@ msgstr "Ин ҳисоб дар ин компютер ворид шуда нам�
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Ин ҳисоб дар ин компютер ворид шуда наметавонад. Почтаи электронии мактаби худро (%s) истифода баред."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Ин ҳисоб дар ин компютер ворид шуда наметавонад. Нишонии почтаи электронии он тасдиқ нашудааст."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Шумо бо ҳисоби дигар ворид шудед. Бо ҳисобе, ки дар ин ҷо интихоб кардед, бори дигар ворид шавед."
 

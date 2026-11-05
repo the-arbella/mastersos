@@ -44,6 +44,9 @@ msgstr "Dit Konto kann sik op dissen Reekner nich anmellen."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Dit Konto kann sik op dissen Reekner nich anmellen. Bruuk dien School-E-Mail (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Dit Konto kann sik op dissen Reekner nich anmellen. Siene E-Mail-Adress is nich bestätigt."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Du hest di mit en anner Konto anmellt. Mell di nochmal mit dat Konto an, dat du hier utsöcht hest."
 
