@@ -455,7 +455,7 @@ pub struct TrustKey {
     /// Standard base64. `ed25519`: 32 bytes when decoded; `webauthn-es256`: 65 bytes, the
     /// uncompressed P-256 point (`0x04 || x || y`).
     pub public_key: String,
-    /// Only for `webauthn-es256`: the RP ID the Passkey was registered for (the signing page's
+    /// Only for `webauthn-es256`: the RP ID the Passkey was registered for (its
     /// host name), a lowercase ASCII host name without scheme, port or path. Signature checks
     /// compare the assertion's `rpIdHash` and `origin` with it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -543,7 +543,7 @@ pub struct School {
             length(min = 1, max = 8),
             description = "1 to 8 age X25519 public keys (`age1…`, canonical lowercase, none \
                            twice) that Devices encrypt their disk recovery key to before sending \
-                           it to the cloud. Written by the signing page. Leave the key out rather \
+                           it to the cloud. Written by `mastersos init` and `mastersos keys add`. Leave the key out rather \
                            than writing an empty list."
         )
     )]

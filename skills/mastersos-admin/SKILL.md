@@ -32,8 +32,8 @@ your own file tools, run `mastersos check` and `mastersos diff`, and hand the re
    You (the AI) are never given IT's token file: you use the MCP tools, or pass
    `--token-file ~/.config/mastersos/ai-token` to `mastersos devices`, `keys list` and `spec`.
 3. IT makes the directory: `mastersos pull <dir>` for a school that has published, or
-   `mastersos init <dir> --school-key <file> [--school-key <file>]` for a new one (school keys are made on the
-   admin site's signing page).
+   `mastersos init <dir> --school-key <file> [--school-key <file>]` for a new one (school keys are made with
+   `mastersos-sign school-key new` and registered with `mastersos-sign register`).
    You work inside it (`cd <dir>`, or pass `<dir>` to each command).
 
 If `mastersos` is not found: on macOS and Linux `~/.local/bin` is not on the PATH; on Windows open a new terminal
@@ -101,9 +101,8 @@ The tools never show secret values, only their names.
 5. **Show the diff**: `mastersos diff`, explained in plain words: what changes for which Group or Device.
 6. **Hand over**: when they agree, tell IT the directory is ready and what it does ("Added Khan Academy to the
    Grade 3 Config for the maths unit"), and ask IT to run `mastersos publish --school-key <school key file>`. IT
-   approves with the school key, on that computer or on the signing page in the browser (then `publish` prints a
-   check code to compare on that page); after approving in the browser IT runs `mastersos pull` to take the
-   published version as the new base. If `check`
+   approves with the school key file on that computer: `publish` needs `--school-key` and uploads nothing without
+   it. It prints a check code and then `Published version N`. If `check`
    reported `secret_rerouted`, say which secret moved where: `publish` refuses until IT approves it.
 
 If the publish is refused because someone else published first (the version is taken), IT runs `mastersos pull`
