@@ -255,8 +255,11 @@ fn is_ip(host: &str) -> bool {
 }
 
 /// Whether a cookie with this `host_key` belongs to one of `hosts`. A host-only cookie (`auth.school.ac.th`) must name the
-/// host exactly; a domain cookie (`.school.ac.th`) may also be set for a parent domain of a host, as long as that domain
-/// has a dot in it (Chrome refuses public suffixes when a site sets them). IP addresses match only themselves.
+/// host exactly. A domain cookie (`.school.ac.th`) may name the host or a parent of it down to the host's registrable domain
+/// on the Public Suffix List (the `psl` crate's built-in copy), never a public suffix: a card that was tampered with cannot
+/// toss cookies onto `.ac.th`, `.co.th` or `.org` for every site under them. A host that is itself a public suffix (or has no
+/// registrable domain) gets domain cookies for nothing but itself, and only when it is not a suffix. IP addresses match
+/// only themselves.
 pub fn host_allowed(host_key: &str, hosts: &[String]) -> bool {
     let key = host_key.to_ascii_lowercase();
     let (domain, key) = match key.strip_prefix('.') {
@@ -266,13 +269,21 @@ pub fn host_allowed(host_key: &str, hosts: &[String]) -> bool {
     if key.is_empty() {
         return false;
     }
-    hosts.iter().any(|h| {
-        *h == key
-            || (domain
-                && key.contains('.')
-                && !is_ip(h)
-                && !is_ip(&key)
-                && h.ends_with(&format!(".{key}")))
+    if !domain || is_ip(&key) {
+        return hosts.contains(&key);
+    }
+    if psl::suffix_str(&key) == Some(key.as_str()) {
+        return false;
+    }
+    hosts.iter().filter(|h| !is_ip(h)).any(|h| {
+        if *h == key {
+            return true;
+        }
+        let Some(registrable) = psl::domain_str(h) else {
+            return false;
+        };
+        h.ends_with(&format!(".{key}"))
+            && (key == registrable || key.ends_with(&format!(".{registrable}")))
     })
 }
 
@@ -514,6 +525,37 @@ pub(crate) mod tests {
             "host-only cookie of another host"
         );
         assert!(!host_allowed(".th", &h), "no dot: a public suffix");
+        for suffix in [".ac.th", ".co.th", ".org", ".com", ".example.org"] {
+            // .example.org is a parent of idp.example.org at its registrable domain: allowed; the rest are suffixes
+            assert_eq!(
+                host_allowed(suffix, &h),
+                suffix == ".example.org",
+                "{suffix}"
+            );
+        }
+        let google = vec!["accounts.google.com".to_string()];
+        assert!(
+            host_allowed(".google.com", &google),
+            "registrable domain of the host"
+        );
+        assert!(host_allowed(".accounts.google.com", &google));
+        assert!(!host_allowed(".com", &google));
+        assert!(
+            !host_allowed("google.com", &google),
+            "host-only cookie of another host"
+        );
+        assert!(
+            !host_allowed(".mail.google.com", &google),
+            "a sibling, not a parent"
+        );
+        // a host on a private suffix: its registrable domain is below the suffix
+        let gh = vec!["idp.school.github.io".to_string()];
+        assert!(host_allowed(".school.github.io", &gh));
+        assert!(!host_allowed(".github.io", &gh), "private suffix");
+        // a host that is itself a public suffix: no domain cookies but its own, and not even those
+        let bare = vec!["co.th".to_string()];
+        assert!(!host_allowed(".co.th", &bare));
+        assert!(host_allowed("co.th", &bare), "host-only stays exact");
         assert!(!host_allowed("evil.example", &h));
         assert!(
             !host_allowed(".hschool.ac.th", &h),
