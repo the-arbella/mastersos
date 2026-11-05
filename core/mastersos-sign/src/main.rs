@@ -182,7 +182,7 @@ enum Cmd {
         pin_dir: PinDir,
         #[command(flatten)]
         key: KeyArg,
-        /// The pending bundle's id (printed by `mastersos publish`)
+        /// The id of an upload that is waiting for approval (an earlier `mastersos publish` that was not approved)
         #[arg(long)]
         pending: String,
     },

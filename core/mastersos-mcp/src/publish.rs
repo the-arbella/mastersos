@@ -1195,7 +1195,7 @@ mod tests {
             .all(|l| l.level != mastersos_bundle::LintLevel::Error));
     }
 
-    /// A kit written the way `mastersos-sign kit new` writes it (0600).
+    /// A kit written the way `mastersos-sign school-key new` writes it (0600).
     fn kit_file(dir: &Path) -> (std::path::PathBuf, Kit) {
         let path = dir.join("school.kit");
         mastersos_sign::kit::kit_new(&path).unwrap();

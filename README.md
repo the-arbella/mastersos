@@ -110,7 +110,7 @@ mastersos publish ./school --school-key <school key file>
 run `mastersos pull ./school`.
 
 Computers want a **monthly check-in** ("nothing new; what you have is current"). `publish --school-key` does it for
-you; if you have not published for a while, the admin site reminds you; run `mastersos-sign heartbeat --school-key <file>` then.
+you; if you have not published for a while, the admin site reminds you. Publish again with `mastersos publish --school-key <file>`, or run `mastersos-sign heartbeat --server <school address> --token-file <token file> --school-key <file>`.
 
 ### 6. Add or remove a school key
 
@@ -330,7 +330,7 @@ kiosk PWA），同时联系厂商取得长期支持（设计 `docs/superpowers/s
 
 **学校钥匙是唯一的签名钥匙**（2026-11-04 起 IT 的流程里没有 passkey）：一个小文件加一份打印件，批准每台电脑的设置，
 也能解开它们的磁盘。IT 在任何一台电脑上有这个文件就能批准：命令行 `mastersos publish --school-key <文件>`。
-用 `mastersos-sign school-key new --out <目录> --school <名>` 做学校钥匙，再用 `mastersos-sign register` 登记（要管理网站「Tokens」页给的钥匙 token，60 分钟有效）（文件名 `<学校>-school-key-<钥匙码>.kit`，打印件上有同一个钥匙码），每个文件放一根 U 盘，建议做两把、分开放。
+用 `mastersos-sign school-key new --out <目录> --school <名>` 做学校钥匙，再用 `mastersos-sign register` 登记（要管理网站「Tokens」页给的钥匙 token，60 分钟有效）。文件名 `<学校>-school-key-<钥匙码>.kit`，打印件上有同一个钥匙码；每个文件放一根 U 盘，建议做两把、分开放。
 `mastersos-bundle` 与 agent 仍然验旧的 `webauthn-es256` 签名（没有在用的学校，以后再删），只是不再产生新的。
 
 ### `mastersos publish` 与 `mastersos-sign` 的分工
@@ -405,4 +405,4 @@ $S escrow-read --server https://<slug>.os.khundavid.com --token-file recovery.to
 
 每月确认说有更新的版本、而电脑立即重拉仍拿不到时，电脑回报「有更新被扣住」。**每月确认的有效期就是服务端扣住更新、
 而电脑看不出来的最长时间。** 服务端从不自签，由 IT 的学校钥匙签，最长 31 天（按签发时刻算；电脑容许签发时刻比本机快 1 天，所以从电脑的角度看最多约 32 天）：
-`mastersos publish --school-key` 每次发布都顺带签 30 天；长期没发布时，管理网站首页提醒，用 `mastersos-sign heartbeat --school-key <文件>` 完成。
+`mastersos publish --school-key` 每次发布都顺带签 30 天；长期没发布时，管理网站首页提醒，再发布一次 `mastersos publish --school-key <文件>`，或运行 `mastersos-sign heartbeat --server <学校的管理地址> --token-file <token 文件> --school-key <文件>`。
