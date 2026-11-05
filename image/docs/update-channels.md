@@ -99,6 +99,14 @@ mirror_cdn=<CloudFront DistributionId>
 - `wait invalidation-completed` 约 10 分钟放弃：此时什么都没删，重跑即可完成。
 测试：`tests/sync-s3-test.sh`（`tests/fake-aws` 顶替 aws，不碰 AWS）。
 
+**更新源对缺的文件必须回 404，不能回 403。** systemd-pull（v259 `pull-common.c`）取清单签名时先要 SUSE 式的
+`SHA256SUMS.sha256.asc`，再 `.sha256.gpg`，最后才是我们发的 `SHA256SUMS.gpg`，**只有收到 404 才换下一个名字**。
+私有桶不给 CloudFront `s3:ListBucket` 时 S3 对缺的对象回 403，于是每台机器每次都停在
+`Failed to retrieve signature file, cannot verify`，一个更新也装不上。2026-11-05 在 20261030.1 的 VM 上发现（试验网的 nginx 缺文件本来就回 404，
+所以先前在试验网上的实测没暴露）；云端仓库 `infra/cfn/static-origin.yaml` 用 `CustomErrorResponses` 把 403 换成 404
+（正文是桶根的 `/not-found.txt`，发布脚本只同步通道目录，不碰它），os 与 oslab 当天部署。换 CDN 或校内缓存时照样要满足：
+`curl -o /dev/null -w '%{http_code}' https://<源>/stable/SHA256SUMS.sha256.asc` 应是 404。
+
 - 每个通道只留**最近 3 个版本**（`publish.sh` / `promote.sh` 收尾时删旧的）。
 - 镜像里的 `/usr/lib/sysupdate.d/*.transfer`（四个：三个分区 + UKI）指向 `<base>/stable/`；
   `/usr/lib/mastersos/sysupdate.d.in/` 是同一份模板，源是 `<base>/@CHANNEL@/`。清单选 `beta` 时 agent
