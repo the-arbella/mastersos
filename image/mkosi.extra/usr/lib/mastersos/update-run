@@ -135,13 +135,27 @@ get() {
 # fetch <url> <file> <sha256>: download into <file>.part, resuming what an earlier round left; <file> appears only with
 # the right content. A part file that cannot be completed into the right bytes is dropped (the next round starts over).
 fetch() {
-	local part=$2.part got rc=0
-	curl --fail --silent --show-error --location --proto "=$protos" --proto-redir =https --max-filesize "$max_file" \
+	local part=$2.part got have rc=0
+	# the cap is on the whole file, across every resumed round: curl may only add what is left of it
+	have=$(stat -c %s "$part" 2>/dev/null || echo 0)
+	if [ "$have" -ge "$max_file" ]; then
+		rm -f -- "$part"
+		have=0
+	fi
+	curl --fail --silent --show-error --location --proto "=$protos" --proto-redir =https \
+		--max-filesize "$((max_file - have))" \
 		--connect-timeout 30 --speed-limit 1024 --speed-time 300 --retry 5 --retry-delay 10 \
 		--continue-at - --output "$part" "$1" || rc=$?
+	# --max-filesize is only certain when the server sends a length: never keep more than the cap
+	if [ "$(stat -c %s "$part" 2>/dev/null || echo 0)" -gt "$max_file" ]; then
+		rm -f -- "$part"
+		echo "update-run: ${1##*/} grew past ${max_file} bytes; dropped" >&2
+		return 1
+	fi
 	if [ "$rc" -ne 0 ]; then
-		# 33: the server cannot resume; 36: bad resume offset (the part is longer than the file); either way start over
-		case $rc in 33 | 36) rm -f -- "$part" ;; esac
+		# 33: the server cannot resume; 36: bad resume offset (the part is longer than the file); 63: past the size cap.
+		# Either way start over.
+		case $rc in 33 | 36 | 63) rm -f -- "$part" ;; esac
 		echo "update-run: download of ${1##*/} stopped (curl exit code ${rc}) at $(stat -c %s "$part" 2>/dev/null || echo 0) bytes; the next round resumes it" >&2
 		return 1
 	fi
@@ -214,7 +228,8 @@ staged_update() {
 	}
 
 	install -d -m 0700 "$staging" "$dir"
-	have=$(du -sb "$dir" | cut -f1)
+	# complete files count as free space (they are reused), part files do not
+	have=$(find "$dir" -maxdepth 1 -type f ! -name '*.part' -printf '%s\n' | awk '{ n += $1 } END { print n + 0 }')
 	avail=$(df --output=avail -B1 "$dir" | tail -n 1 | tr -d ' ')
 	if [ $((avail + have)) -lt "$min_free" ]; then
 		echo "update-run: only ${avail} bytes free under ${var}; updating without staging" >&2

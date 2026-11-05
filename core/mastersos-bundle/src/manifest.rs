@@ -421,6 +421,7 @@ impl LegacyManifest {
                 chrome_policy: g.chrome_policy,
                 chrome: g.chrome,
                 support: Support::default(),
+                update_channel: None,
                 files: g.files,
                 downloads: g.downloads,
                 scripts: g.scripts,
@@ -666,6 +667,10 @@ pub struct Config {
     /// (`[config.support] enabled`, absent: true).
     #[serde(default = "default_true")]
     pub support_enabled: bool,
+    /// The Config's or the Defaults' update channel as written; `None`: `[school] update_channel`
+    /// ([`Config::channel`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_channel: Option<String>,
     /// Files from the bundle placed at absolute paths on the Devices.
     #[serde(default)]
     pub files: Vec<FileEntry>,
@@ -684,6 +689,16 @@ pub struct Config {
 
 fn default_true() -> bool {
     true
+}
+
+impl Config {
+    /// The update channel the Devices of this Config follow: the Config's, else the Defaults',
+    /// else the school's.
+    pub fn channel<'a>(&'a self, school: &'a School) -> &'a str {
+        self.update_channel
+            .as_deref()
+            .unwrap_or(&school.update_channel)
+    }
 }
 
 /// `[defaults]`: what every Config starts from (`format = 2`). The same keys as `[[config]]`
@@ -736,6 +751,10 @@ pub struct Defaults {
     /// Whether "Get help" shows, unless a Config writes its own. Absent: true.
     #[serde(default, skip_serializing_if = "Support::is_empty")]
     pub support: Support,
+    /// The update channel of the Devices, unless a Config writes its own: `stable` or `beta`
+    /// ([`FEATURE_CONFIG_CHANNEL`]). Absent: `[school] update_channel`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_channel: Option<String>,
     /// Files from the bundle every Config places.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<FileEntry>,
@@ -802,6 +821,11 @@ pub struct ConfigLayer {
     /// Whether "Get help" shows on the Devices. Absent: the Defaults' value, else true.
     #[serde(default, skip_serializing_if = "Support::is_empty")]
     pub support: Support,
+    /// The update channel of the Devices: `stable` or `beta` ([`FEATURE_CONFIG_CHANNEL`]); a
+    /// few test Devices in a Group of their own can run beta while the school stays on stable.
+    /// Absent: the Defaults' value, else `[school] update_channel`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_channel: Option<String>,
     /// Files from the bundle placed at absolute paths on the Devices.
     #[serde(default)]
     pub files: Vec<FileEntry>,
@@ -1345,6 +1369,10 @@ pub fn effective_config(m: &Manifest, c: &ConfigLayer) -> Config {
                 .or(d.chrome.pause_until.clone()),
         },
         support_enabled: c.support.enabled.or(d.support.enabled).unwrap_or(true),
+        update_channel: c
+            .update_channel
+            .clone()
+            .or_else(|| d.update_channel.clone()),
         files: merge_list(&d.files, &c.files, &drop.files, |f| f.dest.as_str()),
         downloads: merge_list(&d.downloads, &c.downloads, &drop.downloads, |f| {
             f.dest.as_str()
@@ -1665,6 +1693,8 @@ pub const FEATURE_OIDC_CARD: &str = "oidc_card";
 /// See [`FEATURE_UPDATE_MIRROR`]: `[config.support]` (and `support` in `[defaults]`), the "Get
 /// help" button (remote diagnostics and help design).
 pub const FEATURE_SUPPORT: &str = "support";
+/// `update_channel` in `[defaults]` or a `[[config]]` (a Group of test Devices on beta).
+pub const FEATURE_CONFIG_CHANNEL: &str = "config_update_channel";
 /// See [`FEATURE_UPDATE_MIRROR`]: the Device reads `format = 2` (Defaults, `drop`, the IT account,
 /// the school logo and name); the same string as [`format_feature`]`(2)`.
 pub const FEATURE_FORMAT_2: &str = "format_2";
@@ -1767,6 +1797,11 @@ pub fn features_used(m: &Manifest) -> Vec<&'static str> {
         || m.configs.iter().any(|c| !c.support.is_empty())
     {
         out.push(FEATURE_SUPPORT);
+    }
+    if defaults.is_some_and(|d| d.update_channel.is_some())
+        || m.configs.iter().any(|c| c.update_channel.is_some())
+    {
+        out.push(FEATURE_CONFIG_CHANNEL);
     }
     out
 }
@@ -3582,6 +3617,32 @@ config = "teacher"
         effective_config(m, &m.configs[0])
     }
 
+    #[test]
+    fn update_channel_config_over_defaults_over_school() {
+        let school = |m: &Manifest, ch: &str| {
+            let mut s = m.school.clone();
+            s.update_channel = ch.into();
+            s
+        };
+        let m = layered_with("", "");
+        assert_eq!(eff(&m).update_channel, None);
+        assert_eq!(eff(&m).channel(&school(&m, "beta")), "beta");
+        let m = layered_with("update_channel = \"beta\"", "");
+        assert_eq!(eff(&m).channel(&school(&m, "stable")), "beta");
+        let m = layered_with("update_channel = \"beta\"", "update_channel = \"stable\"");
+        assert_eq!(eff(&m).channel(&school(&m, "beta")), "stable");
+        assert!(!features_used(&layered_with("", "")).contains(&FEATURE_CONFIG_CHANNEL));
+        assert!(
+            features_used(&layered_with("update_channel = \"beta\"", ""))
+                .contains(&FEATURE_CONFIG_CHANNEL)
+        );
+        assert!(
+            features_used(&layered_with("", "update_channel = \"beta\""))
+                .contains(&FEATURE_CONFIG_CHANNEL)
+        );
+        assert_eq!(FEATURE_CONFIG_CHANNEL, "config_update_channel");
+    }
+
     fn ssids(l: &[Wifi]) -> Vec<&str> {
         l.iter().map(|w| w.ssid.as_str()).collect()
     }
@@ -3720,6 +3781,7 @@ config = "teacher"
             chrome_policy: c.chrome_policy.clone(),
             chrome: c.chrome.clone(),
             support_enabled: true,
+            update_channel: None,
             files: c.files.clone(),
             downloads: c.downloads.clone(),
             scripts: c.scripts.clone(),

@@ -333,6 +333,7 @@ Entries are replaced as a whole, never merged key by key.
 | `chrome_policy` | table | `{}` | as in `[[config]]` | — | |
 | `chrome` | table | no limit | as `[config.chrome]` | — | |
 | `support` | table | "Get help" shown | as `[config.support]` | `support.enabled = false` | |
+| `update_channel` | string | `[school] update_channel` | `"stable"`, `"beta"` | — | |
 | `files` | list of tables | `[]` | as `[[config.files]]` | — | |
 | `downloads` | list of tables | `[]` | as `[[config.downloads]]` | — | |
 | `scripts` | list of tables | `[]` | as `[[config.scripts]]` | — | |
@@ -388,6 +389,7 @@ later) and reported as `config_unused`.
 | `chrome_policy` | table | `{}`: the baseline only | Chrome enterprise policy names and values | `chrome_policy = { URLBlocklist = ["facebook.com"] }` | Passed to Chrome as written (see Chrome's policy list for names and values), on top of a baseline every Device gets: `BrowserAddPersonEnabled` and `BrowserGuestModeEnabled` false, `BrowserSignin` 0, `DefaultBrowserSettingEnabled`, `MetricsReportingEnabled` and `PromotionalTabsEnabled` false, `ExtensionInstallBlocklist` `["*"]`, `RestoreOnStartup` 5. Write the same key here to override it, for example `BrowserSignin = 1` to allow signing in to Chrome or `ExtensionInstallBlocklist = []` to allow extensions. Date values are not allowed; the check does not catch them, and Devices report a failure at apply time. Not applied inside kiosk apps. |
 | `chrome` | table | no limit | see [`[config.chrome]`](#configchrome) | — | When Chrome may update. |
 | `support` | table | "Get help" shown | see [`[config.support]`](#configsupport) | — | Whether students and staff can ask IT for help from the Devices. |
+| `update_channel` | string | the Defaults' value, else `[school] update_channel` | `"stable"`, `"beta"` | `update_channel = "beta"` | Test Devices in a Group of their own can run `beta` first. |
 | `files` | list of tables | `[]` | see [`[[config.files]]`](#configfiles) | — | |
 | `downloads` | list of tables | `[]` | see [`[[config.downloads]]`](#configdownloads) | — | |
 | `scripts` | list of tables | `[]` | see [`[[config.scripts]]`](#configscripts) | — | |
@@ -396,6 +398,14 @@ later) and reported as `config_unused`.
 
 With [`[defaults]`](#defaults), a key this table lists as defaulting is taken from the Defaults when
 left out, and the collections add to the Defaults' entries.
+
+<!-- prompt:omit -->
+**Testing a new OS version on a few Devices first:** every new version reaches the `beta` channel
+before `stable`. Make a Config with `update_channel = "beta"` (the rest as the school's usual
+Config), a Group that uses it, and put two or three test Devices in that Group. Once they run the
+new version well, IT promotes it to `stable` and every other Device follows. A Device moved back
+to a `stable` Config keeps its version until `stable` has a higher one.
+<!-- /prompt:omit -->
 
 #### Modes
 
@@ -1204,7 +1214,7 @@ last Version), so only the server's check at `mastersos publish` reports them.
 | `trust_rp_id_forbidden` | error | `rp_id` on an `ed25519` key |
 | `trust_rp_id_invalid` | error | Passkey `rp_id` |
 | `unknown_field` | error | misspelled or unknown key (parse) |
-| `update_channel_unknown` | error | `[school] update_channel` |
+| `update_channel_unknown` | error | `update_channel` in `[school]`, `[defaults]` or a `[[config]]` |
 | `update_mirror_invalid` | error | `[school] update_mirror` |
 | `update_mirror_not_https` | warning | `update_mirror` uses `http://` |
 | `web_app_invalid` | error | web app entry |
@@ -1901,7 +1911,8 @@ there is no standalone example.
 (`update_mirror`, `escrow_recipients`, `[school] id`, kiosk apps, `[[config]]` itself: every file
 with Configs counts as using it, `wifi_ext`: any `[[school.wifi]]`, or a Wi-Fi entry writing `open`,
 `wpa3_only` (either value), `eap` or an enterprise key, or `oidc_card`: `client_secret` or
-`card_hosts` in `[school.oidc]`, or `support`: `[config.support]` or `support` in `[defaults]`),
+`card_hosts` in `[school.oidc]`, or `support`: `[config.support]` or `support` in `[defaults]`, or
+`config_update_channel`: `update_channel` in `[defaults]` or a `[[config]]`),
 and some Devices seen in the last 30 days have not reported that they understand it.
 
 <!-- prompt:omit -->
@@ -3472,7 +3483,7 @@ config = "standard"
 
 ### `update_channel_unknown`
 
-**Level:** error. **Meaning:** `[school] update_channel` is not `stable` or `beta`.
+**Level:** error. **Meaning:** an `update_channel` (in `[school]`, `[defaults]` or a `[[config]]`) is not `stable` or `beta`.
 
 <!-- prompt:omit -->
 **Why:** Devices would fall back to `stable` and report a failure.

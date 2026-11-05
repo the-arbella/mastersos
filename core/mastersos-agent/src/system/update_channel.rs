@@ -1,5 +1,8 @@
 //! Update channel (Ruling 5) and school cache (plan 5 Task 12).
 //!
+//! The channel is the Device's Config's `update_channel`, else the Defaults', else `[school] update_channel`
+//! ([`mastersos_bundle::Config::channel`]): a Group of test Devices can run beta while the school stays on stable.
+//!
 //! The image's `/usr/lib/sysupdate.d/` is stable and points at the official update source. When the manifest
 //! picks `beta` or sets `update_mirror`, the templates in `/usr/lib/mastersos/sysupdate.d.in/` get the channel
 //! (`@CHANNEL@`) filled in, optionally with the `[Source]` root replaced by the school cache, and are written
@@ -84,7 +87,7 @@ pub fn with_mirror(template: &str, mirror: &str) -> Result<String> {
 }
 
 fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
-    let channel = ctx.school.update_channel.as_str();
+    let channel = ctx.config.channel(ctx.school);
     let root = &env.paths.root;
     let beta = channel == "beta";
     let eff_channel = if beta { "beta" } else { "stable" };
@@ -284,6 +287,50 @@ mod tests {
                 },
             )
         })
+    }
+
+    /// The Config's channel wins over the school's, both ways.
+    #[test]
+    fn config_channel_overrides_school() {
+        for (school_ch, config_ch, beta) in [("stable", "beta", true), ("beta", "stable", false)] {
+            let root = root_with_templates();
+            let p = paths(root.path());
+            let runner = FakeRunner::new();
+            let school = School {
+                update_channel: school_ch.into(),
+                ..School::default()
+            };
+            let mut config = super::super::tests::config();
+            config.update_channel = Some(config_ch.into());
+            let group = super::super::tests::group();
+            let dir = tempfile::tempdir().unwrap();
+            let flag = AtomicBool::new(false);
+            let mut sys = SysState::default();
+            let ctx = ApplyContext {
+                seed: &super::super::tests::test_seed(),
+                school: &school,
+                group: &group,
+                config: &config,
+                lock: None,
+                bundle_dir: dir.path(),
+                phase: Phase::Boot,
+                superseded: &flag,
+            };
+            let r = run(
+                &ctx,
+                &mut Env {
+                    paths: &p,
+                    runner: &runner,
+                    sys: &mut sys,
+                },
+            );
+            assert_eq!(r, vec![ok(ITEM)], "school {school_ch}, config {config_ch}");
+            assert_eq!(
+                sys.channel_override, beta,
+                "school {school_ch}, config {config_ch}"
+            );
+            assert_eq!(etc(root.path()).join("12-usr.transfer").exists(), beta);
+        }
     }
 
     fn etc(root: &Path) -> std::path::PathBuf {

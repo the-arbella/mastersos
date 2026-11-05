@@ -159,19 +159,37 @@ pub fn lint_at(m: &Manifest, present: &BTreeSet<String>, today: chrono::NaiveDat
         lint_kiosk(v, present, &mut out);
     }
     lint_kiosk_semantics(m, &configs, &mut out);
-    if !UPDATE_CHANNELS.contains(&m.school.update_channel.as_str()) {
-        out.push(
-            Lint::new(
-                LintLevel::Error,
-                "update_channel_unknown",
-                format!(
-                    "Update channel {:?} is not stable or beta: machines treat it as stable and report a failure; use stable or beta.",
-                    m.school.update_channel
-                ),
-            )
-            .at("school.update_channel")
-            .param("channel", &m.school.update_channel),
-        );
+    let channels = std::iter::once((
+        "school.update_channel".to_owned(),
+        Some(&m.school.update_channel),
+    ))
+    .chain(m.defaults.iter().map(|d| {
+        (
+            "defaults.update_channel".to_owned(),
+            d.update_channel.as_ref(),
+        )
+    }))
+    .chain(m.configs.iter().map(|c| {
+        (
+            format!("config.{}.update_channel", c.id),
+            c.update_channel.as_ref(),
+        )
+    }));
+    for (at, channel) in channels {
+        let Some(channel) = channel else { continue };
+        if !UPDATE_CHANNELS.contains(&channel.as_str()) {
+            out.push(
+                Lint::new(
+                    LintLevel::Error,
+                    "update_channel_unknown",
+                    format!(
+                        "Update channel {channel:?} is not stable or beta: machines treat it as stable and report a failure; use stable or beta."
+                    ),
+                )
+                .at(at)
+                .param("channel", channel),
+            );
+        }
     }
     if let Some(o) = &m.school.oidc {
         if let Err(e) = checks::oidc(o) {
@@ -463,6 +481,18 @@ pub fn feature_path(m: &Manifest, feature: &str) -> String {
                     .iter()
                     .filter(|c| !c.support.is_empty())
                     .map(|c| format!("config.{}.support", c.id)),
+            )
+            .next(),
+        FEATURE_CONFIG_CHANNEL => m
+            .defaults
+            .iter()
+            .filter(|d| d.update_channel.is_some())
+            .map(|_| "defaults.update_channel".to_owned())
+            .chain(
+                m.configs
+                    .iter()
+                    .filter(|c| c.update_channel.is_some())
+                    .map(|c| format!("config.{}.update_channel", c.id)),
             )
             .next(),
         FEATURE_WIFI_EXT if !m.school.wifi.is_empty() => Some("school.wifi".to_owned()),
@@ -2546,6 +2576,38 @@ config = "a"
             assert_eq!(l[0].level, LintLevel::Error);
             assert_eq!(l[0].path.as_deref(), Some("school.update_mirror"));
         }
+    }
+
+    #[test]
+    fn feature_path_points_at_config_update_channel() {
+        let body = |defaults: &str| {
+            manifest2(&format!(
+                "{defaults}\n[[config]]\nid = \"a\"\nname = \"a\"\n\n[[config]]\nid = \"b\"\nname = \"b\"\n\
+                 update_channel = \"beta\"\n\n[[group]]\nid = \"default\"\nname = \"D\"\nconfig = \"a\"\n"
+            ))
+        };
+        assert_eq!(
+            feature_path(&body(""), crate::FEATURE_CONFIG_CHANNEL),
+            "config.b.update_channel"
+        );
+        assert_eq!(
+            feature_path(
+                &body("[defaults]\nupdate_channel = \"stable\""),
+                crate::FEATURE_CONFIG_CHANNEL
+            ),
+            "defaults.update_channel"
+        );
+        // an unknown value in a Config is an error at that Config
+        let m = manifest2(
+            "[[config]]\nid = \"t\"\nname = \"T\"\nupdate_channel = \"nightly\"\n\n\
+             [[group]]\nid = \"default\"\nname = \"D\"\nconfig = \"t\"\n",
+        );
+        let l: Vec<_> = lint(&m, &present())
+            .into_iter()
+            .filter(|l| l.code == "update_channel_unknown")
+            .collect();
+        assert_eq!(l.len(), 1, "{l:?}");
+        assert_eq!(l[0].path.as_deref(), Some("config.t.update_channel"));
     }
 
     #[test]

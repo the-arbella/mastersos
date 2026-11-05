@@ -157,6 +157,14 @@ case $(cat "$tmp/out") in *"does not match the signed SHA256SUMS"*) echo "ok    
 esac
 check "  the next round downloads it again and installs" 0 "$(run)"
 
+# --- a part file can never grow past the per-file cap, whatever the source sends
+FAKE_RC=3 run >/dev/null
+rm -f "$d/$usr1"
+head -c 120000 "$ch/$usr1" >"$d/$usr1.part"
+check "cap reached by an earlier round: not updated" 1 "$(MASTERSOS_STAGING_MAX_FILE_BYTES=100000 run)"
+istrue "  the oversized part file is gone, nothing past the cap was kept" test ! -e "$d/$usr1.part" -a ! -e "$d/$usr1"
+check "  with a sane cap the next round completes it" 0 "$(run)"
+
 # --- a half-published version: what is there stays, the rest comes later
 mv "$ch/$usr1" "$tmp/held"
 check "missing file: not updated" 1 "$(run)"
