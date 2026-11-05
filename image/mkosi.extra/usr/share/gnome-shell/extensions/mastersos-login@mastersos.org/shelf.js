@@ -13,7 +13,7 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {setShelfHeight} from './area.js';
 import {cleanText} from './strings.js';
 
-const KIOSK_DIR = '/var/lib/mastersos-public/kiosk';
+export const KIOSK_DIR = '/var/lib/mastersos-public/kiosk';
 const APP_ID = /^[a-z0-9][a-z0-9-]{0,30}$/;
 const SHELF_MARGIN = 24;
 const NOTICE_GAP = 16;
@@ -83,13 +83,12 @@ export class Shelf {
         this._apps = [];
 
         this.actor = new St.BoxLayout({style_class: 'mastersos-shelf', orientation: Clutter.Orientation.VERTICAL});
-        if (managedLine) {
-            this.actor.add_child(new St.Label({
-                text: managedLine,
-                style_class: 'mastersos-login-managed',
-                x_align: Clutter.ActorAlign.START,
-            }));
-        }
+        this._managed = new St.Label({
+            style_class: 'mastersos-login-managed',
+            x_align: Clutter.ActorAlign.START,
+            visible: false,
+        });
+        this.actor.add_child(this._managed);
         this._row = new St.BoxLayout({style_class: 'mastersos-shelf-row'});
         this.actor.add_child(this._row);
 
@@ -126,8 +125,15 @@ export class Shelf {
         this._monitorsId = Main.layoutManager.connect('monitors-changed', () => this._reposition());
         this._allocId = this.actor.connect('notify::height', () => this._reposition());
         this.actor.connect('notify::width', () => this._reposition());
-        this._reposition();
+        this.setManaged(managedLine);
         this.refreshApps();
+    }
+
+    // "Managed by <school>", or nothing when there is no school name.
+    setManaged(line) {
+        this._managed.text = line ?? '';
+        this._managed.visible = !!line;
+        this._reposition();
     }
 
     // onRetry null: no Retry button.
@@ -151,8 +157,12 @@ export class Shelf {
         this._reposition();
     }
 
+    // An open Apps menu closes when the apps changed under it (new settings while the login screen is up).
     refreshApps() {
-        this._apps = readApps();
+        const apps = readApps();
+        if (this._menu && JSON.stringify(apps) !== JSON.stringify(this._apps))
+            this._scheduleClose();
+        this._apps = apps;
         this._appsButton.visible = this._apps.length > 0;
         this._reposition();
     }

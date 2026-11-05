@@ -2112,7 +2112,7 @@ fi
 #     the agent's redirect filter equals the patch's redirect, and build.sh pins gnome-shell (the extension patches its private code).
 r=0
 le=$gs/extensions/mastersos-login@mastersos.org
-for f in area.js brand.js card.js people.js setup.js shelf.js strings.js; do
+for f in area.js brand.js card.js people.js setup.js shelf.js strings.js watch.js; do
 	[ -f "$le/$f" ] || {
 		bad 49 "$le/$f is missing"
 		r=1
@@ -2756,5 +2756,43 @@ grep -qE '^export function suggestDomains\(' "$ld/people.js" || {
 }
 [ "$r" = 0 ] && ok 62 "login: school domains offered while the name is typed, in the people list, Enter fills the address"
 
+# 63. New settings reach a login screen that is already up (Dell, 2026-11-05): the agent wrote new allowed domains to
+#     branding.json and a new locked app under kiosk/<id>/, and the greeter kept the old ones until it restarted, because the
+#     extension read them only in enable(). watch.js watches the branding directory (branding.json is replaced by rename) and
+#     the kiosk directory with each app's own directory (its files are written one level down, after the directory appears),
+#     waits until the writes settle, and the extension then applies domains, "Managed by" and Apps; monitors and the timeout
+#     go in disable().
+r=0
+lw=$ld/watch.js
+if ! grep -qF 'monitor_directory(' "$lw" 2>/dev/null || ! grep -qF 'GLib.timeout_add(' "$lw" ||
+	! grep -qF '.cancel()' "$lw" || ! grep -qF 'GLib.source_remove(' "$lw" || ! grep -qE '^export const SETTLE_MS = [345][0-9]{2};' "$lw"; then
+	bad 63 "watch.js does not watch directories (and their subdirectories), coalesce with a 300-500 ms timeout and cancel on destroy"
+	r=1
+fi
+grep -qE "^import \{[^}]*Watch[^}]*\} from './watch.js';" "$lx" || {
+	bad 63 "extension.js does not use watch.js"
+	r=1
+}
+grep -qE "new Watch\(\[[^]]*BRANDING_DIR[^]]*KIOSK_DIR|new Watch\(\[[^]]*KIOSK_DIR[^]]*BRANDING_DIR" "$lx" || {
+	bad 63 "extension.js does not watch both the branding and the kiosk directory"
+	r=1
+}
+changed=$(awk '/^    _settingsChanged\(\) \{/ {on = 1} on {print} on && /^    \}$/ {exit}' "$lx")
+for want in 'this._domains = domainList(' 'this._shelf?.setManaged(' 'this._shelf?.refreshApps()'; do
+	grep -qF "$want" <<<"$changed" || {
+		bad 63 "extension.js _settingsChanged does not apply $want"
+		r=1
+	}
+done
+off=$(awk '/^    disable\(\) \{/ {on = 1} on {print} on && /^    \}$/ {exit}' "$lx")
+grep -qF 'this._watch?.destroy()' <<<"$off" || {
+	bad 63 "extension.js disable() does not stop the settings watch"
+	r=1
+}
+grep -qE '^    setManaged\(' "$ld/shelf.js" || {
+	bad 63 "shelf.js has no setManaged"
+	r=1
+}
+[ "$r" = 0 ] && ok 63 "login: new branding and locked apps are applied while the login screen is up"
 
 exit $fail

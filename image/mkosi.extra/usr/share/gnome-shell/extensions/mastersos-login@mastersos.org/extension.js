@@ -12,7 +12,8 @@
 //   - as a name is typed, the school addresses (name@domain for each school domain, filtered by what follows an '@') are
 //     offered in the same list as the people; an explicit pick fills in the address, typing it by hand always works.
 // Never reads passwords or tokens: everything secret stays in PAM, authd and the school's page. Reads
-// /var/lib/mastersos-public/branding/branding.json; missing, broken or empty values show nothing and never throw.
+// /var/lib/mastersos-public/branding/branding.json; missing, broken or empty values show nothing and never throw. New settings
+// (branding.json, the locked apps) are applied while the login screen is up (watch.js).
 //
 // The GDM internals patched here are pinned to one gnome-shell version by build.sh: retest when it moves.
 
@@ -35,10 +36,12 @@ import {addBrandMark} from './brand.js';
 import {LoginCard} from './card.js';
 import {LanguageScreen, languageChosen, restartGreeter} from './setup.js';
 import {matchPeople, preselect, suggestDomains} from './people.js';
-import {Shelf} from './shelf.js';
+import {KIOSK_DIR, Shelf} from './shelf.js';
 import {agentRefusal, bannerText, brokerText, cleanText, fmt, strings} from './strings.js';
+import {Watch} from './watch.js';
 
-const BRANDING = '/var/lib/mastersos-public/branding/branding.json';
+const BRANDING_DIR = '/var/lib/mastersos-public/branding';
+const BRANDING = `${BRANDING_DIR}/branding.json`;
 const NM_CONNECTIVITY_NONE = 1;
 const STATUS = '/var/lib/mastersos-public/status.json';
 const BROKER_CHOICE = 'authd-broker-selection';
@@ -169,6 +172,8 @@ export default class MastersosLoginExtension extends Extension {
         } catch (e) {
             log(`mastersos-login: patching the greeter failed: ${e.message ?? e}`);
         }
+        // The agent may apply new settings while this screen is up (a new settings version on a computer left at login).
+        this._watch = new Watch([BRANDING_DIR, KIOSK_DIR], () => this._settingsChanged());
         // The login dialog and the username entry appear later: poll until they do.
         this._pollId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 400, () => {
             try {
@@ -178,6 +183,25 @@ export default class MastersosLoginExtension extends Extension {
             }
             return GLib.SOURCE_CONTINUE;
         });
+    }
+
+    // Take what the agent just wrote: school domains, "Managed by", whether the language is the school's, the Apps list. Nothing
+    // here touches the sign-in in progress or an open card; an open Apps menu closes when its apps change.
+    _settingsChanged() {
+        const b = readBranding();
+        this._domains = domainList(b);
+        const name = schoolName(b);
+        this._managed = name ? fmt(this._text.managed, name) : null;
+        this._localeManaged = localeManaged(b);
+        if (this._localeManaged && this._languageItem) {
+            this._languageItem.destroy();
+            this._languageItem = null;
+        }
+        this._shelf?.setManaged(this._managed);
+        this._shelf?.refreshApps();
+        // The list under the entry follows the new domains at once.
+        if (this._matchBox?.visible && this._hookedText)
+            this._showMatches(this._hookedText.get_text());
     }
 
     _tick() {
@@ -879,6 +903,8 @@ export default class MastersosLoginExtension extends Extension {
     }
 
     disable() {
+        this._watch?.destroy();
+        this._watch = null;
         this._brand?.destroy();
         this._brand = null;
         if (this._pollId) {
