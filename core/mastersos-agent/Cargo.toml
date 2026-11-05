@@ -12,7 +12,8 @@ chrono = { workspace = true, features = ["serde"] }
 clap.workspace = true
 log = "0.4"
 nix.workspace = true
-reqwest.workspace = true
+# `stream`: the diagnostics PUT streams the archive from its file.
+reqwest = { workspace = true, features = ["stream"] }
 ring.workspace = true
 rumqttc.workspace = true
 rustix.workspace = true

@@ -1,15 +1,20 @@
 //! Talking to mastersos-server: fetch the bundle (`wait=0`, never a long poll), the signed
-//! heartbeat, status reports, recovery-key escrow, fetch-token renewal, push grants and the inbox.
+//! heartbeat, status reports, recovery-key escrow, fetch-token renewal, push grants, the inbox and
+//! the diagnostics upload (`POST /v1/diagnostics`, the presigned S3 `PUT`, the complete call).
 //!
 //! agent 的 HTTP 客户端只在这里构造（Ruling 27 m6）：跟随重定向的一律经 [`http_client`]
 //! （带 [`no_downgrade_redirects`]），托管与换领令牌经 [`no_redirect_client`]（不跟随）。
 
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use mastersos_bundle::archive::MAX_BUNDLE_BYTES;
+use mastersos_bundle::diag::{
+    error_action, ApiError, DiagUploadRequest, DiagUploadResponse, ErrorAction, PresignedUpload,
+};
 use mastersos_bundle::{
     FetchTokenRequest, FetchTokenResponse, InboxPage, InboxResult, PushTokenRequest,
     PushTokenResponse, Seed, StatusReport,
@@ -63,6 +68,14 @@ const DEVICE_HEADER: &str = "x-mastersos-device";
 const DEVICE_SECRET_HEADER: &str = "x-mastersos-device-secret";
 /// 带退役令牌的响应上的头（值 `stale`）。
 pub const STALE_HEADER: &str = "x-mastersos-fetch-token";
+
+/// Total timeout of the presigned diagnostics `PUT`: up to 50 MiB over a slow school link. S3
+/// checks the URL's expiry when the request starts, so a long transfer is fine.
+pub const DIAG_PUT_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+/// Cap of a `POST /v1/diagnostics` answer (a URL and a few headers: well under 8 KiB).
+const MAX_DIAG_BODY_BYTES: usize = 64 * 1024;
+/// The longest `Retry-After` honoured; longer values are clamped to this.
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(24 * 3600);
 
 /// 构造跟随重定向的 HTTP 客户端的参数。
 #[derive(Debug, Clone, Copy)]
@@ -159,6 +172,46 @@ pub enum ResultAck {
     Refused,
 }
 
+/// A failed step of the diagnostics upload. `action` is what the caller does next, always from
+/// [`error_action`] for cloud answers (Ruling P5); `retry_after` is the answer's `Retry-After`
+/// with [`ErrorAction::RetryAfter`]. `detail` names the step and the status or code, never the
+/// presigned URL (its query string is the upload grant), the device secret or a token.
+/// `Display` is `upload: <detail>`, ready for an inbox ack detail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiagUploadError {
+    pub action: ErrorAction,
+    pub retry_after: Option<Duration>,
+    pub detail: String,
+}
+
+impl DiagUploadError {
+    pub fn new(action: ErrorAction, detail: impl Into<String>) -> Self {
+        DiagUploadError {
+            action,
+            retry_after: None,
+            detail: detail.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for DiagUploadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "upload: {}", self.detail)
+    }
+}
+
+impl std::error::Error for DiagUploadError {}
+
+/// How the cloud took `POST /v1/diagnostics/{id}/complete`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompleteOutcome {
+    /// 2xx: size and SHA-256 matched; the archive has arrived.
+    Done,
+    /// The object did not match and was deleted (`409 upload_mismatch`, or any answer that
+    /// [`error_action`] says to restart on): start again from `POST /v1/diagnostics`.
+    Rejected,
+}
+
 /// Per-machine credential for push and inbox: `device_id` from `state.json`,
 /// `secret` is `identity.json`'s `escrow_secret`. `Debug` hides the secret.
 #[derive(Clone, PartialEq, Eq)]
@@ -211,6 +264,8 @@ pub struct Fetcher {
     bundle_client: Client,
     /// 托管与换领专用：不跟随任何重定向（307/308 会带着恢复密钥与托管凭据重发到 Location）。
     escrow_client: Client,
+    /// The presigned diagnostics `PUT`: [`diag_put_client`].
+    upload_client: Client,
     base: String,
     token: Arc<RwLock<Option<String>>>,
     stale: Arc<AtomicBool>,
@@ -224,6 +279,7 @@ impl Fetcher {
             client: http_client(short_opts()),
             bundle_client: http_client(bundle_opts()),
             escrow_client: no_redirect_client(ESCROW_TIMEOUT),
+            upload_client: diag_put_client(),
             base: seed.server_url.trim_end_matches('/').to_string(),
             token: Arc::new(RwLock::new(token)),
             stale: Arc::new(AtomicBool::new(false)),
@@ -597,6 +653,310 @@ impl Fetcher {
             bail!("status report refused: {}", resp.status());
         }
         Ok(())
+    }
+}
+
+/// The diagnostics upload (spec「接口: 上传」). Every failure is a [`DiagUploadError`] whose
+/// action comes from [`error_action`]; [`crate::diag::upload::upload`] drives the three steps.
+impl Fetcher {
+    /// Step 1, `POST /v1/diagnostics` with the device headers: `200` / `201` →
+    /// [`DiagUploadResponse`] (either `complete: true`, or an `upload` to use). Any other answer
+    /// is a [`DiagUploadError`] with the [`error_action`] of its status and error code. No
+    /// redirects; the device secret only travels over https (`lab` images may use http).
+    pub async fn diag_upload_url(
+        &self,
+        cred: &DeviceCred,
+        r: &DiagUploadRequest,
+        lab: bool,
+    ) -> std::result::Result<DiagUploadResponse, DiagUploadError> {
+        const STEP: &str = "POST /v1/diagnostics";
+        if let Err(e) = r.validate() {
+            return Err(DiagUploadError::new(
+                ErrorAction::Drop,
+                format!("{STEP}: invalid request: {e}"),
+            ));
+        }
+        let used = self.current_token();
+        let req = self
+            .device_request(reqwest::Method::POST, "/v1/diagnostics", cred, &used, lab)
+            .map_err(|e| DiagUploadError::new(ErrorAction::Drop, format!("{STEP}: {e}")))?;
+        let resp = req.json(r).send().await.map_err(|e| net_error(STEP, e))?;
+        self.observe(&resp, &used);
+        let status = resp.status();
+        if !(status == StatusCode::OK || status == StatusCode::CREATED) {
+            return Err(api_failure(STEP, resp).await);
+        }
+        let body = read_capped(resp, MAX_DIAG_BODY_BYTES)
+            .await
+            .map_err(|why| DiagUploadError::new(ErrorAction::Backoff, format!("{STEP}: {why}")))?;
+        let a: DiagUploadResponse = serde_json::from_slice(&body).map_err(|_| {
+            DiagUploadError::new(
+                ErrorAction::Backoff,
+                format!("{STEP}: the answer is not valid JSON of the expected shape"),
+            )
+        })?;
+        if !valid_diag_id(&a.id) {
+            return Err(DiagUploadError::new(
+                ErrorAction::Backoff,
+                format!("{STEP}: the answer's id is not a plain identifier"),
+            ));
+        }
+        if !a.complete && a.upload.is_none() {
+            return Err(DiagUploadError::new(
+                ErrorAction::Backoff,
+                format!("{STEP}: the answer has neither complete nor upload"),
+            ));
+        }
+        Ok(a)
+    }
+
+    /// Step 2, the presigned `PUT` of `file`: [`diag_put_with`] on this fetcher's upload client.
+    pub async fn diag_put(
+        &self,
+        u: &PresignedUpload,
+        file: &Path,
+        lab: bool,
+    ) -> std::result::Result<u16, DiagUploadError> {
+        diag_put_with(&self.upload_client, u, file, lab).await
+    }
+
+    /// Step 3, `POST /v1/diagnostics/{id}/complete` with the device headers: 2xx →
+    /// [`CompleteOutcome::Done`]; an answer whose [`error_action`] is
+    /// [`ErrorAction::Restart`] (`409 upload_mismatch`) → [`CompleteOutcome::Rejected`]; any
+    /// other answer is a [`DiagUploadError`].
+    pub async fn diag_complete(
+        &self,
+        cred: &DeviceCred,
+        id: &str,
+        lab: bool,
+    ) -> std::result::Result<CompleteOutcome, DiagUploadError> {
+        const STEP: &str = "complete";
+        if !valid_diag_id(id) {
+            return Err(DiagUploadError::new(
+                ErrorAction::Drop,
+                format!("{STEP}: the id is not a plain identifier"),
+            ));
+        }
+        let used = self.current_token();
+        let req = self
+            .device_request(
+                reqwest::Method::POST,
+                &format!("/v1/diagnostics/{id}/complete"),
+                cred,
+                &used,
+                lab,
+            )
+            .map_err(|e| DiagUploadError::new(ErrorAction::Drop, format!("{STEP}: {e}")))?;
+        let resp = req.send().await.map_err(|e| net_error(STEP, e))?;
+        self.observe(&resp, &used);
+        if resp.status().is_success() {
+            return Ok(CompleteOutcome::Done);
+        }
+        let e = api_failure(STEP, resp).await;
+        if e.action == ErrorAction::Restart {
+            log::info!("diagnostics {e}; starting again");
+            return Ok(CompleteOutcome::Rejected);
+        }
+        Err(e)
+    }
+}
+
+/// The client of the presigned diagnostics `PUT`: never follows a redirect, [`DIAG_PUT_TIMEOUT`].
+fn diag_put_client() -> Client {
+    no_redirect_client(DIAG_PUT_TIMEOUT)
+}
+
+/// The presigned `PUT` of `file` ([`Fetcher::diag_put`]). Returns the 2xx status.
+///
+/// Sends exactly `u.headers` (values verbatim; names are case-insensitive in HTTP): no
+/// `Content-MD5`, no `Content-Type`, no auth or device headers. The body streams from the file,
+/// whose length must equal the signed `Content-Length`. Only `PUT`, only https (`lab` images may
+/// use http). Errors never carry the URL or S3's error body (it can echo the canonical request,
+/// query string included): only the status and S3's `<Code>`. S3 `403` "Request has expired" is
+/// [`ErrorAction::Restart`]; S3 `RequestTimeout` (the body came in too slowly: a slow link, not
+/// a bad request) is [`ErrorAction::Backoff`]; other S3 answers go through [`error_action`] by
+/// status alone.
+async fn diag_put_with(
+    client: &Client,
+    u: &PresignedUpload,
+    file: &Path,
+    lab: bool,
+) -> std::result::Result<u16, DiagUploadError> {
+    const STEP: &str = "PUT";
+    let bad = |a, why: &str| DiagUploadError::new(a, format!("{STEP}: {why}"));
+    if !u.method.eq_ignore_ascii_case("PUT") {
+        return Err(bad(ErrorAction::Backoff, "the presigned method is not PUT"));
+    }
+    let url = reqwest::Url::parse(&u.url)
+        .map_err(|_| bad(ErrorAction::Backoff, "the presigned URL is not a valid URL"))?;
+    match url.scheme() {
+        "https" => {}
+        "http" if lab => {}
+        _ => {
+            return Err(bad(
+                ErrorAction::Drop,
+                "the presigned URL is not https:// (only lab images allow http)",
+            ))
+        }
+    }
+    let mut headers = reqwest::header::HeaderMap::new();
+    for (k, v) in &u.headers {
+        let name = reqwest::header::HeaderName::from_bytes(k.as_bytes())
+            .map_err(|_| bad(ErrorAction::Backoff, "a presigned header name is invalid"))?;
+        let value = reqwest::header::HeaderValue::from_str(v)
+            .map_err(|_| bad(ErrorAction::Backoff, "a presigned header value is invalid"))?;
+        headers.insert(name, value);
+    }
+    let signed_len = headers
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .ok_or_else(|| {
+            bad(
+                ErrorAction::Backoff,
+                "the presigned headers have no valid Content-Length",
+            )
+        })?;
+    let f = tokio::fs::File::open(file).await.map_err(|e| {
+        bad(
+            ErrorAction::Drop,
+            &format!("opening the archive failed: {e}"),
+        )
+    })?;
+    let len = f
+        .metadata()
+        .await
+        .map_err(|e| {
+            bad(
+                ErrorAction::Drop,
+                &format!("reading the archive failed: {e}"),
+            )
+        })?
+        .len();
+    if len != signed_len {
+        return Err(bad(
+            ErrorAction::Drop,
+            &format!("the archive is {len} bytes, the signed Content-Length is {signed_len}"),
+        ));
+    }
+    // A body of unknown length with an explicit Content-Length header: hyper sends exactly that
+    // many bytes, without chunked encoding.
+    let resp = client
+        .put(url)
+        .headers(headers)
+        .body(reqwest::Body::from(f))
+        .send()
+        .await
+        .map_err(|e| net_error(STEP, e))?;
+    let status = resp.status();
+    if status.is_success() {
+        return Ok(status.as_u16());
+    }
+    let body = read_capped(resp, MAX_ERROR_BODY_BYTES)
+        .await
+        .unwrap_or_default();
+    let body = String::from_utf8_lossy(&body);
+    let code = s3_error_code(&body);
+    let action = if status == StatusCode::FORBIDDEN && body.contains("Request has expired") {
+        ErrorAction::Restart
+    } else if code.as_deref() == Some("RequestTimeout") {
+        ErrorAction::Backoff
+    } else {
+        error_action(status.as_u16(), None)
+    };
+    let detail = match code {
+        Some(c) => format!("{STEP}: S3 answered {} {c}", status.as_u16()),
+        None => format!("{STEP}: S3 answered {}", status.as_u16()),
+    };
+    Err(DiagUploadError::new(action, detail))
+}
+
+/// S3's `<Code>` from an XML error body, if it is a plain word (the only part of the body that
+/// goes into an error).
+fn s3_error_code(body: &str) -> Option<String> {
+    let start = body.find("<Code>")? + "<Code>".len();
+    let end = start + body[start..].find("</Code>")?;
+    let c = &body[start..end];
+    (!c.is_empty() && c.len() <= 64 && c.bytes().all(|b| b.is_ascii_alphanumeric()))
+        .then(|| c.to_string())
+}
+
+/// An upload id goes into a URL path: letters, digits, `-` and `_` only, at most 128.
+fn valid_diag_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// A request that got no answer: [`ErrorAction::Backoff`]; the text has no URL.
+fn net_error(step: &str, e: reqwest::Error) -> DiagUploadError {
+    let e = e.without_url();
+    let mut text = e.to_string();
+    let mut src = std::error::Error::source(&e);
+    while let Some(s) = src {
+        text.push_str(": ");
+        text.push_str(&s.to_string());
+        src = s.source();
+    }
+    DiagUploadError::new(
+        ErrorAction::Backoff,
+        format!("{step}: request failed: {text}"),
+    )
+}
+
+/// A non-2xx cloud answer: the action from [`error_action`] with the parsed [`ApiError`], and
+/// `Retry-After` for [`ErrorAction::RetryAfter`]. Only the status and the code (a plain word)
+/// go into the detail, never the server's message.
+async fn api_failure(step: &str, resp: reqwest::Response) -> DiagUploadError {
+    let status = resp.status().as_u16();
+    let retry_after = resp
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(|s| Duration::from_secs(s).min(MAX_RETRY_AFTER));
+    let body = read_capped(resp, MAX_ERROR_BODY_BYTES).await.ok();
+    let parsed = body.as_deref().and_then(ApiError::parse);
+    if parsed.as_ref().is_some_and(|p| p.is_machine_bug()) {
+        log::error!("diagnostics upload, {step}: the server says this machine's request is malformed ({status})");
+    }
+    let action = error_action(status, parsed.as_ref());
+    let code = parsed.as_ref().map(|p| p.code.as_str()).filter(|c| {
+        !c.is_empty()
+            && c.len() <= 64
+            && c.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    });
+    let detail = match code {
+        Some(c) => format!("{step}: the server answered {status} {c}"),
+        None => format!("{step}: the server answered {status}"),
+    };
+    DiagUploadError {
+        action,
+        retry_after: retry_after.filter(|_| action == ErrorAction::RetryAfter),
+        detail,
+    }
+}
+
+/// Reads a body of at most `cap` bytes.
+async fn read_capped(
+    mut resp: reqwest::Response,
+    cap: usize,
+) -> std::result::Result<Vec<u8>, String> {
+    let mut body = Vec::new();
+    loop {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                if body.len() + chunk.len() > cap {
+                    return Err("the answer exceeds the size cap".into());
+                }
+                body.extend_from_slice(&chunk);
+            }
+            Ok(None) => return Ok(body),
+            Err(e) => return Err(format!("reading the answer failed: {}", e.without_url())),
+        }
     }
 }
 
