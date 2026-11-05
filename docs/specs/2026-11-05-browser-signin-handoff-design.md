@@ -99,13 +99,40 @@ pam-session 不能等（会拖慢登录），所以两边各记一半，后到�
 | 之后的另一个人 | 每次开卡片 begin 先作废一切；claim 要邮箱等于 PAM_USER，且 2 分钟内 |
 | 解锁 | 不跑 open_session，没有 claim；锁住的学校桌面也不会开卡片（managed 扩展的 `_onReset`） |
 | 访客、kiosk、本机账号 | pam-session 只给 gdm-authd 上名字带 `@` 的 SSO 账号 claim |
-| 卡片的 Chrome 被攻破 | 它能写的只有自己的 cookie 库：导入只收卡片策略放行的主机（issuer 与 `card_hosts`，含它们的上级域名的域 cookie，但不收没有点的名字），每一列的类型、大小、行数都有上限，表结构不对就不收 |
+| 卡片的 Chrome 被攻破 | 它能写的只有自己的 cookie 库：导入只收卡片策略放行的主机（issuer 与 `card_hosts`；域 cookie 只收这台主机本身、或它往上到可注册域名（按 Public Suffix List，`psl` crate 内置的一份，不联网）为止的上级域名，绝不收公共后缀：`auth.school.ac.th` 的卡片种不了 `.ac.th`、`.co.th`、`.org`，`accounts.google.com` 可以种 `.google.com`；只限本主机的 cookie 仍要逐字相等，IP 只认自己），每一列的类型、大小、行数都有上限，表结构不对就不收 |
 | 只给 root | `/run/mastersos-signin` root 0711（不能列目录），`private/` root 0700；交付的文件属于本人 0600 |
 | root 不写用户能写的目录 | root 只在自己的 `/run/mastersos-signin` 里写；往 `~/.config/google-chrome` 写的是用户单元里本人身份的 `signin-import` |
 | 有上限 | URL 4 KiB、card.json 等记录 4 KiB、cookie 库 4 MiB、1000 行、每个值 16 KiB |
 | 失败 | begin 失败卡片不起（不作废旧的就不许开新的）；其余步骤出错只记日志，登录照常 |
 
 同一个人在卡片里先后登录了两个账号（Google 允许）时，两个都会交过去：要做到这一步他得有第二个账号的口令，这不算泄露。
+
+### 为什么「输入别人的邮箱、在学校页面登录成自己」的那份 cookie 到不了被冒名的人（login CSRF）
+
+A 在邮箱框里输入 B，卡片的 URL 带 `login_hint=B`，A 在学校页面登录成 A。broker 拿到的邮箱是 A，与 B 不符，拒绝；
+卡片停下时 stash 照常存下 A 的会话，标的是 B。它到不了 B，也到不了 A，靠的是下面三条，代码里各有对应：
+
+1. **每开一次卡片先作废一切。** 卡片单元的 `ExecStartPre=+ … begin` 在 Chrome 起来之前删掉交接目录里除锁以外的全部
+   （pending、claim、card.json、任何人的占位或已交付的文件），`begin` 做不到就以 1 退出、卡片不起（`begin()` 里先 `wipe`
+   再写新的 card.json；测试 `every_card_start_forgets_the_last`、`a_refused_sign_in_never_reaches_the_next_person`）。
+   卡片每次打开都走 `RestartUnit`（`card.js` 的 `open`），一次登录里卡片被连续重开几次（例如 200 ms 内 3 次）时每一次都是
+   完整的 stop → start：同一个单元的作业由 systemd 依次执行，上一次的 `ExecStopPost`（stash）一定在下一次的
+   `ExecStartPre`（begin）之前跑完，下一次的 begin 把它删掉；每次的 card.json 带这一次的 `INVOCATION_ID`，
+   stash 只认自己这一次（`stash_only_for_this_invocation_and_greeter`）。最后留下的只可能是最后一次卡片的。
+2. **学校账号只能经卡片开会话。** 镜像固定 `MASTERSOS_AUTH_CODE=1`：补丁 0004 让 broker 的 `password` 方式不可用
+   （`authModeIsAvailable` 返回 false），补丁 0003 把两个设备码方式都改成卡片里的授权码流程（`code` 为空，登录页扩展
+   只把这种情形交给卡片）。所以 B 要开会话，B 的这次登录一定开了一张新卡片，第 1 条把 A 的那份删掉；B 拿到的只会是
+   B 自己那张卡片的 cookie。claim 只在 `gdm-authd` 的 open_session 里、名字带 `@` 时做（`claim_from_pam`），tty、ssh、
+   cron、`su` 都不经过它；访客、kiosk、本机账号也不 claim。
+3. **claim 要同一个邮箱、同一张卡片、在时限内。** claim 要求 card.json 的邮箱等于 PAM_USER（broker 已经核对过身份系统
+   返回的邮箱等于这个用户名）；交付要 card.json 的 stop 与 claim 都不超过 2 分钟，card.json 只由同一 invocation 的 stash
+   改写。A 之后以 A 登录：邮箱不符（`another_user_gets_nothing`），而且那时 A 也开了新卡片。
+4. **解锁不开会话。** 锁住的学校桌面不会开始登录（managed 扩展把 `UnlockDialog._onReset` 换成空函数，check-tree 第 49 条
+   核对）；在登录页上用卡片重新验证一个已有会话的人时，GDM 切回那个会话，不跑 `pam_open_session`，`pam-session`
+   不被调用，所以没有 claim。那份 stash 本来就是这个人自己卡片的，2 分钟后或下一张卡片开始时作废。
+
+没有找到不经新卡片就为 B 开会话的路：若以后 broker 加了不经卡片的方式（本机密码、设备码），第 2 条就不成立，
+这时要先给交接加一道「这次 PAM 认证用的就是最后那张卡片」的核对，再放开那个方式。
 
 ## 第一次登录
 
