@@ -44,6 +44,9 @@ msgstr "এই অ্যাকাউন্ট দিয়ে এই কম্�
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "এই অ্যাকাউন্ট দিয়ে এই কম্পিউটারে সাইন ইন করা যাবে না। আপনার স্কুলের ইমেইল (%s) ব্যবহার করুন।"
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "এই অ্যাকাউন্ট দিয়ে এই কম্পিউটারে সাইন ইন করা যাবে না। এর ইমেল ঠিকানা যাচাই করা হয়নি।"
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "আপনি অন্য একটি অ্যাকাউন্টে সাইন ইন করেছেন। এখানে যে অ্যাকাউন্টটি বেছে নিয়েছিলেন সেটি দিয়ে আবার সাইন ইন করুন।"
 

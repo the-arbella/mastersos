@@ -44,6 +44,9 @@ msgstr "บัญชีนี้ไม่สามารถลงชื่อเ
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "บัญชีนี้ไม่สามารถลงชื่อเข้าใช้บนคอมพิวเตอร์เครื่องนี้ได้ โปรดใช้อีเมลโรงเรียนของคุณ (%s)"
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "บัญชีนี้ไม่สามารถลงชื่อเข้าใช้บนคอมพิวเตอร์เครื่องนี้ได้ ที่อยู่อีเมลของบัญชีนี้ยังไม่ได้รับการยืนยัน"
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "คุณลงชื่อเข้าใช้ด้วยบัญชีอื่น โปรดลงชื่อเข้าใช้อีกครั้งด้วยบัญชีที่คุณเลือกไว้ที่นี่"
 

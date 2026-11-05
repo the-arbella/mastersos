@@ -44,6 +44,9 @@ msgstr "Цей обліковий запис не може входити на �
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Цей обліковий запис не може входити на цьому комп’ютері. Використайте шкільну електронну пошту (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Цей обліковий запис не може входити на цьому комп’ютері. Його адресу електронної пошти не підтверджено."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Ви увійшли з іншим обліковим записом. Увійдіть ще раз з обліковим записом, який ви вибрали тут."
 

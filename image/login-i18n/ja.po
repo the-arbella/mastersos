@@ -44,6 +44,9 @@ msgstr "このアカウントではこのコンピューターにログインで
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "このアカウントではこのコンピューターにログインできません。学校のメールアドレス (%s) を使用してください。"
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "このアカウントではこのコンピューターにログインできません。このアカウントのメールアドレスは確認されていません。"
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "別のアカウントでログインしました。ここで選択したアカウントでもう一度ログインしてください。"
 

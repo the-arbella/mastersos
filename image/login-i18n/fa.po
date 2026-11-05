@@ -44,6 +44,9 @@ msgstr "این حساب نمی‌تواند در این رایانه وارد ش
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "این حساب نمی‌تواند در این رایانه وارد شود. از ایمیل مدرسهٔ خود (%s) استفاده کنید."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "این حساب نمی‌تواند در این رایانه وارد شود. نشانی ایمیل آن تأیید نشده است."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "با حساب دیگری وارد شده‌اید. دوباره با حسابی که اینجا انتخاب کردید وارد شوید."
 

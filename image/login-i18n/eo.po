@@ -44,6 +44,9 @@ msgstr "Ĉi tiu konto ne povas saluti en ĉi tiu komputilo."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Ĉi tiu konto ne povas saluti en ĉi tiu komputilo. Uzu vian lernejan retpoŝton (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Ĉi tiu konto ne povas saluti en ĉi tiu komputilo. Ĝia retpoŝtadreso ne estas kontrolita."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Vi salutis per alia konto. Salutu denove per la konto, kiun vi elektis ĉi tie."
 

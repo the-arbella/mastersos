@@ -44,6 +44,9 @@ msgstr "Aquest compte no pot iniciar la sessió en aquest ordinador."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Aquest compte no pot iniciar la sessió en aquest ordinador. Feu servir el correu de l'escola (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Aquest compte no pot iniciar la sessió en aquest ordinador. La seva adreça electrònica no s'ha verificat."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Heu iniciat la sessió amb un altre compte. Torneu-la a iniciar amb el compte que heu triat aquí."
 

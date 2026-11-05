@@ -44,6 +44,9 @@ msgstr "គណនីនេះមិនអាចចូលប្រើក្នុ
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "គណនីនេះមិនអាចចូលប្រើក្នុងកុំព្យូទ័រនេះបានទេ។ សូមប្រើអ៊ីមែលសាលារបស់អ្នក (%s)។"
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "គណនីនេះមិនអាចចូលប្រើក្នុងកុំព្យូទ័រនេះបានទេ។ អាសយដ្ឋានអ៊ីមែលរបស់វាមិនទាន់បានផ្ទៀងផ្ទាត់ទេ។"
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "អ្នកបានចូលដោយប្រើគណនីផ្សេង។ សូមចូលម្ដងទៀតដោយប្រើគណនីដែលអ្នកបានជ្រើសរើសនៅទីនេះ។"
 

@@ -44,6 +44,9 @@ msgstr "Dit account kan zich niet aanmelden op deze computer."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Dit account kan zich niet aanmelden op deze computer. Gebruik je school-e-mailadres (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Dit account kan zich niet aanmelden op deze computer. Het e-mailadres ervan is niet geverifieerd."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Je hebt je met een ander account aangemeld. Meld je opnieuw aan met het account dat je hier hebt gekozen."
 

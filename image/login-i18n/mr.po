@@ -44,6 +44,9 @@ msgstr "हे खाते या संगणकावर साइन इन 
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "हे खाते या संगणकावर साइन इन करू शकत नाही. तुमचा शाळेचा ईमेल (%s) वापरा."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "हे खाते या संगणकावर साइन इन करू शकत नाही. त्याचा ईमेल पत्ता सत्यापित केलेला नाही."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "तुम्ही दुसऱ्या खात्याने साइन इन केले. येथे निवडलेल्या खात्याने पुन्हा साइन इन करा."
 

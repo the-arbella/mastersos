@@ -44,6 +44,9 @@ msgstr "ئەم هەژمارە ناتوانێت لەسەر ئەم کۆمپیوت�
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "ئەم هەژمارە ناتوانێت لەسەر ئەم کۆمپیوتەرە بچێتە ژوورەوە. ئیمەیڵی قوتابخانەکەت (%s) بەکاربهێنە."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "ئەم هەژمارە ناتوانێت لەسەر ئەم کۆمپیوتەرە بچێتە ژوورەوە. ناونیشانی ئیمەیڵەکەی پشتڕاست نەکراوەتەوە."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "بە هەژمارێکی جیاواز چوویتە ژوورەوە. دووبارە بە هەژمارەکەی لێرە هەڵتبژاردووە بچۆ ژوورەوە."
 

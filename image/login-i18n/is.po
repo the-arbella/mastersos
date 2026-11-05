@@ -44,6 +44,9 @@ msgstr "Þessi reikningur getur ekki skráð sig inn á þessari tölvu."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Þessi reikningur getur ekki skráð sig inn á þessari tölvu. Notaðu skólanetfangið þitt (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Þessi reikningur getur ekki skráð sig inn á þessari tölvu. Netfang hans hefur ekki verið staðfest."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Þú skráðir þig inn með öðrum reikningi. Skráðu þig aftur inn með reikningnum sem þú valdir hér."
 

@@ -44,6 +44,9 @@ msgstr "Kjo llogari nuk mund të hyjë në këtë kompjuter."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Kjo llogari nuk mund të hyjë në këtë kompjuter. Përdor email-in e shkollës (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Kjo llogari nuk mund të hyjë në këtë kompjuter. Adresa e saj e email-it nuk është verifikuar."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Ke hyrë me një llogari tjetër. Hyr përsëri me llogarinë që zgjodhe këtu."
 

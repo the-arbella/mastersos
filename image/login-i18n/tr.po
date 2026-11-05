@@ -44,6 +44,9 @@ msgstr "Bu hesap bu bilgisayarda oturum açamaz."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Bu hesap bu bilgisayarda oturum açamaz. Okul e-postanızı (%s) kullanın."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Bu hesap bu bilgisayarda oturum açamaz. E-posta adresi doğrulanmamış."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Farklı bir hesapla oturum açtınız. Burada seçtiğiniz hesapla yeniden oturum açın."
 

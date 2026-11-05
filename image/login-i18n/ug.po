@@ -44,6 +44,9 @@ msgstr "بۇ ھېسابات بۇ كومپيۇتېرغا كىرەلمەيدۇ."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "بۇ ھېسابات بۇ كومپيۇتېرغا كىرەلمەيدۇ. مەكتەپ ئېلخېتىڭىزنى (%s) ئىشلىتىڭ."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "بۇ ھېسابات بۇ كومپيۇتېرغا كىرەلمەيدۇ. ئۇنىڭ ئېلخەت ئادرېسى دەلىللەنمىگەن."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "سىز باشقا ھېسابات بىلەن كىردىڭىز. بۇ يەردە تاللىغان ھېساباتىڭىز بىلەن قايتا كىرىڭ."
 

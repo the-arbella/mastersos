@@ -44,6 +44,9 @@ msgstr "Ne c'hall ket ar gont-mañ kevreañ er mikrourzhiataer-mañ."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Ne c'hall ket ar gont-mañ kevreañ er mikrourzhiataer-mañ. Implijit postel ho skol (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Ne c'hall ket ar gont-mañ kevreañ er mikrourzhiataer-mañ. N'eo ket bet gwiriet e chomlec'h postel."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Kevreet oc'h gant ur gont all. Kevreit en-dro gant ar gont hoc'h eus dibabet amañ."
 

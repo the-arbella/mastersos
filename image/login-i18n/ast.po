@@ -44,6 +44,9 @@ msgstr "Esta cuenta nun pue aniciar sesión nesti ordenador."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Esta cuenta nun pue aniciar sesión nesti ordenador. Usa'l corréu de la escuela (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Esta cuenta nun pue aniciar sesión nesti ordenador. La so direición de corréu nun ta verificada."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Aniciesti sesión con otra cuenta. Volvi aniciar sesión cola cuenta qu'escoyesti equí."
 

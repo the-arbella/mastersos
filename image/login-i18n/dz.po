@@ -45,6 +45,9 @@ msgstr "རྩིས་ཐོ་འདི་གིས་ གློག་ཀླ�
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "རྩིས་ཐོ་འདི་གིས་ གློག་ཀླད་འདི་ལུ་ ནང་འཛུལ་འབད་མི་ཚུགས། ཁྱོད་ཀྱི་ སློབ་གྲྭའི་གློག་འཕྲིན་ (%s) ལག་ལེན་འཐབ།"
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "རྩིས་ཐོ་འདི་གིས་ གློག་ཀླད་འདི་ལུ་ ནང་འཛུལ་འབད་མི་ཚུགས། དེའི་གློག་འཕྲིན་ཁ་བྱང་ བདེན་དཔྱད་མ་འབད་བས།"
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "ཁྱོད་ཀྱིས་ རྩིས་ཐོ་གཞན་ཅིག་གིས་ ནང་འཛུལ་འབད་ཡི། ཁྱོད་ཀྱིས་ ཁ་ཐོག་ལུ་ སེལ་འཐུ་འབད་མི་ རྩིས་ཐོ་གིས་ ལོག་ནང་འཛུལ་འབད།"
 

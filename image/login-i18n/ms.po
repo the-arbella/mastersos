@@ -44,6 +44,9 @@ msgstr "Akaun ini tidak boleh log masuk pada komputer ini."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Akaun ini tidak boleh log masuk pada komputer ini. Gunakan e-mel sekolah anda (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Akaun ini tidak boleh log masuk pada komputer ini. Alamat e-melnya belum disahkan."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Anda log masuk dengan akaun yang berbeza. Log masuk semula dengan akaun yang anda pilih di sini."
 

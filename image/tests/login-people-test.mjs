@@ -1,11 +1,12 @@
-// Unit tests for the login screen's person search (mastersos-login@mastersos.org/people.js).
-// Run with: bash image/tests/login-people-test.sh
+// Unit tests for the login screen's person search and refusals (mastersos-login@mastersos.org/people.js).
+// Run with: bash image/tests/login-people-test.sh (from any directory: it runs from the repository root)
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 
 // login-people-test.sh copies people.js to a .mjs first: node before 22 reads a bare .js as CommonJS.
-const {HIDDEN, LIMIT, matchPeople, preselect, suggestDomains} = await import(process.env.MASTERSOS_PEOPLE_MJS);
+const {HIDDEN, LIMIT, matchPeople, preselect, refusalKind, suggestDomains} = await import(process.env.MASTERSOS_PEOPLE_MJS);
 
 const person = (userName, realName, loginTime = 0) => ({userName, realName, loginTime});
 const names = r => r.shown.map(p => p.userName);
@@ -122,4 +123,29 @@ test('no domain suggestion for an address already listed as a person', () => {
 test('at most five domain suggestions', () => {
     const many = Array.from({length: 8}, (_, i) => `s${i}.org`);
     assert.equal(suggestDomains('kim', many).length, LIMIT);
+});
+
+// The English half of a pam-check refusal in core/mastersos-agent/src/system/login.rs ("中文 / English").
+function agentRefusal(name) {
+    const src = readFileSync('core/mastersos-agent/src/system/login.rs', 'utf8');
+    const m = src.match(new RegExp(`pub const ${name}: &str =\\s*"([^"]*)"`));
+    assert.ok(m, `${name} not found in login.rs`);
+    return m[1].split(' / ').pop();
+}
+
+test('refusals for who the person is, in the words the broker and the agent use', () => {
+    // The broker: allowed_users and allowed_domains (patch 0006), the generic provider's email_verified, patch 0004.
+    assert.equal(refusalKind('Authentication failure: user not allowed in broker configuration'), 'not-allowed');
+    assert.equal(refusalKind('Authentication failure: email not verified'), 'unverified');
+    assert.equal(refusalKind('Authentication failure: requested username "a@s.org" does not match the authenticated user "b@s.org"'),
+        'wrong-account');
+    // The agent's pam-check, as it reaches the greeter: "中文 / English".
+    assert.equal(refusalKind(`这个账号的域名不允许登录这台电脑 / ${agentRefusal('DENY_DOMAIN')}`), 'not-allowed');
+    assert.equal(refusalKind(agentRefusal('DENY_DOMAIN')), 'not-allowed');
+});
+
+test('other messages are no refusal of the person', () => {
+    for (const m of ['Error retrieving access token. Please try again.', 'Error connecting to provider', '', null, undefined,
+        agentRefusal('DENY_LOCKED'), agentRefusal('DENY_SSO')])
+        assert.equal(refusalKind(m), null, String(m));
 });

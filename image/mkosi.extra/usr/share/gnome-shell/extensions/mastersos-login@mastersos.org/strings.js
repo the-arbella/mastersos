@@ -28,6 +28,7 @@ export function strings() {
         itSignIn: _('IT maintenance sign-in'),
         notAllowed: _('This account cannot sign in on this computer.'),
         notAllowedUse: _('This account cannot sign in on this computer. Use your school email (%s).'),
+        notVerified: _('This account cannot sign in on this computer. Its email address has not been verified.'),
         wrongAccount: _('You signed in with a different account. Sign in again with the account you chose here.'),
         language: _('Language'),
         keyboard: _('Keyboard'),

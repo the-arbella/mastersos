@@ -44,6 +44,9 @@ msgstr "Does dim modd i'r cyfrif hwn fewngofnodi ar y cyfrifiadur hwn."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Does dim modd i'r cyfrif hwn fewngofnodi ar y cyfrifiadur hwn. Defnyddiwch e-bost eich ysgol (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Does dim modd i'r cyfrif hwn fewngofnodi ar y cyfrifiadur hwn. Nid yw ei gyfeiriad e-bost wedi'i wirio."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Rydych wedi mewngofnodi gyda chyfrif gwahanol. Mewngofnodwch eto gyda'r cyfrif a ddewisoch yma."
 

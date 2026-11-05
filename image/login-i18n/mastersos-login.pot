@@ -44,6 +44,9 @@ msgstr ""
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr ""
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr ""
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr ""
 

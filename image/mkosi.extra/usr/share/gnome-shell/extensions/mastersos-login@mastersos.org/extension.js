@@ -38,7 +38,7 @@ import {LoginCard} from './card.js';
 import {HelpDialog, readSupportEnabled} from './help.js';
 import {collectingFor} from './help-model.js';
 import {LanguageScreen, languageChosen, restartGreeter} from './setup.js';
-import {matchPeople, preselect, suggestDomains} from './people.js';
+import {matchPeople, preselect, refusalKind, suggestDomains} from './people.js';
 import {KIOSK_DIR, Shelf} from './shelf.js';
 import {agentRefusal, bannerText, brokerText, cleanText, fmt, strings, tr} from './strings.js';
 import {Watch} from './watch.js';
@@ -57,11 +57,10 @@ const IT_ACCOUNT = 'itadmin';
 // How often the first-run state is read again, in ticks of 400 ms.
 const FIRST_RUN_TICKS = 5;
 const OFFLINE_PROBLEM = /connecting to provider/i;
-// The ways a person ends up refused for who they are rather than for what they typed. The domain check is the agent's
-// pam-check (account stage, after a successful sign-in; DENY_DOMAIN in core/mastersos-agent/src/system/login.rs), the other
-// two are the broker's. All vanish with the reset that follows, so these get a line of their own under the email field.
-const NOT_ALLOWED = /not allowed in broker configuration|Accounts from this domain cannot sign in/i;
-const WRONG_ACCOUNT = /does not match the authenticated user/i;
+// authd's answer when the broker refuses the sign-in for good (gnome-shell's authd.js AuthResult.Denied).
+const AUTH_DENIED = 'denied';
+// A refusal vanishes with the reset that follows it (authd.js _failVerification), so every one gets a line of its own under
+// the email field: the ones people.js refusalKind knows in words of this screen, any other the broker's own text.
 
 function readJson(path) {
     try {
@@ -334,12 +333,15 @@ export default class MastersosLoginExtension extends Extension {
                 return true;
             });
 
+        // A denial with a reason (for example a guardian's account whose email the provider has not verified) ends in
+        // _failVerification and a reset that clears the reason before anyone can read it: show it under the email field.
         this._patch(Authd.AuthdSwitchableHandler.prototype, '_handleAuthResponse', original =>
             function (response) {
-                if (response?.msg && !ext._noteRefusal(response.msg))
-                    response.msg = ext._say(response.msg);
-                else if (response?.msg)
-                    response.msg = '';
+                if (response?.msg) {
+                    const noted = ext._noteRefusal(response.msg) ||
+                        (response.access === AUTH_DENIED && ext._noteDenied(response.msg));
+                    response.msg = noted ? '' : ext._say(response.msg);
+                }
                 original.call(this, response);
             });
 
@@ -404,10 +406,13 @@ export default class MastersosLoginExtension extends Extension {
     // Remember why the broker refused this person; true when it was one of the refusals explained on the email screen.
     _noteRefusal(message) {
         let text;
-        if (NOT_ALLOWED.test(message)) {
+        const kind = refusalKind(message);
+        if (kind === 'not-allowed') {
             const domain = this._domains[0];
             text = domain ? fmt(this._text.notAllowedUse, `@${domain}`) : this._text.notAllowed;
-        } else if (WRONG_ACCOUNT.test(message)) {
+        } else if (kind === 'unverified') {
+            text = this._text.notVerified;
+        } else if (kind === 'wrong-account') {
             text = this._text.wrongAccount;
         } else if (agentRefusal(message)) {
             text = this._say(message);
@@ -415,6 +420,12 @@ export default class MastersosLoginExtension extends Extension {
             return false;
         }
         this._afterReset({text, toEmail: true, retryAs: null});
+        return true;
+    }
+
+    // Any other final refusal from the broker: its own text (translated when it is one of the known ones), after the reset.
+    _noteDenied(message) {
+        this._afterReset({text: this._say(message), toEmail: true, retryAs: null});
         return true;
     }
 

@@ -44,6 +44,9 @@ msgstr "Ev hesab nikare li ser vî komputerî têkeve."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Ev hesab nikare li ser vî komputerî têkeve. E-peyama dibistana xwe (%s) bi kar bîne."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Ev hesab nikare li ser vî komputerî têkeve. Navnîşana wê ya e-nameyê nehatiye piştrastkirin."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Te bi hesabekî din têketin kir. Dîsa bi hesabê ku te li vir hilbijart têkeve."
 

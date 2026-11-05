@@ -44,6 +44,9 @@ msgstr "Dieses Konto kann sich an diesem Computer nicht anmelden."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Dieses Konto kann sich an diesem Computer nicht anmelden. Verwenden Sie Ihre Schul-E-Mail (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Dieses Konto kann sich an diesem Computer nicht anmelden. Seine E-Mail-Adresse wurde nicht bestätigt."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Sie haben sich mit einem anderen Konto angemeldet. Melden Sie sich erneut mit dem hier gewählten Konto an."
 

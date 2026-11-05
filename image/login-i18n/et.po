@@ -44,6 +44,9 @@ msgstr "See konto ei saa selles arvutis sisse logida."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "See konto ei saa selles arvutis sisse logida. Kasutage oma kooli e-posti (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "See konto ei saa selles arvutis sisse logida. Selle e-posti aadressi pole kinnitatud."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Logisite sisse teise kontoga. Logige uuesti sisse kontoga, mille siin valisite."
 

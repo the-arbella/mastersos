@@ -44,6 +44,9 @@ msgstr "Ez a fiók nem tud bejelentkezni ezen a számítógépen."
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "Ez a fiók nem tud bejelentkezni ezen a számítógépen. Használd az iskolai e-mail-címedet (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "Ez a fiók nem tud bejelentkezni ezen a számítógépen. Az e-mail-címe nincs ellenőrizve."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "Másik fiókkal jelentkeztél be. Jelentkezz be újra az itt kiválasztott fiókkal."
 

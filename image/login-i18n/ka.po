@@ -44,6 +44,9 @@ msgstr "ამ ანგარიშით ამ კომპიუტერზ
 msgid "This account cannot sign in on this computer. Use your school email (%s)."
 msgstr "ამ ანგარიშით ამ კომპიუტერზე შესვლა შეუძლებელია. გამოიყენეთ თქვენი სკოლის ელფოსტა (%s)."
 
+msgid "This account cannot sign in on this computer. Its email address has not been verified."
+msgstr "ამ ანგარიშით ამ კომპიუტერზე შესვლა შეუძლებელია. მისი ელფოსტის მისამართი დადასტურებული არ არის."
+
 msgid "You signed in with a different account. Sign in again with the account you chose here."
 msgstr "სხვა ანგარიშით შეხვედით. ხელახლა შედით იმ ანგარიშით, რომელიც აქ აირჩიეთ."
 
