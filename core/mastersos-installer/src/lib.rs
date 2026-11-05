@@ -29,8 +29,7 @@ use plan::{
 };
 use precheck::{precheck, Level, PrecheckEnv, Profile};
 use seed::{
-    choose_seed, locate_seeds, refuse_if_all_invalid, write_debug_marker, write_seed_dir, SeedFile,
-    SeedSource,
+    choose_seed, locate_seeds, refuse_if_all_invalid, write_seed_dir, SeedFile, SeedSource,
 };
 use tty::Tty;
 
@@ -66,8 +65,6 @@ pub struct InstallEnv<'a> {
     pub tmp: &'a Path,
     /// How to restart after the finish screen (usually [`Restart::system`]).
     pub restart: Restart<'a>,
-    /// Developer diagnostics: d was held in the hidden window before the first screen ([`tty::sniff_debug`]).
-    pub debug: bool,
 }
 
 /// An install step failed after the target disk had been changed: the failure screen must not say the disk is untouched.
@@ -178,13 +175,7 @@ pub fn panic_text(info: &str) -> String {
 }
 
 /// The installer's whole flow (`main` only wires it up).
-pub fn run_install(
-    r: &dyn Runner,
-    tty: &mut dyn Tty,
-    sysfs: &Path,
-    dev: &Path,
-    debug: bool,
-) -> Result<()> {
+pub fn run_install(r: &dyn Runner, tty: &mut dyn Tty, sysfs: &Path, dev: &Path) -> Result<()> {
     run_install_with(
         r,
         tty,
@@ -202,7 +193,6 @@ pub fn run_install(
             shim: Path::new(precheck::SHIM),
             tmp: Path::new("/run"),
             restart: Restart::system(),
-            debug,
         },
     )
 }
@@ -322,7 +312,7 @@ pub fn run_install_with(r: &dyn Runner, tty: &mut dyn Tty, env: &InstallEnv) -> 
         if let Some(a) = &advice {
             tty.say(a);
         }
-        // keys typed ahead (d held past the diagnostics window, an Enter during the checks) must not answer this
+        // keys typed ahead (a key held at power-on, an Enter during the checks) must not answer this
         tty.flush_input();
         if tty
             .prompt("There are warnings above, type y to continue: ")?
@@ -341,7 +331,7 @@ pub fn run_install_with(r: &dyn Runner, tty: &mut dyn Tty, env: &InstallEnv) -> 
         Target::None => bail!("No suitable internal disk (>= 48 GiB, not USB)"),
     };
     tty.flush_input();
-    if tty.prompt(&confirm_text(&target, &seed, env.debug))?.trim() != "y" {
+    if tty.prompt(&confirm_text(&target, &seed))?.trim() != "y" {
         bail!(CANCELLED);
     }
     let mut facts = Facts::detect(r)?;
@@ -356,10 +346,6 @@ pub fn run_install_with(r: &dyn Runner, tty: &mut dyn Tty, env: &InstallEnv) -> 
         write_mok_hash(Path::new(MOK_HASH_FILE), &hash)?;
     }
     write_seed_dir(Path::new(SEED_DIR), &seed)?;
-    // Developer diagnostics: repart's CopyFiles= copies the whole folder into the seed partition
-    if env.debug {
-        write_debug_marker(Path::new(SEED_DIR))?;
-    }
     run_plan(
         r,
         tty,

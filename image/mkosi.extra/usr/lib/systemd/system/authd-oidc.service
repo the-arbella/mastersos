@@ -5,8 +5,6 @@
 # 数据 /var/lib/authd-oidc（broker 不在 snap 里时的默认数据目录：/var/lib/<可执行文件名>，即 StateDirectory）。
 [Unit]
 Description=authd OIDC broker
-# developer diagnostics: /run/mastersos/diag.env (only with the switch) adds -vv below
-After=mastersos-diag-setup.service
 Documentation=https://documentation.ubuntu.com/authd/
 # 学校没配 SSO（agent 没写 broker.conf.d/ 里的文件）时不起：它以 root 解析网络上来的东西，没用时不让它跑。
 # 此时 authd 选这个 broker 会得到激活失败，本机用户的登录不经过它（broker 是用户在「Not listed?」里选的）
@@ -15,8 +13,7 @@ ConditionDirectoryNotEmpty=/etc/authd/oidc/broker.conf.d
 [Service]
 Type=dbus
 BusName=com.ubuntu.authd.Oidc
-EnvironmentFile=-/run/mastersos/diag.env
-ExecStart=/usr/libexec/authd-oidc --config /etc/authd/oidc/broker.conf $MASTERSOS_DIAG_AUTHD_ARGS
+ExecStart=/usr/libexec/authd-oidc --config /etc/authd/oidc/broker.conf
 Environment=SYSLOG_IDENTIFIER=authd-oidc
 SyslogIdentifier=authd-oidc
 # 同 snap 的 restart-condition: never：退出后由下一次 D-Bus 调用重新激活

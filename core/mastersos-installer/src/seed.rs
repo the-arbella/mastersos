@@ -367,23 +367,3 @@ pub fn write_seed_dir(dir: &Path, seed: &SeedFound) -> Result<()> {
     }
     Ok(())
 }
-
-/// The developer diagnostics marker (docs/specs/2026-11-03-diagnostics-design.md): the installer writes it into the seed
-/// folder when d was held in the hidden window ([`crate::tty::sniff_debug`]). The first boot moves it into the encrypted root
-/// (mastersos-diag-adopt.service); a marker found on the seed partition on any later boot is deleted, never trusted.
-pub const DEBUG_MARKER: &str = "debug-install";
-
-/// Creates the empty marker (0644) in `dir`, the seed folder `write_seed_dir` just made.
-pub fn write_debug_marker(dir: &Path) -> Result<()> {
-    let p = dir.join(DEBUG_MARKER);
-    let f = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o644)
-        .open(&p)
-        .context("writing the diagnostics marker")?;
-    // umask must not tighten it
-    fs::set_permissions(&p, std::os::unix::fs::PermissionsExt::from_mode(0o644))?;
-    f.sync_all()?;
-    Ok(())
-}

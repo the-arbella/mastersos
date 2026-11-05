@@ -1,5 +1,0 @@
-# Developer diagnostics (docs/specs/2026-11-03-diagnostics-design.md): only on a machine with the switch
-# /var/lib/mastersos-diag/enabled, any vfat or exfat USB stick (no label needed) gets the diagnostics package
-# (mastersos-diag-export@.service, which checks the switch again). UDISKS_IGNORE keeps GNOME from mounting the same stick
-# meanwhile; machines without the switch keep the usual automount.
-ACTION=="add", SUBSYSTEM=="block", ENV{ID_BUS}=="usb", ENV{ID_FS_TYPE}=="vfat|exfat", TEST=="/var/lib/mastersos-diag/enabled", ENV{UDISKS_IGNORE}="1", TAG+="systemd", ENV{SYSTEMD_WANTS}+="mastersos-diag-export@%k.service"

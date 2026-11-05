@@ -63,8 +63,8 @@ impl log::Log for StderrLog {
     fn flush(&self) {}
 }
 
-/// The log level from `MASTERSOS_LOG_LEVEL`: `debug` or `trace` (exactly), anything else is `info`. The developer diagnostics
-/// switch sets it through /run/mastersos/diag.env (docs/specs/2026-11-03-diagnostics-design.md).
+/// The log level from `MASTERSOS_LOG_LEVEL`: `debug` or `trace` (exactly), anything else is `info`. Nothing in the image sets it
+/// today (the USB diagnostics switch that did was removed); kept for a debug drop-in and the planned remote `diag-verbose`.
 fn level_from_env(v: Option<&str>) -> log::LevelFilter {
     match v {
         Some("debug") => log::LevelFilter::Debug,
