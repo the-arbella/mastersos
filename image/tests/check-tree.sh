@@ -1310,7 +1310,8 @@ fi
 #     overrides first, on failure retry from the official source using the fallback directory the agent
 #     writes) instead of calling systemd-sysupdate directly; the fallback directory and record names in
 #     update-run must match the agent (FALLBACK_DIR / MIRROR_STATUS in update_channel.rs);
-#     tests/update-run-test.sh tests the behaviour
+#     tests/update-run-test.sh tests the behaviour; every update goes through staged_update (resumable download,
+#     tests/update-run-staged-test.sh)
 r=0
 upsvc=$rel/mkosi.extra/usr/lib/systemd/system/mastersos-update.service
 upr=$rel/mkosi.extra/usr/lib/mastersos/update-run
@@ -1324,8 +1325,8 @@ if [ ! -x "$upr" ] && [ ! -f "$upr" ]; then
 	bad 31 "missing $upr"
 	r=1
 elif ! grep -qF 'fallback=$var/sysupdate-fallback.d' "$upr" || ! grep -qF 'status=$var/update-mirror-failed' "$upr" ||
-	! grep -qF -- '--definitions="$fallback"' "$upr"; then
-	bad 31 "update-run should use \$var/sysupdate-fallback.d and \$var/update-mirror-failed and fall back with --definitions=\"\$fallback\""
+	! grep -qF -- 'staged_update "$fallback"' "$upr" || ! grep -qF -- '--definitions="$1"' "$upr"; then
+	bad 31 "update-run should use \$var/sysupdate-fallback.d and \$var/update-mirror-failed and fall back with staged_update \"\$fallback\" (sysupdate --definitions=)"
 	r=1
 fi
 if [ -f "$agent_uc" ] && { ! grep -qF 'FALLBACK_DIR: &str = "sysupdate-fallback.d"' "$agent_uc" || ! grep -qF 'MIRROR_STATUS: &str = "update-mirror-failed"' "$agent_uc"; }; then

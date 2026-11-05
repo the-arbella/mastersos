@@ -163,6 +163,10 @@ jobs:
       - run: bash image/tests/update-done-test.sh
       # School cache fallback: if updating via the cache fails, retry from the official source using the fallback dir the agent wrote (plan 5 Task 12)
       - run: bash image/tests/update-run-test.sh
+      # Resumable download: signed listing, curl --continue-at into /var, install from the staged copy through file:// transfers
+      - run: bash image/tests/update-run-staged-test.sh
+        env:
+          MASTERSOS_UPDATE_RUN_TEST_REQUIRE: "1"
       # browser-wait: Chrome there, full / no session-mode (one notification), learning (zenity until Chrome appears), window closed, kiosk-* skipped, th/zh first line (offline status Task 4)
       - run: bash image/tests/browser-wait-test.sh
       # 考试扩展的 crx3 打包（计划 9 Task 7）：一次性钥匙现生成，openssl 验签，id、updates.xml、宿主清单、kiosk-ext.json、不漏私钥

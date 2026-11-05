@@ -230,6 +230,16 @@ systemd-boot 都按 systemd 的版本比较排序（`20261012.10` > `20261012.9`
   sysupdate 不运行，定时器本身保持 active、`mastersos-health` 不被重跑。
 - `mastersos-update.timer`：开机 15 分钟后一次，之后约每 6 小时一次（`RandomizedDelaySec=1h`，免得全校
   同一刻下载），`Persistent=true`。触发 `mastersos-update.service` → `systemd-sysupdate update`，**不重启**。
+- **断点续传（2026-11-05）**：sysupdate 自己下载时直接写进另一个槽，被打断（合盖、断电、断网）就从 0 重来，而且开始前已经删掉
+  旧的另一个槽。所以 `update-run` 的每次更新都先走 `staged_update`：`check-new` 问出新版本 → 下载 `SHA256SUMS{,.gpg}`、用镜像的
+  `import-pubring.pgp` 验签 → 按签过的清单逐个 `curl --continue-at -` 下载这个版本的 UKI 与三个分区文件到
+  `/var/lib/mastersos-system/update-staging/<源地址的哈希>/`（`.part` 跨轮、跨重启保留，sha256 对上才改名）→ 都齐了，用同一组
+  transfer 的副本（`[Source] Path=file://<暂存目录>/`，放在 `/run/mastersos-update/definitions/`）跑 `sysupdate --definitions=… update`：
+  签名与每个文件的哈希由 systemd-pull 照 https 时一样再验一遍，写槽只用几分钟。装好就删暂存目录；装失败留着下一轮直接用。
+  续出来的文件哈希不对就丢掉重下；签名不对什么都不下；新版本出来时旧版本的暂存文件删掉。transfer 不是同一个 url-file 源、
+  `/var` 剩余空间不足 3 GiB（已暂存的算在内）、或 `check-new` 答不清楚时，照旧直接跑 sysupdate。
+  测试：`tests/update-run-staged-test.sh`（file:// 通道 + 一次性 gpg 钥匙 + 假 sysupdate）；v259 的 `url-file` 源接受 `file://`
+  （`sysupdate-transfer.c`），真机上的第一次实测见下面的实测记录。
 - 上游的 `systemd-sysupdate.timer` 与 `systemd-sysupdate-reboot.timer`（后者装好后自动重启）在镜像里
   删掉了（`mkosi.conf` 的 `RemoveFiles=`，`mkosi.finalize` 删掉包留下的启用链接）。
 - 本镜像新加的单元都由 `/usr/lib/systemd/system/*.wants|*.requires` 里的链接启用，不靠 preset：preset
@@ -352,6 +362,7 @@ stable 只留最近 3 个版本，重写并重签 `stable/SHA256SUMS`。stable �
 
 - 新镜像在 **switch-root 之后**进 emergency（例如 local-fs 失败）：主系统的 emergency 没改，root 锁着，
   机器停在那里，计数要等有人断电重启才往下走（只有 initrd 里的 emergency 改成了自动重启）。
+- （2026-11-05 起下载先进 `/var` 的暂存目录，下面这个「删了旧槽再下载」的窗口只剩从本地写槽的几分钟。）
 - 一次更新被打断（断电、断网）会不会留下「指向已被覆盖分区的回退 UKI」：VM 166 的日志里 sysupdate 先
   `Removing old` 另一个槽的三个分区**和**它的 UKI（如 `MastersOS_20261012.3_x86-64+0-3.efi`），再下载、写分区，
   最后才放新 UKI。所以打断后 ESP 上只剩正在运行的版本，不会有坏的回退项；下次更新从头再来。
@@ -364,6 +375,8 @@ stable 只留最近 3 个版本，重写并重签 `stable/SHA256SUMS`。stable �
 版本号又比之后 stable 版本都高的构建。
 
 ## 每次 1.46 GB：第一期不做增量（Ruling 6）
+
+（断点续传见上面「机器上」一节：打断后不再从头下载，但仍是整包。）
 
 每次更新整包下载：`/usr` zstd 压缩后约 1.5 GB（`20261012.5` 实测 1 535 620 371 字节，spec 估 1.46 GB），加 UKI 约 80 MB。以后两条路：
 

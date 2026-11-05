@@ -19,6 +19,18 @@
 #      so a flaky or blocked official source cannot reset the clock. Unknown is tracked in $unknown; after
 #      $unknown_grace seconds of it, "freshness unknown" is recorded. Any definitive answer clears it.
 #      A timestamp file that is unparsable or lies in the future (clock set back) is rewritten with now.
+# Resumable download (2026-11-05): systemd-sysupdate downloads straight into the inactive slot and starts over after any
+#   interruption (lid closed, power cut, Wi-Fi gone), and it removes the old inactive slot before it starts, so a slow line
+#   could spend days restarting a 1.6 GB download. Every update therefore goes through staged_update: with check-new it asks
+#   the source (the [Source] Path= of the transfers sysupdate would use) which version is new, downloads SHA256SUMS and
+#   SHA256SUMS.gpg, checks them with gpgv against the image's import-pubring.pgp, then downloads the version's files (the
+#   UKI and the three partition files, exact names from the signed listing) with curl --continue-at into
+#   $var/update-staging/<hash of the source URL>/, a part file per file kept across rounds and reboots, each moved into
+#   place only when its sha256 matches. When all are there, sysupdate runs on copies of the same transfers whose
+#   [Source] Path= is file://<that directory>/: it verifies the signature and every file again exactly as it does over
+#   https, and writes the slot from local disk in minutes. After a successful update the staging tree is removed.
+#   Without usable transfers (none, a source that is not http(s), sources that differ), with too little free space or a
+#   check-new that cannot be judged, sysupdate runs directly as before.
 # Paths, grace window and timeout can be overridden through environment variables for tests/update-run-test.sh.
 set -euo pipefail
 
@@ -32,6 +44,19 @@ status=$var/update-mirror-failed
 stale=$var/update-mirror-stale-since
 unknown=$var/update-mirror-unknown-since
 unknown_grace=${MASTERSOS_MIRROR_UNKNOWN_GRACE:-86400}
+
+staging=$var/update-staging
+staged_defs=${MASTERSOS_STAGED_DEFINITIONS:-/run/mastersos-update/definitions}
+# where sysupdate looks without --definitions=, highest priority first (sysupdate.d(5))
+defs_dirs=${MASTERSOS_SYSUPDATE_DIRS:-/etc/sysupdate.d /run/sysupdate.d /usr/local/lib/sysupdate.d /usr/lib/sysupdate.d}
+keyring=${MASTERSOS_GPG_KEYRING:-/usr/lib/systemd/import-pubring.pgp}
+# free space needed under $var before a download starts (the staged files count as free: they are reused)
+min_free=${MASTERSOS_STAGING_MIN_FREE:-3221225472}
+max_list=${MASTERSOS_STAGING_MAX_LIST_BYTES:-1048576}
+max_file=${MASTERSOS_STAGING_MAX_FILE_BYTES:-4294967296}
+# tests/update-run-test.sh serves a channel from a directory; on a Device a file:// source is local already and runs directly
+protos=http,https
+[ "${MASTERSOS_STAGING_FILE_URLS:-}" != 1 ] || protos=http,https,file
 
 # write_status <text>: atomically replace the record with "<UTC time> <text>".
 write_status() {
@@ -75,22 +100,198 @@ load_ts() {
 	return 1
 }
 
+# transfers <definitions dir or empty>: the *.transfer files sysupdate uses, one path per line (a name in a
+# higher-priority directory hides the same name further down)
+transfers() {
+	local d f
+	local -A seen=()
+	if [ -n "$1" ]; then
+		for f in "$1"/*.transfer; do [ -f "$f" ] && echo "$f"; done
+		return 0
+	fi
+	for d in $defs_dirs; do
+		for f in "$d"/*.transfer; do
+			[ -f "$f" ] || continue
+			[ -z "${seen[${f##*/}]:-}" ] || continue
+			seen[${f##*/}]=1
+			echo "$f"
+		done
+	done
+}
+
+# source_of <transfer>: "<Type> <Path>" of its [Source] section
+source_of() {
+	sed -nE '/^\[Source\]/,/^\[/{s/^(Type|Path)=[[:space:]]*([^[:space:]]+)[[:space:]]*$/\1 \2/p}' "$1" |
+		awk '$1 == "Type" { t = $2 } $1 == "Path" { p = $2 } END { print t, p }'
+}
+
+# get <url> <file> <max bytes>: one small file, downloaded whole
+get() {
+	rm -f -- "$2"
+	curl --fail --silent --show-error --location --proto "=$protos" --proto-redir =https --max-filesize "$3" \
+		--connect-timeout 30 --speed-limit 1024 --speed-time 120 --retry 3 --output "$2" "$1"
+}
+
+# fetch <url> <file> <sha256>: download into <file>.part, resuming what an earlier round left; <file> appears only with
+# the right content. A part file that cannot be completed into the right bytes is dropped (the next round starts over).
+fetch() {
+	local part=$2.part got rc=0
+	curl --fail --silent --show-error --location --proto "=$protos" --proto-redir =https --max-filesize "$max_file" \
+		--connect-timeout 30 --speed-limit 1024 --speed-time 300 --retry 5 --retry-delay 10 \
+		--continue-at - --output "$part" "$1" || rc=$?
+	if [ "$rc" -ne 0 ]; then
+		# 33: the server cannot resume; 36: bad resume offset (the part is longer than the file); either way start over
+		case $rc in 33 | 36) rm -f -- "$part" ;; esac
+		echo "update-run: download of ${1##*/} stopped (curl exit code ${rc}) at $(stat -c %s "$part" 2>/dev/null || echo 0) bytes; the next round resumes it" >&2
+		return 1
+	fi
+	got=$(sha256sum <"$part" | cut -d' ' -f1)
+	if [ "$got" != "$3" ]; then
+		rm -f -- "$part"
+		echo "update-run: ${1##*/} does not match the signed SHA256SUMS (sha256 ${got}); dropped, the next round downloads it again" >&2
+		return 1
+	fi
+	mv -f -- "$part" "$2"
+}
+
+# plain <definitions dir or empty>: sysupdate update without staging
+plain() {
+	if [ -n "$1" ]; then "$sysupdate" --definitions="$1" update; else "$sysupdate" update; fi
+}
+
+# staged_update <definitions dir or empty>: the resumable update described at the top. Exit code: 0 updated or nothing
+# new, otherwise not updated this round (what was downloaded so far stays for the next one).
+staged_update() {
+	local defs=$1 f t u url="" v dir sums names n want have avail rc=0
+	local -a files=()
+	mapfile -t files < <(transfers "$defs")
+	[ ${#files[@]} -gt 0 ] || {
+		plain "$defs"
+		return
+	}
+	for f in "${files[@]}"; do
+		read -r t u < <(source_of "$f")
+		if [ "$t" != url-file ] || { [ -n "$url" ] && [ "${u%/}" != "$url" ]; }; then
+			echo "update-run: $f is not a url-file transfer from the same source; updating without staging" >&2
+			plain "$defs"
+			return
+		fi
+		url=${u%/}
+	done
+	# the scheme (tests/check-tree.sh item 10 keeps literal plain-http URLs out of the image tree)
+	case ${url%%:*} in
+	http | https) ;;
+	file) [ "${MASTERSOS_STAGING_FILE_URLS:-}" = 1 ] || {
+		plain "$defs"
+		return
+	} ;;
+	*)
+		plain "$defs"
+		return
+		;;
+	esac
+
+	# one directory per source: main() may stage from the school cache and from the official source in turn
+	dir=$staging/$(printf '%s' "$url" | sha256sum | cut -c1-16)
+	newer "$defs"
+	case $NEWER_STATE in
+	none)
+		# only this source's download: the other one may be half way through a version this source has not got yet
+		rm -rf -- "$dir"
+		rmdir -- "$staging" 2>/dev/null || true
+		return 0
+		;;
+	unknown)
+		echo "update-run: cannot tell whether $url has a new version; updating without staging" >&2
+		plain "$defs"
+		return
+		;;
+	esac
+	v=$NEWER_OUT
+	[[ $v =~ ^[0-9A-Za-z][0-9A-Za-z._~+-]*$ ]] || {
+		echo "update-run: check-new answered an unusable version '${v}'" >&2
+		return 1
+	}
+
+	install -d -m 0700 "$staging" "$dir"
+	have=$(du -sb "$dir" | cut -f1)
+	avail=$(df --output=avail -B1 "$dir" | tail -n 1 | tr -d ' ')
+	if [ $((avail + have)) -lt "$min_free" ]; then
+		echo "update-run: only ${avail} bytes free under ${var}; updating without staging" >&2
+		plain "$defs"
+		return
+	fi
+
+	sums=$dir/.SHA256SUMS.new
+	if ! get "$url/SHA256SUMS" "$sums" "$max_list" || ! get "$url/SHA256SUMS.gpg" "$sums.gpg" "$max_list"; then
+		echo "update-run: cannot download SHA256SUMS from $url" >&2
+		return 1
+	fi
+	if ! gpgv --homedir "$dir" --keyring "$keyring" "$sums.gpg" "$sums" >/dev/null 2>&1; then
+		rm -f -- "$sums" "$sums.gpg"
+		echo "update-run: SHA256SUMS from $url does not verify against $keyring" >&2
+		return 1
+	fi
+	# the files of version v that the transfers match: the UKI and the partition files (MastersOS_<v>_<arch>.efi,
+	# MastersOS_<v>_<arch>.usr-*.raw.zst)
+	names=$(sed -nE 's/^[0-9a-f]{64} [ *]?([^ ]+)$/\1/p' "$sums" | awk -v p="MastersOS_${v}_" '
+		index($0, p) == 1 && (/\.efi$/ || /\.raw\.zst$/) && /^[A-Za-z0-9._+-]+$/')
+	[ -n "$names" ] || {
+		echo "update-run: the signed SHA256SUMS lists no files of $v" >&2
+		return 1
+	}
+	# files of other versions (a newer version came out meanwhile) go
+	for f in "$dir"/*; do
+		[ -e "$f" ] || continue
+		n=${f##*/}
+		n=${n%.part}
+		grep -qxF -- "$n" <<<"$names" || rm -f -- "$f"
+	done
+	for n in $names; do
+		want=$(awk -v n="$n" '$2 == n || $2 == "*" n { print $1; exit }' "$sums")
+		if [ -f "$dir/$n" ] && [ "$(sha256sum <"$dir/$n" | cut -d' ' -f1)" = "$want" ]; then
+			continue
+		fi
+		rm -f -- "$dir/$n"
+		fetch "$url/$n" "$dir/$n" "$want" || return 1
+	done
+	mv -f -- "$sums" "$dir/SHA256SUMS"
+	mv -f -- "$sums.gpg" "$dir/SHA256SUMS.gpg"
+	echo "update-run: $v from $url is downloaded and checked; installing it" >&2
+
+	rm -rf -- "$staged_defs"
+	install -d -m 0700 "$staged_defs"
+	for f in "${files[@]}"; do
+		sed -E '/^\[Source\]/,/^\[/{s#^Path=.*$#Path=file://'"$dir"'/#}' "$f" >"$staged_defs/${f##*/}" || {
+			echo "update-run: cannot write $staged_defs/${f##*/}" >&2
+			return 1
+		}
+	done
+	"$sysupdate" --definitions="$staged_defs" update || rc=$?
+	if [ "$rc" -eq 0 ]; then
+		rm -rf -- "$staging"
+	else
+		echo "update-run: installing $v from the downloaded files failed (exit code ${rc})" >&2
+	fi
+	return "$rc"
+}
+
 main() {
 	local rc=0 rc2=0 w v now since
 
 	# No fallback directory: no cache is set, so a failure is just a failure.
 	if ! compgen -G "$fallback/*.transfer" >/dev/null; then
-		"$sysupdate" update || rc=$?
+		staged_update "" || rc=$?
 		return "$rc"
 	fi
 
 	newer ""
 	w=""
 	[ "$NEWER_STATE" = newer ] && w=$NEWER_OUT
-	timeout --kill-after=60 "$cache_timeout" "$sysupdate" update || rc=$?
+	timeout --kill-after=60 "$cache_timeout" "$BASH" "$0" --staged-update "" || rc=$?
 	if [ "$rc" -ne 0 ]; then
 		echo "update-run: update via the school cache failed (exit code ${rc}), retrying from the official source" >&2
-		"$sysupdate" --definitions="$fallback" update || rc2=$?
+		staged_update "$fallback" || rc2=$?
 		if [ "$rc2" -eq 0 ]; then
 			write_status "school cache not used: sysupdate exit code ${rc}; this round updated from the official source"
 		else
@@ -136,7 +337,7 @@ main() {
 		return 0
 	fi
 	echo "update-run: the school cache has been behind for over ${grace}s, updating from the official source" >&2
-	"$sysupdate" --definitions="$fallback" update || rc2=$?
+	staged_update "$fallback" || rc2=$?
 	w=${w:-nothing newer than installed}
 	if [ "$rc2" -eq 0 ]; then
 		write_status "school cache stale: official has ${v}, cache offers ${w}; this round updated from the official source"
@@ -147,5 +348,10 @@ main() {
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
-	main "$@"
+	# --staged-update <dir or "">: main runs the school-cache attempt through this, under timeout(1)
+	if [ "${1:-}" = --staged-update ]; then
+		staged_update "${2:-}"
+	else
+		main "$@"
+	fi
 fi

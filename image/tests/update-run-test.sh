@@ -38,6 +38,8 @@ exit "${FAKE_MIRROR_RC:-0}"
 SH
 chmod +x "$fake"
 export MASTERSOS_SYSUPDATE=$fake MASTERSOS_SYSTEM_VAR=$var FAKE_LOG=$tmp/log
+# no transfers anywhere: every update takes the direct path (staging: tests/update-run-staged-test.sh)
+export MASTERSOS_SYSUPDATE_DIRS=$tmp/no-transfers
 
 fails=0
 check() { # check <name> <expected> <actual>
