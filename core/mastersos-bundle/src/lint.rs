@@ -85,6 +85,30 @@ pub fn has_errors(lints: &[Lint]) -> bool {
 /// 镜像发布的更新通道（Ruling 5）。
 pub const UPDATE_CHANNELS: &[&str] = &["stable", "beta"];
 
+/// Public consumer sign-in providers: anyone in the world can hold an account there, so an issuer
+/// on one of these hosts must come with `allowed_domains`. Only Google for now: Microsoft's
+/// `common` / `consumers` endpoints publish a templated or per-tenant issuer, so matching them by
+/// host alone would also hit single-tenant schools.
+const PUBLIC_IDP_HOSTS: &[(&str, &str)] = &[("accounts.google.com", "Google")];
+
+/// The name of the public provider whose host the issuer is on, if any: strips the scheme (http /
+/// https), userinfo, port, path / query / fragment and a trailing dot; the host is compared
+/// ASCII-case-insensitively.
+fn public_idp(issuer: &str) -> Option<&'static str> {
+    let lower = issuer.trim().to_ascii_lowercase();
+    let rest = lower
+        .strip_prefix("https://")
+        .or_else(|| lower.strip_prefix("http://"))?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let hostport = authority.rsplit('@').next().unwrap_or("");
+    let host = hostport.split(':').next().unwrap_or("");
+    let host = host.trim_end_matches('.');
+    PUBLIC_IDP_HOSTS
+        .iter()
+        .find(|(h, _)| *h == host)
+        .map(|(_, name)| *name)
+}
+
 /// 按今天（UTC）的日期 lint，见 [`lint_at`]。
 pub fn lint(m: &Manifest, present: &BTreeSet<String>) -> Vec<Lint> {
     lint_at(m, present, chrono::Utc::now().date_naive())
@@ -174,6 +198,24 @@ pub fn lint_at(m: &Manifest, present: &BTreeSet<String>, today: chrono::NaiveDat
     if let Some(o) = &m.school.oidc {
         if let Err(e) = checks::oidc(o) {
             out.push(err("oidc_invalid", e, "school.oidc".into()));
+        }
+        // `allowed_domains` exists only in `[school]` (every Config's SSO login reads it), so the
+        // rule is school-wide and does not look at which Configs allow `sso`: a Device can move to
+        // another Config, and the seed carries `[school.oidc]` regardless.
+        if let Some(provider) = public_idp(&o.issuer) {
+            if m.school.allowed_domains.is_empty() {
+                out.push(
+                    Lint::new(
+                        LintLevel::Error,
+                        "public_idp_without_allowed_domains",
+                        format!(
+                            "The sign-in provider is {provider}, where anyone can create an account: with no allowed_domains, any {provider} account in the world could sign in to the Devices. List the school's domains in allowed_domains."
+                        ),
+                    )
+                    .at("school.allowed_domains")
+                    .param("provider", provider),
+                );
+            }
         }
     }
     lint_formats(m, &views, &configs, &mut out);
@@ -1655,24 +1697,70 @@ config = "teacher"
     }
 
     #[test]
-    fn google_issuer_passes_lint() {
-        // Since 2026-11-05 Devices may sign in with Google accounts: an accounts.google.com issuer
-        // is an ordinary OIDC issuer, not an error.
+    fn google_issuer_needs_allowed_domains() {
+        // Since 2026-11-05 Devices may sign in with Google accounts, but only with allowed_domains:
+        // otherwise any Google account could sign in.
         for issuer in [
             "https://accounts.google.com",
             "https://Accounts.Google.com:443/",
         ] {
             let google = format!("oidc = {{ issuer = \"{issuer}\", client_id = \"c\" }}");
-            let m = manifest(&google, "", "\"local\"");
-            let l = lint(&m, &present());
+            for login in ["\"local\"", "\"sso\""] {
+                let m = manifest(&google, "", login);
+                let l = lint(&m, &present());
+                let errors: Vec<_> = l.iter().filter(|x| x.level == LintLevel::Error).collect();
+                assert_eq!(errors.len(), 1, "{issuer}: {l:?}");
+                assert_eq!(errors[0].code, "public_idp_without_allowed_domains");
+                assert_eq!(errors[0].path.as_deref(), Some("school.allowed_domains"));
+                assert_eq!(
+                    errors[0].params.get("provider").map(String::as_str),
+                    Some("Google")
+                );
+                let o = m.school.oidc.as_ref().expect("oidc");
+                assert!(checks::oidc(o).is_ok(), "{issuer}");
+            }
+            let with = format!("{google}\nallowed_domains = [\"school.ac.th\"]");
+            let l = lint(&manifest(&with, "", "\"local\""), &present());
             assert!(l.is_empty(), "{issuer}: {l:?}");
-            let o = m.school.oidc.as_ref().expect("oidc");
-            assert!(checks::oidc(o).is_ok(), "{issuer}");
         }
         let with = r#"oidc = { issuer = "https://accounts.google.com", client_id = "c", client_secret = "s" }
 allowed_domains = ["school.ac.th"]"#;
         let l = lint(&manifest(with, "", "\"sso\""), &present());
         assert!(!has_errors(&l), "{l:?}");
+        // A school's own provider needs no domains.
+        let own = r#"oidc = { issuer = "https://sso.school.ac.th", client_id = "c" }"#;
+        let l = lint(&manifest(own, "", "\"sso\""), &present());
+        assert!(!has_errors(&l), "{l:?}");
+    }
+
+    #[test]
+    fn public_idp_is_matched_by_host() {
+        for yes in [
+            "https://accounts.google.com",
+            "https://ACCOUNTS.GOOGLE.COM",
+            "https://accounts.google.com:443",
+            "https://accounts.google.com/foo?x=1",
+            "http://accounts.google.com",
+            "https://user@accounts.google.com",
+            "https://user:pw@accounts.google.com:443/x",
+            "https://accounts.google.com/",
+            "https://accounts.google.com.",
+        ] {
+            assert_eq!(public_idp(yes), Some("Google"), "{yes}");
+        }
+        for no in [
+            "https://accounts.google.com.evil.example",
+            "https://evil.example/accounts.google.com",
+            "https://evil.example?u=accounts.google.com",
+            "https://evil.example#accounts.google.com",
+            "https://accounts.google.com@evil.example",
+            "https://xaccounts.google.com",
+            "https://sso.school.ac.th",
+            "accounts.google.com",
+            "ftp://accounts.google.com",
+        ] {
+            assert_eq!(public_idp(no), None, "{no}");
+        }
     }
 
     #[test]
@@ -1959,6 +2047,7 @@ scanners = [{ name = "s", uri = "http://x" }, { name = "s", uri = "http://y" }]"
             ("timezone_invalid", &[]),
             ("locale_invalid", &[]),
             ("oidc_invalid", &[]),
+            ("public_idp_without_allowed_domains", &["provider"]),
             ("update_mirror_invalid", &[]),
             ("escrow_recipients_invalid", &[]),
             ("lock_message_too_long", &[]),

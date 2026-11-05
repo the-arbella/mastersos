@@ -61,8 +61,9 @@ gives `group_unknown_config`.
 
 Goal: school accounts can sign in. Add `[school.oidc]` (issuer and client id from the SSO provider), add
 `"sso"` to each Config that should allow it, optionally limit to your domains. A school on Google
-Workspace may use `issuer = "https://accounts.google.com"` (with its client id and secret); then always
-set `allowed_domains`, or any Google account can sign in.
+Workspace may use `issuer = "https://accounts.google.com"` (with its client id and secret); then
+`allowed_domains` is required, or any Google account could sign in (publish refuses it with
+`public_idp_without_allowed_domains`).
 
 ```toml check=ok
 [school]
@@ -83,7 +84,8 @@ name = "Unassigned"
 config = "standard"
 ```
 
-Issues: `sso_without_oidc`, `oidc_invalid`, `allowed_domain_invalid`.
+Issues: `sso_without_oidc`, `oidc_invalid`, `public_idp_without_allowed_domains`,
+`allowed_domain_invalid`.
 
 ## Add an administrator
 

@@ -230,7 +230,7 @@ with PKCE and the fixed redirect `http://127.0.0.1:48123/callback`.
 
 | Key | Type | Required / default | Allowed values | Example | Notes |
 |---|---|---|---|---|---|
-| `issuer` | string | required in `[school.oidc]` | `https://` (or `http://`) URL; no spaces, control characters or any of ``# ; " ' ` \`` | `issuer = "https://sso.school.ac.th"` | Google (`https://accounts.google.com`) is allowed but untried on Devices; set `allowed_domains`. |
+| `issuer` | string | required in `[school.oidc]` | `https://` (or `http://`) URL; no spaces, control characters or any of ``# ; " ' ` \`` | `issuer = "https://sso.school.ac.th"` | Google (`https://accounts.google.com`) is allowed but untried on Devices; it needs `allowed_domains` (`public_idp_without_allowed_domains`). |
 | `client_id` | string | required in `[school.oidc]` | non-empty; same character limits as `issuer` | `client_id = "mastersos"` | The client registered with the provider for MastersOS Devices. |
 | `client_secret` | string | optional; no secret | 1 to 512 printable ASCII characters; same character limits as `issuer`, and no `%` | — | Only for a provider that requires one even for a desktop app. Every Device holds it, so it protects nothing; do not reuse a real secret here. Devices whose OS predates this key reject the whole Version (see `feature_unsupported`, feature `oidc_card`). |
 | `card_hosts` | list of strings | optional; only the issuer's host | lowercase hostnames with at least two labels; no scheme, port, path, wildcard or IP address; none twice; at most 20 | `card_hosts = ["cdn.school.ac.th"]` | Hosts the sign-in page may load from besides the issuer, for example a CDN or an upstream provider. Each is reached over `https` on port 443, and its subdomains are not included. Leave it out when the provider serves everything from the issuer. Feature `oidc_card`, like `client_secret`. |
@@ -253,9 +253,10 @@ config = "standard"
 
 <!-- prompt:omit -->
 A school on Google Workspace may point Devices straight at Google: register a Desktop app OAuth
-client in the school's Google Cloud project and fill in its client id and secret. Always set
-`allowed_domains` with Google, otherwise any Google account in the world can sign in. This path has
-not yet been tried on Devices; `card_hosts` may need Google's other sign-in hosts.
+client in the school's Google Cloud project and fill in its client id and secret. `allowed_domains`
+is required with Google (`public_idp_without_allowed_domains`), otherwise any Google account in the
+world could sign in. This path has not yet been tried on Devices; `card_hosts` may need Google's
+other sign-in hosts.
 
 ```toml check=ok
 [school]
@@ -1224,6 +1225,7 @@ last Version), so only the server's check at `mastersos publish` reports them.
 | `oidc_invalid` | error | `[school.oidc]` values |
 | `path_file_and_dir` | error | bundle file is also a folder |
 | `printer_invalid` | error | printer entry |
+| `public_idp_without_allowed_domains` | error | Google as SSO issuer without `allowed_domains` |
 | `scanner_invalid` | error | scanner entry |
 | `school_id_mismatch` | error (server) | `[school] id` wrong or missing |
 | `school_name_invalid` | error | `[school] name` |
@@ -3046,6 +3048,38 @@ name or password.
 id = "standard"
 name = "Standard"
 printers = [{ name = "Library Printer", uri = "lpd://10.0.0.5/queue" }]
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "standard"
+```
+<!-- /prompt:omit -->
+
+### `public_idp_without_allowed_domains`
+
+**Level:** error. **Meaning:** the SSO issuer is Google (`accounts.google.com`) and `[school]
+allowed_domains` is empty.
+
+<!-- prompt:omit -->
+**Why:** anyone can create a Google account, so without a domain list any Google account in the
+world could sign in to the Devices. The rule looks only at the issuer and `allowed_domains`, not at
+which Configs allow `sso`.
+<!-- /prompt:omit -->
+
+**How to fix:** list the school's domains in `allowed_domains`.
+
+<!-- prompt:omit -->
+```toml check=public_idp_without_allowed_domains
+[school.oidc]
+issuer = "https://accounts.google.com"
+client_id = "1234567890-example.apps.googleusercontent.com"
+client_secret = "example-only"
+
+[[config]]
+id = "standard"
+name = "Standard"
+login_methods = ["sso"]
 
 [[group]]
 id = "default"

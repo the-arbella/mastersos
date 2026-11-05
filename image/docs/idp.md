@@ -91,7 +91,7 @@ EIS 的实例 2026-10-31 按下面配置，VM 121 走通过卡片登录（当时
 
 ## 接入：Google Workspace（未测）
 
-> **这一节完全没有实测，不能照着给学校上线。** 裁定（2026-11-05，David）：笔记本**可以**用 Google 账号登录，`[school.oidc] issuer` 可以直接指向 `https://accounts.google.com`。2026-10-14 的「笔记本永不用 Google 账号登录」裁定作废（11-01 已部分撤销，11-05 完全撤销）。发布检查不再拒绝 `accounts.google.com`（`oidc_issuer_google` 已删），这样配可以发布出去，但 Google 这条路在笔记本上一次都没有跑过：`card_hosts`、`login_hint`、`prompt` 的行为都还要实测。下面只来自对 Google 官方行为的了解。
+> **这一节完全没有实测，不能照着给学校上线。** 裁定（2026-11-05，David）：笔记本**可以**用 Google 账号登录，`[school.oidc] issuer` 可以直接指向 `https://accounts.google.com`。2026-10-14 的「笔记本永不用 Google 账号登录」裁定作废（11-01 已部分撤销，11-05 完全撤销）。发布检查不再拒绝 `accounts.google.com` 本身（`oidc_issuer_google` 已删），配了 `allowed_domains` 就可以发布出去；`allowed_domains` 为空时发布检查报错 `public_idp_without_allowed_domains` 并拒绝发布（否则全世界任何 Google 账号都能登录）。但 Google 这条路在笔记本上一次都没有跑过：`card_hosts`、`login_hint`、`prompt` 的行为都还要实测。下面只来自对 Google 官方行为的了解。
 
 长期计划：我们托管的服务以后由一个中心签发方（Rauthy）给笔记本发令牌，Google 作为它的上游登录方式之一。这不改变系统本身的中立：学校仍然可以把笔记本直接指向任何 OIDC 签发方，包括 Google、Zitadel、Dex 或自己的服务。
 
@@ -116,7 +116,9 @@ EIS 的实例 2026-10-31 按下面配置，VM 121 走通过卡片登录（当时
 - 卡片发出的 `prompt` 在 Google 上的表现（会不会每次都弹账号选择或同意页）。
 - 不带 `offline_access` 时 broker 的行为（Google 不接受这个 scope 写法；单元测试已覆盖没有刷新令牌的情形）。
 
-`allowed_domains` 仍然要配：Internal 只限制同意屏幕，机器上的域名限制由 `pam-check` 判。
+`allowed_domains` 必须配（发布检查 `public_idp_without_allowed_domains` 强制）：Internal 只限制同意屏幕，机器上的域名限制由 `pam-check` 判。
+
+后续（未做）：`pam-check` 现在只比对邮箱 `@` 之后的后缀。用 Google 时，笔记本还可以再核对 ID 令牌里的 `hd` 声明（Workspace 主域），只认 `hd` 属于 `allowed_domains` 的账号，比只看邮箱后缀更可靠。
 
 Microsoft Entra 不在范围内：镜像编的是通用 provider，它要求 `email_verified`，Entra 默认不发这个声明，接入时要单独设计。
 

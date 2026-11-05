@@ -152,6 +152,7 @@ pub const ISSUE_CODES: &[&str] = &[
     "oidc_invalid",
     "path_file_and_dir",
     "printer_invalid",
+    "public_idp_without_allowed_domains",
     "scanner_invalid",
     "school_id_mismatch",
     "school_name_invalid",
