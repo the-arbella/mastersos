@@ -86,6 +86,17 @@ jobs:
             sleep $((attempt * 180))
           done
           exit 1
+      # mkosi runs as root and apt keeps a 0700 archives/partial (half-downloaded files) in the cache: the runner user's
+      # tar cannot read it, so the save failed on every run until 2026-11-06 and every build downloaded ~1.5 GB again.
+      # Drop the partial downloads and hand the rest to the runner user.
+      - name: Make the package cache readable
+        if: always()
+        continue-on-error: true
+        run: |
+          [ -d "$MASTERSOS_PACKAGE_CACHE" ] || exit 0
+          sudo find "$MASTERSOS_PACKAGE_CACHE" -type d -name partial -prune -exec rm -rf {} +
+          sudo chown -R "$(id -u):$(id -g)" "$MASTERSOS_PACKAGE_CACHE"
+          du -sh "$MASTERSOS_PACKAGE_CACHE"
       # Saved even when the build failed: the next run then only fetches what is still missing
       - name: Save the package cache
         if: always()
