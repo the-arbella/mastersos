@@ -51,6 +51,8 @@ rustls-native-certs = "0.8"
 nix = { version = "0.29", features = ["signal"] }
 # 逐级 openat 的受限写入（safefs）；只用它的安全 API（process 只为 geteuid/getegid；termios 给安装器与首次开机程序关回显读口令）
 rustix = { version = "1", features = ["fs", "process", "time", "termios", "mount"] }
+# The sign-in handoff reads and writes Chrome's cookie database (SQLite built in: no system library to match)
+rusqlite = { version = "0.32", features = ["bundled", "serialize"] }
 # MCP
 rmcp = { version = "=3.8.0", features = ["server", "transport-io"] }
 schemars = "1"

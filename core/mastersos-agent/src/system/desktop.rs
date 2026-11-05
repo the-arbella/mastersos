@@ -52,6 +52,10 @@ const KIOSK_SUB: &str = "kiosk";
 /// Chrome 的 desktop id（Chrome 的 sysext 带的）与 Chrome 本体。
 pub const CHROME_DESKTOP: &str = "google-chrome.desktop";
 pub const CHROME_BIN: &str = "/usr/bin/google-chrome-stable";
+/// The desktop Chrome's user data directory under the home directory, and the profile in it that the sign-in handoff
+/// writes cookies into (`signin_handoff::import`). Moving to Chromium changes these with [`CHROME_BIN`].
+pub const CHROME_USER_DATA: &str = ".config/google-chrome";
+pub const CHROME_PROFILE: &str = "Default";
 /// `full` 的 Dock 里另有文件管理器。
 pub const NAUTILUS_DESKTOP: &str = "org.gnome.Nautilus.desktop";
 /// 网页应用的启动器与图标的文件名前缀（后面是 `slug`）。

@@ -301,6 +301,13 @@ impl<'a> TmpFile<'a> {
             .ok_or_else(|| anyhow!("temporary file already committed"))
     }
 
+    /// Gives the temporary file to `uid` (`fchown`, group unchanged) before [`TmpFile::commit`].
+    pub fn chown(&mut self, uid: u32) -> Result<()> {
+        rustix::fs::fchown(self.file()?, Some(rustix::fs::Uid::from_raw(uid)), None)
+            .map_err(std::io::Error::from)
+            .with_context(|| format!("setting the owner of {}", self.tmp))
+    }
+
     /// `fsync` → `renameat` 到目标名 → `fsync` 目录。
     pub fn commit(mut self) -> Result<()> {
         let f = self
