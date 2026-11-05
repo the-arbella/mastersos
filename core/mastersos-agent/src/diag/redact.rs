@@ -5,7 +5,9 @@
 //! case-insensitive, also as the end of a longer name such as `fetch_token`) is used as a key,
 //! that is followed (after optional `\`, `"`, `'` and blanks) by `=` or `:`, everything after the
 //! separator up to the end of the line becomes [`MASK`]. The key and the separator stay visible;
-//! the rest of such a line is lost (over-masking is accepted). Prose where the word is not
+//! the rest of such a line is lost (over-masking is accepted). Line breaks may stand between
+//! the key, the separator and the value (pretty-printed JSON): then the line where the value
+//! starts is masked instead. Prose where the word is not
 //! followed by `=` or `:` ("wrong password for user") stays as it is.
 //!
 //! Also masked to the end of the line: whatever follows `Bearer `; and the body of PEM private
@@ -104,15 +106,25 @@ fn line_end(b: &[u8], i: usize) -> usize {
     e
 }
 
+/// Blanks and line breaks from `i`.
+fn skip_space(b: &[u8], mut i: usize) -> usize {
+    while i < b.len() && matches!(b[i], b' ' | b'\t' | b'\r' | b'\n') {
+        i += 1;
+    }
+    i
+}
+
 /// After a key ending at `i`: optional `\`, `"`, `'`, blanks, then `=` or `:`. Returns where the
-/// value starts (after the separator and its blanks).
+/// value starts (after the separator and its blanks). Fails closed for pretty-printed text:
+/// line breaks may stand between the key and the separator and between the separator and the
+/// value, so a value on a following line is found (and that line masked).
 fn after_separator(b: &[u8], i: usize) -> Option<usize> {
     let mut j = i;
     while j < b.len() && matches!(b[j], b'\\' | b'"' | b'\'') {
         j += 1;
     }
-    j = skip_blanks(b, j);
-    matches!(b.get(j), Some(b'=') | Some(b':')).then(|| skip_blanks(b, j + 1))
+    j = skip_space(b, j);
+    matches!(b.get(j), Some(b'=') | Some(b':')).then(|| skip_space(b, j + 1))
 }
 
 /// The body of every `-----BEGIN … PRIVATE KEY-----` block (to its END line, or the end of the text).
@@ -215,6 +227,21 @@ mod tests {
             ),
             // multi-byte text before the key, the next line untouched
             ("é psk=1 é\nplain é", "é psk=[redacted]\nplain é"),
+            // pretty-printed JSON: the value on the next line
+            (
+                "{\n  \"password\":\n    \"x\",\n  \"n\": 1\n}",
+                "{\n  \"password\":\n    [redacted]\n  \"n\": 1\n}",
+            ),
+            (
+                "\"token\": \r\n\r\n  \"abc\"\r\nnext",
+                "\"token\": \r\n\r\n  [redacted]\r\nnext",
+            ),
+            // the separator and the value start the following line
+            (
+                "\"secret\"\n  : \"x\"\nnext",
+                "\"secret\"\n  : [redacted]\nnext",
+            ),
+            ("psk=\nabc\nnext", "psk=\n[redacted]\nnext"),
         ];
         for (input, want) in cases {
             assert_eq!(redact(input), want, "{input}");

@@ -22,7 +22,6 @@ use mastersos_bundle::diag::{
     source, DiagFile, DiagFileType, DiagKind, DiagManifest, DiagSkipped, DIAG_MANIFEST_FORMAT,
     DIAG_MANIFEST_NAME,
 };
-use sha2::{Digest, Sha256};
 
 use super::redact::redact;
 use crate::runner::{Cmd, Runner};

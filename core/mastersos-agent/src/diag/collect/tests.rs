@@ -6,6 +6,7 @@ use chrono::TimeZone;
 use mastersos_bundle::diag::{DIAG_INBOX_MAX_BYTES, DIAG_TICKET_MAX_BYTES};
 
 use super::*;
+use sha2::{Digest, Sha256};
 use crate::runner::{FakeRunner, Output};
 
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\nfake-image-bytes";
