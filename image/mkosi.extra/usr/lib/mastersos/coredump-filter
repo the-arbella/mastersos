@@ -1,0 +1,17 @@
+#!/bin/bash
+# Kernel core_pattern helper (usr/lib/sysctl.d/90-mastersos-coredump.conf), run as root for every crash:
+#   coredump-filter %e <the arguments systemd-coredump takes: %P %u %g %s %t %c %h %d %F>
+# Only crashes of the login stack and the agent reach systemd-coredump; anything else (a student's Chrome, their session) is
+# dropped here before any of it is read or logged: their memory may hold web pages and account tokens (2026-11-06 ruling).
+# %e is the kernel's 15-character process name; the kernel splits the pattern into arguments before expanding it, so a name
+# with spaces stays one argument.
+set -euo pipefail
+comm=${1:-}
+shift || exit 0
+uid=${2:-}
+case "$uid:$comm" in
+0:gdm3 | 0:gdm-session-wor | 0:authd | 0:authd-oidc | 0:mastersos-agent)
+	exec "${MASTERSOS_COREDUMP_HELPER:-/usr/lib/systemd/systemd-coredump}" "$@"
+	;;
+esac
+exit 0
