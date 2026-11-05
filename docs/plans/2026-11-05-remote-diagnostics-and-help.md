@@ -29,6 +29,13 @@
   服务端限 10 条/时、snapshot ≤64 KiB、上传头只带下发的、`diag::source` 固定名单）先由一个前置提交改进 `mastersos_bundle::diag`，波次 A 在它合入后开始。
   各任务一律用 `error_action(status, body)` 决定丢弃、退避、重来，不自己按状态码分支。
 
+- Ruling P6：上传队列（spec 设计 3，与云端商定、用户关心资源）：没有常驻上传者，收集与发送都在 oneshot `mastersos-upload.service`
+  （`mastersos-agent upload drain`）里，队列 `/var/lib/mastersos/upload-queue/`。这改动 Task 4、5 的分工：
+  Task 4 只做「ack running → 写 `collect` 项 → `systemctl start --no-block`」，以及 drain 里处理 `collect` 项（收集、上传、ack 结果）；
+  Task 5 的 support host 只写 `support` 项并启动服务，drain 负责建单、附件；队列格式、触发（agent、NM dispatcher、30 分钟 timer）、
+  退避、电池、100 MB 上限、单元资源限制由 Task 4 先建好（`upload/queue.rs`、`upload/drain.rs`、单元与 dispatcher 脚本），Task 5 复用。
+  因此 Task 5 排在 Task 4 之后，不再并行。错误体是嵌套格式，一律 `ApiError::parse`。
+
 ## Global Constraints
 
 - 代码注释、错误、脚本输出英文；终端用户文字走 i18n，英文为主（登录扩展 `strings.js` + `image/login-i18n/*.po` 84 种；kiosk 扩展只英文）。提交信息中文。

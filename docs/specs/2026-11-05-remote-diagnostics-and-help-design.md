@@ -92,7 +92,8 @@
      `agent-state`、`status-report`、`screenshot`。新增来源算协议变更。
    - 云端做开发商副本时按 `source` 处理：`wifi-scan` 与 `coredump-info` 整个丢掉；其余文件里的 IP、MAC/BSSID、SSID、
      序列号与 `/home/<x>` 路径做假名化。
-6. **错误。** 错误响应体统一 `{"error": "<code>"}`（`ApiError`，可能多带字段），机器按下表处理（`error_action`）：
+6. **错误。** 错误响应体沿用服务端现有的嵌套格式 `{"error": {"code": "<码>", "message": "<英文句子>"}}`；机器也认扁平的
+   `{"error": "<码>"}`（`ApiError::parse`），多带的字段忽略。服务端 JSON 解析失败一律回 `invalid` 422。机器按下表处理（`error_action`）：
 
    | code | 状态 | 机器 |
    |---|---|---|
@@ -104,9 +105,14 @@
    | `expired` | 410 | 放弃 |
    | `upload_mismatch` | 409 | 从 `POST /v1/diagnostics` 重来 |
    | `forbidden` | 403 | 设备校验失败：保留，退避 |
+   | `unauthorized` | 401（带体） | fetch 令牌不对：保留，退避 |
+   | `device_auth_missing` | 401 | 机器端的 bug：保留，记错误日志，退避 |
+   | `school_suspended` | 403 | 保留，退避 |
+   | `not_ready` | 503 | 保留，退避 |
+   | `too_many_keys` | 429 | 首次登记太多：同所有 429，按 `Retry-After`，没有就退避 |
    | （无） | 5xx、网络错误、404、空体 401 | 保留，退避 |
 
-   未知 code 按状态兜底：400、413、422 丢弃（同样的请求永远不会被接受），其余保留并退避。
+   429 一律按 `Retry-After`、5xx 一律退避，不看 code。未知 code 按状态兜底：400、413、422 丢弃（同样的请求永远不会被接受），其余保留并退避。
    `agent_too_old` 只出现在管理端（对旧机器发需要新 agent 的操作），机器收不到。
 
 ## 设计（系统侧）
@@ -126,20 +132,34 @@
    - 系统：`os-release`、`bootctl status`、agent 的 `state.json` 与最近状态报告（过一遍去密）。
    - **不收**：种子分区（seed、`identity.json`、令牌）、`/etc/NetworkManager/system-connections/`、任何私钥与令牌文件、
      用户主目录。收集后对文本做一遍去密（`psk=`、`password=`、`token`、`secret`、Bearer 头等模式替换为 `[redacted]`）。
-   - 写 `manifest.json`，打 tar.zst，超限按上面的规则截断。缺少的命令跳过并在 manifest 里记 `source` 失败原因。
-3. **inbox 处理。** `collect-diagnostics` 按现有 inbox 流程（时钟下限、过期、先 ack）。收集与上传在阻塞线程里做，不挡主循环；
-   上传失败按退避重试同一个包，直到指令过期。收集开始时在当前会话（含登录页）显示一条通知
+   - 写 `manifest.json`，打 tar.zst（tar 里只放普通文件与目录，不放链接；zstd 窗口 ≤8 MiB，`window_log` ≤
+     `DIAG_ZSTD_WINDOW_LOG_MAX` = 23，不用 long 模式与超高级别：服务端内存小），超限按上面的规则截断。缺少的命令跳过并在 manifest 里记 `source` 失败原因。
+3. **上传队列（离线排队、联网补发、平时不占资源；用户关心，与云端商定）。**
+   - 不加常驻进程。收集与发送都由 oneshot 的 `mastersos-upload.service`（`mastersos-agent upload drain`）做，队列空了就退出。
+     单元限制：`Nice=10`、`IOSchedulingClass=idle`、`MemoryMax=64M`、`CPUQuota=20%`。上传从文件流式读，包不进内存。
+   - 队列在磁盘上：`/var/lib/mastersos/upload-queue/`（root 0700）。每项一个 json（种类：`collect`（待收集的指令）、`support`
+     （求助单）、`archive`（打好的包）；seq 或 client_id、bytes、sha256（打包时算好）、截止时间、退避状态），加上包文件。
+     求助单本身也走这个队列。关机、重启不丢。
+   - 触发：(a) agent 收到 `collect-diagnostics`、support 服务收到求助后 `systemctl start --no-block mastersos-upload.service`；
+     (b) NetworkManager dispatcher 在连通性变为 full 时触发，并把各项退避清零；(c) `mastersos-upload.timer` 每 30 分钟兜底一次，
+     `RandomizedDelaySec=10min`，开机后也由它接着发。
+   - 重试：指数退避，1 分钟起，上限 1 小时，带随机抖动；有 `Retry-After` 按它。截止：求助附件 48 小时（以服务端 `expired`
+     为准），收集指令按指令的 `expires_at`；过了就放弃（指令 ack `failed`）。
+   - 电池低于 15% 且没插电：只发求助单（小 JSON），诊断包等插电或电量回升。
+   - 磁盘上限：队列总共 ≤100 MB，超出从最旧的诊断包开始丢（对应指令 ack `failed`，detail `dropped: queue full`），求助单本身不丢。
+4. **inbox 处理。** `collect-diagnostics` 按现有 inbox 流程（时钟下限、过期、先 ack）：ack `running` 后写一项 `collect` 进上传队列、
+   启动上传服务，主循环不等；上传服务收集、上传后 ack `done`/`failed`。收集开始时在当前会话（含登录页）显示一条通知
    「IT is collecting diagnostic info from this computer.」（i18n）。
-4. **求助入口与本地通道。**
+5. **求助入口与本地通道。**
    - 本地 socket `/run/mastersos/support.sock`（systemd socket 激活，0666），服务端是 root 的 `mastersos-agent support-host`。
      用 `SO_PEERCRED` 取调用方 uid 认定用户：GDM 登录页 → `none`，访客 uid 1999 → `guest`，authd 用户 → `sso`，其他 → `local`；
      `name` 取自系统，不接受界面传来的名字。
-   - 界面只传：分类、描述、是否附截图与截图文件（PNG，≤5 MB，从调用方给的 fd 读，不按路径读）。
-   - helper 校验后写入 root 0700 的本地队列 `/var/lib/mastersos/support-queue/<client_id>.json`，叫醒 agent，立刻回界面
-     「已排队」；agent 发送成功后把单号写回，界面轮询或订阅后显示单号。
+   - 界面只传：分类、描述、是否附截图与截图（PNG，≤5 MB，base64 放在请求里，不按路径读）。
+   - helper 校验后写入上传队列（一项 `support`，截图另存），启动上传服务，立刻回界面「已排队」；上传服务建单成功后把单号写回
+     该项，界面轮询 `status` 显示单号；随后同一服务收集最近 30 分钟的轻量日志，作为 `archive` 项上传。
    - 限流：本机每小时 3 条（helper 里数，跨重启算），超出界面显示「稍后再试」；服务端 429 同样处理。
    - 离线：队列里的单子联网后发出；界面说明「Will send when you're online」。
-5. **界面（英文为主，全部走 i18n）。**
+6. **界面（英文为主，全部走 i18n）。**
    - 登录页：底部 shelf 加「Get help」；桌面：右上系统菜单加「Get help」；Kiosk：浮动 Options 菜单在 Exit 上方加「Get help」
      （扩展经 native messaging 宿主 `mastersos-agent support-host --native` 转到同一个 socket）。
    - 对话框：标题「Get help from IT」；分类按钮（Wi-Fi / Can't sign in / An app / Screen, keys or sound / Battery / Other），
@@ -147,7 +167,7 @@
      「Attach a screenshot」默认不勾，勾选后显示缩略图预览（截的是打开对话框之前的画面）；Cancel / Send。
    - 发送后：「Sent. Ticket #1042. IT has been told.」；排队时：「Saved. It will be sent when this computer is online.」
    - `[config.support] enabled = false` 时三处入口都不显示。
-6. **设置项。** bundle 加 `[config.support] enabled`（默认 true），spec 文本、lint、`mastersos spec --section config.support`。
+7. **设置项。** bundle 加 `[config.support] enabled`（默认 true），spec 文本、lint、`mastersos spec --section config.support`。
 
 ## 测试
 

@@ -248,14 +248,86 @@ pub struct DiagUploadResponse {
     pub upload: Option<PresignedUpload>,
 }
 
-/// Body of every error answer of these endpoints: `{"error": "<code>"}`. Newer clouds may add
-/// fields; they are ignored.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+/// Body of an error answer, the server's usual nested form
+/// `{"error": {"code": "<code>", "message": "<English sentence>"}}` (the same as the inbox and
+/// the other machine endpoints). The flat form `{"error": "<code>"}` is read too. Fields a newer
+/// cloud adds are ignored. Serialized in the nested form.
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ApiError {
-    /// One of the `ERR_*` codes.
-    pub error: String,
+    /// One of the `ERR_*` codes, or one this version does not know.
+    pub code: String,
+    /// The server's English sentence, for logs; never shown to students.
+    pub message: Option<String>,
 }
+
+impl ApiError {
+    /// The error body of an answer, or `None` when it is not one (empty, not JSON, no `error`).
+    pub fn parse(body: &[u8]) -> Option<ApiError> {
+        serde_json::from_slice(body).ok()
+    }
+
+    /// The code means the machine sent something wrong ([`ERR_DEVICE_AUTH_MISSING`]): still
+    /// kept and retried, but logged as an error.
+    pub fn is_machine_bug(&self) -> bool {
+        self.code == ERR_DEVICE_AUTH_MISSING
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct ApiErrorInner {
+    code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ApiErrorField {
+    Nested(ApiErrorInner),
+    Flat(String),
+}
+
+impl Serialize for ApiError {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Wire<'a> {
+            error: &'a ApiErrorInner,
+        }
+        Wire {
+            error: &ApiErrorInner {
+                code: self.code.clone(),
+                message: self.message.clone(),
+            },
+        }
+        .serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for ApiError {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Wire {
+            error: ApiErrorField,
+        }
+        Ok(match Wire::deserialize(d)?.error {
+            ApiErrorField::Nested(i) => ApiError {
+                code: i.code,
+                message: i.message,
+            },
+            ApiErrorField::Flat(code) => ApiError {
+                code,
+                message: None,
+            },
+        })
+    }
+}
+
+/// Largest zstd window the cloud decompresses (`window_log_max(23)`, 8 MiB; the server is
+/// small). The machine compresses with a window at most this big: no `--long`, no ultra levels.
+/// An archive with a bigger window still reaches the school, but gets no vendor copy. The tar
+/// holds regular files only, no links.
+pub const DIAG_ZSTD_WINDOW_LOG_MAX: u32 = 23;
 
 /// `422`: the request does not validate. The machine drops it and logs why.
 pub const ERR_INVALID: &str = "invalid";
@@ -282,6 +354,18 @@ pub const ERR_FORBIDDEN: &str = "forbidden";
 /// reports (for example asking an old machine for diagnostics). A machine that sees it treats
 /// it like any unknown code.
 pub const ERR_AGENT_TOO_OLD: &str = "agent_too_old";
+/// `401` with a body: the fetch token is wrong. The machine keeps what it has and backs off.
+pub const ERR_UNAUTHORIZED: &str = "unauthorized";
+/// The device headers were missing: a bug on the machine. It keeps what it has, logs an error
+/// ([`ApiError::is_machine_bug`]) and backs off.
+pub const ERR_DEVICE_AUTH_MISSING: &str = "device_auth_missing";
+/// `429` from the device check: too many first enrolments. Like every `429` it is
+/// [`ErrorAction::RetryAfter`] (without a `Retry-After` the machine backs off).
+pub const ERR_TOO_MANY_KEYS: &str = "too_many_keys";
+/// `403`: the school is suspended. The machine keeps what it has and backs off.
+pub const ERR_SCHOOL_SUSPENDED: &str = "school_suspended";
+/// `503`: the server is not ready yet. The machine keeps what it has and backs off.
+pub const ERR_NOT_READY: &str = "not_ready";
 
 /// What the machine does with a failed answer ([`error_action`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -301,18 +385,24 @@ pub enum ErrorAction {
 }
 
 /// What the machine does with a non-2xx answer of `status` and its body, if the body parsed
-/// as an [`ApiError`]. Network errors (no status) are [`ErrorAction::Backoff`].
+/// as an [`ApiError`] ([`ApiError::parse`]; a JSON body the server could not parse is answered
+/// with [`ERR_INVALID`] `422`). Network errors (no status) are [`ErrorAction::Backoff`].
 ///
 /// | code                              | status | machine                                       |
 /// |-----------------------------------|--------|-----------------------------------------------|
 /// | [`ERR_INVALID`]                   | 422    | drop the request and log it                   |
 /// | [`ERR_SUPPORT_DISABLED`]          | 403    | drop queued help requests; tell the student   |
-/// | [`ERR_TOO_MANY`]                  | 429    | keep; retry after `Retry-After` seconds       |
+/// | [`ERR_TOO_MANY`]                  | 429    | keep; retry after `Retry-After`, else back off|
 /// | [`ERR_DIAGNOSTICS_UNAVAILABLE`]   | 503    | keep; back off                                |
 /// | [`ERR_NOT_YOURS`]                 | 409    | give up this upload                           |
 /// | [`ERR_EXPIRED`]                   | 410    | give up this upload                           |
 /// | [`ERR_UPLOAD_MISMATCH`]           | 409    | start again from `POST /v1/diagnostics`       |
 /// | [`ERR_FORBIDDEN`]                 | 403    | device check failed: keep; back off           |
+/// | [`ERR_UNAUTHORIZED`]              | 401    | fetch token wrong: keep; back off             |
+/// | [`ERR_DEVICE_AUTH_MISSING`]       | 401    | machine bug: keep; log an error; back off     |
+/// | [`ERR_SCHOOL_SUSPENDED`]          | 403    | keep; back off                                |
+/// | [`ERR_NOT_READY`]                 | 503    | keep; back off                                |
+/// | [`ERR_TOO_MANY_KEYS`]             | 429    | keep; retry after `Retry-After`, else back off|
 /// | none (5xx, 404, 401 empty body)   |        | keep; back off                                |
 ///
 /// A known code decides; `429` is always [`ErrorAction::RetryAfter`] and `5xx` always
@@ -327,11 +417,18 @@ pub fn error_action(status: u16, body: Option<&ApiError>) -> ErrorAction {
     if status >= 500 {
         return ErrorAction::Backoff;
     }
-    match body.map(|b| b.error.as_str()) {
+    match body.map(|b| b.code.as_str()) {
         Some(ERR_INVALID) => ErrorAction::Drop,
         Some(ERR_SUPPORT_DISABLED) => ErrorAction::DropSupportDisabled,
         Some(ERR_TOO_MANY) => ErrorAction::RetryAfter,
-        Some(ERR_DIAGNOSTICS_UNAVAILABLE) | Some(ERR_FORBIDDEN) => ErrorAction::Backoff,
+        Some(
+            ERR_DIAGNOSTICS_UNAVAILABLE
+            | ERR_FORBIDDEN
+            | ERR_UNAUTHORIZED
+            | ERR_DEVICE_AUTH_MISSING
+            | ERR_SCHOOL_SUSPENDED
+            | ERR_NOT_READY,
+        ) => ErrorAction::Backoff,
         Some(ERR_NOT_YOURS) | Some(ERR_EXPIRED) => ErrorAction::GiveUp,
         Some(ERR_UPLOAD_MISMATCH) => ErrorAction::Restart,
         _ => match status {
@@ -1223,14 +1320,35 @@ mod tests {
     fn api_error_wire() {
         round_trip(
             &ApiError {
-                error: ERR_TOO_MANY.into(),
+                code: ERR_TOO_MANY.into(),
+                message: Some("Too many requests.".into()),
             },
-            json!({"error": "too_many"}),
+            json!({"error": {"code": "too_many", "message": "Too many requests."}}),
         );
-        // Extra fields from a newer cloud are fine.
-        let e: ApiError =
-            serde_json::from_value(json!({"error": "invalid", "detail": "text too long"})).unwrap();
-        assert_eq!(e.error, ERR_INVALID);
+        // The nested form without a message, and extra fields from a newer cloud.
+        let e: ApiError = serde_json::from_value(
+            json!({"error": {"code": "invalid", "extra": 1}, "detail": "text too long"}),
+        )
+        .unwrap();
+        assert_eq!(e.code, ERR_INVALID);
+        assert_eq!(e.message, None);
+        // The flat string form is read too.
+        let e: ApiError = serde_json::from_value(json!({"error": "not_ready"})).unwrap();
+        assert_eq!(e.code, ERR_NOT_READY);
+        // Anything else is not an ApiError.
+        assert!(serde_json::from_value::<ApiError>(json!({"error": 5})).is_err());
+        assert!(serde_json::from_value::<ApiError>(json!({"message": "x"})).is_err());
+        assert!(ApiError::parse(b"not json").is_none());
+        assert_eq!(
+            ApiError::parse(br#"{"error":{"code":"expired","message":"m"}}"#).map(|e| e.code),
+            Some(ERR_EXPIRED.to_owned())
+        );
+        assert!(!e.is_machine_bug());
+        assert!(ApiError {
+            code: ERR_DEVICE_AUTH_MISSING.into(),
+            message: None
+        }
+        .is_machine_bug());
         for (c, s) in [
             (ERR_INVALID, "invalid"),
             (ERR_SUPPORT_DISABLED, "support_disabled"),
@@ -1241,6 +1359,11 @@ mod tests {
             (ERR_UPLOAD_MISMATCH, "upload_mismatch"),
             (ERR_FORBIDDEN, "forbidden"),
             (ERR_AGENT_TOO_OLD, "agent_too_old"),
+            (ERR_UNAUTHORIZED, "unauthorized"),
+            (ERR_DEVICE_AUTH_MISSING, "device_auth_missing"),
+            (ERR_SCHOOL_SUSPENDED, "school_suspended"),
+            (ERR_NOT_READY, "not_ready"),
+            (ERR_TOO_MANY_KEYS, "too_many_keys"),
         ] {
             assert_eq!(c, s);
         }
@@ -1248,7 +1371,10 @@ mod tests {
 
     #[test]
     fn error_actions() {
-        let e = |code: &str| ApiError { error: code.into() };
+        let e = |code: &str| ApiError {
+            code: code.into(),
+            message: None,
+        };
         use ErrorAction::*;
         let cases: &[(u16, Option<ApiError>, ErrorAction)] = &[
             (422, Some(e(ERR_INVALID)), Drop),
@@ -1276,6 +1402,12 @@ mod tests {
             (410, None, Backoff),
             (418, Some(e("new_code")), Backoff),
             (403, Some(e(ERR_AGENT_TOO_OLD)), Backoff),
+            (401, Some(e(ERR_UNAUTHORIZED)), Backoff),
+            (400, Some(e(ERR_DEVICE_AUTH_MISSING)), Backoff),
+            (401, Some(e(ERR_DEVICE_AUTH_MISSING)), Backoff),
+            (403, Some(e(ERR_SCHOOL_SUSPENDED)), Backoff),
+            (503, Some(e(ERR_NOT_READY)), Backoff),
+            (429, Some(e(ERR_TOO_MANY_KEYS)), RetryAfter),
         ];
         for (status, body, want) in cases {
             assert_eq!(
@@ -1284,6 +1416,11 @@ mod tests {
                 "{status} {body:?}"
             );
         }
+    }
+
+    #[test]
+    fn zstd_window_fits_the_server() {
+        assert_eq!(DIAG_ZSTD_WINDOW_LOG_MAX, 23);
     }
 
     #[test]
