@@ -1,96 +1,172 @@
-// MastersOS 考试扩展的内容脚本（计划 9 Task 7，设计 §4.7）：锁定会话里每个页面的右下角有一个「退出 / Exit」按钮，
-// 点了先在同一处确认，确认后请后台（background.js）经 native messaging 结束锁定会话。
+// Content script of the MastersOS exam extension (plan 9 Task 7, design §4.7): every page of a locked session gets a
+// small icon-only "Options" handle docked to the middle of the right edge (exam pages keep Next / Submit bottom right
+// and status top right). It opens a small menu of actions (today only "Exit"); Exit asks to confirm in a dialog, then
+// asks the background (background.js) to end the locked session over native messaging. Exiting and failure show in
+// that same dialog. Actions are the ACTIONS list below: adding one is one more entry there.
 //
-// 不能弄坏考试页面：
-//   - 按钮与对话框都在一个 closed shadow root 里（页面的脚本拿不到它，页面的样式表进不去），样式全在里面；
-//     宿主元素自己的样式写在 style 属性上并带 !important（行内的 !important 比页面样式表里的 !important 优先）。
-//   - 内容脚本跑在扩展的隔离环境里，不往页面的 JS 环境注入任何东西。
-//   - 不吞页面的事件：自己元素上的点击与按键不冒泡给页面；document 上只有三个只看不拦的监听（toggle 的捕获、
-//     fullscreenchange），用来在页面开了顶层元素之后把按钮重新提到最上面。
-//   - 页面把宿主元素移走（换掉 <html> 的子节点）就挂回去；10 秒内最多 10 次，再多就停下、记一条警告，不与页面无限拉锯。
-// 顶层：宿主是 popover="manual"，showPopover() 进顶层——页面的 z-index、<html> 上的 transform / filter / contain
-// 都管不到它。页面之后开的模态对话框、popover、全屏元素会排在它上面，所以页面一开（toggle 事件、对话框的 open 属性、
-// fullscreenchange）就先 hide 再 show，重新排到最上面；页面开着模态对话框时，<html> 下的一切都是 inert（点不到），
-// 宿主就挪进那个对话框里（对话框的子孙不 inert），对话框关了再挪回 <html>。提升 10 秒内最多 30 次。
-// 提升超过上限时不丢，窗口结束时补一次。每秒一次的看门狗兜底：页面直接移走开着的模态对话框、换掉 <html> 时把按钮放回该在的地方。
-// 没有 Popover API（旧版 Chrome）时退回到最大的 z-index，并保持是 <html> 的最后一个子元素。
-// 按钮可以拖到四角之一，位置记在页面的 sessionStorage（同一标签页里换页还在那个角）。
+// It must not break the exam page:
+//   - The handle, menu and dialog live in a closed shadow root (page scripts cannot reach it, page style sheets do not
+//     get in) with all their styles inside it. The host element's own styles are inline with !important (inline
+//     !important beats !important in the page's style sheets).
+//   - The content script runs in the extension's isolated world and injects nothing into the page's JS world.
+//   - It does not swallow page events: clicks and keys on its own elements stop at the shadow root and never bubble to
+//     the page. On document there are only listeners that look and never intercept (toggle in capture,
+//     fullscreenchange) to raise the handle again after the page opens a top-layer element, plus, only while the menu
+//     is open, a capturing pointerdown that closes the menu on a press outside it (and lets the event through).
+//   - When the page removes the host (or replaces <html>'s children) it is put back; at most 10 times in 10 seconds,
+//     then it stops and logs one warning instead of fighting the page forever.
+// Top layer: the host is popover="manual" and showPopover() puts it in the top layer, out of reach of the page's
+// z-index and of transform / filter / contain on <html>. Modal dialogs, popovers and fullscreen elements the page opens
+// later stack above it, so as soon as the page opens one (toggle event, a dialog's open attribute, fullscreenchange)
+// the host is hidden and shown again to go back on top. While the page has a modal dialog open everything under
+// <html> is inert (not clickable), so the host moves into that dialog (its descendants are not inert) and back to
+// <html> when it closes. Raising is capped at 30 times in 10 seconds; raises over the cap are not lost, one more runs
+// when the window ends. A once-a-second watchdog puts the handle back where it belongs when the page removes an open
+// modal dialog directly or replaces <html>.
+// Without the Popover API (old Chrome) it falls back to the largest z-index and stays <html>'s last child.
+// The handle can be dragged anywhere and snaps to the nearer side edge on release (a move under DRAG_PX is still a
+// click and opens the menu). Side and height (a fraction of the free viewport height, so it stays inside the viewport
+// on resize) are kept in the page's sessionStorage (same place after navigating in the same tab).
 (function mastersosExamExit() {
   "use strict";
 
-  const KEY = "mastersos-exit-corner";
-  const CORNERS = ["br", "bl", "tr", "tl"];
-  const DRAG_PX = 6; // 移动超过这么多才算拖，不算点
-  const EXIT_TIMEOUT_MS = 20000; // 回了「已请求」之后这么久会话还在，就当没退成
+  const KEY = "mastersos-exit-pos"; // {"side": "l" | "r", "y": 0..1}; the old corner key is ignored
+  const HANDLE_H = 48; // px, keep in step with .fab in STYLE
+  const DRAG_PX = 6; // a press only becomes a drag after moving this far
+  const EXIT_TIMEOUT_MS = 20000; // session still there this long after "requested": treat as not exited
 
   const TEXT = {
-    button: "退出 / Exit",
-    zh: "确定离开吗？离开后要重新进入。",
-    en: "Leave this app? You will need to open it again.",
-    cancel: "取消 / Cancel",
-    confirm: "离开 / Leave",
-    exiting: "正在退出… / Exiting…",
-    failed: "没能退出，请举手找老师。/ Could not leave. Please ask a teacher.",
+    handle: "Options",
+    exit: "Exit",
+    confirmTitle: "Exit this app?",
+    confirmBody: "You will need to open it again from the sign-in screen.",
+    cancel: "Cancel",
+    confirm: "Exit",
+    exitingTitle: "Exiting…",
+    exitingBody: "Closing this app.",
+    failedTitle: "Could not exit",
+    failedBody: "Could not leave. Please ask a teacher.",
+    ok: "OK",
   };
 
+  // Icons as [tag, attributes] lists, drawn on a 24x24 grid (built with createElementNS: no innerHTML).
+  const ICONS = {
+    dots: [
+      ["circle", { cx: 12, cy: 5, r: 2, fill: "currentColor" }],
+      ["circle", { cx: 12, cy: 12, r: 2, fill: "currentColor" }],
+      ["circle", { cx: 12, cy: 19, r: 2, fill: "currentColor" }],
+    ],
+    // a door with an arrow leaving it
+    exit: [
+      ["path", { d: "M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4" }],
+      ["path", { d: "M15 8l4 4-4 4" }],
+      ["path", { d: "M19 12H9" }],
+    ],
+  };
+
+  const FONT = `system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif`;
   const STYLE = `
 :host { all: initial; }
-.exit {
-  position: fixed; z-index: 2147483647; margin: 0; padding: 8px 16px;
-  font: 600 14px/1.2 system-ui, "Noto Sans CJK SC", "Noto Sans Thai", sans-serif;
-  color: #fff; background: #b91c1c; border: 2px solid #fff; border-radius: 999px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, .35); cursor: pointer; touch-action: none; user-select: none;
-  opacity: .92; min-width: 0; min-height: 0; width: auto; height: auto; display: block; visibility: visible;
+button { font-family: ${FONT}; -webkit-tap-highlight-color: transparent; }
+button:focus { outline: none; }
+button:focus-visible { outline: 2px solid #d9653b; outline-offset: 2px; }
+button::-moz-focus-inner { border: 0; }
+.dock {
+  position: fixed; z-index: 2147483647; margin: 0; padding: 0; width: auto; height: ${HANDLE_H}px;
+  top: calc((100vh - ${HANDLE_H}px) * var(--y, .5)); visibility: visible;
 }
-.exit:hover, .exit:focus-visible { opacity: 1; }
-.exit:focus-visible { outline: 3px solid #fbbf24; outline-offset: 2px; }
-.exit.dragging { cursor: grabbing; }
-.exit[data-corner="br"] { right: 16px; bottom: 16px; }
-.exit[data-corner="bl"] { left: 16px; bottom: 16px; }
-.exit[data-corner="tr"] { right: 16px; top: 16px; }
-.exit[data-corner="tl"] { left: 16px; top: 16px; }
+.dock[data-side="r"] { right: 0; }
+.dock[data-side="l"] { left: 0; }
+.fab {
+  box-sizing: border-box; display: flex; align-items: center; justify-content: center; margin: 0; padding: 0;
+  width: 40px; height: ${HANDLE_H}px; min-width: 40px; color: #fff; background: rgba(27, 29, 42, .85);
+  border: 1px solid rgba(255, 255, 255, .55); box-shadow: 0 2px 10px rgba(0, 0, 0, .3);
+  cursor: pointer; touch-action: none; user-select: none; visibility: visible;
+  transition: width .12s ease, background-color .12s ease;
+}
+.dock[data-side="r"] .fab { border-right: 0; border-radius: 12px 0 0 12px; }
+.dock[data-side="l"] .fab { border-left: 0; border-radius: 0 12px 12px 0; }
+.fab:hover, .fab:focus-visible, .fab[aria-expanded="true"] { width: 44px; background: #1b1d2a; }
+.dock.dragging .fab { cursor: grabbing; border-radius: 12px; }
+.fab svg { width: 20px; height: 20px; display: block; pointer-events: none; }
+.menu {
+  position: absolute; top: 50%; transform: translateY(-50%); box-sizing: border-box; min-width: 11rem; margin: 0;
+  padding: 6px; display: block; background: #fff; color: #1b1d2a; border-radius: 12px;
+  box-shadow: 0 8px 28px rgba(16, 18, 27, .22), 0 1px 3px rgba(16, 18, 27, .12);
+}
+.dock[data-side="r"] .menu { right: calc(100% + 8px); }
+.dock[data-side="l"] .menu { left: calc(100% + 8px); }
+.menu[hidden] { display: none; }
+.menu button {
+  box-sizing: border-box; display: flex; align-items: center; gap: 12px; width: 100%; height: 44px; margin: 0;
+  padding: 0 14px; text-align: left; font: 500 15px/1.2 ${FONT}; color: #1b1d2a; background: transparent;
+  border: 0; border-radius: 8px; cursor: pointer; white-space: nowrap;
+}
+.menu button svg { width: 18px; height: 18px; flex: none; display: block; }
+.menu button.danger { color: #b3261e; }
+.menu button:hover, .menu button:focus { background: #f1f2f6; }
+.menu button:focus-visible { outline-offset: -2px; }
 .overlay {
   position: fixed; inset: 0; z-index: 2147483647; display: flex; align-items: center; justify-content: center;
   background: rgba(0, 0, 0, .55); visibility: visible;
 }
 .overlay[hidden] { display: none; }
 .dialog {
-  box-sizing: border-box; max-width: min(28rem, calc(100vw - 32px)); margin: 16px; padding: 20px 24px;
-  background: #fff; color: #111; border-radius: 12px; box-shadow: 0 8px 32px rgba(0, 0, 0, .4);
-  font: 16px/1.5 system-ui, "Noto Sans CJK SC", "Noto Sans Thai", sans-serif; text-align: left;
+  box-sizing: border-box; width: calc(100vw - 32px); max-width: 420px; margin: 16px; padding: 24px;
+  display: flex; flex-direction: column; gap: 20px; background: #fff; color: #1b1d2a; border-radius: 16px;
+  box-shadow: 0 16px 48px rgba(16, 18, 27, .35); font: 15px/1.5 ${FONT}; text-align: left;
 }
-.dialog p { margin: 0 0 4px; }
-.status { min-height: 1.5em; margin-top: 8px; color: #b91c1c; font-size: 14px; }
-.actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.text { display: flex; flex-direction: column; gap: 8px; }
+.head { display: flex; align-items: center; gap: 10px; }
+.title { margin: 0; font: 600 18px/1.3 ${FONT}; color: #1b1d2a; }
+.spinner {
+  box-sizing: border-box; flex: none; width: 18px; height: 18px; border-radius: 50%;
+  border: 2px solid #eee; border-top-color: #d9653b; animation: mastersos-spin .8s linear infinite;
+}
+.spinner[hidden] { display: none; }
+@keyframes mastersos-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation: none; border-color: #d9653b #eee; }
+}
+.body { margin: 0; font: 400 15px/1.5 ${FONT}; color: #444; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .actions button {
-  margin: 0; padding: 8px 16px; font: 600 15px/1.2 inherit; font-family: inherit; border-radius: 8px; cursor: pointer;
-  border: 1px solid #9ca3af; background: #f3f4f6; color: #111;
+  box-sizing: border-box; height: 40px; margin: 0; padding: 0 18px; font: 600 15px/1 ${FONT}; border-radius: 8px;
+  cursor: pointer; border: 1px solid #c9ccd6; background: #fff; color: #1b1d2a;
 }
-.actions button.confirm { border-color: #b91c1c; background: #b91c1c; color: #fff; }
+.actions button:hover { background: #f1f2f6; }
+.actions button.confirm { border-color: #b3261e; background: #b3261e; color: #fff; }
+.actions button.confirm:hover { background: #9c2019; }
+.actions[hidden] { display: flex; visibility: hidden; } /* keeps its height: the card does not jump */
+.actions button[hidden] { display: none; }
 .actions button:disabled { opacity: .5; cursor: default; }
-.actions button:focus-visible { outline: 3px solid #2563eb; outline-offset: 2px; }
 `;
 
   const doc = document;
   if (!doc.documentElement) return;
 
-  function readCorner() {
+  const DEFAULT_POS = { side: "r", y: 0.5 };
+  function readPos() {
     try {
-      const c = sessionStorage.getItem(KEY);
-      return CORNERS.includes(c) ? c : "br";
+      const p = JSON.parse(sessionStorage.getItem(KEY));
+      if (p && (p.side === "l" || p.side === "r") && typeof p.y === "number" && p.y >= 0 && p.y <= 1) {
+        return { side: p.side, y: p.y };
+      }
     } catch {
-      return "br"; // 沙箱页面、关了存储：照样显示，只是不记位置
+      // sandboxed page, storage disabled or a malformed value: still shown at the default place
     }
+    return DEFAULT_POS;
   }
-  function saveCorner(c) {
+  function savePos(p) {
     try {
-      sessionStorage.setItem(KEY, c);
+      sessionStorage.setItem(KEY, JSON.stringify(p));
     } catch {
-      // 记不下就算了
+      // cannot remember it: fine
     }
   }
 
-  // 宿主：自定义元素名（不撞页面的 button / div 选择器），行内 !important 压住页面针对它的样式
+  // Host: a custom element name (no clash with the page's button / div selectors); inline !important beats page
+  // styles aimed at it.
   const host = doc.createElement("mastersos-exit");
   const hostStyle = {
     all: "initial",
@@ -120,47 +196,88 @@
   const style = doc.createElement("style");
   style.textContent = STYLE;
 
-  const btn = doc.createElement("button");
-  btn.type = "button";
-  btn.className = "exit";
-  btn.textContent = TEXT.button;
-  btn.dataset.corner = readCorner();
+  function el(tag, className, text) {
+    const e = doc.createElement(tag);
+    if (className) e.className = className;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  function button(className, text) {
+    const b = el("button", className, text);
+    b.type = "button";
+    return b;
+  }
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  function svgIcon(parts) {
+    const svg = doc.createElementNS(SVG_NS, "svg");
+    const attrs = { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "2" };
+    Object.assign(attrs, { "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" });
+    for (const [k, v] of Object.entries(attrs)) svg.setAttribute(k, v);
+    svg.setAttribute("focusable", "false");
+    for (const [tag, a] of parts) {
+      const n = doc.createElementNS(SVG_NS, tag);
+      for (const [k, v] of Object.entries(a)) n.setAttribute(k, String(v));
+      svg.append(n);
+    }
+    return svg;
+  }
 
-  const overlay = doc.createElement("div");
-  overlay.className = "overlay";
+  // ---- floating handle and its menu -------------------------------------------
+  const dock = el("div", "dock");
+  function place(p) {
+    dock.dataset.side = p.side;
+    dock.style.setProperty("--y", String(p.y));
+  }
+  place(readPos());
+
+  const fab = button("fab");
+  const dots = svgIcon(ICONS.dots);
+  dots.setAttribute("stroke", "none");
+  fab.append(dots);
+  fab.setAttribute("aria-label", TEXT.handle);
+  fab.title = TEXT.handle;
+  fab.setAttribute("aria-haspopup", "menu");
+  fab.setAttribute("aria-expanded", "false");
+  fab.setAttribute("aria-controls", "mastersos-menu");
+
+  const menu = el("div", "menu");
+  menu.id = "mastersos-menu";
+  menu.setAttribute("role", "menu");
+  menu.setAttribute("aria-label", TEXT.handle);
+  menu.hidden = true;
+  dock.append(fab, menu);
+
+  // ---- Exit dialog: confirm, then exiting / failed in the same card ------------
+  const overlay = el("div", "overlay");
   overlay.hidden = true;
-  const dialog = doc.createElement("div");
-  dialog.className = "dialog";
+  const dialog = el("div", "dialog");
   dialog.setAttribute("role", "dialog");
   dialog.setAttribute("aria-modal", "true");
-  dialog.setAttribute("aria-labelledby", "mastersos-exit-q");
-  const q = doc.createElement("div");
-  q.id = "mastersos-exit-q";
-  const zh = doc.createElement("p");
-  zh.textContent = TEXT.zh;
-  const en = doc.createElement("p");
-  en.lang = "en";
-  en.textContent = TEXT.en;
-  q.append(zh, en);
-  const status = doc.createElement("div");
-  status.className = "status";
-  status.setAttribute("role", "status");
-  const actions = doc.createElement("div");
-  actions.className = "actions";
-  const cancel = doc.createElement("button");
-  cancel.type = "button";
-  cancel.className = "cancel";
-  cancel.textContent = TEXT.cancel;
-  const confirm = doc.createElement("button");
-  confirm.type = "button";
-  confirm.className = "confirm";
-  confirm.textContent = TEXT.confirm;
-  actions.append(cancel, confirm);
-  dialog.append(q, status, actions);
+  dialog.setAttribute("aria-labelledby", "mastersos-exit-title");
+  dialog.setAttribute("aria-describedby", "mastersos-exit-body");
+  const text = el("div", "text");
+  text.setAttribute("aria-live", "polite");
+  const head = el("div", "head");
+  const spinner = el("span", "spinner");
+  spinner.setAttribute("aria-hidden", "true");
+  spinner.hidden = true;
+  const title = el("h2", "title");
+  title.id = "mastersos-exit-title";
+  head.append(spinner, title);
+  const body = el("p", "body");
+  body.id = "mastersos-exit-body";
+  text.append(head, body);
+  const actions = el("div", "actions");
+  const cancel = button("cancel", TEXT.cancel);
+  const confirm = button("confirm", TEXT.confirm);
+  const ok = button("ok", TEXT.ok);
+  actions.append(cancel, confirm, ok);
+  dialog.append(text, actions);
   overlay.append(dialog);
-  root.append(style, btn, overlay);
+  root.append(style, dock, overlay);
 
-  // 自己元素上的事件到 shadow root 为止，不让页面的处理函数看到（只拦我们自己的，不碰页面的事件）
+  // Events on our own elements end at the shadow root and are not seen by page handlers (only ours are stopped; the
+  // page's events are left alone).
   for (const type of [
     "click",
     "dblclick",
@@ -178,120 +295,220 @@
     root.addEventListener(type, (e) => e.stopPropagation());
   }
 
-  // ---- 拖到四角 -------------------------------------------------------------
+  // ---- menu -------------------------------------------------------------------
+  /** The menu's actions, in order. `icon` is a key of ICONS; `danger` paints the item red. */
+  const ACTIONS = [{ id: "exit", label: TEXT.exit, icon: "exit", danger: true, run: openConfirm }];
+
+  const menuItems = ACTIONS.map((a) => {
+    const b = button(a.danger ? "danger" : "");
+    b.append(svgIcon(ICONS[a.icon]), el("span", "label", a.label));
+    b.setAttribute("role", "menuitem");
+    b.dataset.action = a.id;
+    b.tabIndex = -1;
+    b.addEventListener("click", () => {
+      closeMenu(false);
+      a.run();
+    });
+    return b;
+  });
+  menu.append(...menuItems);
+
+  const menuOpen = () => !menu.hidden;
+
+  /** A press anywhere outside our host closes the menu. Looks only: the page still gets the event. */
+  function onOutsidePress(e) {
+    if (e.target !== host) closeMenu(false);
+  }
+  function openMenu(focusIndex = 0) {
+    if (!menuOpen()) {
+      menu.hidden = false;
+      fab.setAttribute("aria-expanded", "true");
+      doc.addEventListener("pointerdown", onOutsidePress, true);
+    }
+    const i = (focusIndex + menuItems.length) % menuItems.length;
+    menuItems[i].focus();
+  }
+  function closeMenu(refocus) {
+    if (!menuOpen()) return;
+    menu.hidden = true;
+    fab.setAttribute("aria-expanded", "false");
+    doc.removeEventListener("pointerdown", onOutsidePress, true);
+    if (refocus) fab.focus();
+  }
+
+  fab.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      openMenu(e.key === "ArrowDown" ? 0 : -1);
+    } else if (e.key === "Escape" && menuOpen()) {
+      e.preventDefault();
+      closeMenu(true);
+    }
+    // Enter and Space: the native button turns them into a click
+  });
+  menu.addEventListener("keydown", (e) => {
+    const i = menuItems.indexOf(root.activeElement);
+    let next = null;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeMenu(true);
+      return;
+    } else if (e.key === "ArrowDown" || (e.key === "Tab" && !e.shiftKey)) {
+      next = i + 1;
+    } else if (e.key === "ArrowUp" || (e.key === "Tab" && e.shiftKey)) {
+      next = i < 0 ? -1 : i - 1;
+    } else if (e.key === "Home") {
+      next = 0;
+    } else if (e.key === "End") {
+      next = -1;
+    }
+    if (next === null) return;
+    e.preventDefault(); // focus stays within the menu
+    menuItems[(next + menuItems.length) % menuItems.length].focus();
+  });
+
+  // ---- drag along the side edges ----------------------------------------------
   let drag = null; // {x, y, id, moved}
   let swallowClick = false;
 
-  btn.addEventListener("pointerdown", (e) => {
-    swallowClick = false; // 新的一次按下：上一次拖完没等到的 click 不再等
+  const viewport = () => ({
+    w: window.innerWidth || doc.documentElement.clientWidth || 0,
+    h: window.innerHeight || doc.documentElement.clientHeight || 0,
+  });
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+  fab.addEventListener("pointerdown", (e) => {
+    swallowClick = false; // a new press: stop waiting for a click a previous drag never got
     if (e.button !== 0) return;
     drag = { x: e.clientX, y: e.clientY, id: e.pointerId, moved: false };
     try {
-      if (e.pointerId !== undefined) btn.setPointerCapture(e.pointerId);
+      if (e.pointerId !== undefined) fab.setPointerCapture(e.pointerId);
     } catch {
-      // 没有指针捕获也能拖，只是指针移出按钮时会断
+      // dragging works without pointer capture, it just breaks when the pointer leaves the handle
     }
   });
-  btn.addEventListener("pointermove", (e) => {
+  fab.addEventListener("pointermove", (e) => {
     if (!drag) return;
     if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < DRAG_PX) return;
+    if (!drag.moved) closeMenu(false);
     drag.moved = true;
-    btn.classList.add("dragging");
-    btn.style.right = "auto";
-    btn.style.bottom = "auto";
-    btn.style.left = `${Math.max(0, e.clientX - btn.offsetWidth / 2)}px`;
-    btn.style.top = `${Math.max(0, e.clientY - btn.offsetHeight / 2)}px`;
+    const { w, h } = viewport();
+    const fw = fab.offsetWidth || 40;
+    dock.classList.add("dragging");
+    dock.style.right = "auto";
+    dock.style.left = `${clamp(e.clientX - fw / 2, 0, Math.max(0, w - fw))}px`;
+    dock.style.top = `${clamp(e.clientY - HANDLE_H / 2, 0, Math.max(0, h - HANDLE_H))}px`;
   });
   function endDrag(e, commit) {
     if (!drag) return;
     const moved = drag.moved;
     drag = null;
-    btn.classList.remove("dragging");
-    btn.style.removeProperty("left");
-    btn.style.removeProperty("top");
-    btn.style.removeProperty("right");
-    btn.style.removeProperty("bottom");
-    if (!moved || !commit) return; // pointercancel 之后浏览器不补 click，不用吞
-    // 鼠标拖完，浏览器在同一个任务里补一个 click，吞掉它；触屏拖完常常不补，下一个任务就不再吞
+    dock.classList.remove("dragging");
+    for (const p of ["left", "top", "right"]) dock.style.removeProperty(p);
+    if (!moved || !commit) return; // no click follows a pointercancel, nothing to swallow
+    // After a mouse drag the browser sends a click in the same task: swallow it. After a touch drag it often sends
+    // none, so stop swallowing from the next task on.
     swallowClick = true;
     setTimeout(() => {
       swallowClick = false;
     }, 0);
-    const w = window.innerWidth || doc.documentElement.clientWidth || 0;
-    const h = window.innerHeight || doc.documentElement.clientHeight || 0;
-    const corner = (e.clientY < h / 2 ? "t" : "b") + (e.clientX < w / 2 ? "l" : "r");
-    btn.dataset.corner = corner;
-    saveCorner(corner);
+    const { w, h } = viewport();
+    const free = h - HANDLE_H;
+    const p = {
+      side: e.clientX < w / 2 ? "l" : "r",
+      y: free > 0 ? clamp((e.clientY - HANDLE_H / 2) / free, 0, 1) : 0.5,
+    };
+    place(p);
+    savePos(p);
   }
-  btn.addEventListener("pointerup", (e) => endDrag(e, true));
-  btn.addEventListener("pointercancel", (e) => endDrag(e, false));
+  fab.addEventListener("pointerup", (e) => endDrag(e, true));
+  fab.addEventListener("pointercancel", (e) => endDrag(e, false));
 
-  // ---- 确认与退出 -----------------------------------------------------------
-  let timer = null;
-
-  function setBusy(busy, text) {
-    confirm.disabled = busy;
-    cancel.disabled = busy;
-    status.textContent = text;
-  }
-  function open() {
-    setBusy(false, "");
-    overlay.hidden = false;
-    cancel.focus();
-  }
-  function close() {
-    if (confirm.disabled) return; // 已经在退出了
-    overlay.hidden = true;
-    btn.focus();
-  }
-  function failed() {
-    if (timer !== null) clearTimeout(timer);
-    timer = null;
-    setBusy(false, TEXT.failed);
-    confirm.focus();
-  }
-
-  btn.addEventListener("click", () => {
+  fab.addEventListener("click", () => {
     if (swallowClick) {
       swallowClick = false;
       return;
     }
-    open();
+    if (menuOpen()) closeMenu(true);
+    else openMenu(0);
   });
-  cancel.addEventListener("click", close);
+
+  // ---- confirm and exit -------------------------------------------------------
+  let timer = null;
+  let state = "closed"; // closed | confirm | exiting | failed
+
+  /** Show one state of the dialog: its title, body and buttons; focus goes to `focus`. */
+  function setState(next) {
+    state = next;
+    const v = {
+      confirm: [TEXT.confirmTitle, TEXT.confirmBody, [cancel, confirm], cancel],
+      exiting: [TEXT.exitingTitle, TEXT.exitingBody, [cancel, confirm], null],
+      failed: [TEXT.failedTitle, TEXT.failedBody, [ok], ok],
+    }[next];
+    if (!v) return;
+    const [t, b, shown, focus] = v;
+    title.textContent = t;
+    body.textContent = b;
+    // exiting: a spinner instead of disabled buttons that would look stuck
+    spinner.hidden = next !== "exiting";
+    actions.hidden = next === "exiting";
+    for (const btn of [cancel, confirm, ok]) {
+      btn.hidden = !shown.includes(btn);
+      btn.disabled = next === "exiting";
+    }
+    if (focus) focus.focus();
+  }
+  function openConfirm() {
+    overlay.hidden = false;
+    setState("confirm");
+  }
+  function closeDialog() {
+    if (state === "exiting") return; // already exiting
+    state = "closed";
+    overlay.hidden = true;
+    fab.focus();
+  }
+  function failed() {
+    if (timer !== null) clearTimeout(timer);
+    timer = null;
+    setState("failed");
+  }
+
+  cancel.addEventListener("click", closeDialog);
+  ok.addEventListener("click", closeDialog);
   dialog.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       e.preventDefault();
-      close();
+      closeDialog();
     } else if (e.key === "Tab") {
-      // 焦点留在对话框的两个按钮之间
-      const items = [cancel, confirm].filter((b) => !b.disabled);
+      // focus stays on the dialog's visible buttons
+      const items = [cancel, confirm, ok].filter((b) => !b.hidden && !b.disabled);
+      e.preventDefault();
       if (items.length === 0) return;
       const i = items.indexOf(root.activeElement);
       const next = items[(i + (e.shiftKey ? items.length - 1 : 1)) % items.length] || items[0];
-      e.preventDefault();
       next.focus();
     }
   });
   confirm.addEventListener("click", () => {
-    setBusy(true, TEXT.exiting);
+    setState("exiting");
     try {
       chrome.runtime.sendMessage({ cmd: "exit" }, (reply) => {
         const err = chrome.runtime.lastError;
         if (!err && reply && reply.ok === true) {
-          // 已请求：会话随即结束。过了这么久还在，就当没退成
+          // requested: the session ends right away. Still here after this long means it did not.
           timer = setTimeout(failed, EXIT_TIMEOUT_MS);
         } else {
           failed();
         }
       });
     } catch {
-      failed(); // 扩展被重载之后旧页面里的 chrome.runtime 不能用了
+      failed(); // after the extension is reloaded, chrome.runtime no longer works in old pages
     }
   });
 
-  // ---- 挂上、留在最上面、被移走就挂回去 --------------------------------------
-  /** 每 ms 毫秒的窗口里最多放行 max 次；`left()` 是当前窗口还剩多少毫秒。 */
+  // ---- attach, stay on top, reattach when removed -----------------------------
+  /** Lets at most `max` calls through per `ms` window; `left()` is how many ms remain in the current window. */
   function limiter(max, ms) {
     let start = -Infinity;
     let n = 0;
@@ -311,20 +528,20 @@
   const raiseOk = limiter(30, 10000);
   let stopped = false;
   let raiseWarned = false;
-  let trailing = null; // 超过提升上限时，窗口结束补的那一次
+  let trailing = null; // the one raise run when the window ends, after going over the cap
   let parentObs = null;
   let openObs = null;
   let watchdog = null;
-  let boundRoot = null; // openObs 盯着的 <html>
+  let boundRoot = null; // the <html> openObs watches
 
-  /** 页面开着的模态对话框（文档里最后一个）：开着时 <html> 下的其余部分都是 inert。 */
+  /** The page's open modal dialog (the last in the document): while open, the rest under <html> is inert. */
   function topModal() {
     let found = null;
     for (const d of doc.querySelectorAll("dialog[open]")) {
       try {
         if (d.matches(":modal")) found = d;
       } catch {
-        // 不认得 :modal 的浏览器也没有顶层
+        // a browser without :modal has no top layer either
       }
     }
     return found;
@@ -345,10 +562,10 @@
   function show() {
     if (!hasPopover || !host.isConnected) return;
     try {
-      if (isShown()) host.hidePopover(); // 先 hide 再 show：排到顶层的最上面
+      if (isShown()) host.hidePopover(); // hide first, then show: back on top of the top layer
       host.showPopover();
     } catch {
-      // 退回到 z-index
+      // fall back to z-index
     }
   }
   function put(parent) {
@@ -366,21 +583,26 @@
     clearTimeout(trailing);
     doc.removeEventListener("toggle", onPageToggle, true);
     doc.removeEventListener("fullscreenchange", raise);
-    console.warn("mastersos-exit: 页面一再移走退出按钮，不再挂回（这一页里用 Alt+F4 或重新打开应用）");
+    doc.removeEventListener("pointerdown", onOutsidePress, true);
+    console.warn(
+      "mastersos-exit: the page keeps removing the Options handle; no longer reattaching it (on this page use Alt+F4 or reopen the app)",
+    );
   }
 
-  /** 页面开关了顶层元素：挪到该在的地方，再排到最上面。 */
+  /** The page opened or closed a top-layer element: move to where we belong, then go back on top. */
   function raise() {
     if (stopped) return;
     if (!raiseOk()) {
-      if (!raiseWarned) console.warn("mastersos-exit: 页面频繁开关顶层元素，提升退出按钮推迟到这一阵之后");
+      if (!raiseWarned) {
+        console.warn("mastersos-exit: the page keeps toggling top-layer elements; raising the Options handle is deferred");
+      }
       raiseWarned = true;
-      // 不丢：窗口结束时补一次（只排一个）
+      // not lost: one more when the window ends (only one queued)
       if (trailing === null) {
         trailing = setTimeout(() => {
           trailing = null;
           raise();
-        }, raiseOk.left()); // 早到了一点也不要紧：仍被拒就再排一次
+        }, raiseOk.left()); // a little early is fine: if still refused it queues again
       }
       return;
     }
@@ -389,13 +611,13 @@
     if (parent && misplaced(parent)) put(parent);
     show();
   }
-  /** 宿主所在的父元素的子节点变了：被移走就挂回（有上限），没有 Popover API 时保持在最后。 */
+  /** The host's parent's children changed: reattach if removed (capped); without the Popover API stay last. */
   function onChildList() {
     if (stopped) return;
     const parent = wantedParent();
     if (!parent) return;
     if (host.parentNode === parent) {
-      if (misplaced(parent)) raise(); // 没有 Popover API：页面在后面又挂了东西
+      if (misplaced(parent)) raise(); // no Popover API: the page appended something after us
       return;
     }
     if (!reattachOk()) {
@@ -408,7 +630,7 @@
   function onPageToggle(e) {
     if (e.target !== host) raise();
   }
-  /** <html> 换了：open 属性的观察者跟到新的 <html>。 */
+  /** <html> was replaced: the open-attribute observer follows the new <html>. */
   function bindRoot() {
     const el = doc.documentElement;
     if (!openObs || !el || el === boundRoot) return;
@@ -417,9 +639,11 @@
     openObs.observe(el, { subtree: true, attributes: true, attributeFilter: ["open"] });
   }
   /**
-   * 看门狗，每秒一次：页面直接移走开着的模态对话框（或它的容器）时没有属性变化，宿主跟着离开文档而观察者看不到；
-   * <html> 被换掉时 openObs 还盯着旧的。每次只做便宜的检查（一次 dialog[open] 查询、比较父节点、:popover-open），
-   * 不对时才动 DOM。这里的挂回不算进页面移走的上限（M6），它本身就限在每秒最多一次。M6 停下之后它也停。
+   * Watchdog, once a second: when the page removes an open modal dialog (or its container) directly there is no
+   * attribute change, so the host leaves the document unseen by the observers; when <html> is replaced openObs still
+   * watches the old one. Each run only does cheap checks (one dialog[open] query, a parent comparison, :popover-open)
+   * and touches the DOM only when something is wrong. Its reattaching does not count against the page-removal cap
+   * (M6); it is capped at once a second by itself. It stops too once M6 has stopped.
    */
   function check() {
     if (stopped) {
@@ -438,28 +662,28 @@
   }
 
   const observers = [];
-  put(wantedParent()); // 注入时页面可能已开着模态对话框
+  put(wantedParent()); // the page may already have a modal dialog open when we are injected
   show();
   parentObs = new MutationObserver(onChildList);
   parentObs.observe(host.parentNode, { childList: true });
   if (host.parentNode !== doc.documentElement) parentObs.observe(doc.documentElement, { childList: true });
   observers.push(parentObs);
-  // <html> 被换掉
+  // <html> replaced
   const docObs = new MutationObserver(() => {
     bindRoot();
     onChildList();
   });
   docObs.observe(doc, { childList: true });
   observers.push(docObs);
-  // showModal / close 改 open 属性（较旧的 Chrome 对话框不发 toggle）
+  // showModal / close change the open attribute (older Chrome dialogs fire no toggle)
   openObs = new MutationObserver(raise);
   bindRoot();
   observers.push(openObs);
   watchdog = setInterval(check, 1000);
-  // 只看不拦：不 stopPropagation、不 preventDefault
+  // look, never intercept: no stopPropagation, no preventDefault
   doc.addEventListener("toggle", onPageToggle, true);
   doc.addEventListener("fullscreenchange", raise);
-  // 页面对宿主 hidePopover：再显示回来
+  // the page called hidePopover on the host: show it again
   host.addEventListener("toggle", () => {
     if (hasPopover && !isShown()) raise();
   });
