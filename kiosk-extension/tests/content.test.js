@@ -1,18 +1,21 @@
-// 考试扩展内容脚本的测试（计划 9 Task 7）。由 mastersos-server/web 的 vitest 跑（jsdom、globals），
-// 不另起 package：`cd core/mastersos-server/web && pnpm exec vitest run kiosk-extension`。
-// 内容脚本是普通脚本（不是 ES 模块），这里读出源码、把 chrome 当参数传进去执行，与 Chrome 注入时一样只跑一次。
-// jsdom 没有 Popover API、:modal 与顶层：「顶层」一组测试用桩模拟它们，只核对调用的顺序与宿主挂在哪里；
-// 真的画在页面的模态对话框、popover、全屏之上（并且点得到）要在 VM 上验（见 ../README.md）。
-// ?raw：vite 把源码当字符串给出（不当模块执行）。
+// Tests for the exam extension's content script (plan 9 Task 7). Run with vitest + jsdom (globals); this directory has
+// no package of its own (see ../README.md "Tests").
+// The content script is a plain script (not an ES module): the source is read as a string and run with `chrome` passed
+// in, once, the way Chrome injects it.
+// jsdom has no Popover API, :modal or top layer: the "top layer" group stubs them and only checks the order of calls
+// and where the host is attached; really painting above the page's modal dialogs, popovers and fullscreen (and being
+// clickable there) is checked on a VM (see ../README.md).
+// ?raw: vite hands over the source as a string (not executed as a module).
 import SRC from "../content.js?raw";
 
 const KEY = "mastersos-exit-corner";
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
-// 每次注入留下的观察者与 document 上的监听：测试之间拆掉，免得上一个实例把它的宿主挂回来
+// Observers and document listeners each injection leaves behind: torn down between tests so an earlier instance does
+// not reattach its host.
 const cleanups = [];
 
-/** 跑一次内容脚本；返回挂上的宿主元素、偷看到的 closed shadow root 与 chrome 桩。 */
+/** Run the content script once; returns the attached host, the peeked closed shadow root and the chrome stub. */
 function inject(reply = { ok: true }) {
   const sendMessage = vi.fn((_msg, cb) => {
     if (typeof reply === "function") reply(cb);
@@ -56,7 +59,7 @@ function inject(reply = { ok: true }) {
   return { host, root, chrome, sendMessage };
 }
 
-/** jsdom 没有的 Popover API 与 :popover-open / :modal 的桩。 */
+/** Stubs for jsdom's missing Popover API and :popover-open / :modal. */
 function stubTopLayer() {
   const open = new WeakSet();
   const calls = [];
@@ -88,37 +91,66 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const exitButton = (root) => root.querySelector("button.exit");
+const fab = (root) => root.querySelector("button.fab");
+const dock = (root) => root.querySelector(".dock");
+const menu = (root) => root.querySelector("[role=menu]");
+const items = (root) => [...root.querySelectorAll("[role=menuitem]")];
 const dialog = (root) => root.querySelector("[role=dialog]");
 const overlay = (root) => root.querySelector(".overlay");
+const status = (root) => root.querySelector(".status").textContent;
+
+/** Dispatch a keydown on `el`; returns the event (to check defaultPrevented). */
+function key(el, k, init = {}) {
+  const e = new KeyboardEvent("keydown", { key: k, bubbles: true, composed: true, cancelable: true, ...init });
+  el.dispatchEvent(e);
+  return e;
+}
+/** Pointer-ish event on `el` (jsdom has no PointerEvent: a MouseEvent with the pointer type does). */
+function pointer(el, type, x, y) {
+  el.dispatchEvent(new MouseEvent(type, { bubbles: true, composed: true, clientX: x, clientY: y, button: 0 }));
+}
+/** Open the menu and pick Exit. */
+function chooseExit(root) {
+  fab(root).click();
+  items(root)[0].click();
+}
 
 beforeEach(() => {
   document.documentElement.querySelectorAll("mastersos-exit").forEach((e) => e.remove());
   document.head.innerHTML = "";
-  document.body.innerHTML = "<p>考试页面</p>";
+  document.body.innerHTML = "<p>exam page</p>";
   sessionStorage.clear();
 });
 
-describe("退出按钮", () => {
-  it("挂在 documentElement 上，closed shadow root 里有「退出 / Exit」", () => {
+describe("source", () => {
+  it("has no Chinese (or other CJK) text: English only", () => {
+    expect(SRC).not.toMatch(/[⺀-鿿가-힯豈-﫿＀-￯]/u);
+  });
+});
+
+describe("floating button", () => {
+  it("is attached to documentElement; the closed shadow root holds a Menu button", () => {
     const { host, root } = inject();
     expect(host).not.toBeNull();
     expect(host.parentNode).toBe(document.documentElement);
     expect(root).not.toBeNull();
     expect(root.mode).toBe("closed");
-    expect(exitButton(root).textContent).toBe("退出 / Exit");
-    // 缺省在右下角
-    expect(exitButton(root).dataset.corner).toBe("br");
+    expect(fab(root).textContent.trim()).toBe("Menu");
+    expect(fab(root).getAttribute("aria-haspopup")).toBe("menu");
+    expect(fab(root).getAttribute("aria-expanded")).toBe("false");
+    expect(menu(root).hidden).toBe(true);
+    // bottom right by default
+    expect(dock(root).dataset.corner).toBe("br");
   });
 
-  it("页面里的脚本拿不到 shadow root，也找不到按钮", () => {
+  it("page scripts cannot reach the shadow root or find the button", () => {
     const { host } = inject();
     expect(host.shadowRoot).toBeNull();
     expect(document.querySelector("button")).toBeNull();
     expect(document.body.contains(host)).toBe(false);
   });
 
-  it("页面样式 button { display:none } 与针对宿主的样式都不影响它", () => {
+  it("page styles button { display:none } and styles aimed at the host do not affect it", () => {
     const style = document.createElement("style");
     style.textContent =
       "button { display: none !important; } mastersos-exit { display: none !important; visibility: hidden !important; }";
@@ -126,25 +158,26 @@ describe("退出按钮", () => {
     const { host, root } = inject();
     expect(getComputedStyle(host).display).not.toBe("none");
     expect(getComputedStyle(host).visibility).not.toBe("hidden");
-    // shadow root 外的样式表不进 shadow 树（浏览器保证）：按钮自己的样式只来自 shadow root 里的 <style>。
-    // jsdom 的 getComputedStyle 会把文档的样式表错误地套到 shadow 树里的元素上（实测 display 也是 none），
-    // 所以这里不看按钮的计算样式，只核对它在 shadow 树里、样式在 shadow root 里。
-    const btn = exitButton(root);
+    // Style sheets outside the shadow root do not reach the shadow tree (the browser guarantees it): the button's
+    // styles come only from the <style> inside the shadow root. jsdom's getComputedStyle wrongly applies the
+    // document's sheets to shadow-tree elements (display is "none" there too), so this only checks that the button is
+    // in the shadow tree and the styles are in the shadow root.
+    const btn = fab(root);
     expect(btn.isConnected).toBe(true);
     expect(btn.getRootNode()).toBe(root);
     expect(document.querySelectorAll("button")).toHaveLength(0);
-    expect(root.querySelector("style").textContent).toContain(".exit");
+    expect(root.querySelector("style").textContent).toContain(".fab");
     expect(btn.hasAttribute("hidden")).toBe(false);
   });
 
-  it("被页面移走之后自己挂回去", async () => {
+  it("reattaches itself after the page removes it", async () => {
     const { host } = inject();
     host.remove();
     await tick();
     expect(host.parentNode).toBe(document.documentElement);
   });
 
-  it("页面一再移走：10 次之内挂回，之后不再挂回、记一条警告（不与页面无限拉锯）", async () => {
+  it("page keeps removing it: reattached 10 times, then no more and one warning (no endless tug of war)", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { host } = inject();
     for (let i = 0; i < 10; i++) {
@@ -157,13 +190,13 @@ describe("退出按钮", () => {
     expect(host.isConnected).toBe(false);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0][0])).toContain("mastersos-exit");
-    // 停了就是停了：之后页面再动 <html> 也不挂回
+    // stopped means stopped: later changes to <html> do not reattach it
     document.documentElement.append(document.createElement("div"));
     await tick();
     expect(host.isConnected).toBe(false);
   });
 
-  it("没有 Popover API：页面后来挂在 <html> 末尾的元素压不住它（宿主挪到最后）", async () => {
+  it("no Popover API: an element the page later appends to <html> does not cover it (host moves last)", async () => {
     const { host } = inject();
     expect(host.hasAttribute("popover")).toBe(false);
     const cover = document.createElement("div");
@@ -172,143 +205,272 @@ describe("退出按钮", () => {
     expect(document.documentElement.lastElementChild).toBe(host);
   });
 
-  it("触屏：拖完没有补 click，下一次点照样出确认", async () => {
+  it("touch: no click after a drag; the next tap still opens the menu", async () => {
     const { root } = inject();
-    const btn = exitButton(root);
-    const ev = (type, x, y) =>
-      btn.dispatchEvent(new MouseEvent(type, { bubbles: true, composed: true, clientX: x, clientY: y, button: 0 }));
-    ev("pointerdown", 1000, 700);
-    ev("pointermove", 20, 20);
-    ev("pointerup", 20, 20);
+    const btn = fab(root);
+    pointer(btn, "pointerdown", 1000, 700);
+    pointer(btn, "pointermove", 20, 20);
+    pointer(btn, "pointerup", 20, 20);
     await tick();
     btn.click();
-    expect(overlay(root).hidden).toBe(false);
+    expect(menu(root).hidden).toBe(false);
   });
 
-  it("拖到一半 pointercancel：位置不变，下一次点照样出确认", () => {
+  it("pointercancel mid-drag: corner unchanged, the next tap still opens the menu", () => {
     const { root } = inject();
-    const btn = exitButton(root);
-    const ev = (type, x, y) =>
-      btn.dispatchEvent(new MouseEvent(type, { bubbles: true, composed: true, clientX: x, clientY: y, button: 0 }));
-    ev("pointerdown", 1000, 700);
-    ev("pointermove", 20, 20);
-    ev("pointercancel", 20, 20);
-    expect(btn.dataset.corner).toBe("br");
+    const btn = fab(root);
+    pointer(btn, "pointerdown", 1000, 700);
+    pointer(btn, "pointermove", 20, 20);
+    pointer(btn, "pointercancel", 20, 20);
+    expect(dock(root).dataset.corner).toBe("br");
     btn.click();
-    expect(overlay(root).hidden).toBe(false);
+    expect(menu(root).hidden).toBe(false);
   });
 
-  it("位置取自 sessionStorage 里记下的角", () => {
+  it("corner comes from the one saved in sessionStorage", () => {
     sessionStorage.setItem(KEY, "tl");
     const { root } = inject();
-    expect(exitButton(root).dataset.corner).toBe("tl");
+    expect(dock(root).dataset.corner).toBe("tl");
   });
 
-  it("记下的值不认得就回右下角", () => {
+  it("an unknown saved value falls back to bottom right", () => {
     sessionStorage.setItem(KEY, "middle");
     const { root } = inject();
-    expect(exitButton(root).dataset.corner).toBe("br");
+    expect(dock(root).dataset.corner).toBe("br");
   });
 
-  it("拖到左上角松手：吸附到那个角、记进 sessionStorage，不弹确认", () => {
+  it("drag to the top left and release: snaps to that corner, saved in sessionStorage, no menu", () => {
     const { root, sendMessage } = inject();
-    const btn = exitButton(root);
-    const ev = (type, x, y) =>
-      btn.dispatchEvent(new MouseEvent(type, { bubbles: true, composed: true, clientX: x, clientY: y, button: 0 }));
-    ev("pointerdown", 1000, 700);
-    ev("pointermove", 500, 400);
-    ev("pointermove", 20, 20);
-    ev("pointerup", 20, 20);
-    btn.click(); // 拖完之后浏览器还会补一个 click：不算点按钮
-    expect(btn.dataset.corner).toBe("tl");
+    const btn = fab(root);
+    pointer(btn, "pointerdown", 1000, 700);
+    pointer(btn, "pointermove", 500, 400);
+    pointer(btn, "pointermove", 20, 20);
+    pointer(btn, "pointerup", 20, 20);
+    btn.click(); // the browser follows a mouse drag with a click: not a press of the button
+    expect(dock(root).dataset.corner).toBe("tl");
     expect(sessionStorage.getItem(KEY)).toBe("tl");
+    expect(menu(root).hidden).toBe(true);
     expect(overlay(root).hidden).toBe(true);
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("a move under the drag threshold is a click: opens the menu, corner unchanged", () => {
+    const { root } = inject();
+    const btn = fab(root);
+    pointer(btn, "pointerdown", 1000, 700);
+    pointer(btn, "pointermove", 1003, 702);
+    pointer(btn, "pointerup", 1003, 702);
+    btn.click();
+    expect(menu(root).hidden).toBe(false);
+    expect(dock(root).dataset.corner).toBe("br");
+    expect(sessionStorage.getItem(KEY)).toBeNull();
+  });
+
+  it("dragging while the menu is open closes the menu", () => {
+    const { root } = inject();
+    const btn = fab(root);
+    btn.click();
+    expect(menu(root).hidden).toBe(false);
+    pointer(btn, "pointerdown", 1000, 700);
+    pointer(btn, "pointermove", 20, 20);
+    pointer(btn, "pointerup", 20, 20);
+    btn.click();
+    expect(menu(root).hidden).toBe(true);
+    expect(dock(root).dataset.corner).toBe("tl");
   });
 });
 
-describe("确认对话框", () => {
-  it("点按钮先出确认，文字中英双语", () => {
+describe("menu", () => {
+  it("clicking the button opens a menu with exactly one action, Exit, focused; nothing is sent", () => {
     const { root, sendMessage } = inject();
-    expect(overlay(root).hidden).toBe(true);
-    exitButton(root).click();
-    expect(overlay(root).hidden).toBe(false);
-    expect(dialog(root).textContent).toContain("确定离开吗？离开后要重新进入。");
-    expect(dialog(root).textContent).toContain("Leave this app? You will need to open it again.");
-    expect(dialog(root).getAttribute("aria-modal")).toBe("true");
-    expect(sendMessage).not.toHaveBeenCalled();
-  });
-
-  it("取消：关掉对话框，不发消息", () => {
-    const { root, sendMessage } = inject();
-    exitButton(root).click();
-    root.querySelector("button.cancel").click();
+    fab(root).click();
+    expect(menu(root).hidden).toBe(false);
+    expect(fab(root).getAttribute("aria-expanded")).toBe("true");
+    expect(items(root).map((i) => i.textContent.trim())).toEqual(["Exit"]);
+    expect(root.activeElement).toBe(items(root)[0]);
     expect(overlay(root).hidden).toBe(true);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("Esc 也是取消", () => {
-    const { root, sendMessage } = inject();
-    exitButton(root).click();
-    dialog(root).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, composed: true }));
-    expect(overlay(root).hidden).toBe(true);
-    expect(sendMessage).not.toHaveBeenCalled();
+  it("clicking the button again closes the menu", () => {
+    const { root } = inject();
+    fab(root).click();
+    fab(root).click();
+    expect(menu(root).hidden).toBe(true);
+    expect(fab(root).getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("确认：发 {cmd:\"exit\"}，回 ok:true 就显示正在退出", () => {
-    const { root, sendMessage } = inject({ ok: true });
-    exitButton(root).click();
-    root.querySelector("button.confirm").click();
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage.mock.calls[0][0]).toEqual({ cmd: "exit" });
-    expect(root.querySelector(".status").textContent).toContain("正在退出");
-    expect(root.querySelector("button.confirm").disabled).toBe(true);
+  it("the button is focusable; ArrowDown on it opens the menu with the first action focused", () => {
+    const { root } = inject();
+    fab(root).focus();
+    expect(root.activeElement).toBe(fab(root));
+    const e = key(fab(root), "ArrowDown");
+    expect(e.defaultPrevented).toBe(true);
+    expect(menu(root).hidden).toBe(false);
+    expect(root.activeElement).toBe(items(root)[0]);
   });
 
-  it("回 ok:true 之后 20 秒会话还在：当没退成，显示找老师、按钮可以再点", () => {
-    vi.useFakeTimers();
-    const { root } = inject({ ok: true });
-    exitButton(root).click();
-    root.querySelector("button.confirm").click();
-    vi.advanceTimersByTime(19999);
-    expect(root.querySelector(".status").textContent).toContain("正在退出");
-    vi.advanceTimersByTime(1);
-    expect(root.querySelector(".status").textContent).toContain("Please ask a teacher");
-    expect(root.querySelector("button.confirm").disabled).toBe(false);
+  it("ArrowUp on the button opens the menu with the last action focused", () => {
+    const { root } = inject();
+    key(fab(root), "ArrowUp");
+    expect(menu(root).hidden).toBe(false);
+    expect(root.activeElement).toBe(items(root).at(-1));
   });
 
-  it("回 ok:false：显示找老师，按钮可以再点", () => {
-    const { root } = inject({ ok: false });
-    exitButton(root).click();
-    root.querySelector("button.confirm").click();
-    expect(root.querySelector(".status").textContent).toContain("Please ask a teacher");
-    expect(root.querySelector("button.confirm").disabled).toBe(false);
+  it("Escape closes the menu and gives focus back to the button", () => {
+    const { root } = inject();
+    fab(root).click();
+    const e = key(items(root)[0], "Escape");
+    expect(e.defaultPrevented).toBe(true);
+    expect(menu(root).hidden).toBe(true);
+    expect(root.activeElement).toBe(fab(root));
   });
 
-  it("没有回答（后台出错、lastError）也按失败处理", () => {
-    const { root, chrome } = inject((cb) => {
-      chrome.runtime.lastError = { message: "Could not establish connection" };
-      cb(undefined);
-      chrome.runtime.lastError = undefined;
-    });
-    exitButton(root).click();
-    root.querySelector("button.confirm").click();
-    expect(root.querySelector(".status").textContent).toContain("请举手找老师");
+  it("arrow keys, Home/End and Tab move within the menu (focus stays in it)", () => {
+    const { root } = inject();
+    fab(root).click();
+    const only = items(root)[0];
+    for (const [k, init] of [
+      ["ArrowDown", {}],
+      ["ArrowUp", {}],
+      ["Home", {}],
+      ["End", {}],
+      ["Tab", {}],
+      ["Tab", { shiftKey: true }],
+    ]) {
+      const e = key(root.activeElement, k, init);
+      expect(e.defaultPrevented).toBe(true);
+      expect(root.activeElement).toBe(only);
+      expect(menu(root).hidden).toBe(false);
+    }
   });
 
-  it("对话框里的点击与按键不冒泡到页面", () => {
+  it("a press outside closes the menu, and the page still gets that event", () => {
+    const seen = [];
+    const onPage = (e) => seen.push(e.type);
+    document.addEventListener("pointerdown", onPage);
+    try {
+      const { root } = inject();
+      fab(root).click();
+      pointer(document.body.querySelector("p"), "pointerdown", 10, 10);
+      expect(menu(root).hidden).toBe(true);
+      expect(seen).toEqual(["pointerdown"]);
+    } finally {
+      document.removeEventListener("pointerdown", onPage);
+    }
+  });
+
+  it("a press inside the menu does not close it", () => {
+    const { root } = inject();
+    fab(root).click();
+    pointer(items(root)[0], "pointerdown", 10, 10);
+    expect(menu(root).hidden).toBe(false);
+  });
+
+  it("clicks and keys in the menu do not bubble to the page", () => {
     const seen = [];
     const onPage = (e) => seen.push(e.type);
     document.addEventListener("click", onPage);
     document.addEventListener("keydown", onPage);
     try {
       const { root } = inject();
-      exitButton(root).click();
-      root.querySelector("button.cancel").click();
-      exitButton(root).click();
-      dialog(root).dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, composed: true }));
+      fab(root).click();
+      key(items(root)[0], "ArrowDown");
+      key(items(root)[0], "Escape");
       expect(seen).toEqual([]);
-      // 页面自己的事件照常到达页面：没有全局监听吞掉它们
+    } finally {
+      document.removeEventListener("click", onPage);
+      document.removeEventListener("keydown", onPage);
+    }
+  });
+});
+
+describe("Exit confirmation", () => {
+  it("Exit asks to confirm first, in English, and closes the menu", () => {
+    const { root, sendMessage } = inject();
+    expect(overlay(root).hidden).toBe(true);
+    chooseExit(root);
+    expect(menu(root).hidden).toBe(true);
+    expect(overlay(root).hidden).toBe(false);
+    expect(dialog(root).textContent).toContain("Leave this app? You will need to open it again.");
+    expect(root.querySelector("button.cancel").textContent).toBe("Cancel");
+    expect(root.querySelector("button.confirm").textContent).toBe("Exit");
+    expect(dialog(root).getAttribute("aria-modal")).toBe("true");
+    expect(root.activeElement).toBe(root.querySelector("button.cancel"));
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("Cancel closes the dialog without sending anything; focus back on the button", () => {
+    const { root, sendMessage } = inject();
+    chooseExit(root);
+    root.querySelector("button.cancel").click();
+    expect(overlay(root).hidden).toBe(true);
+    expect(root.activeElement).toBe(fab(root));
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("Escape cancels too", () => {
+    const { root, sendMessage } = inject();
+    chooseExit(root);
+    key(dialog(root), "Escape");
+    expect(overlay(root).hidden).toBe(true);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('confirm sends {cmd:"exit"}; on ok:true shows Exiting', () => {
+    const { root, sendMessage } = inject({ ok: true });
+    chooseExit(root);
+    root.querySelector("button.confirm").click();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0][0]).toEqual({ cmd: "exit" });
+    expect(status(root)).toBe("Exiting…");
+    expect(root.querySelector("button.confirm").disabled).toBe(true);
+  });
+
+  it("session still there 20 s after ok:true: treated as failed, ask a teacher, can press again", () => {
+    vi.useFakeTimers();
+    const { root } = inject({ ok: true });
+    chooseExit(root);
+    root.querySelector("button.confirm").click();
+    vi.advanceTimersByTime(19999);
+    expect(status(root)).toBe("Exiting…");
+    vi.advanceTimersByTime(1);
+    expect(status(root)).toBe("Could not leave. Please ask a teacher.");
+    expect(root.querySelector("button.confirm").disabled).toBe(false);
+  });
+
+  it("ok:false: ask a teacher, can press again", () => {
+    const { root } = inject({ ok: false });
+    chooseExit(root);
+    root.querySelector("button.confirm").click();
+    expect(status(root)).toBe("Could not leave. Please ask a teacher.");
+    expect(root.querySelector("button.confirm").disabled).toBe(false);
+  });
+
+  it("no reply (background error, lastError) is a failure too", () => {
+    const { root, chrome } = inject((cb) => {
+      chrome.runtime.lastError = { message: "Could not establish connection" };
+      cb(undefined);
+      chrome.runtime.lastError = undefined;
+    });
+    chooseExit(root);
+    root.querySelector("button.confirm").click();
+    expect(status(root)).toBe("Could not leave. Please ask a teacher.");
+  });
+
+  it("clicks and keys in the dialog do not bubble to the page; the page's own events still arrive", () => {
+    const seen = [];
+    const onPage = (e) => seen.push(e.type);
+    document.addEventListener("click", onPage);
+    document.addEventListener("keydown", onPage);
+    try {
+      const { root } = inject();
+      chooseExit(root);
+      root.querySelector("button.cancel").click();
+      chooseExit(root);
+      key(dialog(root), "Tab");
+      expect(seen).toEqual([]);
+      // the page's own events reach the page: no global listener swallows them
       document.body.querySelector("p").click();
       expect(seen).toEqual(["click"]);
     } finally {
@@ -318,15 +480,15 @@ describe("确认对话框", () => {
   });
 });
 
-describe("顶层（页面的模态对话框、popover、全屏、<html> 上的 transform）", () => {
-  it("有 Popover API：宿主是 popover=manual，挂上就 showPopover", () => {
+describe("top layer (page modal dialogs, popovers, fullscreen, transform on <html>)", () => {
+  it("with the Popover API: the host is popover=manual and showPopover runs on attach", () => {
     const { open } = stubTopLayer();
     const { host } = inject();
     expect(host.getAttribute("popover")).toBe("manual");
     expect(open.has(host)).toBe(true);
   });
 
-  it("页面开了 popover（toggle 事件）：先 hide 再 show，回到顶层的最上面", async () => {
+  it("page opens a popover (toggle event): hide then show, back on top of the top layer", async () => {
     const { calls } = stubTopLayer();
     inject();
     const pop = document.createElement("div");
@@ -339,7 +501,7 @@ describe("顶层（页面的模态对话框、popover、全屏、<html> 上的 t
     ]);
   });
 
-  it("页面 showModal：宿主挪进那个模态对话框（不被 inert）、仍在顶层；关掉后回到 <html>", async () => {
+  it("page showModal: the host moves into that modal dialog (not inert), still in the top layer; back to <html> after", async () => {
     const { open } = stubTopLayer();
     const { host } = inject();
     const dlg = document.createElement("dialog");
@@ -355,7 +517,7 @@ describe("顶层（页面的模态对话框、popover、全屏、<html> 上的 t
     expect(open.has(host)).toBe(true);
   });
 
-  it("全屏切换之后重新提到最上面", () => {
+  it("raised to the top again after a fullscreen change", () => {
     const { calls } = stubTopLayer();
     inject();
     calls.length = 0;
@@ -363,7 +525,7 @@ describe("顶层（页面的模态对话框、popover、全屏、<html> 上的 t
     expect(calls.at(-1)).toEqual(["show", "mastersos-exit"]);
   });
 
-  it("页面对宿主 hidePopover：再显示回来", () => {
+  it("page calls hidePopover on the host: shown again", () => {
     const { open } = stubTopLayer();
     const { host } = inject();
     host.hidePopover();
@@ -371,7 +533,7 @@ describe("顶层（页面的模态对话框、popover、全屏、<html> 上的 t
     expect(open.has(host)).toBe(true);
   });
 
-  it("页面每次 toggle 都触发的提升有上限：不与页面无限拉锯", () => {
+  it("raises triggered by every page toggle are capped: no endless tug of war", () => {
     const { calls } = stubTopLayer();
     vi.spyOn(console, "warn").mockImplementation(() => {});
     inject();
@@ -385,7 +547,7 @@ describe("顶层（页面的模态对话框、popover、全屏、<html> 上的 t
   });
 });
 
-describe("看门狗（每秒一次，只在不对时动 DOM）", () => {
+describe("watchdog (once a second, touches the DOM only when something is wrong)", () => {
   const flush = () => vi.advanceTimersByTimeAsync(0);
 
   function modalIn(parent) {
@@ -396,14 +558,14 @@ describe("看门狗（每秒一次，只在不对时动 DOM）", () => {
     return dlg;
   }
 
-  it("页面直接 remove() 开着的模态对话框：1 秒内宿主回到 <html> 并显示", async () => {
+  it("page remove()s the open modal dialog: within 1 s the host is back on <html> and shown", async () => {
     vi.useFakeTimers();
     const { open } = stubTopLayer();
     const { host } = inject();
     const dlg = modalIn(document.body);
     await flush();
     expect(host.parentNode).toBe(dlg);
-    dlg.remove(); // 没先去掉 open：没有属性变化，<html> 的直接子节点也没变
+    dlg.remove(); // open not removed first: no attribute change, and <html>'s children did not change
     await flush();
     expect(host.isConnected).toBe(false);
     await vi.advanceTimersByTimeAsync(1000);
@@ -411,7 +573,7 @@ describe("看门狗（每秒一次，只在不对时动 DOM）", () => {
     expect(open.has(host)).toBe(true);
   });
 
-  it("页面移走对话框所在的容器：同样 1 秒内回到 <html>", async () => {
+  it("page removes the dialog's container: back on <html> within 1 s as well", async () => {
     vi.useFakeTimers();
     stubTopLayer();
     const { host } = inject();
@@ -425,7 +587,7 @@ describe("看门狗（每秒一次，只在不对时动 DOM）", () => {
     expect(host.parentNode).toBe(document.documentElement);
   });
 
-  it("对话框被移走的挂回不算进页面移走的上限：之后页面移走按钮照样挂回 10 次", async () => {
+  it("reattaching after a removed dialog does not count against the removal cap: the page can still remove it 10 times", async () => {
     vi.useFakeTimers();
     vi.spyOn(console, "warn").mockImplementation(() => {});
     stubTopLayer();
@@ -442,10 +604,10 @@ describe("看门狗（每秒一次，只在不对时动 DOM）", () => {
       await flush();
       expect(host.isConnected).toBe(true);
     }
-    expect(console.warn).not.toHaveBeenCalledWith(expect.stringContaining("不再挂回"));
+    expect(console.warn).not.toHaveBeenCalledWith(expect.stringContaining("no longer reattaching"));
   });
 
-  it("安静的页面：每秒的检查不写 DOM、不碰 popover", async () => {
+  it("quiet page: the per-second check neither writes the DOM nor touches the popover", async () => {
     vi.useFakeTimers();
     const { calls } = stubTopLayer();
     inject();
@@ -458,7 +620,7 @@ describe("看门狗（每秒一次，只在不对时动 DOM）", () => {
     expect(insert).not.toHaveBeenCalled();
   });
 
-  it("M6 停下之后看门狗也停：不再挂回", async () => {
+  it("after the M6 stop the watchdog stops too: no reattaching", async () => {
     vi.useFakeTimers();
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const { host } = inject();
@@ -467,11 +629,12 @@ describe("看门狗（每秒一次，只在不对时动 DOM）", () => {
       await flush();
     }
     expect(host.isConnected).toBe(false);
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("no longer reattaching"));
     await vi.advanceTimersByTimeAsync(5000);
     expect(host.isConnected).toBe(false);
   });
 
-  it("提升超过上限时不丢：窗口结束时补一次（先 hide 再 show）", async () => {
+  it("raises over the cap are not lost: one more when the window ends (hide then show)", async () => {
     vi.useFakeTimers();
     const { calls } = stubTopLayer();
     vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -487,7 +650,7 @@ describe("看门狗（每秒一次，只在不对时动 DOM）", () => {
     ]);
   });
 
-  it("<html> 被换掉：宿主挂到新的 <html>，新 <html> 里的 showModal 照样跟进", async () => {
+  it("<html> replaced: the host moves to the new <html>, and showModal there is still followed", async () => {
     stubTopLayer();
     const { host } = inject();
     const old = document.documentElement;

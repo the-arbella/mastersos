@@ -1,37 +1,44 @@
 # MastersOS 考试扩展
 
 锁定会话（`[group.apps.kiosk]` 的网页 / PWA 应用，设计 `docs/superpowers/specs/2026-10-26-mastersos-kiosk-apps-design.md`
-§4.5、§4.7、§4.9）里强制安装的 MV3 扩展。它做两件事：页面角上一个「退出 / Exit」按钮，确认后结束锁定会话；以及按应用的模拟环境
+§4.5、§4.7、§4.9）里强制安装的 MV3 扩展。它做两件事：页面角上一个浮动的「Menu」按钮，菜单里的「Exit」确认后结束锁定会话；以及按应用的模拟环境
 （mock env，下文），让只认 ChromeOS 等设备的考试页读到它要的信号。
 
 | 文件 | 作用 |
 |---|---|
-| `manifest.json` | MV3；`permissions: ["nativeMessaging"]`，`host_permissions` 只有 mock env 的主机（后台按 URL 查这些标签页要用）；「退出」按钮的内容脚本匹配 `<all_urls>`、`all_frames: false`、`document_idle`，mock env 的内容脚本只匹配各自应用的主机。不写 `update_url`：打包时按 `<base_url>` 加进 crx 里的那份 |
-| `content.js` | 往 `document.documentElement` 挂 `<mastersos-exit>`，closed shadow root 里是按钮与确认对话框 |
+| `manifest.json` | MV3；`permissions: ["nativeMessaging"]`，`host_permissions` 只有 mock env 的主机（后台按 URL 查这些标签页要用）；菜单按钮的内容脚本匹配 `<all_urls>`、`all_frames: false`、`document_idle`，mock env 的内容脚本只匹配各自应用的主机。不写 `update_url`：打包时按 `<base_url>` 加进 crx 里的那份 |
+| `content.js` | 往 `document.documentElement` 挂 `<mastersos-exit>`，closed shadow root 里是浮动按钮、它的菜单与确认对话框 |
 | `background.js` | service worker：收到自己内容脚本的恰好 `{cmd:"exit"}`，`chrome.runtime.connectNative("org.mastersos.kiosk_exit")` 发 `{"cmd":"exit"}`；装上（`install`）时重新加载 `MOCK_TAB_PATTERNS` 的标签页 |
 | `mock/nwea/page.js` | NWEA 的 mock env，MAIN 世界、`document_start`：`isKioskChromium`、`extVersion`、`kioskChromiumExit`、UA 后缀、拦 F5 等 |
 | `mock/nwea/relay.js` | 隔离世界、`document_start`：把 `page.js` 的退出请求转成 `{cmd:"exit"}` |
-| `tests/` | vitest + jsdom，借 `core/mastersos-server/web` 的配置与依赖跑（没有自己的 package） |
+| `tests/` | vitest + jsdom（`environment: "jsdom"`、`globals: true`），没有自己的 package，见下「测试」 |
 
 ## 行为
 
-- 按钮在右下角，离边 16 px；可以拖到四角之一（松手时吸附到最近的角），位置记在页面的 `sessionStorage`
-  （`mastersos-exit-corner`），同一标签页里换页还在那个角。存储不可用（沙箱页面）时照样显示，只是不记。
-- 点按钮先在同一个 shadow root 里出确认：「确定离开吗？离开后要重新进入。/ Leave this app? You will need to open it again.」
-  取消或 Esc 关掉、不发任何消息；「离开 / Leave」发 `chrome.runtime.sendMessage({cmd:"exit"})`。
+- 界面文字只有英文（扩展里不放中文；`tests/content.test.js` 核对源码里没有 CJK 字符）。
+- 浮动按钮（药丸形，深色底、白边、阴影，任何页面上都看得见；字是「Menu」）在右下角，离边 16 px；可以拖到四角之一
+  （松手时吸附到最近的角；移动不到 6 px 仍算点击），位置记在页面的 `sessionStorage`（`mastersos-exit-corner`），
+  同一标签页里换页还在那个角。存储不可用（沙箱页面）时照样显示，只是不记。拖动时菜单收起，拖完不弹菜单。
+- 点按钮弹出一个小菜单（`role="menu"`，朝屏幕内侧展开），现在只有一项「Exit」。菜单项是 `content.js` 里的 `ACTIONS` 列表，
+  以后加一项就是加一条。
+- 键盘：按钮能拿到焦点，Enter / Space 开关菜单，↓ / ↑ 打开并聚焦第一项 / 最后一项；菜单里 ↑ ↓ Home End Tab 在菜单项之间移动
+  （焦点不出菜单），Esc 收起、焦点回到按钮。菜单开着时点页面别处就收起（`document` 上捕获阶段的 `pointerdown`，
+  只在菜单开着时挂、只看不拦，页面照样收到这个事件）。
+- 选「Exit」先在同一个 shadow root 里出确认：「Leave this app? You will need to open it again.」，按钮「Cancel」/「Exit」。
+  Cancel 或 Esc 关掉、不发任何消息；「Exit」发 `chrome.runtime.sendMessage({cmd:"exit"})`。
 - 后台连 native messaging 宿主 `org.mastersos.kiosk_exit`（= `mastersos-bundle` 的 `EXIT_HOST`）。宿主是
   `/usr/lib/mastersos/mastersos-kiosk-exit` → `mastersos-agent kiosk exit-host`：4 字节小端长度 + JSON，只认恰好
   `{"cmd":"exit"}`，回 `{"ok":true}`（「已请求」：会话随即结束，之后什么都等不到）或 `{"ok":false}`。
-- 回 `{"ok":true}` 时对话框显示「正在退出… / Exiting…」；20 秒后会话还在，或回 `{"ok":false}`、宿主没回就断开、连不上，
-  都显示「没能退出，请举手找老师。/ Could not leave. Please ask a teacher.」，按钮可以再点。
+- 回 `{"ok":true}` 时对话框显示「Exiting…」；20 秒后会话还在，或回 `{"ok":false}`、宿主没回就断开、连不上，
+  都显示「Could not leave. Please ask a teacher.」，按钮可以再点。
 
 ### 不弄坏页面
 
-- 按钮、对话框与它们的样式都在 closed shadow root 里：页面的脚本拿不到（`host.shadowRoot === null`），页面的样式表进不去。
+- 按钮、菜单、对话框与它们的样式都在 closed shadow root 里：页面的脚本拿不到（`host.shadowRoot === null`），页面的样式表进不去。
   宿主元素自己的样式写在 `style` 属性上并带 `!important`（行内的 `!important` 压过页面样式表里的 `!important`），`z-index` 取最大值。
 - 内容脚本跑在扩展的隔离环境里，不往页面的 JS 环境注入脚本。
 - 不吞页面的事件：自己元素上的点击、指针与按键事件在 shadow root 处停止冒泡；`document` 上只有只看不拦的 `toggle`（捕获）
-  与 `fullscreenchange`，不 `stopPropagation`、不 `preventDefault`。
+  与 `fullscreenchange`，以及只在菜单开着时挂上的 `pointerdown`（捕获，点在菜单外就收起菜单），都不 `stopPropagation`、不 `preventDefault`。
 - 页面把宿主元素移走就挂回去（`MutationObserver`），10 秒内最多 10 次；再多就停下、`console.warn` 一条，不与一直移走它的页面
   无限拉锯（这一页就没有按钮了，Alt+F4 照样能退）。
 
@@ -52,11 +59,11 @@
 
 **VM 验收清单（计划 9 Task 8）：**
 
-1. 页面 `dialog.showModal()` 开着时按钮在对话框之上、点得到，确认对话框能用；关掉对话框后按钮回到原处。
+1. 页面 `dialog.showModal()` 开着时按钮在对话框之上、点得到，菜单与确认对话框能用；关掉对话框后按钮回到原处。
 2. 页面的 popover（`popover="auto"` 与 `manual`）开着时按钮在其上。
 3. 元素全屏（`requestFullscreen()`，如视频或考试平台的全屏模式）时按钮可见、点得到。
 4. `<html style="transform: translateZ(0)">` 的长页面滚到底：按钮仍在视口的角上。
-5. 触屏拖按钮到别的角、松手后再点一下：出确认（不被吞）。
+5. 触屏拖按钮到别的角、松手后再点一下：出菜单（不被吞）；拖动本身不弹菜单。键盘 Tab 到按钮、Enter 开菜单、Esc 收起。
 6. Chrome 的错误页与 `URLBlocklist` 的拦截页（`chrome-error://`）没有内容脚本、没有按钮：确认 Alt+F4 ×5 能退出（审阅 M2）。
 - 只在顶层框架（`all_frames: false`）。
 
@@ -85,8 +92,11 @@
 ## 测试
 
 ```bash
-cd core/mastersos-server/web && pnpm install && pnpm exec vitest run ../../../kiosk-extension   # 只跑扩展的测试
-cd core/mastersos-server/web && pnpm test                                             # 整套（CI 的 web job）
+# 这个仓库不带 JS 依赖，CI 也不跑这些测试：在仓库外装 vitest 与 jsdom 的目录里写一个配置，
+# root 指向本目录、environment: "jsdom"、globals: true、include: ["tests/**/*.test.js"]，
+# cacheDir 放在本目录以外（打包会把本目录里的文件都装进 crx；vitest 5 的模块缓存默认写进 root 下的
+# node_modules/.vitest-cache，所以关掉它），然后：
+vitest run --no-experimental.fsModuleCache --config <那个配置>
 bash image/tests/kiosk-ext-pack-test.sh                                                # 打包（CI 的 image-lint）
 ```
 

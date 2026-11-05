@@ -6,8 +6,8 @@ import BG from "../background.js?raw";
 const NWEA = ["https://*.nwea.org/*", "https://*.mapnwea.org/*"];
 
 describe("manifest", () => {
-  it("version is 1.1.2", () => {
-    expect(M.version).toBe("1.1.2");
+  it("version is 1.1.3", () => {
+    expect(M.version).toBe("1.1.3");
     expect(M.manifest_version).toBe(3);
     expect(M.minimum_chrome_version).toBe("120");
     expect(M.permissions).toEqual(["nativeMessaging"]);
