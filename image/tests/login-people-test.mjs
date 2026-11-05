@@ -6,7 +6,8 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 
 // login-people-test.sh copies people.js to a .mjs first: node before 22 reads a bare .js as CommonJS.
-const {HIDDEN, LIMIT, matchPeople, preselect, refusalKind, suggestDomains} = await import(process.env.MASTERSOS_PEOPLE_MJS);
+const {HIDDEN, LIMIT, REFUSAL_DOMAINS, matchPeople, preselect, refusalDomains, refusalKind, suggestDomains} =
+    await import(process.env.MASTERSOS_PEOPLE_MJS);
 
 const person = (userName, realName, loginTime = 0) => ({userName, realName, loginTime});
 const names = r => r.shown.map(p => p.userName);
@@ -142,6 +143,20 @@ test('refusals for who the person is, in the words the broker and the agent use'
     // The agent's pam-check, as it reaches the greeter: "中文 / English".
     assert.equal(refusalKind(`这个账号的域名不允许登录这台电脑 / ${agentRefusal('DENY_DOMAIN')}`), 'not-allowed');
     assert.equal(refusalKind(agentRefusal('DENY_DOMAIN')), 'not-allowed');
+});
+
+// 20261105.15: the refusal named only the first domain, and teachers on the second one read it as meant for them.
+test('a domain refusal names every school domain', () => {
+    assert.equal(refusalDomains(['school.example.org']), '@school.example.org');
+    assert.equal(refusalDomains(['school.example.org', 'staff.example.org']), '@school.example.org, @staff.example.org');
+    assert.equal(refusalDomains(['a.org', 'b.org', 'c.org']), '@a.org, @b.org, @c.org');
+});
+
+test('a domain refusal names none without domains or with too many', () => {
+    assert.equal(refusalDomains([]), '');
+    assert.equal(refusalDomains(null), '');
+    assert.equal(refusalDomains(['', null]), '');
+    assert.equal(refusalDomains(Array.from({length: REFUSAL_DOMAINS + 1}, (_, i) => `s${i}.org`)), '');
 });
 
 test('other messages are no refusal of the person', () => {

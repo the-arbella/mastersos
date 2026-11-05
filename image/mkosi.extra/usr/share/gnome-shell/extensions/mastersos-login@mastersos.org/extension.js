@@ -38,7 +38,7 @@ import {LoginCard} from './card.js';
 import {HelpDialog, readSupportEnabled} from './help.js';
 import {collectingFor} from './help-model.js';
 import {LanguageScreen, languageChosen, restartGreeter} from './setup.js';
-import {matchPeople, preselect, refusalKind, suggestDomains} from './people.js';
+import {matchPeople, preselect, refusalDomains, refusalKind, suggestDomains} from './people.js';
 import {KIOSK_DIR, Shelf} from './shelf.js';
 import {agentRefusal, bannerText, brokerText, cleanText, fmt, strings, tr} from './strings.js';
 import {Watch} from './watch.js';
@@ -408,8 +408,8 @@ export default class MastersosLoginExtension extends Extension {
         let text;
         const kind = refusalKind(message);
         if (kind === 'not-allowed') {
-            const domain = this._domains[0];
-            text = domain ? fmt(this._text.notAllowedUse, `@${domain}`) : this._text.notAllowed;
+            const domains = refusalDomains(this._domains);
+            text = domains ? fmt(this._text.notAllowedUse, domains) : this._text.notAllowed;
         } else if (kind === 'unverified') {
             text = this._text.notVerified;
         } else if (kind === 'wrong-account') {
