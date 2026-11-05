@@ -119,3 +119,60 @@ msgstr "Miano abo szkolny e-mejl"
 
 msgid "Keep typing to narrow down"
 msgstr "Pisz dalij, coby zawynżić lista"
+
+msgid "Get help"
+msgstr "Poproś ô pōmoc"
+
+msgid "Get help from IT"
+msgstr "Poproś IT ô pōmoc"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Niy idzie sie zalogować"
+
+msgid "An app"
+msgstr "Aplikacyjo"
+
+msgid "Screen, keys or sound"
+msgstr "Ekran, klawisze abo zwuk"
+
+msgid "Battery"
+msgstr "Batryjo"
+
+msgid "Other"
+msgstr "Inksze"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Co sie stało? Niy wpisuj haseł ani ôsobistych danych."
+
+msgid "Attach a screenshot"
+msgstr "Przipnij zrzut ekranu"
+
+msgid "Send"
+msgstr "Poślij"
+
+msgid "Close"
+msgstr "Zawrzij"
+
+msgid "Sending…"
+msgstr "Posyłanie…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Posłane. Zgłoszynie #%s. IT ôstało powiadōmiōne."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Zapisane. Ôstanie posłane, kej tyn kōmputer bydzie online."
+
+msgid "Help requests are turned off at this school."
+msgstr "Proszynia ô pōmoc sōm wyłōnczōne w tyj szkole."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "W tyj godzinie ôstały posłane już 3 proszynia. Sprōbuj zaś niyskorzij."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Niy szło posłać. Pedz ô tym rechtorowi."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT zbiyro diagnostyczne informacyje z tego kōmputra."

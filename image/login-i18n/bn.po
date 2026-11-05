@@ -118,3 +118,60 @@ msgstr "নাম বা স্কুলের ইমেইল"
 
 msgid "Keep typing to narrow down"
 msgstr "তালিকা ছোট করতে টাইপ করতে থাকুন"
+
+msgid "Get help"
+msgstr "সাহায্য নিন"
+
+msgid "Get help from IT"
+msgstr "আইটি থেকে সাহায্য নিন"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "সাইন ইন করা যাচ্ছে না"
+
+msgid "An app"
+msgstr "একটি অ্যাপ"
+
+msgid "Screen, keys or sound"
+msgstr "স্ক্রিন, কী বা সাউন্ড"
+
+msgid "Battery"
+msgstr "ব্যাটারি"
+
+msgid "Other"
+msgstr "অন্যান্য"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "কী হয়েছে? অনুগ্রহ করে পাসওয়ার্ড বা ব্যক্তিগত তথ্য লিখবেন না।"
+
+msgid "Attach a screenshot"
+msgstr "একটি স্ক্রিনশট সংযুক্ত করুন"
+
+msgid "Send"
+msgstr "পাঠান"
+
+msgid "Close"
+msgstr "বন্ধ করুন"
+
+msgid "Sending…"
+msgstr "পাঠানো হচ্ছে…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "পাঠানো হয়েছে। টিকিট #%s। আইটি বিভাগকে জানানো হয়েছে।"
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "সংরক্ষিত হয়েছে। এই কম্পিউটার অনলাইনে এলে পাঠানো হবে।"
+
+msgid "Help requests are turned off at this school."
+msgstr "এই স্কুলে সাহায্যের অনুরোধ বন্ধ করা আছে।"
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "আপনি এই ঘণ্টায় 3টি অনুরোধ পাঠিয়েছেন। অনুগ্রহ করে পরে আবার চেষ্টা করুন।"
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "পাঠানো যায়নি। অনুগ্রহ করে একজন শিক্ষককে জানান।"
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "আইটি বিভাগ এই কম্পিউটার থেকে ডায়াগনস্টিক তথ্য সংগ্রহ করছে।"

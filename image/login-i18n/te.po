@@ -118,3 +118,60 @@ msgstr "పేరు లేదా పాఠశాల ఇమెయిల్"
 
 msgid "Keep typing to narrow down"
 msgstr "జాబితాను తగ్గించడానికి టైప్ చేస్తూ ఉండండి"
+
+msgid "Get help"
+msgstr "సహాయం పొందండి"
+
+msgid "Get help from IT"
+msgstr "IT నుండి సహాయం పొందండి"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "సైన్ ఇన్ చేయలేకపోతున్నాను"
+
+msgid "An app"
+msgstr "ఒక యాప్"
+
+msgid "Screen, keys or sound"
+msgstr "స్క్రీన్, కీలు లేదా సౌండ్"
+
+msgid "Battery"
+msgstr "బ్యాటరీ"
+
+msgid "Other"
+msgstr "ఇతరం"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "ఏం జరిగింది? దయచేసి పాస్‌వర్డ్‌లు లేదా వ్యక్తిగత వివరాలు చేర్చవద్దు."
+
+msgid "Attach a screenshot"
+msgstr "స్క్రీన్‌షాట్‌ను జోడించండి"
+
+msgid "Send"
+msgstr "పంపండి"
+
+msgid "Close"
+msgstr "మూసివేయండి"
+
+msgid "Sending…"
+msgstr "పంపుతోంది…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "పంపబడింది. టికెట్ #%s. IT కి తెలియజేయబడింది."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "సేవ్ చేయబడింది. ఈ కంప్యూటర్ ఆన్‌లైన్‌కి వచ్చినప్పుడు పంపబడుతుంది."
+
+msgid "Help requests are turned off at this school."
+msgstr "ఈ పాఠశాలలో సహాయ అభ్యర్థనలు ఆఫ్ చేయబడ్డాయి."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "మీరు ఈ గంటలో 3 అభ్యర్థనలు పంపారు. దయచేసి తర్వాత మళ్లీ ప్రయత్నించండి."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "పంపడం సాధ్యం కాలేదు. దయచేసి ఉపాధ్యాయునికి చెప్పండి."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT ఈ కంప్యూటర్ నుండి డయాగ్నస్టిక్ సమాచారాన్ని సేకరిస్తోంది."

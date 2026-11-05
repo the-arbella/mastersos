@@ -27,3 +27,235 @@
 #panel.mastersos-panel:overview {
     background-color: transparent;
 }
+
+/* Get help in the quick settings menu, under the managed row. Neutral hover: the menu is light or dark with the theme. */
+.mastersos-help-row {
+    padding: 8px 16px;
+    margin-bottom: 6px;
+    border-radius: 99px;
+    transition-duration: 100ms;
+}
+
+.mastersos-help-row:hover {
+    background-color: rgba(127, 127, 127, 0.18);
+}
+
+.mastersos-help-row:active {
+    background-color: rgba(127, 127, 127, 0.28);
+}
+
+.mastersos-help-row:focus {
+    box-shadow: inset 0 0 0 2px #ffb35c;
+}
+
+.mastersos-help-row-content {
+    spacing: 8px;
+}
+
+/* Get help dialog (help.js). The same block is in both extensions' stylesheet.css (check-tree rule 65): the night card of the
+   login screen, pill categories that turn brand orange when picked, the 2px light-orange focus ring used everywhere else. */
+.mastersos-help.modal-dialog {
+    background-color: #17152b;
+    color: #f2f3f5;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 24px;
+    padding: 0;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+}
+
+.mastersos-help .modal-dialog-content-box {
+    padding: 28px 32px 4px 32px;
+    margin: 0;
+    spacing: 0;
+}
+
+.mastersos-help-body {
+    width: 460px;
+    spacing: 18px;
+}
+
+.mastersos-help-title {
+    color: #ffffff;
+    font-size: 16pt;
+    font-weight: 700;
+}
+
+.mastersos-help-form {
+    spacing: 14px;
+}
+
+.mastersos-help-category {
+    background-color: rgba(255, 255, 255, 0.10);
+    color: #f2f3f5;
+    border-radius: 18px;
+    padding: 8px 16px;
+    font-size: 11pt;
+    transition-duration: 100ms;
+}
+
+.mastersos-help-category:hover {
+    background-color: rgba(255, 255, 255, 0.18);
+}
+
+.mastersos-help-category:active {
+    background-color: rgba(255, 255, 255, 0.26);
+}
+
+.mastersos-help-category:checked {
+    background-color: #b8512e;
+    color: #ffffff;
+}
+
+.mastersos-help-category:checked:hover {
+    background-color: #9c4426;
+}
+
+.mastersos-help-category:focus {
+    box-shadow: inset 0 0 0 2px #ffb35c;
+}
+
+.mastersos-help-text {
+    min-height: 96px;
+    background-color: rgba(255, 255, 255, 0.06);
+    color: #f2f3f5;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 12px;
+    padding: 10px 12px;
+    font-size: 11pt;
+    caret-color: #ffb35c;
+    selection-background-color: rgba(255, 179, 92, 0.40);
+    selected-color: #ffffff;
+}
+
+.mastersos-help-text:focus {
+    border-color: rgba(255, 190, 130, 0.75);
+    box-shadow: 0 0 0 3px rgba(255, 154, 77, 0.22);
+}
+
+.mastersos-help-hint {
+    color: rgba(255, 255, 255, 0.50);
+}
+
+.mastersos-help-counter {
+    color: rgba(255, 255, 255, 0.60);
+    font-size: 9pt;
+}
+
+.mastersos-help-attach {
+    color: #f2f3f5;
+    font-size: 11pt;
+    border-radius: 8px;
+    padding: 4px 6px;
+}
+
+.mastersos-help-attach StBoxLayout {
+    spacing: 10px;
+}
+
+.mastersos-help-attach StBin {
+    width: 20px;
+    height: 20px;
+    border-radius: 6px;
+    background-color: rgba(255, 255, 255, 0.10);
+    border: 1px solid rgba(255, 255, 255, 0.32);
+}
+
+.mastersos-help-attach StIcon {
+    icon-size: 14px;
+    color: transparent;
+}
+
+.mastersos-help-attach:checked StBin {
+    background-color: #b8512e;
+    border-color: #b8512e;
+}
+
+.mastersos-help-attach:checked StIcon {
+    color: #ffffff;
+}
+
+.mastersos-help-attach:focus {
+    box-shadow: inset 0 0 0 2px #ffb35c;
+}
+
+/* 160 px wide, under the tick box, in a thin light frame. */
+.mastersos-help-preview {
+    padding: 1px;
+    margin-left: 34px;
+    background-color: rgba(255, 255, 255, 0.28);
+    border-radius: 4px;
+}
+
+.mastersos-help-result {
+    spacing: 14px;
+    padding: 6px 0 2px 0;
+    min-height: 40px;
+}
+
+.mastersos-help-result-text {
+    color: #f2f3f5;
+    font-size: 12pt;
+}
+
+.mastersos-help-icon {
+    icon-size: 24px;
+    color: #f2f3f5;
+}
+
+.mastersos-help-sent .mastersos-help-icon {
+    color: #7ed69b;
+}
+
+.mastersos-help-queued .mastersos-help-icon {
+    color: #ffb35c;
+}
+
+.mastersos-help-rate-limited .mastersos-help-icon,
+.mastersos-help-disabled .mastersos-help-icon,
+.mastersos-help-error .mastersos-help-icon {
+    color: #f2b8b5;
+}
+
+.mastersos-help .modal-dialog-button-box {
+    padding: 20px 32px 28px 32px;
+    border-top-width: 0;
+    background-color: transparent;
+}
+
+.mastersos-help .modal-dialog-button {
+    background-color: rgba(255, 255, 255, 0.10);
+    color: #f2f3f5;
+    border: none;
+    border-radius: 20px;
+    box-shadow: none;
+    padding: 10px 24px;
+    font-size: 11pt;
+    font-weight: 600;
+}
+
+.mastersos-help .modal-dialog-button:hover {
+    background-color: rgba(255, 255, 255, 0.18);
+}
+
+.mastersos-help .modal-dialog-button:active {
+    background-color: rgba(255, 255, 255, 0.26);
+}
+
+.mastersos-help .modal-dialog-button:focus {
+    box-shadow: inset 0 0 0 2px #ffb35c;
+}
+
+.mastersos-help .modal-dialog-button.mastersos-help-send {
+    background-color: #b8512e;
+    color: #ffffff;
+}
+
+.mastersos-help .modal-dialog-button.mastersos-help-send:hover {
+    background-color: #9c4426;
+}
+
+.mastersos-help .modal-dialog-button.mastersos-help-send:insensitive {
+    background-color: rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.38);
+}
+/* End of the Get help dialog. */

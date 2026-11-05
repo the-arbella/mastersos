@@ -118,3 +118,60 @@ msgstr "Nimi või kooli e-post"
 
 msgid "Keep typing to narrow down"
 msgstr "Kirjuta edasi, et loendit kitsendada"
+
+msgid "Get help"
+msgstr "Abi"
+
+msgid "Get help from IT"
+msgstr "Abi IT-osakonnalt"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Ei saa sisse logida"
+
+msgid "An app"
+msgstr "Rakendus"
+
+msgid "Screen, keys or sound"
+msgstr "Ekraan, klahvid või heli"
+
+msgid "Battery"
+msgstr "Aku"
+
+msgid "Other"
+msgstr "Muu"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Mis juhtus? Palun ärge lisage paroole ega isikuandmeid."
+
+msgid "Attach a screenshot"
+msgstr "Lisa ekraanipilt"
+
+msgid "Send"
+msgstr "Saada"
+
+msgid "Close"
+msgstr "Sulge"
+
+msgid "Sending…"
+msgstr "Saatmine…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Saadetud. Pilet nr %s. IT-osakonda on teavitatud."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Salvestatud. Saadetakse, kui see arvuti on võrgus."
+
+msgid "Help requests are turned off at this school."
+msgstr "Abipäringud on selles koolis välja lülitatud."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Olete selle tunni jooksul saatnud 3 päringut. Proovige hiljem uuesti."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Saatmine ebaõnnestus. Palun öelge õpetajale."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT-osakond kogub sellest arvutist diagnostikateavet."

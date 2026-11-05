@@ -118,3 +118,60 @@ msgstr "Nom o corrièr electronic de l'escòla"
 
 msgid "Keep typing to narrow down"
 msgstr "Contunhatz d'escriure per reduire la lista"
+
+msgid "Get help"
+msgstr "Demandar d'ajuda"
+
+msgid "Get help from IT"
+msgstr "Demandar d'ajuda al servici informatic"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Connexion impossibla"
+
+msgid "An app"
+msgstr "Una aplicacion"
+
+msgid "Screen, keys or sound"
+msgstr "Ecran, clavièr o son"
+
+msgid "Battery"
+msgstr "Batariá"
+
+msgid "Other"
+msgstr "Autre"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Qué s'es passat ? Metètz pas de senhals ni d'informacions personalas."
+
+msgid "Attach a screenshot"
+msgstr "Jónher una captura d'ecran"
+
+msgid "Send"
+msgstr "Mandar"
+
+msgid "Close"
+msgstr "Tampar"
+
+msgid "Sending…"
+msgstr "Mandadís…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Mandat. Tiquet n° %s. Lo servici informatic es estat avisat."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Enregistrat. Serà mandat quand aqueste ordenador serà en linha."
+
+msgid "Help requests are turned off at this school."
+msgstr "Las demandas d'ajuda son desactivadas dins aquesta escòla."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Avètz mandat 3 demandas aquesta ora. Tornatz ensajar mai tard."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Mandadís impossible. Avisatz un ensenhaire."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "Lo servici informatic recampa d'informacions de diagnostic d'aqueste ordenador."

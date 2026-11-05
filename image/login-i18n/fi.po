@@ -118,3 +118,60 @@ msgstr "Nimi tai koulun sähköposti"
 
 msgid "Keep typing to narrow down"
 msgstr "Jatka kirjoittamista rajataksesi luetteloa"
+
+msgid "Get help"
+msgstr "Pyydä apua"
+
+msgid "Get help from IT"
+msgstr "Pyydä apua IT-tuelta"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "En pääse kirjautumaan"
+
+msgid "An app"
+msgstr "Sovellus"
+
+msgid "Screen, keys or sound"
+msgstr "Näyttö, näppäimet tai ääni"
+
+msgid "Battery"
+msgstr "Akku"
+
+msgid "Other"
+msgstr "Muu"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Mitä tapahtui? Älä kirjoita salasanoja tai henkilötietoja."
+
+msgid "Attach a screenshot"
+msgstr "Liitä kuvakaappaus"
+
+msgid "Send"
+msgstr "Lähetä"
+
+msgid "Close"
+msgstr "Sulje"
+
+msgid "Sending…"
+msgstr "Lähetetään…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Lähetetty. Tiketti #%s. IT-tuelle on ilmoitettu."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Tallennettu. Lähetetään, kun tämä tietokone on verkossa."
+
+msgid "Help requests are turned off at this school."
+msgstr "Avunpyynnöt eivät ole käytössä tässä koulussa."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Olet lähettänyt 3 pyyntöä tämän tunnin aikana. Yritä myöhemmin uudelleen."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Lähetys epäonnistui. Kerro opettajalle."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT-tuki kerää diagnostiikkatietoja tästä tietokoneesta."

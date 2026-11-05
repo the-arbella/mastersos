@@ -118,3 +118,60 @@ msgstr "Emri ose email-i i shkollës"
 
 msgid "Keep typing to narrow down"
 msgstr "Vazhdoni të shkruani për të ngushtuar listën"
+
+msgid "Get help"
+msgstr "Merr ndihmë"
+
+msgid "Get help from IT"
+msgstr "Merr ndihmë nga IT-ja"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Nuk mund të hyj"
+
+msgid "An app"
+msgstr "Një aplikacion"
+
+msgid "Screen, keys or sound"
+msgstr "Ekrani, tastet ose zëri"
+
+msgid "Battery"
+msgstr "Bateria"
+
+msgid "Other"
+msgstr "Tjetër"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Çfarë ndodhi? Mos shkruaj fjalëkalime ose të dhëna personale."
+
+msgid "Attach a screenshot"
+msgstr "Bashkëngjit një pamje ekrani"
+
+msgid "Send"
+msgstr "Dërgo"
+
+msgid "Close"
+msgstr "Mbyll"
+
+msgid "Sending…"
+msgstr "Po dërgohet…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "U dërgua. Kërkesa #%s. IT-ja u njoftua."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "U ruajt. Do të dërgohet kur ky kompjuter të jetë në linjë."
+
+msgid "Help requests are turned off at this school."
+msgstr "Kërkesat për ndihmë janë çaktivizuar në këtë shkollë."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Ke dërguar 3 kërkesa këtë orë. Provo përsëri më vonë."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Nuk u dërgua dot. Tregoji një mësuesi."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT-ja po mbledh të dhëna diagnostikuese nga ky kompjuter."

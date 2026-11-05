@@ -118,3 +118,60 @@ msgstr "Ad veya okul e-postası"
 
 msgid "Keep typing to narrow down"
 msgstr "Listeyi daraltmak için yazmaya devam edin"
+
+msgid "Get help"
+msgstr "Yardım al"
+
+msgid "Get help from IT"
+msgstr "BT'den yardım al"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Oturum açamıyorum"
+
+msgid "An app"
+msgstr "Bir uygulama"
+
+msgid "Screen, keys or sound"
+msgstr "Ekran, tuşlar veya ses"
+
+msgid "Battery"
+msgstr "Pil"
+
+msgid "Other"
+msgstr "Diğer"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Ne oldu? Lütfen parola veya kişisel bilgi yazmayın."
+
+msgid "Attach a screenshot"
+msgstr "Ekran görüntüsü ekle"
+
+msgid "Send"
+msgstr "Gönder"
+
+msgid "Close"
+msgstr "Kapat"
+
+msgid "Sending…"
+msgstr "Gönderiliyor…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Gönderildi. Talep #%s. BT birimine bildirildi."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Kaydedildi. Bu bilgisayar çevrimiçi olunca gönderilecek."
+
+msgid "Help requests are turned off at this school."
+msgstr "Bu okulda yardım talepleri kapalı."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Bu saat içinde 3 talep gönderdiniz. Lütfen daha sonra yeniden deneyin."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Gönderilemedi. Lütfen bir öğretmene söyleyin."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "BT bu bilgisayardan tanılama bilgisi topluyor."

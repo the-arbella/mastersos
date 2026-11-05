@@ -118,3 +118,60 @@ msgstr "Naam or School-E-Mail"
 
 msgid "Keep typing to narrow down"
 msgstr "Wieder tippen, üm de List lütter to maken"
+
+msgid "Get help"
+msgstr "Hülp halen"
+
+msgid "Get help from IT"
+msgstr "Hülp vun IT"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Anmellen geiht nich"
+
+msgid "An app"
+msgstr "En App"
+
+msgid "Screen, keys or sound"
+msgstr "Billschirm, Tasten oder Toon"
+
+msgid "Battery"
+msgstr "Akku"
+
+msgid "Other"
+msgstr "Anners"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Wat is passeert? Schriev bitte keen Passwöör oder persöönliche Saken."
+
+msgid "Attach a screenshot"
+msgstr "Billschirmfoto anhangen"
+
+msgid "Send"
+msgstr "Sennen"
+
+msgid "Close"
+msgstr "Tomaken"
+
+msgid "Sending…"
+msgstr "Warrt sennt…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Sennt. Ticket #%s. IT weet Bescheed."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Spiekert. Dat warrt sennt, wenn disse Reekner online is."
+
+msgid "Help requests are turned off at this school."
+msgstr "Hülpanfragen sünd op disse School utschalt."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Du hest in disse Stünn al 3 Anfragen sennt. Versöök dat bitte later nochmal."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Sennen hett nich klappt. Segg dat bitte en Lehrer."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT sammelt Diagnose-Infos vun dissen Reekner."

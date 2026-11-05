@@ -118,3 +118,60 @@ msgstr "ชื่อหรืออีเมลโรงเรียน"
 
 msgid "Keep typing to narrow down"
 msgstr "พิมพ์ต่อเพื่อจำกัดรายการให้แคบลง"
+
+msgid "Get help"
+msgstr "ขอความช่วยเหลือ"
+
+msgid "Get help from IT"
+msgstr "ขอความช่วยเหลือจากฝ่าย IT"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "ลงชื่อเข้าใช้ไม่ได้"
+
+msgid "An app"
+msgstr "แอป"
+
+msgid "Screen, keys or sound"
+msgstr "หน้าจอ ปุ่ม หรือเสียง"
+
+msgid "Battery"
+msgstr "แบตเตอรี่"
+
+msgid "Other"
+msgstr "อื่นๆ"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "เกิดอะไรขึ้น? โปรดอย่าใส่รหัสผ่านหรือข้อมูลส่วนตัว"
+
+msgid "Attach a screenshot"
+msgstr "แนบภาพหน้าจอ"
+
+msgid "Send"
+msgstr "ส่ง"
+
+msgid "Close"
+msgstr "ปิด"
+
+msgid "Sending…"
+msgstr "กำลังส่ง…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "ส่งแล้ว หมายเลขคำขอ #%s ฝ่าย IT ได้รับแจ้งแล้ว"
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "บันทึกแล้ว จะส่งเมื่อคอมพิวเตอร์เครื่องนี้ออนไลน์"
+
+msgid "Help requests are turned off at this school."
+msgstr "โรงเรียนนี้ปิดการขอความช่วยเหลือไว้"
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "คุณส่งคำขอไปแล้ว 3 ครั้งในชั่วโมงนี้ โปรดลองอีกครั้งในภายหลัง"
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "ส่งไม่ได้ โปรดแจ้งครู"
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "ฝ่าย IT กำลังเก็บข้อมูลการวินิจฉัยจากคอมพิวเตอร์เครื่องนี้"

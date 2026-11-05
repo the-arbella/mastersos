@@ -1,8 +1,9 @@
-// The row of pill buttons at the bottom left of the login screen: Shut down, Browse as Guest, Apps, under the
+// The row of pill buttons at the bottom left of the login screen: Shut down, Browse as Guest, Apps, Get help, under the
 // "Managed by <school>" line, which is also the way into the IT maintenance account (it looks like text until hovered or
 // focused, and works only on the username step). The notice
 // (why a sign-in did not go through, with Retry when trying again can help) sits beside it, outside the login area.
 // Apps lists the locked apps the school shows on the login screen, read from /var/lib/mastersos-public/kiosk/<id>/.
+// Get help (help.js) shows only when the school allows it. Above everything, while IT collects diagnostics, one line says so.
 
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
@@ -78,7 +79,7 @@ function pill(iconName, label, onClick) {
 }
 
 export class Shelf {
-    // actions: {shutDown(), guest(), openApp(app), itSignIn()}
+    // actions: {shutDown(), guest(), openApp(app), itSignIn(), help()}
     constructor(text, managedLine, actions) {
         this._actions = actions;
         this._text = text;
@@ -86,6 +87,13 @@ export class Shelf {
         this._itSignIn = false;
 
         this.actor = new St.BoxLayout({style_class: 'mastersos-shelf', orientation: Clutter.Orientation.VERTICAL});
+        const collecting = new St.BoxLayout({style_class: 'mastersos-login-collecting', x_align: Clutter.ActorAlign.START,
+            visible: false});
+        collecting.add_child(new St.Icon({icon_name: 'dialog-information-symbolic', style_class: 'mastersos-pill-icon',
+            y_align: Clutter.ActorAlign.CENTER}));
+        collecting.add_child(new St.Label({text: text.collecting, y_align: Clutter.ActorAlign.CENTER}));
+        this._collecting = collecting;
+        this.actor.add_child(collecting);
         // A button that starts out inert: setItSignIn turns it on (St.Button handles Enter and Space when focused).
         this._managedLabel = new St.Label({y_align: Clutter.ActorAlign.CENTER});
         this._managed = new St.Button({
@@ -112,6 +120,9 @@ export class Shelf {
         this._appsButton = pill('view-app-grid-symbolic', text.apps, () => this._toggleApps());
         this._appsButton.hide();
         this._row.add_child(this._appsButton);
+        this._help = pill('help-browser-symbolic', text.help, () => actions.help());
+        this._help.hide();
+        this._row.add_child(this._help);
 
         this._noticeBox = new St.BoxLayout({style_class: 'mastersos-notice', visible: false});
         this._notice = new St.Label({
@@ -179,6 +190,18 @@ export class Shelf {
     hideNotice() {
         this._onRetry = null;
         this._noticeBox.hide();
+    }
+
+    // support.json says whether the school takes help requests.
+    setHelpAvailable(available) {
+        this._help.visible = available;
+        this._reposition();
+    }
+
+    // "IT is collecting diagnostic info from this computer." while status.json says so.
+    setCollecting(on) {
+        this._collecting.visible = on;
+        this._reposition();
     }
 
     setGuestAvailable(available) {

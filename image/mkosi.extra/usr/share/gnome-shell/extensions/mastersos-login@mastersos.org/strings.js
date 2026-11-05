@@ -3,6 +3,13 @@
 
 import {gettext as _} from 'resource:///org/gnome/shell/extensions/extension.js';
 
+import {COPY} from './help-model.js';
+
+// The extension's gettext as a plain function, for help.js (which is shared with the desktop and takes the gettext it is given).
+export function tr(msgid) {
+    return _(msgid);
+}
+
 export function strings() {
     return {
         managed: _('Managed by %s'),
@@ -26,6 +33,8 @@ export function strings() {
         keyboard: _('Keyboard'),
         continueLabel: _('Continue'),
         settingsFailed: _('The setting could not be saved. Try again.'),
+        help: _(COPY.entry),
+        collecting: _(COPY.collecting),
     };
 }
 

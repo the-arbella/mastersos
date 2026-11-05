@@ -118,3 +118,60 @@ msgstr "이름 또는 학교 이메일"
 
 msgid "Keep typing to narrow down"
 msgstr "계속 입력하면 목록이 좁혀집니다"
+
+msgid "Get help"
+msgstr "도움 요청"
+
+msgid "Get help from IT"
+msgstr "IT에 도움 요청"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "로그인할 수 없음"
+
+msgid "An app"
+msgstr "앱"
+
+msgid "Screen, keys or sound"
+msgstr "화면, 키보드 또는 소리"
+
+msgid "Battery"
+msgstr "배터리"
+
+msgid "Other"
+msgstr "기타"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "무슨 일이 있었나요? 비밀번호나 개인 정보는 적지 마세요."
+
+msgid "Attach a screenshot"
+msgstr "스크린샷 첨부"
+
+msgid "Send"
+msgstr "보내기"
+
+msgid "Close"
+msgstr "닫기"
+
+msgid "Sending…"
+msgstr "보내는 중…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "보냈습니다. 티켓 #%s. IT에 알렸습니다."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "저장했습니다. 이 컴퓨터가 온라인이 되면 보내집니다."
+
+msgid "Help requests are turned off at this school."
+msgstr "이 학교에서는 도움 요청이 꺼져 있습니다."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "이번 시간에 요청을 3번 보냈습니다. 나중에 다시 시도해 주세요."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "보낼 수 없습니다. 선생님께 말씀드리세요."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT에서 이 컴퓨터의 진단 정보를 수집하고 있습니다."

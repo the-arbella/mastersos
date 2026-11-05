@@ -118,3 +118,60 @@ msgstr "Ainm no post-d na sgoile"
 
 msgid "Keep typing to narrow down"
 msgstr "Lean ort a' sgrìobhadh gus an liosta a chumhangachadh"
+
+msgid "Get help"
+msgstr "Faigh cobhair"
+
+msgid "Get help from IT"
+msgstr "Faigh cobhair o IT"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Cha ghabh inntrigeadh"
+
+msgid "An app"
+msgstr "Aplacaid"
+
+msgid "Screen, keys or sound"
+msgstr "Sgrìn, iuchraichean no fuaim"
+
+msgid "Battery"
+msgstr "Bataraidh"
+
+msgid "Other"
+msgstr "Eile"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Dè thachair? Na cuir a-steach faclan-faire no fiosrachadh pearsanta."
+
+msgid "Attach a screenshot"
+msgstr "Ceangail glacadh-sgrìn ris"
+
+msgid "Send"
+msgstr "Cuir"
+
+msgid "Close"
+msgstr "Dùin"
+
+msgid "Sending…"
+msgstr "Ga chur…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Air a chur. Tiogaid #%s. Chaidh innse do IT."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Air a shàbhaladh. Thèid a chur nuair a bhios an coimpiutair seo air loidhne."
+
+msgid "Help requests are turned off at this school."
+msgstr "Tha iarrtasan cobhrach dheth san sgoil seo."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Chuir thu 3 iarrtasan an uair seo. Feuch a-rithist an ceann tàmaill."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Cha b’ urrainn dhuinn a chur. Innis do thidsear."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "Tha IT a’ cruinneachadh fiosrachadh breithneachaidh on choimpiutair seo."

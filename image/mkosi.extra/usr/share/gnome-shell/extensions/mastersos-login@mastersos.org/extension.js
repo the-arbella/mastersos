@@ -1,6 +1,7 @@
 // MastersOS login-screen extension. Runs only in the GDM greeter session mode (mastersos-gdm).
 //   - one entry, no user list: typing finds the people of this computer below it, a new school email signs someone new in
-//   - bottom shelf: Shut down, Browse as Guest, Apps (shelf.js), and "Managed by <school_name>"
+//   - bottom shelf: Shut down, Browse as Guest, Apps, Get help (shelf.js, help.js), and "Managed by <school_name>"; above it a
+//     line while IT collects diagnostics (status.json diag_collecting_until)
 //   - sign-in card: the school's page in a locked-down Chrome instead of the login code dialog (card.js)
 //   - a school account has no password on this computer: its only way in is that card, online
 //   - hides what a student should not see: kiosk accounts and guest in the user list, Not listed?, the broker and
@@ -34,16 +35,19 @@ import * as SystemActions from 'resource:///org/gnome/shell/misc/systemActions.j
 import {loginArea} from './area.js';
 import {addBrandMark} from './brand.js';
 import {LoginCard} from './card.js';
+import {HelpDialog, readSupportEnabled} from './help.js';
+import {collectingFor} from './help-model.js';
 import {LanguageScreen, languageChosen, restartGreeter} from './setup.js';
 import {matchPeople, preselect, suggestDomains} from './people.js';
 import {KIOSK_DIR, Shelf} from './shelf.js';
-import {agentRefusal, bannerText, brokerText, cleanText, fmt, strings} from './strings.js';
+import {agentRefusal, bannerText, brokerText, cleanText, fmt, strings, tr} from './strings.js';
 import {Watch} from './watch.js';
 
-const BRANDING_DIR = '/var/lib/mastersos-public/branding';
+const PUBLIC_DIR = '/var/lib/mastersos-public';
+const BRANDING_DIR = `${PUBLIC_DIR}/branding`;
 const BRANDING = `${BRANDING_DIR}/branding.json`;
 const NM_CONNECTIVITY_NONE = 1;
-const STATUS = '/var/lib/mastersos-public/status.json';
+const STATUS = `${PUBLIC_DIR}/status.json`;
 const BROKER_CHOICE = 'authd-broker-selection';
 const MODE_CHOICE = 'authd-auth-mode-selection';
 const LOCAL_BROKER = 'local';
@@ -156,6 +160,8 @@ export default class MastersosLoginExtension extends Extension {
         this._language = null;
         this._firstRun = false;
         this._firstRunTicks = 0;
+        this._helpDialog = null;
+        this._collectingId = 0;
         const b = readBranding();
         const name = schoolName(b);
         this._domains = domainList(b);
@@ -175,6 +181,8 @@ export default class MastersosLoginExtension extends Extension {
         }
         // The agent may apply new settings while this screen is up (a new settings version on a computer left at login).
         this._watch = new Watch([BRANDING_DIR, KIOSK_DIR], () => this._settingsChanged());
+        // support.json (Get help on or off) and status.json (IT collecting) sit in the public directory itself.
+        this._publicWatch = new Watch([PUBLIC_DIR], () => this._publicChanged());
         // The login dialog and the username entry appear later: poll until they do.
         this._pollId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 400, () => {
             try {
@@ -203,6 +211,36 @@ export default class MastersosLoginExtension extends Extension {
         // The list under the entry follows the new domains at once.
         if (this._matchBox?.visible && this._hookedText)
             this._showMatches(this._hookedText.get_text());
+    }
+
+    // Get help shows when the school allows it; the collecting line shows until diag_collecting_until, then goes by itself.
+    _publicChanged() {
+        if (this._collectingId) {
+            GLib.source_remove(this._collectingId);
+            this._collectingId = 0;
+        }
+        if (!this._shelf)
+            return;
+        this._shelf.setHelpAvailable(readSupportEnabled());
+        const ms = collectingFor(readJson(STATUS), Date.now());
+        this._shelf.setCollecting(ms > 0);
+        if (ms > 0) {
+            this._collectingId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ms + 1000, () => {
+                this._collectingId = 0;
+                this._publicChanged();
+                return GLib.SOURCE_REMOVE;
+            });
+        }
+    }
+
+    _openHelp() {
+        if (this._helpDialog)
+            return;
+        this._helpDialog = new HelpDialog({session: 'login', gettext: tr});
+        this._helpDialog.connect('destroy', () => {
+            this._helpDialog = null;
+        });
+        this._helpDialog.open();
     }
 
     _tick() {
@@ -510,8 +548,10 @@ export default class MastersosLoginExtension extends Extension {
             openApp: app => this._openApp(app),
             // "Managed by <school>" goes straight to the IT account's password: nobody types its user name.
             itSignIn: () => this._signInAs(IT_ACCOUNT),
+            help: () => this._openHelp(),
         });
         this._shelf.setItSignIn(this._itSignIn);
+        this._publicChanged();
 
         // A long list scrolls inside the area; the box around it grows to the whole dialog.
         const fitList = () => {
@@ -893,6 +933,14 @@ export default class MastersosLoginExtension extends Extension {
     disable() {
         this._watch?.destroy();
         this._watch = null;
+        this._publicWatch?.destroy();
+        this._publicWatch = null;
+        if (this._collectingId) {
+            GLib.source_remove(this._collectingId);
+            this._collectingId = 0;
+        }
+        this._helpDialog?.destroy();
+        this._helpDialog = null;
         this._brand?.destroy();
         this._brand = null;
         if (this._pollId) {

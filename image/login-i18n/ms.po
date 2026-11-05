@@ -118,3 +118,60 @@ msgstr "Nama atau e-mel sekolah"
 
 msgid "Keep typing to narrow down"
 msgstr "Teruskan menaip untuk mengecilkan senarai"
+
+msgid "Get help"
+msgstr "Dapatkan bantuan"
+
+msgid "Get help from IT"
+msgstr "Dapatkan bantuan daripada IT"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Tidak dapat log masuk"
+
+msgid "An app"
+msgstr "Aplikasi"
+
+msgid "Screen, keys or sound"
+msgstr "Skrin, kekunci atau bunyi"
+
+msgid "Battery"
+msgstr "Bateri"
+
+msgid "Other"
+msgstr "Lain-lain"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Apa yang berlaku? Sila jangan sertakan kata laluan atau butiran peribadi."
+
+msgid "Attach a screenshot"
+msgstr "Lampirkan tangkapan skrin"
+
+msgid "Send"
+msgstr "Hantar"
+
+msgid "Close"
+msgstr "Tutup"
+
+msgid "Sending…"
+msgstr "Menghantar…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Dihantar. Tiket #%s. IT telah dimaklumkan."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Disimpan. Akan dihantar apabila komputer ini dalam talian."
+
+msgid "Help requests are turned off at this school."
+msgstr "Permintaan bantuan dimatikan di sekolah ini."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Anda telah menghantar 3 permintaan dalam jam ini. Sila cuba lagi nanti."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Tidak dapat dihantar. Sila beritahu guru."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT sedang mengumpul maklumat diagnostik daripada komputer ini."

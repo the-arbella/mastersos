@@ -118,3 +118,60 @@ msgstr "പേര് അല്ലെങ്കിൽ സ്കൂൾ ഇമെയ
 
 msgid "Keep typing to narrow down"
 msgstr "പട്ടിക ചുരുക്കാൻ ടൈപ്പ് ചെയ്യുന്നത് തുടരുക"
+
+msgid "Get help"
+msgstr "സഹായം നേടുക"
+
+msgid "Get help from IT"
+msgstr "IT-യിൽ നിന്ന് സഹായം നേടുക"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "സൈൻ ഇൻ ചെയ്യാൻ കഴിയുന്നില്ല"
+
+msgid "An app"
+msgstr "ഒരു ആപ്പ്"
+
+msgid "Screen, keys or sound"
+msgstr "സ്ക്രീൻ, കീകൾ അല്ലെങ്കിൽ ശബ്ദം"
+
+msgid "Battery"
+msgstr "ബാറ്ററി"
+
+msgid "Other"
+msgstr "മറ്റുള്ളവ"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "എന്താണ് സംഭവിച്ചത്? ദയവായി പാസ്‌വേഡുകളോ സ്വകാര്യ വിവരങ്ങളോ ചേർക്കരുത്."
+
+msgid "Attach a screenshot"
+msgstr "ഒരു സ്ക്രീൻഷോട്ട് ചേർക്കുക"
+
+msgid "Send"
+msgstr "അയയ്ക്കുക"
+
+msgid "Close"
+msgstr "അടയ്ക്കുക"
+
+msgid "Sending…"
+msgstr "അയയ്ക്കുന്നു…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "അയച്ചു. ടിക്കറ്റ് #%s. IT-യെ അറിയിച്ചു."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "സംരക്ഷിച്ചു. ഈ കമ്പ്യൂട്ടർ ഓൺലൈനാകുമ്പോൾ അയയ്ക്കും."
+
+msgid "Help requests are turned off at this school."
+msgstr "ഈ സ്കൂളിൽ സഹായ അഭ്യർത്ഥനകൾ ഓഫാക്കിയിരിക്കുന്നു."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "ഈ മണിക്കൂറിൽ നിങ്ങൾ 3 അഭ്യർത്ഥനകൾ അയച്ചു. ദയവായി പിന്നീട് വീണ്ടും ശ്രമിക്കുക."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "അയയ്ക്കാൻ കഴിഞ്ഞില്ല. ദയവായി ഒരു അധ്യാപകനോട് പറയുക."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT ഈ കമ്പ്യൂട്ടറിൽ നിന്ന് ഡയഗ്നോസ്റ്റിക് വിവരങ്ങൾ ശേഖരിക്കുന്നു."

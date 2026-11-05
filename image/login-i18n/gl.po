@@ -118,3 +118,60 @@ msgstr "Nome ou correo electrónico da escola"
 
 msgid "Keep typing to narrow down"
 msgstr "Continúa escribindo para reducir a lista"
+
+msgid "Get help"
+msgstr "Pedir axuda"
+
+msgid "Get help from IT"
+msgstr "Pedir axuda a TI"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Non podo iniciar sesión"
+
+msgid "An app"
+msgstr "Unha aplicación"
+
+msgid "Screen, keys or sound"
+msgstr "Pantalla, teclado ou son"
+
+msgid "Battery"
+msgstr "Batería"
+
+msgid "Other"
+msgstr "Outro"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Que pasou? Non inclúas contrasinais nin datos persoais."
+
+msgid "Attach a screenshot"
+msgstr "Anexar unha captura de pantalla"
+
+msgid "Send"
+msgstr "Enviar"
+
+msgid "Close"
+msgstr "Pechar"
+
+msgid "Sending…"
+msgstr "Enviando…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Enviado. Incidencia #%s. Avisouse a TI."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Gardado. Enviarase cando este ordenador teña conexión."
+
+msgid "Help requests are turned off at this school."
+msgstr "As solicitudes de axuda están desactivadas nesta escola."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Enviaches 3 solicitudes nesta hora. Téntao de novo máis tarde."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Non se puido enviar. Avisa a un profesor."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "TI está a recoller información de diagnóstico deste ordenador."

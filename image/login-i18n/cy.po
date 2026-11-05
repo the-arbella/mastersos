@@ -118,3 +118,60 @@ msgstr "Enw neu e-bost yr ysgol"
 
 msgid "Keep typing to narrow down"
 msgstr "Daliwch ati i deipio i gulhau'r rhestr"
+
+msgid "Get help"
+msgstr "Cael help"
+
+msgid "Get help from IT"
+msgstr "Cael help gan TG"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Methu mewngofnodi"
+
+msgid "An app"
+msgstr "Ap"
+
+msgid "Screen, keys or sound"
+msgstr "Sgrin, bysellau neu sain"
+
+msgid "Battery"
+msgstr "Batri"
+
+msgid "Other"
+msgstr "Arall"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Beth ddigwyddodd? Peidiwch â chynnwys cyfrineiriau na manylion personol."
+
+msgid "Attach a screenshot"
+msgstr "Atodi ciplun"
+
+msgid "Send"
+msgstr "Anfon"
+
+msgid "Close"
+msgstr "Cau"
+
+msgid "Sending…"
+msgstr "Wrthi'n anfon…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Wedi anfon. Tocyn #%s. Mae TG wedi cael gwybod."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Wedi cadw. Bydd yn cael ei anfon pan fydd y cyfrifiadur hwn ar-lein."
+
+msgid "Help requests are turned off at this school."
+msgstr "Mae ceisiadau am help wedi'u diffodd yn yr ysgol hon."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Rydych chi wedi anfon 3 chais yr awr hon. Ceisiwch eto nes ymlaen."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Methu anfon. Dywedwch wrth athro."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "Mae TG yn casglu gwybodaeth ddiagnostig o'r cyfrifiadur hwn."

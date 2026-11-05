@@ -118,3 +118,60 @@ msgstr "Naam of skool-e-pos"
 
 msgid "Keep typing to narrow down"
 msgstr "Hou aan tik om die lys te verklein"
+
+msgid "Get help"
+msgstr "Kry hulp"
+
+msgid "Get help from IT"
+msgstr "Kry hulp van IT"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Kan nie aanmeld nie"
+
+msgid "An app"
+msgstr "'n Toep"
+
+msgid "Screen, keys or sound"
+msgstr "Skerm, sleutels of klank"
+
+msgid "Battery"
+msgstr "Battery"
+
+msgid "Other"
+msgstr "Ander"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Wat het gebeur? Moet asseblief nie wagwoorde of persoonlike besonderhede insluit nie."
+
+msgid "Attach a screenshot"
+msgstr "Heg 'n skermskoot aan"
+
+msgid "Send"
+msgstr "Stuur"
+
+msgid "Close"
+msgstr "Maak toe"
+
+msgid "Sending…"
+msgstr "Stuur tans…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Gestuur. Kaartjie #%s. IT is ingelig."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Gestoor. Dit sal gestuur word wanneer hierdie rekenaar aanlyn is."
+
+msgid "Help requests are turned off at this school."
+msgstr "Hulpversoeke is by hierdie skool afgeskakel."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Jy het hierdie uur al 3 versoeke gestuur. Probeer asseblief later weer."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Kon nie stuur nie. Sê asseblief vir 'n onderwyser."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT versamel diagnostiese inligting van hierdie rekenaar af."

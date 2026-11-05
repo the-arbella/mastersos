@@ -118,3 +118,60 @@ msgstr "ឈ្មោះ ឬអ៊ីមែលសាលា"
 
 msgid "Keep typing to narrow down"
 msgstr "បន្តវាយ ដើម្បីបង្រួមបញ្ជី"
+
+msgid "Get help"
+msgstr "ស្នើសុំជំនួយ"
+
+msgid "Get help from IT"
+msgstr "ស្នើសុំជំនួយពីផ្នែក IT"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "មិនអាចចូលបាន"
+
+msgid "An app"
+msgstr "កម្មវិធី"
+
+msgid "Screen, keys or sound"
+msgstr "អេក្រង់ គ្រាប់ចុច ឬសំឡេង"
+
+msgid "Battery"
+msgstr "ថ្ម"
+
+msgid "Other"
+msgstr "ផ្សេងៗ"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "តើមានអ្វីកើតឡើង? សូមកុំបញ្ចូលពាក្យសម្ងាត់ ឬព័ត៌មានផ្ទាល់ខ្លួន។"
+
+msgid "Attach a screenshot"
+msgstr "ភ្ជាប់រូបថតអេក្រង់"
+
+msgid "Send"
+msgstr "ផ្ញើ"
+
+msgid "Close"
+msgstr "បិទ"
+
+msgid "Sending…"
+msgstr "កំពុងផ្ញើ…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "បានផ្ញើ។ សំបុត្រលេខ #%s។ ផ្នែក IT បានទទួលដំណឹងហើយ។"
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "បានរក្សាទុក។ វានឹងត្រូវផ្ញើនៅពេលកុំព្យូទ័រនេះភ្ជាប់អ៊ីនធឺណិត។"
+
+msgid "Help requests are turned off at this school."
+msgstr "សំណើសុំជំនួយត្រូវបានបិទនៅសាលានេះ។"
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "អ្នកបានផ្ញើសំណើ 3 ក្នុងម៉ោងនេះ។ សូមព្យាយាមម្ដងទៀតនៅពេលក្រោយ។"
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "មិនអាចផ្ញើបានទេ។ សូមប្រាប់គ្រូ។"
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "ផ្នែក IT កំពុងប្រមូលព័ត៌មានវិនិច្ឆ័យពីកុំព្យូទ័រនេះ។"

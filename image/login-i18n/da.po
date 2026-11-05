@@ -118,3 +118,60 @@ msgstr "Navn eller skolemail"
 
 msgid "Keep typing to narrow down"
 msgstr "Skriv videre for at indsnævre listen"
+
+msgid "Get help"
+msgstr "Få hjælp"
+
+msgid "Get help from IT"
+msgstr "Få hjælp fra IT"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Kan ikke logge ind"
+
+msgid "An app"
+msgstr "En app"
+
+msgid "Screen, keys or sound"
+msgstr "Skærm, taster eller lyd"
+
+msgid "Battery"
+msgstr "Batteri"
+
+msgid "Other"
+msgstr "Andet"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Hvad skete der? Skriv ikke adgangskoder eller personlige oplysninger."
+
+msgid "Attach a screenshot"
+msgstr "Vedhæft et skærmbillede"
+
+msgid "Send"
+msgstr "Send"
+
+msgid "Close"
+msgstr "Luk"
+
+msgid "Sending…"
+msgstr "Sender…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Sendt. Sag #%s. IT har fået besked."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Gemt. Den sendes, når computeren er online."
+
+msgid "Help requests are turned off at this school."
+msgstr "Hjælpeanmodninger er slået fra på denne skole."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Du har sendt 3 anmodninger i denne time. Prøv igen senere."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Kunne ikke sende. Sig det til en lærer."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT indsamler diagnosticeringsoplysninger fra denne computer."

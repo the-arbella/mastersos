@@ -118,3 +118,60 @@ msgstr "Nume sau e-mail școlar"
 
 msgid "Keep typing to narrow down"
 msgstr "Continuați să tastați pentru a restrânge lista"
+
+msgid "Get help"
+msgstr "Cere ajutor"
+
+msgid "Get help from IT"
+msgstr "Cere ajutor de la IT"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Nu mă pot autentifica"
+
+msgid "An app"
+msgstr "O aplicație"
+
+msgid "Screen, keys or sound"
+msgstr "Ecran, taste sau sunet"
+
+msgid "Battery"
+msgstr "Baterie"
+
+msgid "Other"
+msgstr "Altceva"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Ce s-a întâmplat? Te rugăm să nu incluzi parole sau date personale."
+
+msgid "Attach a screenshot"
+msgstr "Atașează o captură de ecran"
+
+msgid "Send"
+msgstr "Trimite"
+
+msgid "Close"
+msgstr "Închide"
+
+msgid "Sending…"
+msgstr "Se trimite…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Trimis. Tichet #%s. Departamentul IT a fost anunțat."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Salvat. Va fi trimis când acest computer este online."
+
+msgid "Help requests are turned off at this school."
+msgstr "Cererile de ajutor sunt dezactivate la această școală."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Ai trimis 3 cereri în această oră. Încearcă din nou mai târziu."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Nu s-a putut trimite. Spune-i unui profesor."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "Departamentul IT colectează informații de diagnosticare de la acest computer."

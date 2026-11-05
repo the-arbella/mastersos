@@ -118,3 +118,60 @@ msgstr "ନାମ କିମ୍ବା ବିଦ୍ୟାଳୟ ଇମେଲ୍"
 
 msgid "Keep typing to narrow down"
 msgstr "ତାଲିକା ଛୋଟ କରିବାକୁ ଟାଇପ୍ କରିଚାଲନ୍ତୁ"
+
+msgid "Get help"
+msgstr "ସାହାଯ୍ୟ ନିଅନ୍ତୁ"
+
+msgid "Get help from IT"
+msgstr "IT ଠାରୁ ସାହାଯ୍ୟ ନିଅନ୍ତୁ"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "ସାଇନ୍ ଇନ୍ ହୋଇପାରୁନାହିଁ"
+
+msgid "An app"
+msgstr "ଏକ ଆପ୍"
+
+msgid "Screen, keys or sound"
+msgstr "ସ୍କ୍ରିନ୍, କି କିମ୍ବା ଶବ୍ଦ"
+
+msgid "Battery"
+msgstr "ବ୍ୟାଟେରୀ"
+
+msgid "Other"
+msgstr "ଅନ୍ୟାନ୍ୟ"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "କ'ଣ ହେଲା? ଦୟାକରି ପାସୱାର୍ଡ କିମ୍ବା ବ୍ୟକ୍ତିଗତ ବିବରଣୀ ଲେଖନ୍ତୁ ନାହିଁ।"
+
+msgid "Attach a screenshot"
+msgstr "ଏକ ସ୍କ୍ରିନସଟ୍ ସଂଲଗ୍ନ କରନ୍ତୁ"
+
+msgid "Send"
+msgstr "ପଠାନ୍ତୁ"
+
+msgid "Close"
+msgstr "ବନ୍ଦ କରନ୍ତୁ"
+
+msgid "Sending…"
+msgstr "ପଠାଯାଉଛି…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "ପଠାଗଲା। ଟିକେଟ୍ #%s। IT କୁ ଜଣାଇ ଦିଆଯାଇଛି।"
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "ସଞ୍ଚୟ ହେଲା। ଏହି କମ୍ପ୍ୟୁଟର ଅନଲାଇନ୍ ହେଲେ ପଠାଯିବ।"
+
+msgid "Help requests are turned off at this school."
+msgstr "ଏହି ବିଦ୍ୟାଳୟରେ ସାହାଯ୍ୟ ଅନୁରୋଧ ବନ୍ଦ କରାଯାଇଛି।"
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "ଆପଣ ଏହି ଘଣ୍ଟାରେ 3ଟି ଅନୁରୋଧ ପଠାଇସାରିଛନ୍ତି। ଦୟାକରି ପରେ ପୁନଃ ଚେଷ୍ଟା କରନ୍ତୁ।"
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "ପଠାଯାଇପାରିଲା ନାହିଁ। ଦୟାକରି ଜଣେ ଶିକ୍ଷକଙ୍କୁ କୁହନ୍ତୁ।"
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT ଏହି କମ୍ପ୍ୟୁଟରରୁ ନିଦାନ ସୂଚନା ସଂଗ୍ରହ କରୁଛି।"

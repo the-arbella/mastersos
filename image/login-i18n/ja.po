@@ -118,3 +118,60 @@ msgstr "名前または学校のメールアドレス"
 
 msgid "Keep typing to narrow down"
 msgstr "入力を続けると候補が絞り込まれます"
+
+msgid "Get help"
+msgstr "ヘルプを依頼"
+
+msgid "Get help from IT"
+msgstr "IT 担当者にヘルプを依頼"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "ログインできない"
+
+msgid "An app"
+msgstr "アプリ"
+
+msgid "Screen, keys or sound"
+msgstr "画面・キー・音"
+
+msgid "Battery"
+msgstr "バッテリー"
+
+msgid "Other"
+msgstr "その他"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "何が起きましたか？パスワードや個人情報は書かないでください。"
+
+msgid "Attach a screenshot"
+msgstr "スクリーンショットを添付"
+
+msgid "Send"
+msgstr "送信"
+
+msgid "Close"
+msgstr "閉じる"
+
+msgid "Sending…"
+msgstr "送信中…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "送信しました。チケット番号 #%s。IT 担当者に通知しました。"
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "保存しました。このコンピューターがオンラインになったら送信されます。"
+
+msgid "Help requests are turned off at this school."
+msgstr "この学校ではヘルプ依頼は無効になっています。"
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "この 1 時間に 3 件の依頼を送信しました。しばらくしてからもう一度お試しください。"
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "送信できませんでした。先生に伝えてください。"
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT 担当者がこのコンピューターの診断情報を収集しています。"

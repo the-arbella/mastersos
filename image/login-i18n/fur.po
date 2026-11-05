@@ -118,3 +118,60 @@ msgstr "Non o pueste eletroniche de scuele"
 
 msgid "Keep typing to narrow down"
 msgstr "Continue a scrivi par strenzi la liste"
+
+msgid "Get help"
+msgstr "Domande jutori"
+
+msgid "Get help from IT"
+msgstr "Domande jutori al IT"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "No rivi a jentrâ"
+
+msgid "An app"
+msgstr "Une aplicazion"
+
+msgid "Screen, keys or sound"
+msgstr "Schermi, tascj o sun"
+
+msgid "Battery"
+msgstr "Batarie"
+
+msgid "Other"
+msgstr "Altri"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Ce isal sucedût? Par plasê no sta meti passwords o dâts personâi."
+
+msgid "Attach a screenshot"
+msgstr "Zonte une cature di schermi"
+
+msgid "Send"
+msgstr "Mande"
+
+msgid "Close"
+msgstr "Siere"
+
+msgid "Sending…"
+msgstr "Daûr a mandâ…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Mandât. Ticket #%s. Il IT al è stât visât."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Salvât. Al vignarà mandât cuant che chest computer al sarà in rêt."
+
+msgid "Help requests are turned off at this school."
+msgstr "Lis richiestis di jutori a son disativadis in cheste scuele."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Tu âs za mandât 3 richiestis in cheste ore. Torne prove plui indenant."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "No si à rivât a mandâ. Par plasê dîsilu a un insegnant."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "Il IT al sta tirant dongje informazions diagnostichis di chest computer."

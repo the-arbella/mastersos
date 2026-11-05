@@ -118,3 +118,60 @@ msgstr "Nombre o correo de la escuela"
 
 msgid "Keep typing to narrow down"
 msgstr "Sigue escribiendo para acotar la lista"
+
+msgid "Get help"
+msgstr "Pedir ayuda"
+
+msgid "Get help from IT"
+msgstr "Pedir ayuda a TI"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "No puedo iniciar sesión"
+
+msgid "An app"
+msgstr "Una aplicación"
+
+msgid "Screen, keys or sound"
+msgstr "Pantalla, teclado o sonido"
+
+msgid "Battery"
+msgstr "Batería"
+
+msgid "Other"
+msgstr "Otro"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "¿Qué ha pasado? No incluyas contraseñas ni datos personales."
+
+msgid "Attach a screenshot"
+msgstr "Adjuntar una captura de pantalla"
+
+msgid "Send"
+msgstr "Enviar"
+
+msgid "Close"
+msgstr "Cerrar"
+
+msgid "Sending…"
+msgstr "Enviando…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Enviado. Incidencia #%s. Se ha avisado a TI."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Guardado. Se enviará cuando este equipo tenga conexión."
+
+msgid "Help requests are turned off at this school."
+msgstr "Las solicitudes de ayuda están desactivadas en esta escuela."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Has enviado 3 solicitudes en esta hora. Inténtalo de nuevo más tarde."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "No se pudo enviar. Avisa a un profesor."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "TI está recopilando información de diagnóstico de este equipo."

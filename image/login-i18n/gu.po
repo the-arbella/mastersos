@@ -118,3 +118,60 @@ msgstr "નામ અથવા શાળાનું ઇમેઇલ"
 
 msgid "Keep typing to narrow down"
 msgstr "યાદી ટૂંકી કરવા ટાઇપ કરવાનું ચાલુ રાખો"
+
+msgid "Get help"
+msgstr "મદદ મેળવો"
+
+msgid "Get help from IT"
+msgstr "IT પાસેથી મદદ મેળવો"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "સાઇન ઇન થઈ શકતું નથી"
+
+msgid "An app"
+msgstr "કોઈ ઍપ"
+
+msgid "Screen, keys or sound"
+msgstr "સ્ક્રીન, કી અથવા અવાજ"
+
+msgid "Battery"
+msgstr "બૅટરી"
+
+msgid "Other"
+msgstr "અન્ય"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "શું થયું? કૃપા કરીને પાસવર્ડ અથવા વ્યક્તિગત વિગતો લખશો નહીં."
+
+msgid "Attach a screenshot"
+msgstr "સ્ક્રીનશૉટ જોડો"
+
+msgid "Send"
+msgstr "મોકલો"
+
+msgid "Close"
+msgstr "બંધ કરો"
+
+msgid "Sending…"
+msgstr "મોકલી રહ્યાં છીએ…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "મોકલાયું. ટિકિટ #%s. IT ને જાણ કરવામાં આવી છે."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "સાચવ્યું. આ કમ્પ્યુટર ઑનલાઇન થશે ત્યારે મોકલાશે."
+
+msgid "Help requests are turned off at this school."
+msgstr "આ શાળામાં મદદ વિનંતીઓ બંધ છે."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "તમે આ કલાકમાં 3 વિનંતીઓ મોકલી છે. કૃપા કરીને પછીથી ફરી પ્રયાસ કરો."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "મોકલી શકાયું નથી. કૃપા કરીને શિક્ષકને જણાવો."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT આ કમ્પ્યુટરમાંથી નિદાન માહિતી એકત્ર કરી રહ્યું છે."

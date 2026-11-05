@@ -118,3 +118,60 @@ msgstr "نام یا ایمیل مدرسه"
 
 msgid "Keep typing to narrow down"
 msgstr "برای محدود کردن فهرست به تایپ ادامه دهید"
+
+msgid "Get help"
+msgstr "دریافت کمک"
+
+msgid "Get help from IT"
+msgstr "دریافت کمک از فناوری اطلاعات"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "نمی‌توانم وارد شوم"
+
+msgid "An app"
+msgstr "یک برنامه"
+
+msgid "Screen, keys or sound"
+msgstr "صفحه‌نمایش، کلیدها یا صدا"
+
+msgid "Battery"
+msgstr "باتری"
+
+msgid "Other"
+msgstr "سایر"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "چه اتفاقی افتاد؟ لطفاً گذرواژه یا اطلاعات شخصی ننویسید."
+
+msgid "Attach a screenshot"
+msgstr "پیوست کردن تصویر صفحه"
+
+msgid "Send"
+msgstr "ارسال"
+
+msgid "Close"
+msgstr "بستن"
+
+msgid "Sending…"
+msgstr "در حال ارسال…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "ارسال شد. تیکت #%s. به فناوری اطلاعات اطلاع داده شد."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "ذخیره شد. وقتی این رایانه آنلاین شود، ارسال می‌شود."
+
+msgid "Help requests are turned off at this school."
+msgstr "درخواست کمک در این مدرسه غیرفعال است."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "در این ساعت 3 درخواست فرستاده‌اید. لطفاً بعداً دوباره تلاش کنید."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "ارسال نشد. لطفاً به یک معلم بگویید."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "فناوری اطلاعات در حال جمع‌آوری اطلاعات عیب‌یابی از این رایانه است."

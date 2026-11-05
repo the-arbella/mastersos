@@ -119,3 +119,60 @@ msgstr "Isem neɣ imayl n uɣerbaz"
 
 msgid "Keep typing to narrow down"
 msgstr "Kemmel tira akken ad tesmeẓẓiḍ tabdart"
+
+msgid "Get help"
+msgstr "Awi tallalt"
+
+msgid "Get help from IT"
+msgstr "Awi tallalt sɣur IT"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Ur zmireɣ ara ad kecmeɣ"
+
+msgid "An app"
+msgstr "Asnas"
+
+msgid "Screen, keys or sound"
+msgstr "Agdil, tisura neɣ imesli"
+
+msgid "Battery"
+msgstr "Tazmamt"
+
+msgid "Other"
+msgstr "Wayeḍ"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "D acu i yeḍran? Ma ulac aɣilif, ur sekcam ara awalen uffiren neɣ talɣut tudmawant."
+
+msgid "Attach a screenshot"
+msgstr "Seddu tugna n ugdil"
+
+msgid "Send"
+msgstr "Azen"
+
+msgid "Close"
+msgstr "Mdel"
+
+msgid "Sending…"
+msgstr "Tuzna…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Yettwazen. Atiki #%s. IT yettwaselɣa."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Yettwasekles. Ad yettwazen mi ara yili uselkim-agi deg uẓeṭṭa."
+
+msgid "Help requests are turned off at this school."
+msgstr "Issutren n tallalt nsan deg uɣerbaz-agi."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Tuzneḍ 3 n yissutren deg usrag-agi. Ma ulac aɣilif, ɛreḍ ticki."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Ur yettwazen ara. Ma ulac aɣilif, ini-as i uselmad."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT la yesseggra talɣut n usenqed seg uselkim-agi."

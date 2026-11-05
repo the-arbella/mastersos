@@ -118,3 +118,60 @@ msgstr "ስም ወይም የትምህርት ቤት ኢሜይል"
 
 msgid "Keep typing to narrow down"
 msgstr "ዝርዝሩን ለማጥበብ መተየብዎን ይቀጥሉ"
+
+msgid "Get help"
+msgstr "እርዳታ ያግኙ"
+
+msgid "Get help from IT"
+msgstr "ከአይቲ እርዳታ ያግኙ"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "መግባት አልተቻለም"
+
+msgid "An app"
+msgstr "መተግበሪያ"
+
+msgid "Screen, keys or sound"
+msgstr "ስክሪን፣ ቁልፎች ወይም ድምፅ"
+
+msgid "Battery"
+msgstr "ባትሪ"
+
+msgid "Other"
+msgstr "ሌላ"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "ምን ተፈጠረ? እባክዎ የይለፍ ቃሎችን ወይም የግል መረጃዎችን አያካትቱ።"
+
+msgid "Attach a screenshot"
+msgstr "ቅጽበታዊ ገጽ እይታ አያይዝ"
+
+msgid "Send"
+msgstr "ላክ"
+
+msgid "Close"
+msgstr "ዝጋ"
+
+msgid "Sending…"
+msgstr "በመላክ ላይ…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "ተልኳል። ትኬት #%s። ለአይቲ ተነግሯል።"
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "ተቀምጧል። ይህ ኮምፒውተር ከበይነመረብ ጋር ሲገናኝ ይላካል።"
+
+msgid "Help requests are turned off at this school."
+msgstr "በዚህ ትምህርት ቤት የእርዳታ ጥያቄዎች ጠፍተዋል።"
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "በዚህ ሰዓት 3 ጥያቄዎችን ልከዋል። እባክዎ ቆይተው እንደገና ይሞክሩ።"
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "መላክ አልተቻለም። እባክዎ ለመምህር ይንገሩ።"
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "አይቲ ከዚህ ኮምፒውተር የምርመራ መረጃ እየሰበሰበ ነው።"

@@ -118,3 +118,60 @@ msgstr "Аты немесе мектеп электрондық поштасы"
 
 msgid "Keep typing to narrow down"
 msgstr "Тізімді тарылту үшін теруді жалғастырыңыз"
+
+msgid "Get help"
+msgstr "Көмек сұрау"
+
+msgid "Get help from IT"
+msgstr "IT бөлімінен көмек сұрау"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Кіре алмаймын"
+
+msgid "An app"
+msgstr "Қолданба"
+
+msgid "Screen, keys or sound"
+msgstr "Экран, пернелер немесе дыбыс"
+
+msgid "Battery"
+msgstr "Батарея"
+
+msgid "Other"
+msgstr "Басқа"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Не болды? Құпиясөздерді немесе жеке деректерді жазбаңыз."
+
+msgid "Attach a screenshot"
+msgstr "Скриншот тіркеу"
+
+msgid "Send"
+msgstr "Жіберу"
+
+msgid "Close"
+msgstr "Жабу"
+
+msgid "Sending…"
+msgstr "Жіберілуде…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Жіберілді. Өтінім #%s. IT бөліміне хабарланды."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Сақталды. Бұл компьютер желіге қосылғанда жіберіледі."
+
+msgid "Help requests are turned off at this school."
+msgstr "Бұл мектепте көмек сұрау өшірілген."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Осы сағатта 3 сұрау жібердіңіз. Кейінірек қайталап көріңіз."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Жіберу мүмкін болмады. Мұғалімге айтыңыз."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "IT бөлімі осы компьютерден диагностикалық деректер жинап жатыр."

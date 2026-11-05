@@ -118,3 +118,60 @@ msgstr "Όνομα ή σχολικό email"
 
 msgid "Keep typing to narrow down"
 msgstr "Συνεχίστε να πληκτρολογείτε για να περιορίσετε τη λίστα"
+
+msgid "Get help"
+msgstr "Βοήθεια"
+
+msgid "Get help from IT"
+msgstr "Βοήθεια από το τμήμα IT"
+
+msgid "Wi-Fi"
+msgstr "Wi-Fi"
+
+msgid "Can't sign in"
+msgstr "Δεν μπορώ να συνδεθώ"
+
+msgid "An app"
+msgstr "Μια εφαρμογή"
+
+msgid "Screen, keys or sound"
+msgstr "Οθόνη, πλήκτρα ή ήχος"
+
+msgid "Battery"
+msgstr "Μπαταρία"
+
+msgid "Other"
+msgstr "Άλλο"
+
+msgid "What happened? Please don't include passwords or personal details."
+msgstr "Τι συνέβη; Μην συμπεριλάβετε κωδικούς πρόσβασης ή προσωπικά στοιχεία."
+
+msgid "Attach a screenshot"
+msgstr "Επισύναψη στιγμιότυπου οθόνης"
+
+msgid "Send"
+msgstr "Αποστολή"
+
+msgid "Close"
+msgstr "Κλείσιμο"
+
+msgid "Sending…"
+msgstr "Αποστολή…"
+
+msgid "Sent. Ticket #%s. IT has been told."
+msgstr "Στάλθηκε. Αίτημα #%s. Το τμήμα IT ενημερώθηκε."
+
+msgid "Saved. It will be sent when this computer is online."
+msgstr "Αποθηκεύτηκε. Θα σταλεί όταν ο υπολογιστής συνδεθεί στο διαδίκτυο."
+
+msgid "Help requests are turned off at this school."
+msgstr "Τα αιτήματα βοήθειας είναι απενεργοποιημένα σε αυτό το σχολείο."
+
+msgid "You've sent 3 requests this hour. Please try again later."
+msgstr "Έχετε στείλει 3 αιτήματα αυτήν την ώρα. Δοκιμάστε ξανά αργότερα."
+
+msgid "Couldn't send. Please tell a teacher."
+msgstr "Δεν ήταν δυνατή η αποστολή. Ενημερώστε έναν εκπαιδευτικό."
+
+msgid "IT is collecting diagnostic info from this computer."
+msgstr "Το τμήμα IT συλλέγει διαγνωστικές πληροφορίες από αυτόν τον υπολογιστή."
