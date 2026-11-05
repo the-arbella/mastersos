@@ -1,0 +1,322 @@
+diff --git a/authd-oidc-brokers/internal/broker/broker.go b/authd-oidc-brokers/internal/broker/broker.go
+index 40b5a43..e87325c 100644
+--- a/authd-oidc-brokers/internal/broker/broker.go
++++ b/authd-oidc-brokers/internal/broker/broker.go
+@@ -1178,6 +1178,9 @@ func (b *Broker) generateUILayout(session *session, authModeID string) (map[stri
+ 			if err != nil {
+ 				return nil, fmt.Errorf("could not start the sign-in: %v", err)
+ 			}
++			// MastersOS: an IsAuthenticated call still waiting on this session's previous page follows the new one, see
++			// mastersos_authcode.go handOver.
++			session.authCode.handOver(flow)
+ 			session.authCode = flow
+ 			uiLayout = map[string]string{
+ 				"type":    "qrcode",
+diff --git a/authd-oidc-brokers/internal/broker/mastersos_authcode.go b/authd-oidc-brokers/internal/broker/mastersos_authcode.go
+index bdaaa5c..1ed7a13 100644
+--- a/authd-oidc-brokers/internal/broker/mastersos_authcode.go
++++ b/authd-oidc-brokers/internal/broker/mastersos_authcode.go
+@@ -45,6 +45,10 @@ type authCodeFlow struct {
+ 	results  chan authCodeResult
+ 	server   *http.Server
+ 	listener net.Listener
++
++	// MastersOS (0005): closed when the same sign-in started a newer flow, which is then next. See handOver.
++	replaced chan struct{}
++	next     *authCodeFlow
+ }
+ 
+ var (
+@@ -72,6 +76,7 @@ func startAuthCodeFlow(cfg oauth2.Config, username, addr, redirect string, opts
+ 		verifier: oauth2.GenerateVerifier(),
+ 		state:    hex.EncodeToString(nonce),
+ 		results:  make(chan authCodeResult, 1),
++		replaced: make(chan struct{}),
+ 	}
+ 
+ 	l, err := net.Listen("tcp", addr)
+@@ -117,25 +122,66 @@ func (f *authCodeFlow) close() {
+ 	_ = f.listener.Close()
+ }
+ 
+-// token waits for the redirect and exchanges the code.
++// handOver passes the wait on f to next, the flow the same session started when it selected its auth mode again. An
++// IsAuthenticated call works on the session as it was when the call began, so without this it keeps waiting on f, whose
++// listener next has already closed, while the card's page redirects to next: the login hangs on the done page. authd
++// 0.6.1's PAM module selects the mode twice whenever GDM echoes its own selection back (canonical/authd#1121, fixed in
++// authd 0.7.0), and the greeter's IsAuthenticated can land between the two selections.
++func (f *authCodeFlow) handOver(next *authCodeFlow) {
++	if f == nil || next == nil || f == next {
++		return
++	}
++	authCodeMu.Lock()
++	defer authCodeMu.Unlock()
++	if f.next != nil {
++		return
++	}
++	f.next = next
++	close(f.replaced)
++}
++
++// release closes f and forgets it as the current flow.
++func (f *authCodeFlow) release() {
++	authCodeMu.Lock()
++	defer authCodeMu.Unlock()
++	f.close()
++	if authCodeCurrent == f {
++		authCodeCurrent = nil
++	}
++}
++
++// token waits for the redirect and exchanges the code, following the flows that replaced f in the same session.
+ func (f *authCodeFlow) token(ctx context.Context, opts ...oauth2.AuthCodeOption) (*oauth2.Token, error) {
+-	defer func() {
+-		authCodeMu.Lock()
+-		defer authCodeMu.Unlock()
+-		f.close()
+-		if authCodeCurrent == f {
+-			authCodeCurrent = nil
+-		}
+-	}()
+ 	ctx, cancel := context.WithTimeout(ctx, authCodeTimeout)
+ 	defer cancel()
+-	select {
+-	case <-ctx.Done():
+-		return nil, ctx.Err()
+-	case res := <-f.results:
++	cur := f
++	exchange := func(res authCodeResult) (*oauth2.Token, error) {
++		cur.release()
+ 		if res.err != nil {
+ 			return nil, res.err
+ 		}
+-		return f.cfg.Exchange(ctx, res.code, append(opts, oauth2.VerifierOption(f.verifier))...)
++		return cur.cfg.Exchange(ctx, res.code, append(opts, oauth2.VerifierOption(cur.verifier))...)
++	}
++	for {
++		select {
++		case <-ctx.Done():
++			// A flow this call only followed belongs to the IsAuthenticated call of the newer selection.
++			if cur == f {
++				cur.release()
++			}
++			return nil, ctx.Err()
++		case res := <-cur.results:
++			return exchange(res)
++		case <-cur.replaced:
++			// A redirect that reached cur before it was replaced still counts.
++			select {
++			case res := <-cur.results:
++				return exchange(res)
++			default:
++			}
++			authCodeMu.Lock()
++			cur = cur.next
++			authCodeMu.Unlock()
++		}
+ 	}
+ }
+diff --git a/authd-oidc-brokers/internal/broker/mastersos_handover_test.go b/authd-oidc-brokers/internal/broker/mastersos_handover_test.go
+new file mode 100644
+index 0000000..acabea1
+--- /dev/null
++++ b/authd-oidc-brokers/internal/broker/mastersos_handover_test.go
+@@ -0,0 +1,87 @@
++package broker
++
++// MastersOS carried patch (image/patches/authd-oidc/0005-follow-reselected-sign-in.patch).
++
++import (
++	"context"
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"net/url"
++	"testing"
++	"time"
++
++	"github.com/stretchr/testify/require"
++)
++
++func handOverTestFlow(t *testing.T, tokenURL, addr string) (*authCodeFlow, string) {
++	t.Helper()
++	f, raw, err := startAuthCodeFlow(authCodeTestConfig(tokenURL), "a", addr, "http://"+addr+"/callback")
++	require.NoError(t, err)
++	u, err := url.Parse(raw)
++	require.NoError(t, err)
++	return f, u.Query().Get("state")
++}
++
++func TestMastersOSAuthCodeWaitFollowsHandOver(t *testing.T) {
++	var verifier string
++	idp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		require.NoError(t, r.ParseForm())
++		verifier = r.PostForm.Get("code_verifier")
++		w.Header().Set("Content-Type", "application/json")
++		require.NoError(t, json.NewEncoder(w).Encode(map[string]string{"access_token": "a", "token_type": "Bearer"}))
++	}))
++	defer idp.Close()
++
++	addr := "127.0.0.1:48129"
++	first, _ := handOverTestFlow(t, idp.URL, addr)
++	type result struct {
++		err error
++	}
++	done := make(chan result, 1)
++	go func() {
++		_, err := first.token(context.Background())
++		done <- result{err}
++	}()
++	time.Sleep(50 * time.Millisecond)
++
++	second, state := handOverTestFlow(t, idp.URL, addr)
++	first.handOver(second)
++	res, err := http.Get("http://" + addr + "/callback?code=c&state=" + state)
++	require.NoError(t, err)
++	require.NoError(t, res.Body.Close())
++	require.Equal(t, http.StatusOK, res.StatusCode)
++
++	select {
++	case r := <-done:
++		require.NoError(t, r.err)
++	case <-time.After(5 * time.Second):
++		t.Fatal("the wait on the replaced flow never saw the redirect to the new one")
++	}
++	require.Equal(t, second.verifier, verifier, "the code must be exchanged with the new flow's verifier")
++}
++
++func TestMastersOSAuthCodeCancelledFollowerKeepsNewFlow(t *testing.T) {
++	addr := "127.0.0.1:48130"
++	first, _ := handOverTestFlow(t, "http://127.0.0.1:1", addr)
++	second, state := handOverTestFlow(t, "http://127.0.0.1:1", addr)
++	defer second.close()
++	first.handOver(second)
++	first.handOver(second) // a second hand-over of the same flow is a no-op
++
++	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
++	defer cancel()
++	_, err := first.token(ctx)
++	require.ErrorIs(t, err, context.DeadlineExceeded)
++
++	res, err := http.Get("http://" + addr + "/callback?code=c&state=" + state)
++	require.NoError(t, err, "a cancelled wait that followed the new flow must not close it")
++	require.NoError(t, res.Body.Close())
++	require.Equal(t, http.StatusOK, res.StatusCode)
++	require.Len(t, second.results, 1, "the redirect is kept for the new flow's own IsAuthenticated")
++}
++
++func TestMastersOSAuthCodeHandOverOfNothing(t *testing.T) {
++	var none *authCodeFlow
++	none.handOver(nil) // the first selection of a session has no previous flow
++}
+diff --git a/authd-oidc-brokers/internal/broker/mastersos_reselect_test.go b/authd-oidc-brokers/internal/broker/mastersos_reselect_test.go
+new file mode 100644
+index 0000000..0c6f7f5
+--- /dev/null
++++ b/authd-oidc-brokers/internal/broker/mastersos_reselect_test.go
+@@ -0,0 +1,105 @@
++package broker_test
++
++// MastersOS carried patch (image/patches/authd-oidc/0005-follow-reselected-sign-in.patch). authd 0.6.1's PAM module selects
++// the auth mode a second time when GDM echoes its own selection back (canonical/authd#1121), and the greeter's
++// IsAuthenticated can arrive between the two selections. These tests set the process environment, so none is parallel.
++
++import (
++	"net/http"
++	"net/url"
++	"testing"
++	"time"
++
++	"github.com/canonical/authd/authd-oidc-brokers/internal/broker"
++	"github.com/canonical/authd/authd-oidc-brokers/internal/broker/authmodes"
++	"github.com/canonical/authd/authd-oidc-brokers/internal/testutils"
++	"github.com/stretchr/testify/require"
++)
++
++type isAuthenticatedResult struct {
++	access, data string
++	err          error
++}
++
++// selectCardMode selects the web mode and returns the state of the page it hands to the card.
++func selectCardMode(t *testing.T, b *broker.Broker, sessionID string) string {
++	t.Helper()
++	layout, err := b.SelectAuthenticationMode(sessionID, authmodes.DeviceQr)
++	require.NoError(t, err)
++	u, err := url.Parse(layout["content"])
++	require.NoError(t, err)
++	return u.Query().Get("state")
++}
++
++// startIsAuthenticated runs IsAuthenticated in the background and gives it time to take its copy of the session.
++func startIsAuthenticated(b *broker.Broker, sessionID string) <-chan isAuthenticatedResult {
++	done := make(chan isAuthenticatedResult, 1)
++	go func() {
++		access, data, err := b.IsAuthenticated(sessionID, "{}")
++		done <- isAuthenticatedResult{access, data, err}
++	}()
++	time.Sleep(200 * time.Millisecond)
++	return done
++}
++
++// redirectToCard plays the browser: the school's page sends it back to the loopback listener with this state.
++func redirectToCard(t *testing.T, state string) {
++	t.Helper()
++	res, err := http.Get("http://127.0.0.1:48123/callback?code=c&state=" + state)
++	require.NoError(t, err, "the newest page's listener must be up")
++	require.NoError(t, res.Body.Close())
++	require.Equal(t, http.StatusOK, res.StatusCode)
++}
++
++func waitResult(t *testing.T, done <-chan isAuthenticatedResult) isAuthenticatedResult {
++	t.Helper()
++	select {
++	case r := <-done:
++		return r
++	case <-time.After(10 * time.Second):
++		t.Fatal("IsAuthenticated still waits after the redirect: it is bound to a sign-in page that was replaced")
++		return isAuthenticatedResult{}
++	}
++}
++
++// The order seen on VM 123 (2026-11-05 07:07:44): select, IsAuthenticated, select again; the card shows the second page.
++func TestMastersOSReselectedSignInIsFollowed(t *testing.T) {
++	t.Setenv("MASTERSOS_AUTH_CODE", "1")
++	b := cardOnlyBrokerWith(t, map[string]testutils.EndpointHandler{"/token": cardOnlyTokenHandler()})
++	sessionID, _ := newSessionForTests(t, b, "", "")
++	requireAuthModes(t, b, sessionID, authmodes.DeviceQr)
++	require.NoError(t, b.SetAvailableMode(sessionID, authmodes.DeviceQr))
++
++	selectCardMode(t, b, sessionID)
++	done := startIsAuthenticated(b, sessionID)
++	state := selectCardMode(t, b, sessionID)
++	redirectToCard(t, state)
++
++	r := waitResult(t, done)
++	require.NoError(t, r.err)
++	require.Equal(t, broker.AuthGranted, r.access, "data: %s", r.data)
++}
++
++// A waiting call cancelled after the page was replaced ("Start again" racing the echo) must leave the new page working
++// for the next IsAuthenticated.
++func TestMastersOSCancelledWaitLeavesNewSignIn(t *testing.T) {
++	t.Setenv("MASTERSOS_AUTH_CODE", "1")
++	b := cardOnlyBrokerWith(t, map[string]testutils.EndpointHandler{"/token": cardOnlyTokenHandler()})
++	sessionID, _ := newSessionForTests(t, b, "", "")
++	requireAuthModes(t, b, sessionID, authmodes.DeviceQr)
++	require.NoError(t, b.SetAvailableMode(sessionID, authmodes.DeviceQr))
++
++	selectCardMode(t, b, sessionID)
++	first := startIsAuthenticated(b, sessionID)
++	state := selectCardMode(t, b, sessionID)
++	time.Sleep(100 * time.Millisecond)
++	b.CancelIsAuthenticated(sessionID)
++	r := waitResult(t, first)
++	require.Equal(t, broker.AuthCancelled, r.access)
++
++	second := startIsAuthenticated(b, sessionID)
++	redirectToCard(t, state)
++	r = waitResult(t, second)
++	require.NoError(t, r.err)
++	require.Equal(t, broker.AuthGranted, r.access, "data: %s", r.data)
++}

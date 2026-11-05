@@ -140,7 +140,7 @@ Kanidm 的 `authsession_expiry`、`oauth2_refresh_token_expiry`、Dex 的 `expir
 
 ## broker 的补丁
 
-MastersOS 带四个补丁（`patches/authd-oidc/`，按文件名顺序打）。
+MastersOS 带五个补丁（`patches/authd-oidc/`，按文件名顺序打）。
 
 | 补丁 | 内容 | 现状 |
 |---|---|---|
@@ -148,6 +148,7 @@ MastersOS 带四个补丁（`patches/authd-oidc/`，按文件名顺序打）。
 | `0002-keep-local-password-after-reauth.patch` | 重新认证后保留本机密码 | 同上 |
 | `0003-authorization-code-on-greeter.patch` | `MASTERSOS_AUTH_CODE=1` 时设备码的两个登录方式改走授权码 + PKCE，回调到 `127.0.0.1:48123`（只监听回环；校验 `state`；同时只有一个流程，新的顶掉旧的），带 `login_hint=<邮箱>`。方式的 id 不变；UI 层仍是 `qrcode`，`content` 是授权地址、`code` 为空 | 卡片的基础 |
 | `0004-card-only-login.patch` | 见下 | 卡片的基础 |
+| `0005-follow-reselected-sign-in.patch` | 同一会话再次选登录方式时，新流程接替旧流程：已经在等旧流程的 `IsAuthenticated` 改等新流程（用新流程的 PKCE verifier 换令牌）；被取消的等待不关掉它跟过去的新流程 | 修重新登录卡在「Signed in. Starting your session…」：authd 0.6.1 的 PAM 模块在 GDM 回显自己的选择时会再选一次（canonical/authd#1121，authd 0.7.0 修了），`IsAuthenticated` 落在两次选择之间就会一直等已关掉的旧监听，而卡片里的页面回调到新监听（VM 123，2026-11-05）。自带测试 `TestMastersOSAuthCodeWaitFollowsHandOver`、`TestMastersOSAuthCodeCancelledFollowerKeepsNewFlow`、`TestMastersOSAuthCodeHandOverOfNothing`、`TestMastersOSReselectedSignInIsFollowed`、`TestMastersOSCancelledWaitLeavesNewSignIn`。authd 升到带 #1623 的版本后仍无害 |
 
 `0004` 在 `MASTERSOS_AUTH_CODE=1` 时生效：
 
