@@ -124,6 +124,11 @@ mastersos publish --school-key <a school key that is already trusted>
 
 `keys add` and `keys remove` change only the local `manifest.toml`; computers take the change once you publish it.
 
+### 7. Firewall
+
+Computers upload diagnostics and help-request attachments straight to storage, not through the admin site. If your
+network filters outbound traffic, allow the upload domain shown on the admin site's **Install** page.
+
 ## 测试
 
 ```bash
