@@ -303,7 +303,8 @@ on). Every Config starts from the Defaults; what a Config writes replaces "the s
 Defaults, and what it leaves out is taken as is:
 
 - A single value (`interface`, `login_methods`, `local_users_admin`, `it_account`,
-  `chrome.update_window`, `chrome.pause_until`): written in the Config, it replaces the Defaults'
+  `chrome.update_window`, `chrome.pause_until`, `support.enabled`): written in the Config, it
+  replaces the Defaults'
   value as a whole (`login_methods = []` too); left out, the Defaults' value applies, else the
   default listed in `[[config]]`.
 - A collection (entries with names): the Config's entries are added after the inherited ones; an
@@ -331,6 +332,7 @@ Entries are replaced as a whole, never merged key by key.
 | `scanners` | list of tables | `[]` | as `[[config.scanners]]` | — | |
 | `chrome_policy` | table | `{}` | as in `[[config]]` | — | |
 | `chrome` | table | no limit | as `[config.chrome]` | — | |
+| `support` | table | "Get help" shown | as `[config.support]` | `support.enabled = false` | |
 | `files` | list of tables | `[]` | as `[[config.files]]` | — | |
 | `downloads` | list of tables | `[]` | as `[[config.downloads]]` | — | |
 | `scripts` | list of tables | `[]` | as `[[config.scripts]]` | — | |
@@ -385,6 +387,7 @@ later) and reported as `config_unused`.
 | `scanners` | list of tables | `[]` | see [`[[config.scanners]]`](#configscanners) | — | |
 | `chrome_policy` | table | `{}`: the baseline only | Chrome enterprise policy names and values | `chrome_policy = { URLBlocklist = ["facebook.com"] }` | Passed to Chrome as written (see Chrome's policy list for names and values), on top of a baseline every Device gets: `BrowserAddPersonEnabled` and `BrowserGuestModeEnabled` false, `BrowserSignin` 0, `DefaultBrowserSettingEnabled`, `MetricsReportingEnabled` and `PromotionalTabsEnabled` false, `ExtensionInstallBlocklist` `["*"]`, `RestoreOnStartup` 5. Write the same key here to override it, for example `BrowserSignin = 1` to allow signing in to Chrome or `ExtensionInstallBlocklist = []` to allow extensions. Date values are not allowed; the check does not catch them, and Devices report a failure at apply time. Not applied inside kiosk apps. |
 | `chrome` | table | no limit | see [`[config.chrome]`](#configchrome) | — | When Chrome may update. |
+| `support` | table | "Get help" shown | see [`[config.support]`](#configsupport) | — | Whether students and staff can ask IT for help from the Devices. |
 | `files` | list of tables | `[]` | see [`[[config.files]]`](#configfiles) | — | |
 | `downloads` | list of tables | `[]` | see [`[[config.downloads]]`](#configdownloads) | — | |
 | `scripts` | list of tables | `[]` | see [`[[config.scripts]]`](#configscripts) | — | |
@@ -912,6 +915,36 @@ id = "default"
 name = "Unassigned"
 config = "standard"
 ```
+
+### `[config.support]`
+
+"Get help" on the Config's Devices: a button on the login screen, in the desktop's system menu and in
+kiosk apps' Options menu, for sending IT a help request.
+<!-- prompt:omit -->
+Students and staff pick what the problem is about, may describe it and attach a screenshot, and get
+a ticket number; IT sees the ticket in the console with the Device, the user, its state and recent
+logs. Without a connection the request waits on the Device and is sent once it is online.
+<!-- /prompt:omit -->
+
+| Key | Type | Required / default | Allowed values | Example | Notes |
+|---|---|---|---|---|---|
+| `enabled` | boolean | `true` | `true`, `false` | `enabled = false` | `false` hides "Get help" in all three places. Left out, the Defaults' value applies, else `true`. |
+
+<!-- prompt:omit -->
+```toml check=ok
+[[config]]
+id = "exam"
+name = "Exam"
+
+[config.support]
+enabled = false
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "exam"
+```
+<!-- /prompt:omit -->
 
 ### `[[config.files]]`
 
@@ -1868,8 +1901,8 @@ there is no standalone example.
 (`update_mirror`, `escrow_recipients`, `[school] id`, kiosk apps, `[[config]]` itself: every file
 with Configs counts as using it, `wifi_ext`: any `[[school.wifi]]`, or a Wi-Fi entry writing `open`,
 `wpa3_only` (either value), `eap` or an enterprise key, or `oidc_card`: `client_secret` or
-`card_hosts` in `[school.oidc]`), and some Devices seen in the last 30 days have not reported that
-they understand it.
+`card_hosts` in `[school.oidc]`, or `support`: `[config.support]` or `support` in `[defaults]`),
+and some Devices seen in the last 30 days have not reported that they understand it.
 
 <!-- prompt:omit -->
 **Why:** a Device whose OS predates a key rejects the whole Version.

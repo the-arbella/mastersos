@@ -401,6 +401,8 @@ mod tests {
         assert!(s.contains("**Why:**"), "the full section keeps the Why");
         assert!(!s.contains("prompt:omit"));
         assert!(super::section("config.apps.web").is_some());
+        let support = super::section("config.support").expect("config.support");
+        assert!(support.contains("`enabled`"), "{support}");
         assert!(super::section("school.oidc").is_some());
         assert!(super::section("config.apps.kiosk.<id>").is_some());
         assert!(super::section("config").is_some());

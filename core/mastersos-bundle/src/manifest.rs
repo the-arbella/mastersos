@@ -420,6 +420,7 @@ impl LegacyManifest {
                 scanners: g.scanners,
                 chrome_policy: g.chrome_policy,
                 chrome: g.chrome,
+                support: Support::default(),
                 files: g.files,
                 downloads: g.downloads,
                 scripts: g.scripts,
@@ -661,6 +662,10 @@ pub struct Config {
     /// When Chrome may change version: an update window and a pause. Absent: no limit.
     #[serde(default, skip_serializing_if = "ChromeUpdate::is_empty")]
     pub chrome: ChromeUpdate,
+    /// Whether "Get help" shows on the login screen, the desktop and kiosk apps
+    /// (`[config.support] enabled`, absent: true).
+    #[serde(default = "default_true")]
+    pub support_enabled: bool,
     /// Files from the bundle placed at absolute paths on the Devices.
     #[serde(default)]
     pub files: Vec<FileEntry>,
@@ -677,10 +682,14 @@ pub struct Config {
     pub legacy_browser: bool,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 /// `[defaults]`: what every Config starts from (`format = 2`). The same keys as `[[config]]`
 /// without `id`, `name` and `drop`. A Config's written single value (`interface`,
 /// `login_methods`, `local_users_admin`, `it_account`, `chrome.update_window`,
-/// `chrome.pause_until`) replaces the one here; its collection entries (`wifi`, `apps`,
+/// `chrome.pause_until`, `support.enabled`) replaces the one here; its collection entries (`wifi`, `apps`,
 /// `printers`, `scanners`, `chrome_policy`, `files`, `downloads`, `scripts`) are added, an entry
 /// with the same name replacing the one here as a whole.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -724,6 +733,9 @@ pub struct Defaults {
     /// When Chrome may change version, unless a Config writes its own window or pause.
     #[serde(default, skip_serializing_if = "ChromeUpdate::is_empty")]
     pub chrome: ChromeUpdate,
+    /// Whether "Get help" shows, unless a Config writes its own. Absent: true.
+    #[serde(default, skip_serializing_if = "Support::is_empty")]
+    pub support: Support,
     /// Files from the bundle every Config places.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<FileEntry>,
@@ -787,6 +799,9 @@ pub struct ConfigLayer {
     /// When Chrome may change version: an update window and a pause. Absent: no limit.
     #[serde(default, skip_serializing_if = "ChromeUpdate::is_empty")]
     pub chrome: ChromeUpdate,
+    /// Whether "Get help" shows on the Devices. Absent: the Defaults' value, else true.
+    #[serde(default, skip_serializing_if = "Support::is_empty")]
+    pub support: Support,
     /// Files from the bundle placed at absolute paths on the Devices.
     #[serde(default)]
     pub files: Vec<FileEntry>,
@@ -982,6 +997,29 @@ pub struct ChromeUpdate {
 impl ChromeUpdate {
     pub fn is_empty(&self) -> bool {
         self.update_window.is_none() && self.pause_until.is_none()
+    }
+}
+
+/// `[config.support]`: the "Get help" button ([`FEATURE_SUPPORT`]).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(
+    feature = "schema",
+    schemars(
+        description = "`[config.support]`: whether students and staff can send IT a help request from the Devices."
+    )
+)]
+#[serde(deny_unknown_fields)]
+pub struct Support {
+    /// Whether students and staff see "Get help" on the login screen, the desktop and kiosk
+    /// apps. Absent: true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+}
+
+impl Support {
+    pub fn is_empty(&self) -> bool {
+        self.enabled.is_none()
     }
 }
 
@@ -1250,7 +1288,8 @@ impl Wifi {
 /// the only place the inheritance rule is implemented.
 ///
 /// Single values: `c`'s when written, else the Defaults', else today's default (`learning`,
-/// `[]`, `false`, none); `chrome.update_window` and `chrome.pause_until` each on its own.
+/// `[]`, `false`, none, `true` for `support.enabled`); `chrome.update_window` and
+/// `chrome.pause_until` each on its own.
 /// Collections: the Defaults' entries whose name is neither among `c`'s nor in `c.drop`, in
 /// order, then `c`'s, in order. The Defaults' Wi-Fi is the legacy `[school] wifi` (minus the
 /// SSIDs the Defaults list) followed by `[defaults] wifi`.
@@ -1305,6 +1344,7 @@ pub fn effective_config(m: &Manifest, c: &ConfigLayer) -> Config {
                 .clone()
                 .or(d.chrome.pause_until.clone()),
         },
+        support_enabled: c.support.enabled.or(d.support.enabled).unwrap_or(true),
         files: merge_list(&d.files, &c.files, &drop.files, |f| f.dest.as_str()),
         downloads: merge_list(&d.downloads, &c.downloads, &drop.downloads, |f| {
             f.dest.as_str()
@@ -1622,6 +1662,9 @@ pub const FEATURE_CONFIG: &str = "config";
 pub const FEATURE_WIFI_EXT: &str = "wifi_ext";
 /// See [`FEATURE_UPDATE_MIRROR`]: `client_secret` and `card_hosts` in `[school.oidc]`.
 pub const FEATURE_OIDC_CARD: &str = "oidc_card";
+/// See [`FEATURE_UPDATE_MIRROR`]: `[config.support]` (and `support` in `[defaults]`), the "Get
+/// help" button (remote diagnostics and help design).
+pub const FEATURE_SUPPORT: &str = "support";
 /// See [`FEATURE_UPDATE_MIRROR`]: the Device reads `format = 2` (Defaults, `drop`, the IT account,
 /// the school logo and name); the same string as [`format_feature`]`(2)`.
 pub const FEATURE_FORMAT_2: &str = "format_2";
@@ -1719,6 +1762,11 @@ pub fn features_used(m: &Manifest) -> Vec<&'static str> {
         .is_some_and(|o| o.client_secret.is_some() || !o.card_hosts.is_empty())
     {
         out.push(FEATURE_OIDC_CARD);
+    }
+    if defaults.is_some_and(|d| !d.support.is_empty())
+        || m.configs.iter().any(|c| !c.support.is_empty())
+    {
+        out.push(FEATURE_SUPPORT);
     }
     out
 }
@@ -3594,6 +3642,60 @@ config = "teacher"
         assert_eq!(c.it_account, None);
     }
 
+    /// `[config.support] enabled`: absent everywhere is true; the Defaults' value is inherited;
+    /// the Config's own value wins.
+    #[test]
+    fn support_enabled_defaults_to_true_and_inherits() {
+        assert!(eff(&layered_with("", "")).support_enabled);
+        assert!(!eff(&layered_with("support.enabled = false", "")).support_enabled);
+        assert!(
+            eff(&layered_with(
+                "support.enabled = false",
+                "[config.support]\nenabled = true"
+            ))
+            .support_enabled
+        );
+        assert!(!eff(&layered_with("", "[config.support]\nenabled = false")).support_enabled);
+        // A legacy text has no such key: the button shows.
+        let m =
+            Manifest::parse("version = 1\n[[group]]\nid = \"default\"\nname = \"d\"\n").unwrap();
+        assert!(m.effective_of_group("default").unwrap().support_enabled);
+        // An unknown key in the table is refused, like every settings table.
+        assert!(Manifest::parse(
+            "format = 2\nversion = 1\n[[config]]\nid = \"c\"\nname = \"C\"\n\
+             [config.support]\nenabled = true\nemail = \"x\"\n\
+             [[group]]\nid = \"default\"\nname = \"D\"\nconfig = \"c\"\n"
+        )
+        .is_err());
+    }
+
+    /// A Config serialized before `support_enabled` existed reads as enabled.
+    #[test]
+    fn config_without_support_enabled_reads_true() {
+        let c = eff(&layered_with("", ""));
+        let mut v = serde_json::to_value(&c).unwrap();
+        assert_eq!(v["support_enabled"], serde_json::json!(true));
+        v.as_object_mut().unwrap().remove("support_enabled");
+        let back: Config = serde_json::from_value(v).unwrap();
+        assert!(back.support_enabled);
+    }
+
+    #[test]
+    fn support_is_a_feature_and_stays_out_when_unused() {
+        let plain = layered_with("", "");
+        assert!(!features_used(&plain).contains(&FEATURE_SUPPORT));
+        let d = layered_with("support.enabled = true", "");
+        assert!(features_used(&d).contains(&FEATURE_SUPPORT));
+        let c = layered_with("", "[config.support]\nenabled = false");
+        assert!(features_used(&c).contains(&FEATURE_SUPPORT));
+        assert_eq!(FEATURE_SUPPORT, "support");
+        // Unwritten, it stays out of the text: old Devices keep reading it.
+        let text = toml::to_string(&plain.configs[0]).unwrap();
+        assert!(!text.contains("support"), "{text}");
+        let text = toml::to_string(plain.defaults.as_ref().unwrap()).unwrap();
+        assert!(!text.contains("support"), "{text}");
+    }
+
     /// What a Config meant before Defaults: single values default to `learning`, `[]`, `false`;
     /// the school's networks come first unless the Config lists the same SSID.
     fn old_expand(m: &Manifest, c: &ConfigLayer) -> Config {
@@ -3617,6 +3719,7 @@ config = "teacher"
             scanners: c.scanners.clone(),
             chrome_policy: c.chrome_policy.clone(),
             chrome: c.chrome.clone(),
+            support_enabled: true,
             files: c.files.clone(),
             downloads: c.downloads.clone(),
             scripts: c.scripts.clone(),
