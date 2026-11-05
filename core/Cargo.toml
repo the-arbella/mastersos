@@ -13,6 +13,8 @@ ring = "0.17"
 sha2 = "0.10"
 base64 = "0.23"
 tar = "0.4"
+# Diagnostics archives (tar.zst): the C libzstd built by zstd-sys; no legacy formats, no dictionaries.
+zstd = { version = "0.13", default-features = false }
 flate2 = "1"
 toml = "0.8"
 toml_edit = "0.25"
