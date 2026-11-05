@@ -43,7 +43,7 @@
 ## 接口（类型放 `core/mastersos-bundle`，云端 pin 本仓库提交）
 
 1. **IT 收诊断。** 复用 inbox：新 kind `collect-diagnostics`，class `command`，payload
-   `{"boots": 1..5, "since_hours": null | 1..168}`，默认 TTL 24 小时。
+   `{"boots": 1..5}` 或 `{"since_hours": 1..168}`，二者至多给一个（都给算无效）；都不给即最近 1 次开机。默认 TTL 24 小时。
    - 机器：ack `running` → 收集 → 上传 → ack `done`，detail `diag:<id>`；失败 ack `failed`，detail 写哪一步。
    - 上传分三步（见下面「上传」），`kind: "inbox"`、`inbox_seq: <seq>`；上限 50 MB。
    - 包超过 50 MB：从最早一次开机的日志开始丢，直到在上限内，manifest 写 `"truncated": true`。不发超限的包。
@@ -52,19 +52,27 @@
    `client_id`（机器生成的 UUID，幂等、离线重发同一个）、`category`（`wifi|sign_in|app|hardware|battery|other`，
    服务端把未知值当 `other`）、`text`（≤1000 字符）、`user`（`kind: none|guest|local|sso`，`name`）、
    `session`（`login|desktop|kiosk:<app id>`）、`created_at`、`snapshot`（系统版本、网络、电量、磁盘、最近一次状态报告）、
-   `screenshot`（布尔）。回 `201 {"ticket"}`；同一 `client_id` 回同一单号；超限 429。
-   - 之后按「上传」三步传附件包（`kind: "ticket"`、`ticket: <单号>`）：最近 30 分钟的轻量日志，学生勾选时加截图；
-     上限 10 MB；单号只接受本机建的、48 小时内。48 小时内传不成就放弃附件，单子照常。
+   `screenshot`（布尔）。回 `201` 或 `200 {"ticket"}`（两者同义）；同一 `client_id` 回同一单号。
+   - `text` 按 Unicode 标量计数（`chars().count()`）≤1000；`snapshot` 序列化成 JSON 后 ≤64 KiB；`user.kind` 未知值读作 `unknown`。
+   - 限流两层：机器每小时 3 条（本机计数）；服务端每台每小时 10 条（按服务端收到时间），超出回 429 `too_many`。
+   - 之后按「上传」三步传附件包（`kind: "ticket"`、`client_id: <该求助的 client_id>`）：不用单号，因为单号按学校编、
+     学校重置后可能重编。内容是最近 30 分钟的轻量日志，学生勾选时加截图；上限 10 MB；只接受本机建的、
+     48 小时内的（按服务端收到时间算，不看机器时钟），过期回 410 `expired`。48 小时内传不成就放弃附件，单子照常。
 3. **上传（S3，云端与系统协商定稿）。**
    1. `POST /v1/diagnostics`，设备凭据，JSON（`DiagUploadRequest`）：`{"kind":"inbox","inbox_seq":N}` 或
-      `{"kind":"ticket","ticket":"1042"}`，加 `"bytes"` 与 `"sha256"`（hex）。
-      - 回 `201 {"id","upload":{"method":"PUT","url","headers":{...},"expires_at"}}`：url 有效 15 分钟；headers 里有服务端签入的
-        `Content-Length`、`x-amz-checksum-sha256`（base64）、`x-amz-tagging: state=pending`，机器原样带上，不自己换算。
+      `{"kind":"ticket","client_id":"<uuid>"}`，加 `"bytes"` 与 `"sha256"`（hex）。
+      - 回 `201 {"id","upload":{"method":"PUT","url","headers":{...},"expires_at","expires_in"}}`。headers 里有服务端签入的
+        `Content-Length`、`x-amz-checksum-sha256`（base64）、`x-amz-sdk-checksum-algorithm: SHA256`、`x-amz-tagging: state=pending`：
+        机器只发这些头、原样带上、不自己换算，不加 `Content-MD5`，不另加 `Content-Type`；`Expect: 100-continue` 可以。
+      - 有效期看 `expires_in`（秒）：从收到响应起用单调时钟计时，到点就回第 1 步；不用本机时钟比 `expires_at`（只作参考）。
+        S3 回 `AccessDenied` 且是 “Request has expired” 也回第 1 步。
+      - 每次 `POST /v1/diagnostics` 都是一次新尝试，url 里的对象路径会变，旧 url 不再用。
       - 同一 seq/ticket 已完成：回 `200 {"id","complete":true}`，不带 `upload`，机器跳过后两步。
-      - 没完成的：回同一 id、新 url。超限 413；seq 不是发给本机的 `collect-diagnostics`、或单号不是本机的：409。
+      - 没完成的：回同一 id、新 url。超限 413；seq 不是发给本机的 `collect-diagnostics`、或求助不是本机的：409 `not_yours`；
+        指令或附件期限已过：410 `expired`。
    2. 机器把包 `PUT` 到 `upload.url`。url 过期就回到第 1 步。
    3. `POST /v1/diagnostics/{id}/complete`：服务端核对大小与 sha256，通过回 204（这时才算到达，才去标识与通知 IT）；
-      不通过回 409 并删掉对象，机器回到第 1 步。
+      不通过回 409 `upload_mismatch` 并删掉对象，机器回到第 1 步。
    - 上传 url 的主机是专用的诊断子域名：单独一个 CloudFront 分发，源站是诊断桶，透传 query string 与签入的头、不转发
      Host、不用 OAC，S3 的签名、大小与校验值约束保留；流量是机器 → CloudFront → S3，不经过服务器，也不和 API 共用分发。
      学校防火墙放行这一个名字；公开 README 只写「诊断上传域名见学校管理网站的 Install 页」，域名与桶名不进本仓库。
@@ -75,7 +83,31 @@
    schema、lint 与 spec 文本一起进 bundle。
 5. **诊断包 `manifest.json`**（`DiagManifest`）：
    `{"format": 1, "created_at", "device_id", "kind": "inbox|ticket", "truncated": bool,
-     "files": [{"path", "source", "type": "text|image|binary", "bytes"}]}`。
+     "files": [{"path", "source", "type": "text|image|binary", "bytes"}], "skipped": [{"source", "reason"}]}`。
+   - `path` 是包内相对路径，不含 `..`，不列 `manifest.json` 自己。
+   - `source` 只用下面这些固定名字（`source::ALL`），每个来源单独一个文件（`journal` 按开机每次一个文件）：
+     `journal`、`journal-recent`（求助用的最近几分钟）、`coredump-list`、`coredump-info`、`systemd-failed`、`systemd-units`、
+     `loginctl`、`nm-general`、`nm-device`、`nm-connection`、`ip-addr`、`ip-route`、`resolvectl`、`rfkill`、`iw-dev`、`iw-reg`、
+     `wifi-scan`、`lspci`、`lsusb`、`cmdline`、`input-devices`、`mem-sleep`、`power-supply`、`os-release`、`bootctl`、
+     `agent-state`、`status-report`、`screenshot`。新增来源算协议变更。
+   - 云端做开发商副本时按 `source` 处理：`wifi-scan` 与 `coredump-info` 整个丢掉；其余文件里的 IP、MAC/BSSID、SSID、
+     序列号与 `/home/<x>` 路径做假名化。
+6. **错误。** 错误响应体统一 `{"error": "<code>"}`（`ApiError`，可能多带字段），机器按下表处理（`error_action`）：
+
+   | code | 状态 | 机器 |
+   |---|---|---|
+   | `invalid` | 422 | 丢弃并记日志 |
+   | `support_disabled` | 403 | 丢掉排队的求助，告诉学生「Help requests are turned off at this school.」 |
+   | `too_many` | 429 | 保留，按 `Retry-After` 秒后重试 |
+   | `diagnostics_unavailable` | 503 | 保留，退避 |
+   | `not_yours` | 409 | 放弃这次上传 |
+   | `expired` | 410 | 放弃 |
+   | `upload_mismatch` | 409 | 从 `POST /v1/diagnostics` 重来 |
+   | `forbidden` | 403 | 设备校验失败：保留，退避 |
+   | （无） | 5xx、网络错误、404、空体 401 | 保留，退避 |
+
+   未知 code 按状态兜底：400、413、422 丢弃（同样的请求永远不会被接受），其余保留并退避。
+   `agent_too_old` 只出现在管理端（对旧机器发需要新 agent 的操作），机器收不到。
 
 ## 设计（系统侧）
 
