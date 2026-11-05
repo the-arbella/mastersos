@@ -225,6 +225,19 @@ pub fn open_abs_dir(path: &Path, create: bool) -> Result<OwnedFd> {
     }
 }
 
+/// Opens the directory `path` for lookups only (`O_PATH|O_DIRECTORY|O_NOFOLLOW`): enough for `openat` of a known name in
+/// a search-only directory such as 0711 `/run/mastersos-signin`, where `O_RDONLY` gets `EACCES` for anyone but root.
+/// The parent is opened as in [`open_abs_dir`]; a symbolic link as the last part is refused.
+pub fn open_abs_dir_search(path: &Path) -> Result<OwnedFd> {
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+        bail!("not a directory below another: {}", path.display());
+    };
+    let parent = open_abs_dir(parent, false)?;
+    let flags = OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    rustix::fs::openat(&parent, name, flags, Mode::empty())
+        .map_err(|e| classify(&parent, name, e, "opening directory"))
+}
+
 /// 打开 `dir` 里的普通文件读。不存在为 `None`；是符号链接或不是普通文件都报错。
 /// `O_NONBLOCK` 免得碰上 FIFO 时卡住。
 pub fn open_file_at(dir: &OwnedFd, name: &str) -> Result<Option<File>> {

@@ -119,7 +119,8 @@ fn read_policy(path: &Path) -> String {
 
 /// The user's half: see the module documentation.
 pub fn import(env: &ImportEnv) -> Result<Imported> {
-    let dir = match safefs::open_abs_dir(env.handoff_dir, false) {
+    // The handover directory is 0711: search it, never list it.
+    let dir = match safefs::open_abs_dir_search(env.handoff_dir) {
         Ok(d) => d,
         Err(e) if crate::apply::is_not_found(&e) => return Ok(Imported::Nothing),
         Err(e) => return Err(e),
@@ -300,6 +301,18 @@ mod tests {
         let gone = T::new();
         fs::remove_dir(&gone.handoff).unwrap();
         assert_eq!(gone.run(&dead), Imported::Nothing);
+    }
+
+    /// The image's directory is 0711 root: the user may search it but not list it (found on VM 123, 2026-11-05).
+    #[test]
+    fn a_search_only_directory_is_enough() {
+        let t = T::new();
+        t.deliver_card();
+        fs::set_permissions(&t.handoff, fs::Permissions::from_mode(0o311)).unwrap();
+        let got = import(&t.env(&dead));
+        fs::set_permissions(&t.handoff, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(got.unwrap(), Imported::Created(1));
+        assert_eq!(fs::metadata(t.delivered()).unwrap().len(), 0, "used once");
     }
 
     #[test]
