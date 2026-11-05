@@ -1,7 +1,7 @@
 # MastersOS 考试扩展
 
 锁定会话（`[group.apps.kiosk]` 的网页 / PWA 应用，设计 `docs/superpowers/specs/2026-10-26-mastersos-kiosk-apps-design.md`
-§4.5、§4.7、§4.9）里强制安装的 MV3 扩展。它做两件事：页面角上一个浮动的「Menu」按钮，菜单里的「Exit」确认后结束锁定会话；以及按应用的模拟环境
+§4.5、§4.7、§4.9）里强制安装的 MV3 扩展。它做两件事：页面右边缘一个浮动的「Options」把手，菜单里的「Exit」确认后结束锁定会话；以及按应用的模拟环境
 （mock env，下文），让只认 ChromeOS 等设备的考试页读到它要的信号。
 
 | 文件 | 作用 |
@@ -16,21 +16,28 @@
 ## 行为
 
 - 界面文字只有英文（扩展里不放中文；`tests/content.test.js` 核对源码里没有 CJK 字符）。
-- 浮动按钮（药丸形，深色底、白边、阴影，任何页面上都看得见；字是「Menu」）在右下角，离边 16 px；可以拖到四角之一
-  （松手时吸附到最近的角；移动不到 6 px 仍算点击），位置记在页面的 `sessionStorage`（`mastersos-exit-corner`），
-  同一标签页里换页还在那个角。存储不可用（沙箱页面）时照样显示，只是不记。拖动时菜单收起，拖完不弹菜单。
-- 点按钮弹出一个小菜单（`role="menu"`，朝屏幕内侧展开），现在只有一项「Exit」。菜单项是 `content.js` 里的 `ACTIONS` 列表，
+- 把手只有图标（竖排三点，40×48 px，深色 `#1b1d2a` 85% 不透明、白图标；悬停或聚焦时不透明并略变宽），
+  `aria-label` 与 `title` 都是「Options」。缺省贴在右边缘的竖直正中、只有内侧是圆角——考试页的 Next / Submit 在右下、
+  状态信息在右上，角上会挡住它们。
+- 可以拖到任何地方，松手时吸附到较近的左 / 右边缘，高度跟着指针（移动不到 6 px 仍算点击，拖动时菜单收起，拖完不弹菜单）。
+  边与高度记在页面的 `sessionStorage`（`mastersos-exit-pos`，`{"side":"l"|"r","y":0..1}`，`y` 是可用高度的比例，
+  所以窗口变大变小都还在视口里）；上一版的 `mastersos-exit-corner` 不认。存储不可用（沙箱页面）时照样显示，只是不记。
+- 点把手弹出一个小菜单（`role="menu"`，在把手旁边、朝屏幕内侧展开、与把手竖直居中；白底、12 px 圆角、每项 44 px 高，
+  前面 18 px 图标），现在只有一项「Exit」（门与箭头的图标，红字）。菜单项是 `content.js` 里的 `ACTIONS` 列表，
   以后加一项就是加一条。
 - 键盘：按钮能拿到焦点，Enter / Space 开关菜单，↓ / ↑ 打开并聚焦第一项 / 最后一项；菜单里 ↑ ↓ Home End Tab 在菜单项之间移动
   （焦点不出菜单），Esc 收起、焦点回到按钮。菜单开着时点页面别处就收起（`document` 上捕获阶段的 `pointerdown`，
   只在菜单开着时挂、只看不拦，页面照样收到这个事件）。
-- 选「Exit」先在同一个 shadow root 里出确认：「Leave this app? You will need to open it again.」，按钮「Cancel」/「Exit」。
-  Cancel 或 Esc 关掉、不发任何消息；「Exit」发 `chrome.runtime.sendMessage({cmd:"exit"})`。
+- 选「Exit」先在同一个 shadow root 里出一张居中的确认卡片：标题「Exit this app?」，正文「You will need to open it again
+  from the sign-in screen.」，按钮「Cancel」（缺省焦点）/「Exit」（红底）。Cancel 或 Esc 关掉、不发任何消息；
+  「Exit」发 `chrome.runtime.sendMessage({cmd:"exit"})`。
+- 焦点环全部是 2 px 的 `#d9653b`（`:focus-visible`，外移 2 px），不用浏览器缺省的蓝色双环。
 - 后台连 native messaging 宿主 `org.mastersos.kiosk_exit`（= `mastersos-bundle` 的 `EXIT_HOST`）。宿主是
   `/usr/lib/mastersos/mastersos-kiosk-exit` → `mastersos-agent kiosk exit-host`：4 字节小端长度 + JSON，只认恰好
   `{"cmd":"exit"}`，回 `{"ok":true}`（「已请求」：会话随即结束，之后什么都等不到）或 `{"ok":false}`。
-- 回 `{"ok":true}` 时对话框显示「Exiting…」；20 秒后会话还在，或回 `{"ok":false}`、宿主没回就断开、连不上，
-  都显示「Could not leave. Please ask a teacher.」，按钮可以再点。
+- 回 `{"ok":true}` 时同一张卡片的标题变成「Exiting…」、按钮都禁用（Esc 也不关）；20 秒后会话还在，或回 `{"ok":false}`、
+  宿主没回就断开、连不上，都在同一张卡片里显示「Could not leave. Please ask a teacher.」与一个「OK」按钮；OK 关掉，
+  可以从菜单再试。
 
 ### 不弄坏页面
 
@@ -62,8 +69,8 @@
 1. 页面 `dialog.showModal()` 开着时按钮在对话框之上、点得到，菜单与确认对话框能用；关掉对话框后按钮回到原处。
 2. 页面的 popover（`popover="auto"` 与 `manual`）开着时按钮在其上。
 3. 元素全屏（`requestFullscreen()`，如视频或考试平台的全屏模式）时按钮可见、点得到。
-4. `<html style="transform: translateZ(0)">` 的长页面滚到底：按钮仍在视口的角上。
-5. 触屏拖按钮到别的角、松手后再点一下：出菜单（不被吞）；拖动本身不弹菜单。键盘 Tab 到按钮、Enter 开菜单、Esc 收起。
+4. `<html style="transform: translateZ(0)">` 的长页面滚到底：把手仍在视口的右边缘正中。
+5. 触屏把把手拖到左边缘、松手后再点一下：出菜单（不被吞）；拖动本身不弹菜单。键盘 Tab 到把手、Enter 开菜单、Esc 收起。
 6. Chrome 的错误页与 `URLBlocklist` 的拦截页（`chrome-error://`）没有内容脚本、没有按钮：确认 Alt+F4 ×5 能退出（审阅 M2）。
 - 只在顶层框架（`all_frames: false`）。
 

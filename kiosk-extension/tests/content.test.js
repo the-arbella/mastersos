@@ -8,7 +8,7 @@
 // ?raw: vite hands over the source as a string (not executed as a module).
 import SRC from "../content.js?raw";
 
-const KEY = "mastersos-exit-corner";
+const KEY = "mastersos-exit-pos";
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
 // Observers and document listeners each injection leaves behind: torn down between tests so an earlier instance does
@@ -97,7 +97,9 @@ const menu = (root) => root.querySelector("[role=menu]");
 const items = (root) => [...root.querySelectorAll("[role=menuitem]")];
 const dialog = (root) => root.querySelector("[role=dialog]");
 const overlay = (root) => root.querySelector(".overlay");
-const status = (root) => root.querySelector(".status").textContent;
+const title = (root) => root.querySelector(".title").textContent;
+const body = (root) => root.querySelector(".body").textContent;
+const y = (root) => parseFloat(dock(root).style.getPropertyValue("--y"));
 
 /** Dispatch a keydown on `el`; returns the event (to check defaultPrevented). */
 function key(el, k, init = {}) {
@@ -126,21 +128,36 @@ describe("source", () => {
   it("has no Chinese (or other CJK) text: English only", () => {
     expect(SRC).not.toMatch(/[⺀-鿿가-힯豈-﫿＀-￯]/u);
   });
+
+  it("our focus ring is a 2px brand-orange focus-visible ring, not the browser default", () => {
+    const { root } = inject();
+    const css = root.querySelector("style").textContent;
+    expect(css).toMatch(/:focus-visible\s*\{[^}]*outline:\s*2px solid #d9653b/);
+    expect(css).not.toMatch(/outline:\s*3px/);
+  });
 });
 
-describe("floating button", () => {
-  it("is attached to documentElement; the closed shadow root holds a Menu button", () => {
+describe("floating handle", () => {
+  it("is attached to documentElement; the closed shadow root holds an icon-only Options handle", () => {
     const { host, root } = inject();
     expect(host).not.toBeNull();
     expect(host.parentNode).toBe(document.documentElement);
     expect(root).not.toBeNull();
     expect(root.mode).toBe("closed");
-    expect(fab(root).textContent.trim()).toBe("Menu");
-    expect(fab(root).getAttribute("aria-haspopup")).toBe("menu");
-    expect(fab(root).getAttribute("aria-expanded")).toBe("false");
+    const btn = fab(root);
+    expect(btn.textContent.trim()).toBe(""); // no text label
+    expect(btn.querySelector("svg")).not.toBeNull();
+    expect(btn.getAttribute("aria-label")).toBe("Options");
+    expect(btn.getAttribute("title")).toBe("Options");
+    expect(btn.getAttribute("aria-haspopup")).toBe("menu");
+    expect(btn.getAttribute("aria-expanded")).toBe("false");
     expect(menu(root).hidden).toBe(true);
-    // bottom right by default
-    expect(dock(root).dataset.corner).toBe("br");
+  });
+
+  it("by default docks to the middle of the right edge (not on the page's bottom-right Next button)", () => {
+    const { root } = inject();
+    expect(dock(root).dataset.side).toBe("r");
+    expect(y(root)).toBe(0.5);
   });
 
   it("page scripts cannot reach the shadow root or find the button", () => {
@@ -208,7 +225,7 @@ describe("floating button", () => {
   it("touch: no click after a drag; the next tap still opens the menu", async () => {
     const { root } = inject();
     const btn = fab(root);
-    pointer(btn, "pointerdown", 1000, 700);
+    pointer(btn, "pointerdown", 1000, 384);
     pointer(btn, "pointermove", 20, 20);
     pointer(btn, "pointerup", 20, 20);
     await tick();
@@ -216,53 +233,91 @@ describe("floating button", () => {
     expect(menu(root).hidden).toBe(false);
   });
 
-  it("pointercancel mid-drag: corner unchanged, the next tap still opens the menu", () => {
+  it("pointercancel mid-drag: position unchanged, the next tap still opens the menu", () => {
     const { root } = inject();
     const btn = fab(root);
-    pointer(btn, "pointerdown", 1000, 700);
+    pointer(btn, "pointerdown", 1000, 384);
     pointer(btn, "pointermove", 20, 20);
     pointer(btn, "pointercancel", 20, 20);
-    expect(dock(root).dataset.corner).toBe("br");
+    expect(dock(root).dataset.side).toBe("r");
+    expect(y(root)).toBe(0.5);
+    expect(sessionStorage.getItem(KEY)).toBeNull();
     btn.click();
     expect(menu(root).hidden).toBe(false);
   });
 
-  it("corner comes from the one saved in sessionStorage", () => {
-    sessionStorage.setItem(KEY, "tl");
+  it("position comes from the side and height saved in sessionStorage", () => {
+    sessionStorage.setItem(KEY, JSON.stringify({ side: "l", y: 0.25 }));
     const { root } = inject();
-    expect(dock(root).dataset.corner).toBe("tl");
+    expect(dock(root).dataset.side).toBe("l");
+    expect(y(root)).toBe(0.25);
   });
 
-  it("an unknown saved value falls back to bottom right", () => {
-    sessionStorage.setItem(KEY, "middle");
-    const { root } = inject();
-    expect(dock(root).dataset.corner).toBe("br");
+  it("an unknown or malformed saved value falls back to the middle of the right edge", () => {
+    for (const bad of ["middle", "{", JSON.stringify({ side: "x", y: 0.2 }), JSON.stringify({ side: "l", y: 7 })]) {
+      document.documentElement.querySelectorAll("mastersos-exit").forEach((e) => e.remove());
+      sessionStorage.setItem(KEY, bad);
+      const { root } = inject();
+      expect(dock(root).dataset.side).toBe("r");
+      expect(y(root)).toBe(0.5);
+    }
   });
 
-  it("drag to the top left and release: snaps to that corner, saved in sessionStorage, no menu", () => {
+  it("the old corner value of the previous version is ignored", () => {
+    sessionStorage.setItem("mastersos-exit-corner", "tl");
+    const { root } = inject();
+    expect(dock(root).dataset.side).toBe("r");
+    expect(y(root)).toBe(0.5);
+  });
+
+  it("the stored height is a fraction of the viewport, so the handle stays inside it on resize", () => {
+    const { root } = inject();
+    expect(root.querySelector("style").textContent).toMatch(/top:\s*calc\(\(100vh - 48px\) \* var\(--y/);
+  });
+
+  it("drag to the top left and release: snaps to the left edge at the top, saved, no menu", () => {
     const { root, sendMessage } = inject();
     const btn = fab(root);
-    pointer(btn, "pointerdown", 1000, 700);
-    pointer(btn, "pointermove", 500, 400);
+    pointer(btn, "pointerdown", 1000, 384);
+    pointer(btn, "pointermove", 500, 300);
     pointer(btn, "pointermove", 20, 20);
     pointer(btn, "pointerup", 20, 20);
     btn.click(); // the browser follows a mouse drag with a click: not a press of the button
-    expect(dock(root).dataset.corner).toBe("tl");
-    expect(sessionStorage.getItem(KEY)).toBe("tl");
+    expect(dock(root).dataset.side).toBe("l");
+    expect(y(root)).toBe(0);
+    expect(JSON.parse(sessionStorage.getItem(KEY))).toEqual({ side: "l", y: 0 });
     expect(menu(root).hidden).toBe(true);
     expect(overlay(root).hidden).toBe(true);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("a move under the drag threshold is a click: opens the menu, corner unchanged", () => {
+  it("drag along the right edge: keeps the right side, height follows the pointer (clamped to the viewport)", () => {
     const { root } = inject();
     const btn = fab(root);
-    pointer(btn, "pointerdown", 1000, 700);
-    pointer(btn, "pointermove", 1003, 702);
-    pointer(btn, "pointerup", 1003, 702);
+    const h = window.innerHeight;
+    pointer(btn, "pointerdown", 1000, h / 2);
+    pointer(btn, "pointermove", 990, (h - 48) * 0.75 + 24);
+    pointer(btn, "pointerup", 990, (h - 48) * 0.75 + 24);
+    expect(dock(root).dataset.side).toBe("r");
+    expect(y(root)).toBeCloseTo(0.75, 5);
+    pointer(btn, "pointerdown", 990, 600);
+    pointer(btn, "pointermove", 990, h + 500);
+    pointer(btn, "pointerup", 990, h + 500);
+    expect(y(root)).toBe(1);
+    // inline drag coordinates are gone after release: the stored fraction places it
+    expect(dock(root).style.top).toBe("");
+    expect(dock(root).style.left).toBe("");
+  });
+
+  it("a move under the drag threshold is a click: opens the menu, position unchanged", () => {
+    const { root } = inject();
+    const btn = fab(root);
+    pointer(btn, "pointerdown", 1000, 384);
+    pointer(btn, "pointermove", 1003, 386);
+    pointer(btn, "pointerup", 1003, 386);
     btn.click();
     expect(menu(root).hidden).toBe(false);
-    expect(dock(root).dataset.corner).toBe("br");
+    expect(dock(root).dataset.side).toBe("r");
     expect(sessionStorage.getItem(KEY)).toBeNull();
   });
 
@@ -271,12 +326,12 @@ describe("floating button", () => {
     const btn = fab(root);
     btn.click();
     expect(menu(root).hidden).toBe(false);
-    pointer(btn, "pointerdown", 1000, 700);
+    pointer(btn, "pointerdown", 1000, 384);
     pointer(btn, "pointermove", 20, 20);
     pointer(btn, "pointerup", 20, 20);
     btn.click();
     expect(menu(root).hidden).toBe(true);
-    expect(dock(root).dataset.corner).toBe("tl");
+    expect(dock(root).dataset.side).toBe("l");
   });
 });
 
@@ -386,24 +441,42 @@ describe("menu", () => {
 });
 
 describe("Exit confirmation", () => {
+  const btns = (root) => ({
+    cancel: root.querySelector("button.cancel"),
+    confirm: root.querySelector("button.confirm"),
+    ok: root.querySelector("button.ok"),
+  });
+
+  it("the Exit item has an icon and the label Exit", () => {
+    const { root } = inject();
+    const exit = items(root)[0];
+    expect(exit.querySelector("svg")).not.toBeNull();
+    expect(exit.textContent.trim()).toBe("Exit");
+  });
+
   it("Exit asks to confirm first, in English, and closes the menu", () => {
     const { root, sendMessage } = inject();
     expect(overlay(root).hidden).toBe(true);
     chooseExit(root);
     expect(menu(root).hidden).toBe(true);
     expect(overlay(root).hidden).toBe(false);
-    expect(dialog(root).textContent).toContain("Leave this app? You will need to open it again.");
-    expect(root.querySelector("button.cancel").textContent).toBe("Cancel");
-    expect(root.querySelector("button.confirm").textContent).toBe("Exit");
+    expect(title(root)).toBe("Exit this app?");
+    expect(body(root)).toBe("You will need to open it again from the sign-in screen.");
+    const b = btns(root);
+    expect(b.cancel.textContent).toBe("Cancel");
+    expect(b.confirm.textContent).toBe("Exit");
+    expect(b.cancel.hidden).toBe(false);
+    expect(b.confirm.hidden).toBe(false);
+    expect(b.ok.hidden).toBe(true);
     expect(dialog(root).getAttribute("aria-modal")).toBe("true");
-    expect(root.activeElement).toBe(root.querySelector("button.cancel"));
+    expect(root.activeElement).toBe(b.cancel);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("Cancel closes the dialog without sending anything; focus back on the button", () => {
+  it("Cancel closes the dialog without sending anything; focus back on the handle", () => {
     const { root, sendMessage } = inject();
     chooseExit(root);
-    root.querySelector("button.cancel").click();
+    btns(root).cancel.click();
     expect(overlay(root).hidden).toBe(true);
     expect(root.activeElement).toBe(fab(root));
     expect(sendMessage).not.toHaveBeenCalled();
@@ -417,34 +490,58 @@ describe("Exit confirmation", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it('confirm sends {cmd:"exit"}; on ok:true shows Exiting', () => {
+  it('confirm sends {cmd:"exit"}; on ok:true the same dialog shows Exiting with its buttons disabled', () => {
     const { root, sendMessage } = inject({ ok: true });
     chooseExit(root);
-    root.querySelector("button.confirm").click();
+    btns(root).confirm.click();
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(sendMessage.mock.calls[0][0]).toEqual({ cmd: "exit" });
-    expect(status(root)).toBe("Exiting…");
-    expect(root.querySelector("button.confirm").disabled).toBe(true);
+    expect(overlay(root).hidden).toBe(false);
+    expect(title(root)).toBe("Exiting…");
+    expect(btns(root).confirm.disabled).toBe(true);
+    expect(btns(root).cancel.disabled).toBe(true);
+    // Escape does nothing while exiting
+    key(dialog(root), "Escape");
+    expect(overlay(root).hidden).toBe(false);
   });
 
-  it("session still there 20 s after ok:true: treated as failed, ask a teacher, can press again", () => {
+  it("session still there 20 s after ok:true: failure in the same dialog with a single OK", () => {
     vi.useFakeTimers();
     const { root } = inject({ ok: true });
     chooseExit(root);
-    root.querySelector("button.confirm").click();
+    btns(root).confirm.click();
     vi.advanceTimersByTime(19999);
-    expect(status(root)).toBe("Exiting…");
+    expect(title(root)).toBe("Exiting…");
     vi.advanceTimersByTime(1);
-    expect(status(root)).toBe("Could not leave. Please ask a teacher.");
-    expect(root.querySelector("button.confirm").disabled).toBe(false);
+    expectFailed(root);
   });
 
-  it("ok:false: ask a teacher, can press again", () => {
-    const { root } = inject({ ok: false });
+  function expectFailed(root) {
+    expect(overlay(root).hidden).toBe(false);
+    expect(body(root)).toBe("Could not leave. Please ask a teacher.");
+    const b = btns(root);
+    expect(b.cancel.hidden).toBe(true);
+    expect(b.confirm.hidden).toBe(true);
+    expect(b.ok.hidden).toBe(false);
+    expect(b.ok.disabled).toBe(false);
+    expect(b.ok.textContent).toBe("OK");
+    expect(root.activeElement).toBe(b.ok);
+  }
+
+  it("ok:false: failure with OK; OK closes it and Exit can be tried again from the menu", () => {
+    const { root, sendMessage } = inject({ ok: false });
     chooseExit(root);
-    root.querySelector("button.confirm").click();
-    expect(status(root)).toBe("Could not leave. Please ask a teacher.");
-    expect(root.querySelector("button.confirm").disabled).toBe(false);
+    btns(root).confirm.click();
+    expectFailed(root);
+    btns(root).ok.click();
+    expect(overlay(root).hidden).toBe(true);
+    expect(root.activeElement).toBe(fab(root));
+    chooseExit(root);
+    expect(title(root)).toBe("Exit this app?");
+    expect(btns(root).ok.hidden).toBe(true);
+    expect(btns(root).confirm.disabled).toBe(false);
+    btns(root).confirm.click();
+    expect(sendMessage).toHaveBeenCalledTimes(2);
   });
 
   it("no reply (background error, lastError) is a failure too", () => {
@@ -454,8 +551,20 @@ describe("Exit confirmation", () => {
       chrome.runtime.lastError = undefined;
     });
     chooseExit(root);
-    root.querySelector("button.confirm").click();
-    expect(status(root)).toBe("Could not leave. Please ask a teacher.");
+    btns(root).confirm.click();
+    expectFailed(root);
+  });
+
+  it("Tab stays on the dialog's visible buttons", () => {
+    const { root } = inject();
+    chooseExit(root);
+    const b = btns(root);
+    key(b.cancel, "Tab");
+    expect(root.activeElement).toBe(b.confirm);
+    key(b.confirm, "Tab");
+    expect(root.activeElement).toBe(b.cancel);
+    key(b.cancel, "Tab", { shiftKey: true });
+    expect(root.activeElement).toBe(b.confirm);
   });
 
   it("clicks and keys in the dialog do not bubble to the page; the page's own events still arrive", () => {
@@ -466,7 +575,7 @@ describe("Exit confirmation", () => {
     try {
       const { root } = inject();
       chooseExit(root);
-      root.querySelector("button.cancel").click();
+      btns(root).cancel.click();
       chooseExit(root);
       key(dialog(root), "Tab");
       expect(seen).toEqual([]);
