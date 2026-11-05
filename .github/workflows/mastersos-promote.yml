@@ -1,0 +1,83 @@
+name: mastersos-promote
+# Move a version that machines on beta have run well from beta to stable, and publish its installer
+# (docs/update-channels.md "Publishing from CI"). Nothing is rebuilt: the same signed bytes beta has.
+on:
+  # By hand only
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The beta version to promote, such as 20261105.10
+        required: true
+      allow_bootloader_change:
+        description: The version changes systemd-boot (installed it on a lab machine first; docs/secure-boot.md)
+        type: boolean
+        default: false
+      allow_shim_change:
+        description: The version changes shim (docs/secure-boot.md "Bootloader updates and the TPM")
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  # One job at a time touches the update source, builds included
+  group: mastersos-image
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    # The release environment needs the owner's approval and only allows master
+    if: github.repository == 'the-arbella/mastersos'
+    environment: release
+    runs-on: ubuntu-26.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the inputs
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          ALLOW_BOOTLOADER: ${{ inputs.allow_bootloader_change }}
+          ALLOW_SHIM: ${{ inputs.allow_shim_change }}
+        run: |
+          [[ $INPUT_VERSION =~ ^[0-9]{8}\.[0-9]+$ ]] || { echo "bad version" >&2; exit 1; }
+          flags=()
+          if [ "$ALLOW_BOOTLOADER" = true ]; then flags+=(--allow-bootloader-change); fi
+          if [ "$ALLOW_SHIM" = true ]; then flags+=(--allow-shim-change); fi
+          { echo "VERSION=$INPUT_VERSION"; echo "FLAGS=${flags[*]}"; } >>"$GITHUB_ENV"
+      - name: Set up the runner
+        run: bash image/ci-runner-setup.sh release
+      - name: Load the release keys
+        env:
+          MASTERSOS_RELEASE_KEYS_AGE_B64: ${{ secrets.MASTERSOS_RELEASE_KEYS_AGE_B64 }}
+          MASTERSOS_AGE_PASSPHRASE: ${{ secrets.MASTERSOS_AGE_PASSPHRASE }}
+        run: |
+          age_file=$(mktemp -p /dev/shm)
+          base64 -d <<<"$MASTERSOS_RELEASE_KEYS_AGE_B64" >"$age_file"
+          python3 -I image/ci-load-release-keys.py "$age_file"
+          rm -f "$age_file"
+      - name: AWS credentials for the update source
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.MASTERSOS_OS_PUBLISH_ROLE }}
+          aws-region: ap-southeast-1
+          role-duration-seconds: 7200
+      - name: Promote to stable and publish the installer
+        env:
+          MASTERSOS_OS_BUCKET: ${{ secrets.MASTERSOS_OS_BUCKET }}
+          MASTERSOS_OS_CDN: ${{ secrets.MASTERSOS_OS_CDN }}
+          GH_TOKEN: ${{ github.token }}
+        # FLAGS is a list of fixed words chosen above
+        run: |
+          read -ra flags <<<"$FLAGS"
+          image/ci-publish.sh promote "$VERSION" ${flags[@]+"${flags[@]}"}
+      - name: Wipe the release keys
+        if: always()
+        run: image/keys-unload.sh
+      - name: Mark the GitHub Release as the stable one
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "image-release-$VERSION" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest

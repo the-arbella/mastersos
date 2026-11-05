@@ -265,6 +265,10 @@ fresh_root
 expect "MASTERSOS_AWS_PROFILE 换 profile" ok "" syncenv MASTERSOS_AWS_PROFILE=other
 check "  aws 看到的是 other" test "$(sort -u "$FAKE_AWS_LOG.profile")" = other
 fresh_root
+expect "MASTERSOS_AWS_PROFILE empty: environment credentials" ok "credentials from the environment" syncenv MASTERSOS_AWS_PROFILE= AWS_PROFILE=stale
+check "  aws sees no profile" test "$(sort -u "$FAKE_AWS_LOG.profile")" = ""
+check "  the log names the environment credentials" out_has "credentials from the environment"
+fresh_root
 mkdir -p "$root/.tmp-publish"
 echo junk >"$root/.tmp-publish/junk"
 echo junk >"$root/stable/.SHA256SUMS.new"

@@ -197,6 +197,10 @@ jobs:
       - run: bash image/tests/sync-s3-test.sh
         env:
           MASTERSOS_PUBLISH_TEST_REQUIRE: "1"
+      # ci-publish.sh: a channel restored from the bucket must match its signed manifest before publish.sh / promote.sh re-sign it
+      - run: bash image/tests/ci-publish-test.sh
+        env:
+          MASTERSOS_PUBLISH_TEST_REQUIRE: "1"
       # 真的 mastersos-agent shim-check 对真的 sbverify：测试 CA 单签、双签的映像，printf 拼的 db（4b Task 22）；缺工具算失败
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:

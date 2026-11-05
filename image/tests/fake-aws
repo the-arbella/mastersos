@@ -4,7 +4,7 @@
 #   FAKE_AWS_BUCKET  假桶的目录：对象是 <目录>/<键>，旁边的 <键>.meta 记 cache-control、content-type、sha256
 #   FAKE_AWS_FAIL    子命令名（head-object、cp、list-objects-v2、rm、create-invalidation、wait、get-caller-identity）：
 #                    那一个子命令一律失败（退出 1，什么都不改）
-# 认识 sync-s3.sh 用到的七个子命令，别的一律失败（退出 2）。
+# 认识 sync-s3.sh 用到的七个子命令和 ci-publish.sh 的 s3 sync（桶 → 本地），别的一律失败（退出 2）。
 set -euo pipefail
 : "${FAKE_AWS_LOG:?}" "${FAKE_AWS_BUCKET:?}"
 echo "${AWS_PROFILE:-}" >>"$FAKE_AWS_LOG.profile"
@@ -76,6 +76,19 @@ case "$group $sub" in
 	# --paths 之后到下一个 -- 选项之前的全部值
 	echo "$group paths $(printf '%s\n' "$@" | awk '/^--paths$/ {on=1; next} /^--/ {on=0} on' | tr '\n' ' ')" >>"$FAKE_AWS_LOG"
 	echo "IFAKE0001"
+	;;
+"s3 sync")
+	# only bucket → local (ci-publish.sh restoring a directory): every object under the prefix, without the .meta files
+	src=$1 dst=$2
+	prefix=$(key_of "$src")
+	echo "$group $sub $prefix" >>"$FAKE_AWS_LOG"
+	mkdir -p "$dst"
+	if [ -d "$FAKE_AWS_BUCKET/$prefix" ]; then
+		(cd "$FAKE_AWS_BUCKET/$prefix" && find . -type f ! -name '*.meta' -printf '%P\n') | while read -r k; do
+			mkdir -p "$(dirname "$dst/$k")"
+			cp "$FAKE_AWS_BUCKET/$prefix$k" "$dst/$k"
+		done
+	fi
 	;;
 "cloudfront wait")
 	echo "$group $sub $*" >>"$FAKE_AWS_LOG"

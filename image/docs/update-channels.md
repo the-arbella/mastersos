@@ -113,6 +113,33 @@ mirror_cdn=<CloudFront DistributionId>
   文件名写成 `.gpg` 会 `DOWNLOAD INVALID`）验 `SHA256SUMS.gpg`，再按 `SHA256SUMS` 验每个文件。
   分区内容另有 dm-verity 签名（Secure Boot 那把钥匙），UKI 另有 Secure Boot 签名。
 
+## Publishing from CI (2026-11-05)
+
+Release images are built by GitHub Actions, so the release root no longer lives on a build host: each job rebuilds the
+part of it that it changes from the S3 mirror (`image/ci-publish.sh`), checks it, and runs the same `publish.sh` /
+`promote.sh` / `sync-s3.sh` as above. The bucket stays a mirror of a root that only ever held signed content.
+
+- **`mastersos-image`** (build): after the GitHub Release, `ci-publish.sh beta <v>` restores `beta/`, runs
+  `publish.sh <v> beta` and `sync-s3.sh`. Input `beta` (default on) turns this off for a build that should not reach
+  any machine.
+- **`mastersos-promote`** (by hand, `version` = a version in beta): restores `beta/`, `stable/` and `installer/`, runs
+  `promote.sh <v>` (inputs `allow_bootloader_change` / `allow_shim_change` pass the two gates), then takes the installer
+  image and Ventoy package from the version's GitHub Release (`image-release-<v>`; its `build-info.txt` must be byte for
+  byte the one beta signed) into `publish.sh <v> installer`, then one `sync-s3.sh`, then marks the GitHub Release as the
+  latest non-prerelease one. Nothing is rebuilt: stable gets the bytes beta had.
+- **Restore check**: `publish.sh` and `promote.sh` re-sign whatever a channel holds, so a restored directory must be
+  exactly what its last manifest vouches for: `SHA256SUMS.gpg` verifies with the repository key, every listed file
+  matches, nothing unlisted is there. Otherwise the job stops before any key is used (`tests/ci-publish-test.sh`).
+- Both jobs run in the `release` environment (owner approval, master only) and share the `mastersos-image` concurrency
+  group, so only one job at a time touches the update source. AWS access is the OIDC role of the cloud infra stack
+  `mastersos-os-ci-publisher`: the origin's publisher policy (this bucket, this distribution's invalidations), assumable
+  only by this repository's `release` environment. The bucket, distribution id and role ARN are secrets of that environment
+  (`MASTERSOS_OS_BUCKET`, `MASTERSOS_OS_CDN`, `MASTERSOS_OS_PUBLISH_ROLE`); `sync-s3.sh` uses the environment's
+  credentials when `MASTERSOS_AWS_PROFILE` is set to the empty string.
+- The usual flow: build (lands in beta) → machines on beta update and report healthy → `mastersos-promote` with that
+  version. The version rules above still hold: never publish to beta a version that will not be promoted while a later
+  stable version would be lower.
+
 ## School cache (plan 5 Task 12)
 
 A school can run an HTTP cache of the update source. Any HTTP service that proxies or mirrors

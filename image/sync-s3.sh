@@ -16,7 +16,7 @@
 #   3 清单      每个目录先 SHA256SUMS、后 SHA256SUMS.gpg（max-age=60）
 #   4 失效      /<目录>/SHA256SUMS*（chrome/ 是整个 /chrome/*）失效并等它完成；失败就退出，不删任何东西
 #   5 删除      四个前缀里不在第 1 步集合的对象。本地没有的目录，桶里对应的前缀不碰
-# 环境变量：MASTERSOS_PUBLISH_ROOT（同 publish.sh）、MASTERSOS_SYNC_SETTLE（删除前多等几秒，默认 60 = 清单的 max-age，只给测试设 0）、MASTERSOS_AWS_PROFILE（默认 mastersos-publish；只写这一个桶、只能给这一个分发做失效）。
+# 环境变量：MASTERSOS_PUBLISH_ROOT（同 publish.sh）、MASTERSOS_SYNC_SETTLE（删除前多等几秒，默认 60 = 清单的 max-age，只给测试设 0）、MASTERSOS_AWS_PROFILE（默认 mastersos-publish；只写这一个桶、只能给这一个分发做失效；设成空字符串就用环境里已有的凭据，CI 的 OIDC 角色）。
 # --dry-run 只打印第 2–5 步要做的事，只调 head-object 与 list-objects-v2。
 set -euo pipefail
 # shellcheck source-path=SCRIPTDIR source=channel-common.sh
@@ -37,7 +37,14 @@ read_root_conf verify # 只核对签过的清单，不要私钥（正式私钥�
 [ "$root_lab" = no ] || die "$root 是 lab=yes 的根，不镜像到 S3"
 [ -n "$root_mirror_s3" ] || die "${root_conf} 没有 mirror_s3= / mirror_cdn=（这棵根没声明镜像到哪里）"
 lock_root
-export AWS_PROFILE=${MASTERSOS_AWS_PROFILE:-mastersos-publish}
+# MASTERSOS_AWS_PROFILE set but empty: use the credentials already in the environment (the CI role from OIDC)
+if [ -n "${MASTERSOS_AWS_PROFILE+set}" ] && [ -z "$MASTERSOS_AWS_PROFILE" ]; then
+	unset AWS_PROFILE
+	profile_desc="credentials from the environment"
+else
+	export AWS_PROFILE=${MASTERSOS_AWS_PROFILE:-mastersos-publish}
+	profile_desc="profile $AWS_PROFILE"
+fi
 bucket=${root_mirror_s3#s3://}
 for t in aws gpgv sha256sum; do
 	command -v "$t" >/dev/null || die "没有 ${t}"
@@ -84,9 +91,9 @@ fi
 # crx 在前、updates.xml 在后：桶里的 updates.xml 换上之前，新的 crx 已经在了
 mapfile -t mutable < <(printf '%s\n' "${mutable[@]}" | sed '/^$/d' | LC_ALL=C sort)
 say() { echo "$(basename "$0"): $*"; }
-say "根 ${root} → ${root_mirror_s3}（CloudFront ${root_mirror_cdn}，profile ${AWS_PROFILE}），目录：${dirs_present[*]}$([ "$dry" = 1 ] && echo '；--dry-run')"
+say "根 ${root} → ${root_mirror_s3}（CloudFront ${root_mirror_cdn}，${profile_desc}），目录：${dirs_present[*]}$([ "$dry" = 1 ] && echo '；--dry-run')"
 if [ "$dry" = 0 ]; then
-	aws sts get-caller-identity --query Arn --output text >/dev/null || die "aws 凭据不可用（profile ${AWS_PROFILE}）"
+	aws sts get-caller-identity --query Arn --output text >/dev/null || die "aws 凭据不可用（${profile_desc}）"
 fi
 
 # 第 2 步：先把所有带版本号的对象都查完——有一个字节不同就拒绝，此时还没传过任何东西
