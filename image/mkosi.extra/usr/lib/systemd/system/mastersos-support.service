@@ -1,0 +1,49 @@
+# Get help (plan 2026-11-05 Task 5): checks a help request, decides who sent it from the socket's peer credentials, saves it in
+# /var/lib/mastersos/support-queue/ (at most 3 per hour per machine) and starts mastersos-upload.service to send it. Started
+# by mastersos-support.socket, which it gets as stdin (Accept=no, one socket); exits after two idle minutes.
+[Unit]
+Description=MastersOS: Get help requests
+Documentation=file:/usr/bin/mastersos-agent
+Requires=mastersos-support.socket
+After=mastersos-support.socket
+# Any local user can make it start (and exit) often; a start limit would leave the socket without a service
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=/usr/bin/mastersos-agent support host
+StandardInput=socket
+# StandardOutput would follow StandardInput onto the socket otherwise
+StandardOutput=journal
+StandardError=journal
+# At most 16 connections, 2 of them with a large request (up to 8 MiB: a 5 MiB screenshot in base64), each about 16 MiB
+# at its peak (support/host.rs ServeOpts); the rest is small
+MemoryMax=64M
+# 16 connections, the runner's pipes, the queue: well under this
+LimitNOFILE=256
+
+# Hardening: it parses what any local user sends. It writes only its queue; it reads passwd entries (getent), logind
+# sessions (loginctl), /proc/<pid>/cgroup and support.json, and asks systemd to start the sender (systemctl over /run:
+# the read-only mounts do not stop it). No network.
+PrivateTmp=yes
+ProtectSystem=strict
+StateDirectory=mastersos/support-queue
+StateDirectoryMode=0700
+ProtectHome=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+# root owns everything it writes: no capability needed
+CapabilityBoundingSet=

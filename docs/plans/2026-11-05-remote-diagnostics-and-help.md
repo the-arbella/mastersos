@@ -5,7 +5,7 @@
 **Goal:** 删掉 U 盘诊断；机器能按 IT 指令收集诊断包并经 S3 presigned 上传；学生在登录页、桌面、Kiosk 三处能发求助单。
 
 **Architecture:** 全在 `mastersos-agent` 里：`diag` 收集器（root，白名单 + 去密 + tar.zst）、`diag_upload`（三步上传）、inbox 新 kind、
-`support` 本地 socket 服务（peercred 认人，本地队列）与发送器。三处界面只通过 `/run/mastersos/support.sock` 与 agent 说话。
+`support` 本地 socket 服务（peercred 认人，本地队列）与发送器。三处界面只通过 `/run/mastersos-support/support.sock` 与 agent 说话。
 接口类型已在 `mastersos_bundle::diag`（提交 2181dba1），本计划不改它们。
 
 **Tech Stack:** Rust（tokio、reqwest、serde、zstd/tar）、GJS（GNOME Shell 50 扩展）、Chrome MV3 扩展（kiosk-extension）、systemd 单元、mkosi 树。
@@ -141,12 +141,13 @@
 
 **Files:**
 - Create: `core/mastersos-agent/src/support/{mod.rs,host.rs,queue.rs,send.rs}`
-- Create: `image/mkosi.extra/usr/lib/systemd/system/mastersos-support.socket`（`ListenStream=/run/mastersos/support.sock`、`SocketMode=0666`、`Accept=no`）、`mastersos-support.service`（`ExecStart=/usr/bin/mastersos-agent support host`，root，按 check-execstart-copies 的约定）、socket 的 `sockets.target.wants` 链接
+- Create: `image/mkosi.extra/usr/lib/systemd/system/mastersos-support.socket`（`ListenStream=/run/mastersos-support/support.sock`、`SocketMode=0666`、`Accept=no`）、`mastersos-support.service`（`ExecStart=/usr/bin/mastersos-agent support host`，root，按 check-execstart-copies 的约定）、socket 的 `sockets.target.wants` 链接
 - Modify: `core/mastersos-agent/src/main.rs`（子命令 `support host`、`support native-host`）、`run.rs`（主循环醒来时 `send::drain`）
 - Modify: agent 写 `support.json`（0644，public dir）：`{"enabled": <Config.support_enabled>}`，在设置应用步骤里写
 
 **Interfaces:**
 - socket 协议：一行 JSON 请求、一行 JSON 回复，单个请求 ≤8 MiB。
+  - 注（Task 5a 实现时改定）：socket 放在自己的目录 `/run/mastersos-support/`（0755，socket 单元的 `DirectoryMode`），不放 `/run/mastersos/`：后者 root 0700，登录队列每次登录都收紧，用户连不上。
   - `{"op":"submit","category":"wifi","text":"…","session":"login|desktop|kiosk:<id>","screenshot_png_b64":null|"…"}`（`deny_unknown_fields`）→ `{"ok":true,"client_id":"…","state":"queued"}` 或 `{"ok":false,"error":"rate_limited|invalid|disabled"}`
   - `{"op":"status","client_id":"…"}` → `{"ok":true,"state":"queued|sent|failed|disabled","ticket":"1042"?}`（只答本 uid 提交的）
   - `{"op":"enabled"}` → `{"ok":true,"enabled":bool}`

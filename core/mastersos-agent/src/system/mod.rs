@@ -264,6 +264,8 @@ pub fn steps() -> Vec<Step> {
         update_channel::step(),
         // login 脚本导出到用户读得到的地方（Task 18）；快，开机在 GDM 之前也跑
         crate::login_queue::step(),
+        // support.json for the Get help entries and the support host (fast: the login screen reads it at boot)
+        crate::support::step(),
         wifi::step(),
         printing::scanners_step(),
         // 最后：每台打印机要连上它取能力，最慢。

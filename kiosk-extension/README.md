@@ -55,7 +55,7 @@
   其余（宿主不在、拒收、没回）「Couldn't send. Please tell a teacher.」。等待时一个转圈与「Close」：关掉只是不再问，单子已在本机队列里。
 - 键盘：Esc 关、焦点回把手；Tab 只在卡片里转（话题组、描述、看得见的按钮）。
 - 后台只认这三种恰好的形状（多一个键、未知话题、超 1000 字、空的或过长的 `client_id` 一律不理），回内容脚本时也只留认得的字段。
-  宿主是 `/usr/lib/mastersos/mastersos-support-host` → `mastersos-agent support native-host`（一条消息进、一条出，转给 `/run/mastersos/support.sock`）；
+  宿主是 `/usr/lib/mastersos/mastersos-support-host` → `mastersos-agent support native-host`（一条消息进、一条出，转给 `/run/mastersos-support/support.sock`）；
   锁定会话的 `NativeMessagingAllowlist` 是 `EXIT_HOST` 与 `SUPPORT_HOST` 两个。
 
 ### 不弄坏页面
