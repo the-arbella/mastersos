@@ -2942,4 +2942,48 @@ grep -qxF '      - run: bash image/tests/help-model-test.sh' .github/workflows/m
 }
 [ "$r" = 0 ] && ok 66 "Get help: one dialog and model in both extensions, every text in the catalogues, hidden unless enabled, collecting notice on the login screen"
 
+# 68. The upload queue (plan 2026-11-05 Task 4, remote diagnostics design 3, Ruling P6): no resident uploader. The oneshot
+#     mastersos-upload.service runs `mastersos-agent upload drain` with the resource limits, only when the queue folder is not
+#     empty; the timer (enabled from /usr) runs every 30 minutes; the NetworkManager dispatcher kicks it when online. The
+#     folder and unit names agree with the agent's.
+r=0
+sys=$rel/mkosi.extra/usr/lib/systemd/system
+us=$sys/mastersos-upload.service
+for want in 'Type=oneshot' 'ExecStart=/usr/bin/mastersos-agent upload drain' 'Nice=10' 'IOSchedulingClass=idle' 'CPUQuota=20%' \
+	'ConditionDirectoryNotEmpty=/var/lib/mastersos/upload-queue' 'ConditionKernelCommandLine=!systemd.unit=mastersos-installer.target'; do
+	grep -qxF "$want" "$us" 2>/dev/null || {
+		bad 68 "$us has no line $want"
+		r=1
+	}
+done
+grep -qE '^MemoryMax=[0-9]+M$' "$us" 2>/dev/null || {
+	bad 68 "$us has no MemoryMax="
+	r=1
+}
+for want in 'OnBootSec=3min' 'OnCalendar=*:00/30' 'RandomizedDelaySec=10min'; do
+	grep -qxF "$want" "$sys/mastersos-upload.timer" 2>/dev/null || {
+		bad 68 "mastersos-upload.timer has no line $want"
+		r=1
+	}
+done
+[ "$(readlink "$sys/timers.target.wants/mastersos-upload.timer" 2>/dev/null)" = ../mastersos-upload.timer ] || {
+	bad 68 "timers.target.wants/mastersos-upload.timer should link to ../mastersos-upload.timer"
+	r=1
+}
+nd=$rel/mkosi.extra/usr/lib/NetworkManager/dispatcher.d/91-mastersos-upload
+if [ ! -x "$nd" ] || ! grep -qF '/usr/bin/mastersos-agent upload kick' "$nd" || ! grep -qF 'CONNECTIVITY_STATE:-}" = FULL' "$nd"; then
+	bad 68 "$nd should be executable and run mastersos-agent upload kick on full connectivity"
+	r=1
+fi
+if command -v shellcheck >/dev/null && ! shellcheck "$nd" >&2; then
+	bad 68 "shellcheck $nd"
+	r=1
+fi
+grep -qF 'pub const QUEUE_DIR: &str = "upload-queue";' "$core/mastersos-agent/src/upload/queue.rs" &&
+	grep -qF 'pub const SERVICE: &str = "mastersos-upload.service";' "$core/mastersos-agent/src/upload/mod.rs" || {
+	bad 68 "the agent's queue folder or unit name differs from the image's (upload-queue, mastersos-upload.service)"
+	r=1
+}
+[ "$r" = 0 ] && ok 68 "upload queue: oneshot drain with resource limits, 30-minute timer, NetworkManager kick, names agree with the agent"
+
 exit $fail

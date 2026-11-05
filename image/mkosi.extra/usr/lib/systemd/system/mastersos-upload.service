@@ -1,0 +1,28 @@
+# The upload queue (remote diagnostics design 3, Ruling P6): no resident uploader. One run works through
+# /var/lib/mastersos/upload-queue (collect what IT asked for, upload it in three steps, ack the inbox command) and exits once
+# nothing is due within a few minutes. Started by the agent when it queues something (systemctl start --no-block), by the
+# NetworkManager dispatcher on full connectivity (91-mastersos-upload, `mastersos-agent upload kick`) and by
+# mastersos-upload.timer every 30 minutes and after boot. The queue is on disk: a reboot mid-way loses nothing.
+[Unit]
+Description=MastersOS: send queued diagnostics and help requests
+Documentation=file:/usr/bin/mastersos-agent
+After=NetworkManager.service mastersos-agent-local.service
+# Not in the installer (check-tree 60): timers.target is pulled there too.
+ConditionKernelCommandLine=!systemd.unit=mastersos-installer.target
+# Nothing queued: not even started (the kick and collecting markers live beside the folder, not in it).
+ConditionDirectoryNotEmpty=/var/lib/mastersos/upload-queue
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/mastersos-agent upload drain
+# Resources (design 3): low priority, idle IO, a fifth of one CPU. The collector holds the archive in memory while it packs
+# it (up to 50 MiB compressed, from several boots of journal text), so the memory cap is above design 3's 64M: at 64M the
+# kernel would kill a collection of one ordinary boot. A collection killed anyway is given up after 3 starts.
+Nice=10
+IOSchedulingClass=idle
+CPUQuota=20%
+MemoryMax=512M
+# A collection runs journalctl for up to 5 boots, the PUT of 50 MiB may be slow, and a run waits a few minutes for a retry.
+TimeoutStartSec=2h
+PrivateTmp=yes
+NoNewPrivileges=yes

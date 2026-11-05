@@ -51,6 +51,21 @@ enum Cmd {
         #[command(subcommand)]
         cmd: DiagCmd,
     },
+    /// The upload queue (/var/lib/mastersos/upload-queue); run as root.
+    Upload {
+        #[command(subcommand)]
+        cmd: UploadCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum UploadCmd {
+    /// Works through the queue: collects, uploads, acks; exits when nothing is due soon
+    /// (mastersos-upload.service).
+    Drain,
+    /// Makes every queued item due now and starts mastersos-upload.service when anything is
+    /// queued (the NetworkManager dispatcher, on full connectivity).
+    Kick,
 }
 
 #[derive(Subcommand)]
@@ -264,6 +279,10 @@ async fn agent_main() -> anyhow::Result<()> {
             })
             .await?
         }
+        Cmd::Upload { cmd } => match cmd {
+            UploadCmd::Drain => mastersos_agent::upload::drain::drain_main(&cfg).await,
+            UploadCmd::Kick => mastersos_agent::upload::kick_main(&cfg.state_dir, &RealRunner),
+        },
         Cmd::Chrome { scheduled } => {
             let job = mastersos_agent::chrome_sysext::ChromeJob::new(Arc::new(RealRunner))
                 .scheduled(scheduled);

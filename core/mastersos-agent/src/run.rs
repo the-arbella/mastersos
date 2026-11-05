@@ -280,7 +280,7 @@ async fn run_resident(
 
 /// The system paths under `cfg.root` (production: `/`, so the defaults), as the login queue is: the jobs' and the
 /// status files land in a test's temporary root.
-fn sys_paths(cfg: &AgentConfig) -> SysPaths {
+pub(crate) fn sys_paths(cfg: &AgentConfig) -> SysPaths {
     let d = SysPaths::default();
     SysPaths {
         var_dir: cfg_root_join(&cfg.root, &d.var_dir.to_string_lossy()),
@@ -1270,6 +1270,7 @@ impl Agent {
             status: self.status_report(),
             lab: crate::luks::image_is_lab(&self.cfg.root),
             persist,
+            upload_queue: crate::upload::queue::Queue::new(&self.cfg.state_dir),
         }
     }
 

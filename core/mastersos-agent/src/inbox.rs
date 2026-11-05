@@ -23,6 +23,14 @@
 //!    stays): the new system reports `done` for it ([`ack_reset_done`]).
 //! 4. `systemd-factory-reset request` → `systemctl reboot`; either failing is acked `failed`
 //!    naming the step. Once the reset started, later messages wait (the sync stops).
+//!
+//! `collect-diagnostics` (remote diagnostics design 4, Ruling P6): a payload that does not
+//! validate is acked `failed` `bad payload: …`. Otherwise ack `running` (recorded, as for the
+//! factory reset: a refused `running` runs nothing), queue a `collect` item
+//! ([`crate::upload::queue`]) and start `mastersos-upload.service`; the sync goes straight on
+//! to the next message. The upload service collects, uploads and acks `done` `diag:<id>` or
+//! `failed`. The item is on disk, so a restart or a reboot mid-way resumes it. A queue that
+//! cannot be written is acked `failed` `queue: …`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -30,6 +38,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
+use mastersos_bundle::diag::{CollectDiagnostics, KIND_COLLECT_DIAGNOSTICS};
 use mastersos_bundle::push::{
     InboxMessage, InboxResult, InboxResultState, INBOX_DETAIL_MAX_CHARS, KIND_FACTORY_RESET,
 };
@@ -49,6 +58,7 @@ pub const DETAIL_CLOCK: &str = "the machine clock is wrong";
 pub const DETAIL_UNSUPPORTED: &str = "unsupported: needs a newer system";
 pub const DETAIL_RUNNING: &str = "factory resetting";
 pub const DETAIL_DONE: &str = "factory reset finished";
+pub const DETAIL_COLLECTING: &str = "collecting diagnostics";
 /// The status report sent before the reboot waits at most this long (best effort).
 const REPORT_WAIT: Duration = Duration::from_secs(10);
 
@@ -76,6 +86,8 @@ pub struct InboxCtx<'a> {
     pub lab: bool,
     /// Saves a new `inbox_after` (called after every successful ack that advances it).
     pub persist: &'a (dyn Fn(u64) + Send + Sync),
+    /// The upload queue `collect-diagnostics` goes into.
+    pub upload_queue: crate::upload::queue::Queue,
 }
 
 #[derive(Debug)]
@@ -159,6 +171,7 @@ async fn handle(cx: &InboxCtx<'_>, m: &InboxMessage) -> Step {
     }
     match m.kind.as_str() {
         KIND_FACTORY_RESET => factory_reset(cx, m).await,
+        KIND_COLLECT_DIAGNOSTICS => collect_diagnostics(cx, m).await,
         other => {
             log::warn!("inbox: seq {} has an unsupported kind {other:?}", m.seq);
             ack(cx, m.seq, InboxResultState::Failed, DETAIL_UNSUPPORTED).await
@@ -265,6 +278,50 @@ async fn factory_reset(cx: &InboxCtx<'_>, m: &InboxMessage) -> Step {
         .await;
     }
     Step::Resetting
+}
+
+async fn collect_diagnostics(cx: &InboxCtx<'_>, m: &InboxMessage) -> Step {
+    let seq = m.seq;
+    let request = serde_json::from_value::<CollectDiagnostics>(m.payload.clone())
+        .map_err(|e| e.to_string())
+        .and_then(|r| r.validate().map(|()| r));
+    let request = match request {
+        Ok(r) => r,
+        Err(why) => {
+            log::warn!("inbox: collect-diagnostics (seq {seq}) not run: bad payload: {why}");
+            return ack(
+                cx,
+                seq,
+                InboxResultState::Failed,
+                &format!("bad payload: {why}"),
+            )
+            .await;
+        }
+    };
+    match send(cx, seq, InboxResultState::Running, DETAIL_COLLECTING).await {
+        Ok(ResultAck::Recorded) => {}
+        Ok(ResultAck::Refused) => {
+            log::warn!(
+                "inbox: collect-diagnostics (seq {seq}) refused by the server (409), not run"
+            );
+            return Step::Acked;
+        }
+        Err(error) => return Step::Stopped { past: false, error },
+    }
+    if let Err(e) = cx
+        .upload_queue
+        .enqueue_collect(seq, request, m.expires_at, (cx.clock)())
+    {
+        let why = format!("queue: {e:#}");
+        log::warn!("inbox: collect-diagnostics (seq {seq}): {why}");
+        return match send(cx, seq, InboxResultState::Failed, &why).await {
+            Ok(_) => Step::Acked,
+            Err(error) => Step::Stopped { past: true, error },
+        };
+    }
+    log::info!("inbox: collect-diagnostics (seq {seq}) queued");
+    crate::upload::kick(cx.runner.as_ref());
+    Step::Acked
 }
 
 /// Sends the status report with a `reset` item first (best effort: the `running` ack is what
@@ -383,6 +440,13 @@ mod tests {
         seed: PathBuf,
         sysfs: PathBuf,
         dev: PathBuf,
+    }
+
+    impl Box_ {
+        /// The upload queue of this machine (its state directory is the temporary root).
+        fn queue(&self) -> crate::upload::queue::Queue {
+            crate::upload::queue::Queue::new(self._tmp.path())
+        }
     }
 
     fn machine(tpm: bool) -> Box_ {
@@ -593,6 +657,7 @@ mod tests {
                 status: status(),
                 lab: true,
                 persist: &persist,
+                upload_queue: m.queue(),
             },
             after,
         )
@@ -888,6 +953,7 @@ mod tests {
                 status: status(),
                 lab: true,
                 persist,
+                upload_queue: m.queue(),
             }
         }
         assert!(ack_reset_done(&cx(&m, &f, &c, &persist), 7).await.is_err());
@@ -965,6 +1031,100 @@ mod tests {
         );
     }
 
+    fn collect_msg(seq: u64, payload: serde_json::Value) -> InboxMessage {
+        let mut m = msg(seq, KIND_COLLECT_DIAGNOSTICS, Some("2026-10-28T07:00:00Z"));
+        m.payload = payload;
+        m
+    }
+
+    const START_UPLOAD: &str =
+        "cmd:systemctl --no-ask-password start --no-block mastersos-upload.service";
+
+    /// The collection is only queued: the next message is handled in the same sync, nothing is
+    /// collected in the agent, the upload service is started.
+    #[tokio::test]
+    async fn collect_does_not_block_next_inbox_message() {
+        let m = machine(true);
+        let s = server(
+            vec![
+                collect_msg(5, serde_json::json!({"boots": 2})),
+                msg(6, "x-new", None),
+            ],
+            204,
+        )
+        .await;
+        let r = spy(&m, true, &s.events);
+        let (out, saved) = run(&m, r, &s, now(), 4).await;
+        assert!(out.error.is_none(), "{:?}", out.error);
+        assert_eq!(out.inbox_after, 6);
+        assert_eq!(saved, [5, 6]);
+        assert_eq!(
+            acks(&s),
+            [
+                (5, InboxResultState::Running, DETAIL_COLLECTING.to_string()),
+                (6, InboxResultState::Failed, DETAIL_UNSUPPORTED.to_string()),
+            ]
+        );
+        let c = cmds(&s.events);
+        assert_eq!(
+            c,
+            [START_UPLOAD],
+            "only the service start, no collecting here"
+        );
+        let items = m.queue().list().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].job,
+            crate::upload::queue::Job::Collect {
+                seq: 5,
+                request: CollectDiagnostics {
+                    boots: Some(2),
+                    since_hours: None
+                },
+                expires_at: Some(t("2026-10-28T07:00:00Z")),
+                tries: 0,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_payload_is_failed_not_run() {
+        let m = machine(true);
+        let s = server(
+            vec![
+                collect_msg(1, serde_json::json!({"boots": 1, "since_hours": 2})),
+                collect_msg(2, serde_json::json!({"boots": 9})),
+                collect_msg(3, serde_json::json!({"boots": "many"})),
+            ],
+            204,
+        )
+        .await;
+        let r = spy(&m, true, &s.events);
+        let (out, _) = run(&m, r, &s, now(), 0).await;
+        assert_eq!(out.inbox_after, 3);
+        let a = acks(&s);
+        assert_eq!(a.len(), 3, "{a:?}");
+        for (_, state, detail) in &a {
+            assert_eq!(*state, InboxResultState::Failed);
+            assert!(detail.starts_with("bad payload: "), "{detail}");
+        }
+        assert!(cmds(&s.events).is_empty());
+        assert!(m.queue().list().unwrap().is_empty());
+    }
+
+    /// `running` refused (409): nothing is queued, nothing started.
+    #[tokio::test]
+    async fn collect_not_queued_when_running_is_refused() {
+        let m = machine(true);
+        let s = server(vec![collect_msg(4, serde_json::json!({}))], 409).await;
+        let r = spy(&m, true, &s.events);
+        let (out, _) = run(&m, r, &s, now(), 3).await;
+        assert!(out.error.is_none());
+        assert_eq!(out.inbox_after, 4);
+        assert!(cmds(&s.events).is_empty());
+        assert!(m.queue().list().unwrap().is_empty());
+    }
+
     /// 404 on the `done` ack: the server has no such message (purged after 90 days): final, the
     /// file goes.
     #[tokio::test]
@@ -994,6 +1154,7 @@ mod tests {
             status: status(),
             lab: true,
             persist: &persist,
+            upload_queue: m.queue(),
         };
         ack_reset_done(&cx, 7).await.unwrap();
         assert!(!m.seed.join(RESET_SEQ).exists());

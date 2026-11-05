@@ -155,6 +155,20 @@ pub fn load_or_create_identity(
     Ok(id)
 }
 
+/// Reads `identity.json` without ever creating it (the upload drain: only the resident agent
+/// creates the identity). Missing: `None`.
+pub fn load_identity(seed_dir: &Path) -> Result<Option<Identity>> {
+    let dir = safefs::open_abs_dir(seed_dir, false).context("opening the seed partition")?;
+    let Some(b) = safefs::read_at(&dir, IDENTITY)? else {
+        return Ok(None);
+    };
+    let id: Identity = serde_json::from_slice(&b).context("parsing identity.json failed")?;
+    if id.device_id.is_empty() {
+        bail!("device_id in identity.json is empty");
+    }
+    Ok(Some(id))
+}
+
 /// 接受新包之后写 `cache/current.bundle`（同目录临时文件 + `renameat`，0600；`cache/` 0700）。
 pub fn store_cache(seed_dir: &Path, bundle: &[u8]) -> Result<()> {
     // 种子分区本身不建：它是挂载点，不在就是没挂上。

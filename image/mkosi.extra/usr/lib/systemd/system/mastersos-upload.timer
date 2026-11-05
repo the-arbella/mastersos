@@ -1,0 +1,15 @@
+# The upload queue's safety net (remote diagnostics design 3): every 30 minutes, and 3 minutes after boot, so that anything
+# queued before a shutdown or while offline goes out without waiting for a new command. The service only starts when the
+# queue is not empty (ConditionDirectoryNotEmpty=). OnCalendar, not OnUnitActiveSec: the service is often skipped by its
+# condition, and the next run must not depend on when it last ran.
+# Enabled by the timers.target.wants link in /usr/lib (not by preset: machines updated to this image get it too).
+[Unit]
+Description=MastersOS upload queue timer
+
+[Timer]
+OnBootSec=3min
+OnCalendar=*:00/30
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target
