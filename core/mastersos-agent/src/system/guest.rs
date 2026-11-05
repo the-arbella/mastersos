@@ -504,6 +504,8 @@ pub fn pam_session_main() -> ExitCode {
         }
         SessionAction::Enqueue(user) => {
             if let Some(uid) = login::lookup_uid_checked(&user) {
+                // a school account that just signed in with the card claims the card's cookies (never fails the login)
+                crate::signin_handoff::claim_from_pam(&env_str("PAM_SERVICE"), &user, uid);
                 let _ = crate::login_queue::enqueue(uid);
             }
             ExitCode::SUCCESS

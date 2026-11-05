@@ -104,6 +104,14 @@ fn main() -> ExitCode {
     if sub.as_deref() == Some(OsStr::new("kiosk")) {
         return mastersos_agent::kiosk_session::main(std::env::args_os().skip(2));
     }
+    // The sign-in handoff (docs/specs/2026-11-05-browser-signin-handoff-design.md): the card unit's ExecStartPre/ExecStopPost
+    // as root, and the user unit as the user; synchronous, quick, their own exit codes
+    if sub.as_deref() == Some(OsStr::new("signin-handoff")) {
+        return mastersos_agent::signin_handoff::handoff_main(std::env::args_os().skip(2));
+    }
+    if sub.as_deref() == Some(OsStr::new("signin-import")) {
+        return mastersos_agent::signin_handoff::import_main();
+    }
     // systemd-sysext.service 合并或刷新之后（镜像里的 drop-in）：按记下的模式重挂浏览器模式的桩，同步的
     if sub.as_deref() == Some(OsStr::new("exec-block")) {
         return mastersos_agent::system::exec_block::sync_main();

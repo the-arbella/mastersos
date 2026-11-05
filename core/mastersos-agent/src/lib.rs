@@ -26,6 +26,7 @@ pub mod scripts;
 pub mod secureboot;
 pub mod seedpart;
 pub mod shim_predict;
+pub mod signin_handoff;
 pub mod state;
 pub mod status;
 pub mod system;
