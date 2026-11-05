@@ -45,6 +45,8 @@ use crate::safefs;
 pub const WRITE_ROOTS: &[&str] = &[
     "/etc/sysupdate.d",
     "/etc/authd/oidc/broker.conf.d",
+    // the broker's domain file (login.rs DOMAINS_FILE)
+    "/etc/authd/oidc",
     "/etc/authd/brokers.d",
     "/etc/sudoers.d",
     "/etc/polkit-1/rules.d",

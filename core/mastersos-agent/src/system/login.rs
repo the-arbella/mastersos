@@ -10,9 +10,11 @@
 //!   （`/etc/authd/brokers.d/oidc.conf`，GDM 的 broker 列表读它）。只有学校配好 SSO 时两处都写，否则都删，
 //!   这样没配 SSO 的机器上登录界面不会列出一个选了就报 "could not activate remote peer" 的 OIDC。
 //!   注册文件的内容来自镜像里的 [`BROKER_DECL_SRC`]。
-//! - The school's domain list is enforced in the broker too ([`render_broker_users`], patch 0006): authd registers a user
+//! - The school's domain list is enforced in the broker too ([`render_domains_file`], patch 0006): authd registers a user
 //!   the moment the broker grants access, before `pam-check` runs, so an account refused only here would stay behind as
-//!   a local user. `pam-check` keeps the same check as the second line.
+//!   a local user. `pam-check` keeps the same check as the second line. The domains sit in a file of their own beside
+//!   `broker.conf` ([`DOMAINS_FILE`]), never in the drop-in: an older broker (a rollback) never reads it, and the drop-in
+//!   keeps only keys it knows, so it starts at once.
 //! - The login screen's sign-in card (image: `mastersos-login-browser.service`) runs Chrome with a policy of its own:
 //!   [`render_login_browser_policy`] allows only the issuer's origin, the signed `card_hosts` and the broker's redirect. It is written next to the
 //!   broker drop-in and removed with it; the unit does not start without the file. With `[school.oidc] idp_hint` the step
@@ -65,6 +67,10 @@ const POLICY_FILE: &str = "policy.json";
 /// authd 的 OIDC broker 的 drop-in 目录（相对系统根）与我们写的文件（0600：目录也是 0700）。
 pub const BROKER_DIR: &str = "etc/authd/oidc/broker.conf.d";
 pub const BROKER_FILE: &str = "10-mastersos.conf";
+/// The broker's domain file (patch 0006): beside `broker.conf`, outside `broker.conf.d/`, so a broker without the patch
+/// never reads it (it would refuse to start on an unknown configuration key). Relative to the system root.
+pub const DOMAINS_DIR: &str = "etc/authd/oidc";
+pub const DOMAINS_FILE: &str = "mastersos-allowed-domains";
 
 /// The broker registration that ships in the image (not active there), relative to the system root.
 /// The agent copies it to [`BROKER_DECL_DIR`]/[`BROKER_DECL_FILE`] only when the school has SSO configured.
@@ -504,58 +510,65 @@ pub fn effective_policy(
         .map(|s| policy_from_seed(&s))
 }
 
-/// The `[users]` lines of the broker drop-in: who the broker lets through to authd at all.
-///
-/// authd registers a user (name, uid, groups) as soon as the broker grants access, before PAM's account stage, so a
-/// school account that `pam-check` refuses for its domain would still be left on the device as a local user. The broker
-/// therefore applies the domain list itself (`allowed_domains`, `patches/authd-oidc/0006-allowed-domains.patch`): with
-/// domains, only accounts of those domains and the school's administrators (named in `allowed_users`: `pam-check` lets
-/// them in from any domain) get through. `pam-check` keeps its own check as the second line.
-///
-/// Entries that fail `checks` stay out of the file (they match no account in `pam-check` either, and the file is INI:
-/// no stray separators). `None` when the domain list has entries but none is valid and there are no administrators:
-/// nobody could pass `pam-check`, and an empty `allowed_users` would mean the broker's OWNER default.
-pub fn render_broker_users(policy: &LoginPolicy) -> Option<String> {
-    if policy.allowed_domains.is_empty() {
-        return Some("allowed_users = ALL\n".into());
-    }
-    let domains: Vec<&str> = policy
-        .allowed_domains
-        .iter()
-        .map(String::as_str)
-        .filter(|d| checks::allowed_domain(d).is_ok())
-        .collect();
+/// The `[users]` line of the broker drop-in: `allowed_users = ALL`, and with a domain list also the school's
+/// administrators by name (`pam-check` lets them in from any domain, and the broker's domain file
+/// ([`render_domains_file`]) lets through whoever `allowed_users` names). Upstream syntax only, which every broker of the
+/// pinned tag accepts, patched or not: on a rollback the older broker reads it as `ALL` and starts at once.
+/// Names that fail `checks::admin_user` stay out (the file is INI: no stray separators).
+pub fn render_broker_users(policy: &LoginPolicy) -> String {
     let admins: Vec<String> = policy
         .admin_users
         .iter()
+        .filter(|_| !policy.allowed_domains.is_empty())
         .filter(|u| checks::admin_user(u).is_ok())
         .map(|u| u.to_ascii_lowercase())
         .collect();
-    if domains.is_empty() {
-        // No valid domain: only the administrators (a domain alone never stands in for ALL, and here there is none).
-        return (!admins.is_empty()).then(|| format!("allowed_users = {}\n", admins.join(", ")));
-    }
     let users: Vec<&str> = std::iter::once("ALL")
         .chain(admins.iter().map(String::as_str))
         .collect();
-    Some(format!(
-        "allowed_users = {}\nallowed_domains = {}\n",
-        users.join(", "),
-        domains.join(", ")
-    ))
+    format!("allowed_users = {}\n", users.join(", "))
+}
+
+/// The broker's domain file ([`DOMAINS_FILE`], read by `patches/authd-oidc/0006-allowed-domains.patch`), one domain per
+/// line; `None` (no file, no filter) when the school sets no domains.
+///
+/// authd registers a user (name, uid, groups) as soon as the broker grants access, before PAM's account stage, so a
+/// school account that `pam-check` refuses for its domain would still be left on the device as a local user. With this
+/// file the broker refuses such accounts before granting anything; `pam-check` keeps its own check as the second line.
+/// The file is not part of the broker's configuration (not `broker.conf`, not `broker.conf.d/`): an older broker, which
+/// would refuse to start on an unknown key, never reads it.
+///
+/// Domains that fail `checks::allowed_domain` stay out: they match no account in `pam-check` either. With none left the
+/// file has no domain at all, and the broker lets only the administrators named in `allowed_users` through.
+pub fn render_domains_file(policy: &LoginPolicy) -> Option<String> {
+    if policy.allowed_domains.is_empty() {
+        return None;
+    }
+    let mut out = String::from(
+        "# Generated by mastersos-agent from the school's allowed_domains; do not edit.\n\
+         # Read by the authd OIDC broker (MastersOS patch 0006) when it starts.\n",
+    );
+    for d in policy
+        .allowed_domains
+        .iter()
+        .filter(|d| checks::allowed_domain(d).is_ok())
+    {
+        out.push_str(d);
+        out.push('\n');
+    }
+    Some(out)
 }
 
 /// The authd OIDC broker drop-in. The caller has passed `oidc` through `checks::oidc`. No `offline_access`: a login goes
-/// through the school's page every time, so nothing uses a refresh token and none should sit on disk. `None` as
-/// [`render_broker_users`].
-pub fn render_broker_conf(oidc: &Oidc, policy: &LoginPolicy) -> Option<String> {
-    let users = render_broker_users(policy)?;
+/// through the school's page every time, so nothing uses a refresh token and none should sit on disk.
+pub fn render_broker_conf(oidc: &Oidc, policy: &LoginPolicy) -> String {
+    let users = render_broker_users(policy);
     let secret = oidc
         .client_secret
         .as_ref()
         .map(|s| format!("client_secret = {s}\n"))
         .unwrap_or_default();
-    Some(format!(
+    format!(
         "# Generated by mastersos-agent from the school's settings; do not edit.\n\
          [oidc]\n\
          issuer = {}\n\
@@ -565,7 +578,7 @@ pub fn render_broker_conf(oidc: &Oidc, policy: &LoginPolicy) -> Option<String> {
          [users]\n\
          {users}",
         oidc.issuer, oidc.client_id
-    ))
+    )
 }
 
 /// The Chrome URL filter that matches the issuer's origin and nothing wider. A bare host would also match its subdomains
@@ -795,29 +808,32 @@ fn apply(
         problems.push(format!("writing the login policy failed: {e:#}"));
     }
     let sso = policy.methods.iter().any(|m| m == "sso");
-    let checked = oidc.filter(|_| sso).and_then(|o| match checks::oidc(o) {
+    let valid_oidc = oidc.filter(|_| sso).and_then(|o| match checks::oidc(o) {
         Ok(()) => Some(o),
         Err(e) => {
             problems.push(format!("{e}; not writing the broker drop-in"));
             None
         }
     });
-    let want = checked.and_then(|o| {
-        let conf = render_broker_conf(o, policy);
-        if conf.is_none() {
-            problems.push(
-                "no valid allowed_domains and no administrators, so no school account could sign in; \
-                 not writing the broker drop-in"
-                    .into(),
-            );
+    let want = valid_oidc.map(|o| render_broker_conf(o, policy));
+    // The domain file goes with the drop-in. Written before it and removed after it, so that a broker started in between
+    // never runs the school's sign-in without the domains.
+    let want_domains = want.as_ref().and_then(|_| render_domains_file(policy));
+    if want_domains.is_some() {
+        match sync_domains(&env.paths.root, want_domains.as_deref()) {
+            Ok(changed) => env.sys.broker_restart_pending |= changed,
+            Err(e) => problems.push(format!("broker domain file: {e:#}")),
         }
-        conf
-    });
-    // Without a drop-in there is no school sign-in, so no card either.
-    let valid_oidc = checked.filter(|_| want.is_some());
+    }
     match sync_broker(&env.paths.root, want.as_deref()) {
         Ok(changed) => env.sys.broker_restart_pending |= changed,
         Err(e) => problems.push(format!("broker drop-in: {e:#}")),
+    }
+    if want_domains.is_none() {
+        match sync_domains(&env.paths.root, None) {
+            Ok(changed) => env.sys.broker_restart_pending |= changed,
+            Err(e) => problems.push(format!("broker domain file: {e:#}")),
+        }
     }
     match sync_broker_decl(&env.paths.root, want.is_some()) {
         Ok(changed) => env.sys.broker_restart_pending |= changed,
@@ -866,6 +882,29 @@ fn sync_broker(root: &Path, want: Option<&str>) -> Result<bool> {
                 return Ok(false);
             }
             safefs::remove_at(&dir, BROKER_FILE)?;
+            Ok(true)
+        }
+    }
+}
+
+/// Write the broker's domain file (0644: it holds only the school's domains; its directory `/etc/authd/oidc` stays as the
+/// image made it) or remove it. Returns whether it changed.
+fn sync_domains(root: &Path, want: Option<&str>) -> Result<bool> {
+    match want {
+        Some(text) => {
+            let dir = safefs::open_dir(root, Path::new(DOMAINS_DIR), true)?;
+            safefs::write_at(&dir, DOMAINS_FILE, text.as_bytes(), 0o644)
+        }
+        None => {
+            let dir = match safefs::open_dir(root, Path::new(DOMAINS_DIR), false) {
+                Ok(d) => d,
+                Err(e) if is_not_found(&e) => return Ok(false),
+                Err(e) => return Err(e),
+            };
+            if safefs::open_file_at(&dir, DOMAINS_FILE)?.is_none() {
+                return Ok(false);
+            }
+            safefs::remove_at(&dir, DOMAINS_FILE)?;
             Ok(true)
         }
     }
@@ -1611,7 +1650,7 @@ client_id = "laptops"
             "/../../spikes/s1/broker-conf/10-zitadel.conf"
         ))
         .unwrap();
-        let mine = render_broker_conf(&oidc("https://sso.school.ac.th"), &all()).unwrap();
+        let mine = render_broker_conf(&oidc("https://sso.school.ac.th"), &all());
         // S1 asked for a refresh token; the card logs in on the school's page every time.
         let mut s1_keys = ini_keys(&s1);
         s1_keys.get_mut("oidc").unwrap().remove("extra_scopes");
@@ -1629,7 +1668,7 @@ client_id = "laptops"
 
     #[test]
     fn broker_conf_carries_the_client_secret_only_when_set() {
-        let plain = render_broker_conf(&oidc("https://sso.school.ac.th"), &all()).unwrap();
+        let plain = render_broker_conf(&oidc("https://sso.school.ac.th"), &all());
         assert!(!plain.contains("client_secret"), "{plain}");
         let with = render_broker_conf(
             &Oidc {
@@ -1637,8 +1676,7 @@ client_id = "laptops"
                 ..oidc("https://sso.school.ac.th")
             },
             &all(),
-        )
-        .unwrap();
+        );
         let oidc_section = with.split("[users]").next().unwrap();
         assert!(
             oidc_section
@@ -1658,32 +1696,61 @@ client_id = "laptops"
     }
 
     /// Bug C (20261105.15): a refused account must not become an authd user. authd registers whoever the broker grants,
-    /// so the broker itself gets the domain list (patch 0006), with the administrators named so they keep their exemption.
+    /// so the broker itself gets the domains (patch 0006), in a file of their own; the drop-in names the administrators so
+    /// they keep their exemption.
     #[test]
-    fn broker_conf_limits_the_broker_to_the_school_domains() {
+    fn broker_gets_the_school_domains_in_a_file_of_their_own() {
         let mut p = all();
         p.allowed_domains = vec!["school.ac.th".into(), "staff.school.ac.th".into()];
         p.admin_users = vec!["it@vendor.th".into(), "head@school.ac.th".into()];
-        let conf = render_broker_conf(&oidc("https://sso.school.ac.th"), &p).unwrap();
+        let conf = render_broker_conf(&oidc("https://sso.school.ac.th"), &p);
         assert_eq!(
             users_section(&conf),
-            [
-                "allowed_users = ALL, it@vendor.th, head@school.ac.th",
-                "allowed_domains = school.ac.th, staff.school.ac.th",
-            ],
+            ["allowed_users = ALL, it@vendor.th, head@school.ac.th"],
             "{conf}"
         );
-        // No domain list: everyone the school's provider signs in, as before.
+        let file = render_domains_file(&p).unwrap();
+        let domains: Vec<&str> = file.lines().filter(|l| !l.starts_with('#')).collect();
+        assert_eq!(domains, ["school.ac.th", "staff.school.ac.th"], "{file}");
+        // No domain list: no file, everyone the school's provider signs in, as before.
         p.allowed_domains.clear();
+        assert_eq!(render_domains_file(&p), None);
         assert_eq!(
-            render_broker_users(&p).unwrap(),
+            render_broker_users(&p),
             "allowed_users = ALL\n",
             "admins are not listed when nothing limits the others"
         );
     }
 
+    /// On a rollback the older broker reads this drop-in: only the keys of the pinned upstream tag, never `allowed_domains`.
     #[test]
-    fn broker_users_drop_invalid_entries_and_never_fall_open() {
+    fn broker_conf_has_only_keys_an_unpatched_broker_knows() {
+        let mut p = all();
+        p.allowed_domains = vec!["school.ac.th".into()];
+        p.admin_users = vec!["it@vendor.th".into()];
+        let conf = render_broker_conf(
+            &Oidc {
+                client_secret: Some("s".into()),
+                ..oidc("https://sso.school.ac.th")
+            },
+            &p,
+        );
+        let keys = ini_keys(&conf);
+        assert_eq!(
+            keys.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["oidc", "users"]
+        );
+        for k in &keys["oidc"] {
+            assert!(
+                ["issuer", "client_id", "client_secret"].contains(&k.as_str()),
+                "{k}"
+            );
+        }
+        assert_eq!(keys["users"].iter().collect::<Vec<_>>(), ["allowed_users"]);
+    }
+
+    #[test]
+    fn invalid_entries_stay_out_and_never_open_the_broker() {
         let mut p = all();
         p.allowed_domains = vec![
             "school.ac.th".into(),
@@ -1692,22 +1759,21 @@ client_id = "laptops"
         ];
         p.admin_users = vec!["it@vendor.th".into(), "x, y@z".into()];
         assert_eq!(
-            render_broker_users(&p).unwrap(),
-            "allowed_users = ALL, it@vendor.th\nallowed_domains = school.ac.th\n"
+            render_broker_users(&p),
+            "allowed_users = ALL, it@vendor.th\n"
         );
-        // Only invalid domains: pam-check matches nobody but the administrators, so the broker lets only them through.
+        let file = render_domains_file(&p).unwrap();
+        assert_eq!(
+            file.lines()
+                .filter(|l| !l.starts_with('#'))
+                .collect::<Vec<_>>(),
+            ["school.ac.th"]
+        );
+        // Only invalid domains: the file is still there, with no domain, so the broker lets only the administrators through
+        // (pam-check matches nobody else either). Never no file: that would be no filter at all.
         p.allowed_domains = vec!["Bad Domain".into()];
-        assert_eq!(
-            render_broker_users(&p).unwrap(),
-            "allowed_users = it@vendor.th\n"
-        );
-        // ...and with no administrators nobody: no drop-in at all (an empty allowed_users is the broker's OWNER default).
-        p.admin_users.clear();
-        assert_eq!(render_broker_users(&p), None);
-        assert_eq!(
-            render_broker_conf(&oidc("https://sso.school.ac.th"), &p),
-            None
-        );
+        let file = render_domains_file(&p).unwrap();
+        assert!(file.lines().all(|l| l.starts_with('#')), "{file}");
     }
 
     fn mode(p: &Path) -> u32 {
@@ -1795,8 +1861,9 @@ client_id = "laptops"
                 school.oidc.as_ref().unwrap(),
                 &policy_from_bundle(&school, &g, None)
             )
-            .unwrap()
         );
+        // No school domains: no domain file (no filter, as upstream).
+        assert!(!domains_file(root.path()).exists());
         assert_eq!(mode(&b), 0o600);
         assert_eq!(mode(b.parent().unwrap()), 0o700);
         // 策略文件 0644，login/ 0755，var_dir 仍是 0700。
@@ -1847,10 +1914,23 @@ client_id = "laptops"
         assert_eq!(r.calls().len(), 2);
     }
 
-    /// The school's domains and administrators reach the broker, and a change to them restarts it (the broker reads its
-    /// configuration only when it starts).
+    fn domains_file(root: &Path) -> PathBuf {
+        root.join(DOMAINS_DIR).join(DOMAINS_FILE)
+    }
+
+    fn domain_lines(root: &Path) -> Vec<String> {
+        fs::read_to_string(domains_file(root))
+            .unwrap()
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+            .map(String::from)
+            .collect()
+    }
+
+    /// The school's domains reach the broker's own file and the administrators its drop-in; a change to the domains
+    /// restarts the broker (it reads the file only when it starts). The drop-in itself keeps only upstream keys.
     #[test]
-    fn step_writes_the_domains_into_the_broker_conf() {
+    fn step_writes_the_domain_file_and_restarts_on_change() {
         let root = tmp_root();
         let r = FakeRunner::new();
         let mut sys = SysState::default();
@@ -1865,33 +1945,39 @@ client_id = "laptops"
         let text = fs::read_to_string(broker(root.path())).unwrap();
         assert_eq!(
             users_section(&text),
-            [
-                "allowed_users = ALL, it@vendor.th",
-                "allowed_domains = school.ac.th, staff.school.ac.th",
-            ],
+            ["allowed_users = ALL, it@vendor.th"],
             "{text}"
         );
+        assert!(!text.contains("allowed_domains"), "{text}");
+        assert_eq!(
+            domain_lines(root.path()),
+            ["school.ac.th", "staff.school.ac.th"]
+        );
+        assert_eq!(mode(&domains_file(root.path())), 0o644);
         assert_eq!(r.calls(), vec![RESTART]);
-        school.allowed_domains.pop();
+        // Same settings: nothing changes, no restart.
+        run_bundle(root.path(), &school, &g, &r, &mut sys);
+        assert_eq!(r.calls(), vec![RESTART]);
+        // Only the domains change (the drop-in stays the same): the broker is restarted all the same.
+        school.allowed_domains = vec!["school.ac.th".into(), "other.ac.th".into()];
         run_bundle(root.path(), &school, &g, &r, &mut sys);
         assert_eq!(r.calls(), vec![RESTART, RESTART]);
-        let text = fs::read_to_string(broker(root.path())).unwrap();
-        assert!(
-            text.lines().any(|l| l == "allowed_domains = school.ac.th"),
-            "{text}"
-        );
+        assert_eq!(domain_lines(root.path()), ["school.ac.th", "other.ac.th"]);
+        // No domains any more: the file goes (no filter), and the broker is restarted.
+        school.allowed_domains.clear();
+        run_bundle(root.path(), &school, &g, &r, &mut sys);
+        assert!(!domains_file(root.path()).exists());
+        assert_eq!(r.calls(), vec![RESTART, RESTART, RESTART]);
     }
 
-    /// Only invalid domains and no administrators: no school account could sign in, so there is no broker (and no card),
-    /// rather than a broker that lets everyone through to authd.
+    /// Only invalid domains: the file is written without any domain (only the administrators get through the broker),
+    /// never left out, which would let everyone through to authd; the step reports the bad entries.
     #[test]
-    fn step_without_a_valid_domain_or_admin_writes_no_broker() {
+    fn step_with_only_invalid_domains_keeps_a_file_without_domains() {
         let root = tmp_root();
         let r = FakeRunner::new();
         let mut sys = SysState::default();
         let mut school = school_with(Some(oidc("https://sso.school.ac.th")));
-        run_bundle(root.path(), &school, &sso_group(), &r, &mut sys);
-        assert!(broker(root.path()).exists());
         school.allowed_domains = vec!["not a domain".into()];
         let out = run_bundle(root.path(), &school, &sso_group(), &r, &mut sys);
         assert_eq!(out.len(), 1);
@@ -1901,16 +1987,31 @@ client_id = "laptops"
                 .detail
                 .as_deref()
                 .unwrap_or_default()
-                .contains("no valid allowed_domains"),
+                .contains("matches no account"),
             "{out:?}"
         );
+        assert!(broker(root.path()).exists());
+        assert!(domain_lines(root.path()).is_empty());
+    }
+
+    /// The domain file goes with the drop-in: no SSO, no file (and an unpatched broker never cared about it anyway).
+    #[test]
+    fn sso_removed_deletes_the_domain_file() {
+        let root = tmp_root();
+        let r = FakeRunner::new();
+        let mut sys = SysState::default();
+        let mut school = school_with(Some(oidc("https://sso.school.ac.th")));
+        school.allowed_domains = vec!["school.ac.th".into()];
+        run_bundle(root.path(), &school, &sso_group(), &r, &mut sys);
+        assert!(domains_file(root.path()).exists());
+        let mut local = config();
+        local.login_methods = vec![LoginMethod::Local];
+        assert_eq!(
+            run_bundle(root.path(), &school, &local, &r, &mut sys),
+            vec![ok(ITEM)]
+        );
+        assert!(!domains_file(root.path()).exists());
         assert!(!broker(root.path()).exists());
-        assert!(!decl(root.path()).exists());
-        assert!(!paths(root.path())
-            .public_dir
-            .join(LOGIN_BROWSER_DIR)
-            .join(LOGIN_BROWSER_FILE)
-            .exists());
     }
 
     #[test]
@@ -3110,5 +3211,30 @@ client_id = "laptops"
         assert_eq!(format!("/{BROKER_DECL_DIR}"), "/etc/authd/brokers.d");
         assert!(super::super::WRITE_ROOTS.contains(&"/etc/authd/oidc/broker.conf.d"));
         assert_eq!(format!("/{BROKER_DIR}"), "/etc/authd/oidc/broker.conf.d");
+        assert!(super::super::WRITE_ROOTS.contains(&"/etc/authd/oidc"));
+        assert_eq!(format!("/{DOMAINS_DIR}"), "/etc/authd/oidc");
+    }
+
+    /// Patch 0006 reads `mastersos-allowed-domains` beside `--config /etc/authd/oidc/broker.conf` (authd-oidc.service), never
+    /// anything in broker.conf.d: the agent writes it there and nowhere else.
+    #[test]
+    fn domain_file_is_where_the_patched_broker_reads_it() {
+        let patch = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../image/patches/authd-oidc/0006-allowed-domains.patch"
+        ))
+        .unwrap();
+        assert!(
+            patch.contains(&format!("+const mastersosDomainsFile = \"{DOMAINS_FILE}\"")),
+            "the patch reads another file name"
+        );
+        let unit = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../image/mkosi.extra/usr/lib/systemd/system/authd-oidc.service"
+        ))
+        .unwrap();
+        assert!(unit.lines().any(|l| l
+            == format!("ExecStart=/usr/libexec/authd-oidc --config /{DOMAINS_DIR}/broker.conf")));
+        assert!(!DOMAINS_DIR.starts_with(BROKER_DIR));
     }
 }

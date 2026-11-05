@@ -777,7 +777,7 @@ if [ "$(grep -c '^ReadWritePaths=' "$svc" 2>/dev/null)" != 1 ] || grep -q '^\[In
 	r=1
 fi
 # The skeleton has no identity provider (the agent writes issuer into broker.conf.d) and allowed_users = ALL (the
-# agent's drop-in adds the school's domains, patch 0006, and pam-check checks them again)
+# school's domains go to mastersos-allowed-domains beside it, patch 0006, and pam-check checks them again)
 bc=$ex/etc/authd/oidc/broker.conf
 if grep -qE '^[[:space:]]*(issuer|client_id|client_secret)[[:space:]]*=' "$bc" 2>/dev/null ||
 	! grep -qxF 'allowed_users = ALL' "$bc" 2>/dev/null; then

@@ -32,12 +32,22 @@ MastersOS 只认标准 OIDC，判断账号一律看 `email`，不写任何一家
 域名限制在 broker 里做，`pam-check` 再查一遍：
 
 - **为什么不能只靠 `pam-check`**：authd 在 broker 回 granted 的那一刻就把用户写进自己的数据库（用户名、uid、组），这发生在 PAM 的 account 阶段之前。`pam-check` 拒绝之后这条记录仍然留在机器上（20261105.15 实测：私人账号、别校账号都拿到了 uid）。
-- **做法**：broker 的补丁 `0006-allowed-domains.patch` 给 `[users]` 加了 `allowed_domains`。agent 按学校的 `[school] allowed_domains` 写 drop-in：`allowed_users = ALL, <每个管理员>`、`allowed_domains = <每个域名>`。有这个键时，只有点名的用户（`admin_users`，可以是别的域名）和这几个域名下的账号能通过；其他账号在 broker 回 granted 之前就被拒绝（`Authentication failure: user not allowed in broker configuration`），authd 不建用户、broker 也不留 token。`allowed_domains` 为空时照旧是 `allowed_users = ALL`。
-- **没有选的办法**：authd-oidc 原生的 `allowed_users` 只认完整的用户名，不认 `*@school`；被拒之后再用 authd 的工具（`authctl`）删记录，要在 PAM 拒绝的路径上以 root 再调一个命令，它失败、超时或机器在中途断电都会留下记录，而且 uid 已经分出去了；authd 自己没有按域名过滤的设置。拒绝在授权之前发生，才不会留下任何东西。
-- 不合规的域名与管理员名不写进 drop-in。域名全都不合规时只放管理员；也没有管理员时不写 drop-in（没有学校账号的入口），`login` 回报失败，免得空的 `allowed_users` 落回 broker 默认的 OWNER。
-- 域名或管理员名单变了，drop-in 跟着变，agent 重启 broker 与 authd（broker 只在启动时读配置）。
-- 升级前已经被拒、留在 authd 数据库里的记录不会自动删掉。
-- **回滚**：旧镜像的 broker 不认得 `allowed_domains`，读到这个键会拒绝启动；旧版 agent 的 `login` 步骤重写 drop-in 之后恢复（之前学校账号登录不了，访客和本机账号不受影响）。
+- **做法**：broker 的补丁 `0006-allowed-domains.patch` 在启动时读 `broker.conf` 旁边的普通文件 `/etc/authd/oidc/mastersos-allowed-domains`（每行一个域名，`#` 开头的行与空行跳过，不分大小写）。有这个文件时，只有 `allowed_users` 里点名的用户（不分大小写）和用户名最后一个 `@` 之后正好是其中一个域名的账号能通过；其他账号在 broker 回 granted 之前就被拒绝（`Authentication failure: user not allowed in broker configuration`），authd 不建用户、broker 也不留 token。没有这个文件时与上游一样，不过滤。文件在却读不了时 broker 不启动，不会放所有人过去。
+- **agent 写什么**：学校的 `[school] allowed_domains` 不为空时，agent 先写域名文件（0644），再写 drop-in `broker.conf.d/10-mastersos.conf`，其中 `allowed_users = ALL, <每个管理员>`（`admin_users` 可以来自别的域名）；为空时不写域名文件，drop-in 照旧是 `allowed_users = ALL`。没有 SSO 时先删 drop-in、再删域名文件。drop-in 里只有上游这个 tag 认得的键（`issuer`、`client_id`、`client_secret`、`allowed_users`）。
+- 不合规的域名与管理员名不写进去。域名全都不合规时，域名文件仍然写，只是没有域名：broker 只放点名的管理员（`pam-check` 本来也只放他们），绝不会因为没有文件而放开。
+- 域名文件或 drop-in 变了，agent 重启 broker 与 authd（broker 只在启动时读它们）。`authd-oidc.service` 是 `ProtectSystem=strict`：`/etc` 只读、读得到，不需要另开路径。
+- **没有选的办法**：把域名写成 drop-in 里的新键（上一版就这样做）：不带这个补丁的 broker 读到不认得的键会拒绝启动，回滚到旧镜像时学校账号登录不了，直到旧版 agent 重写 drop-in；authd-oidc 原生的 `allowed_users` 只认完整的用户名，不认 `*@school`；被拒之后再用 `authctl` 删记录：要在 PAM 拒绝的路径上以 root 再调一个命令，它失败、超时或机器在中途断电都会留下记录，镜像里的 authd 0.6.1 也没有删用户的命令（见下）；authd 自己没有按域名过滤的设置。
+- **回滚**（例如 .19 → .18）：旧 broker 不读 `mastersos-allowed-domains`，drop-in 里也只有它认得的键，所以立刻启动，学校账号照常登录。这段时间域名限制只剩旧镜像的 `pam-check`：别的域名的账号又会在 authd 里留下记录，直到再升级。旧版 agent 的 `login` 步骤把 drop-in 改回 `allowed_users = ALL` 并重启一次 broker；域名文件留在原处，旧 broker 不理它。再升级回来时，新 agent 第一次跑 `login` 就重写它（这之前 broker 用的是回滚前留下的名单）。
+- 在 143866c7 到这次修改之间从 master 构建的镜像把 `allowed_domains` 写进了 drop-in。新 broker 仍认得这个键（忽略它，只看域名文件），所以从那样的镜像升级也不会停；新 agent 第一次跑 `login` 时把它从 drop-in 去掉。
+
+### 以前留下的记录（IT 手动处理）
+
+修好之前被拒的账号仍在 authd 的数据库里（有 uid）。镜像里的 authd 是 0.6.1：`authctl user` 只有 `lock`、`unlock`、`set-uid`，**没有删除用户的命令**（`authctl user delete` 从 authd 0.7.0 起才有），所以 agent 不自动清理。不要手改 `/var/lib/authd/authd.sqlite3`。IT 在机器上（IT 账号，`sudo`）：
+
+1. 找出 authd 的学校账号：`getent passwd | awk -F: '$1 ~ /@/ {print $1, $3, $6}'`。若列不出来（NSS 不枚举），按面板或学生报告的邮箱逐个查：`getent passwd <邮箱>`。
+2. 只处理域名不在学校 `allowed_domains`、也不在 `admin_users` 里的账号。确认它没有登录：`loginctl list-users` 里没有它；确认家目录不存在或为空：`sudo ls -A <家目录>` 没有输出。有文件的不动，交给学校决定。
+3. 锁定：`sudo authctl user lock <邮箱>`。锁定的账号即使 broker 放行，authd 也拒绝；记录和 uid 仍在。
+4. 升级到带 authd 0.7 的镜像之后，再用 `sudo authctl user delete <邮箱>` 真正删掉。
 
 只许哪几种登录方式、锁定、管理员豁免仍由 PAM 里的 `mastersos-agent pam-check` 决定（spec §6.10 S1）。身份系统一侧也限制（例如 Zitadel 的项目授权）会更干净，两边都做。
 
@@ -168,7 +178,7 @@ MastersOS 带六个补丁（`patches/authd-oidc/`，按文件名顺序打）。
 | `0003-authorization-code-on-greeter.patch` | `MASTERSOS_AUTH_CODE=1` 时设备码的两个登录方式改走授权码 + PKCE，回调到 `127.0.0.1:48123`（只监听回环；校验 `state`；同时只有一个流程，新的顶掉旧的），带 `login_hint=<邮箱>`。方式的 id 不变；UI 层仍是 `qrcode`，`content` 是授权地址、`code` 为空 | 卡片的基础 |
 | `0004-card-only-login.patch` | 见下 | 卡片的基础 |
 | `0005-follow-reselected-sign-in.patch` | 同一会话再次选登录方式时，新流程接替旧流程：已经在等旧流程的 `IsAuthenticated` 改等新流程（用新流程的 PKCE verifier 换令牌）；被取消的等待不关掉它跟过去的新流程 | 修重新登录卡在「Signed in. Starting your session…」：authd 0.6.1 的 PAM 模块在 GDM 回显自己的选择时会再选一次（canonical/authd#1121，authd 0.7.0 修了），`IsAuthenticated` 落在两次选择之间就会一直等已关掉的旧监听，而卡片里的页面回调到新监听（VM 123，2026-11-05）。自带测试 `TestMastersOSAuthCodeWaitFollowsHandOver`、`TestMastersOSAuthCodeCancelledFollowerKeepsNewFlow`、`TestMastersOSAuthCodeHandOverOfNothing`、`TestMastersOSReselectedSignInIsFollowed`、`TestMastersOSCancelledWaitLeavesNewSignIn`。authd 升到带 #1623 的版本后仍无害 |
-| `0006-allowed-domains.patch` | `[users]` 新键 `allowed_domains`（逗号分隔、不分大小写）：有它时只有 `allowed_users` 里点名的用户（不分大小写）和用户名最后一个 `@` 之后正好是其中之一的账号能通过，`ALL`、`OWNER` 只对通过的人生效；没有这个键或为空时与上游一样。上游 `TestParseConfig` 的 golden 不含这个字段 | 别的域名的账号在授权之前被拒，authd 不建用户（见上面的「域名限制」）。自带测试 `TestMastersOSAllowedDomainsLimitAllUsers`、`TestMastersOSNoAllowedDomainsKeepsAll`、`TestMastersOSAllowedDomainsWithoutAll`、`TestMastersOSAllowedDomainsSurviveClone`、`TestMastersOSOtherDomainIsDeniedBeforeGrant`、`TestMastersOSSchoolDomainIsGranted` |
+| `0006-allowed-domains.patch` | broker 启动时读 `broker.conf` 旁边的 `mastersos-allowed-domains`（不是 `broker.conf`、也不在 `broker.conf.d/`：不带补丁的 broker 永远不读它）。有这个文件时只有 `allowed_users` 里点名的用户（不分大小写）和用户名最后一个 `@` 之后正好是其中一个域名的账号能通过，`ALL`、`OWNER` 只对通过的人生效；没有文件时与上游一样；文件读不了时不启动。上游 `TestParseConfig` 的 golden 不含这个字段 | 别的域名的账号在授权之前被拒，authd 不建用户（见上面的「域名限制」）。自带测试 `TestMastersOSAllowedDomainsLimitAllUsers`、`TestMastersOSNoDomainFileKeepsAll`、`TestMastersOSEmptyDomainFileLetsOnlyListedUsers`、`TestMastersOSUnreadableDomainFileFails`、`TestMastersOSAllowedDomainsWithoutAll`、`TestMastersOSAllowedDomainsSurviveClone`、`TestMastersOSDomainFileIsOutsideTheConfig`、`TestMastersOSLegacyDomainsKeyIsIgnored`、`TestMastersOSOtherDomainIsDeniedBeforeGrant`、`TestMastersOSSchoolDomainIsGranted` |
 
 `0004` 在 `MASTERSOS_AUTH_CODE=1` 时生效：
 
@@ -214,7 +224,7 @@ MastersOS 带六个补丁（`patches/authd-oidc/`，按文件名顺序打）。
 - **需要网页认证的网络**（酒店、机场）：登录页的 Chrome 打不开认证页，只能进 Guest 完成认证后再回来登录。
 - **被停用的账号**下一次登录时被身份系统拒绝。已经开着的会话不会被踢出；挂失的机器用设置里的锁定（Ruling 11），不靠身份系统。
 - **没有本机密码**：`passwd`、GNOME 设置都改不了学校账号的密码，改密码在学校的系统里做。
-- 别的域名的账号由 broker 在授权之前拒绝，不留记录（补丁 0006）。只在 PAM 里被拒的人（锁定的机器上不是管理员的本校账号）仍会在 authd 的数据库里留下一条记录（S1）。
+- 别的域名的账号由 broker 在授权之前拒绝，不留记录（补丁 0006；回滚到旧镜像期间除外）。只在 PAM 里被拒的人（锁定的机器上不是管理员的本校账号）仍会在 authd 的数据库里留下一条记录（S1）。
 
 ## 镜像里的东西
 
@@ -224,6 +234,7 @@ MastersOS 带六个补丁（`patches/authd-oidc/`，按文件名顺序打）。
 | `/etc/authd/brokers.d/oidc.conf`（镜像里是 `/usr/lib/mastersos/authd/oidc-broker.conf`，agent 只在学校配好 SSO 时拷过去） | 向 authd 注册 broker（总线名 `com.ubuntu.authd.Oidc`、对象 `/com/ubuntu/authd/Oidc`，照上游 snap） |
 | `/etc/authd/oidc/broker.conf` | 骨架（0600，跟着镜像走）：没有 issuer，`allowed_users = ALL` |
 | `/etc/authd/oidc/broker.conf.d/` | 0700，agent 写 `10-mastersos.conf`（0600）。目录空时 broker 不启动（`ConditionDirectoryNotEmpty=`） |
+| `/etc/authd/oidc/mastersos-allowed-domains` | 0644，agent 写学校的 `allowed_domains`（每行一个），学校没设域名或没有 SSO 时删掉。broker（补丁 0006）启动时读；不在 `broker.conf.d/` 里，不带补丁的 broker 不读它 |
 | `/var/lib/authd-oidc/` | broker 的数据（token 缓存），0700 |
 | `authd-oidc.service` | D-Bus 激活，`ProtectSystem=strict`、只能写自己的状态目录、没有任何 capability |
 | `/usr/share/dbus-1/system.d/com.ubuntu.authd.Oidc.conf` | 系统总线策略：只有 root 能拥有这个名字、只有 root（authd）能调它 |
