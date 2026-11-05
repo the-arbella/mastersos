@@ -14,7 +14,9 @@
 //!   the moment the broker grants access, before `pam-check` runs, so an account refused only here would stay behind as
 //!   a local user. `pam-check` keeps the same check as the second line. The domains sit in a file of their own beside
 //!   `broker.conf` ([`DOMAINS_FILE`]), never in the drop-in: an older broker (a rollback) never reads it, and the drop-in
-//!   keeps only keys it knows, so it starts at once.
+//!   keeps only keys it knows, so it starts at once. Fail closed: with domains the drop-in carries [`DOMAINS_MARKER`] (the
+//!   patched broker then lets only named users through while the file is missing), and when the file cannot be written
+//!   the drop-in names only the administrators ([`render_broker_conf_admins_only`]), never `ALL`.
 //! - The login screen's sign-in card (image: `mastersos-login-browser.service`) runs Chrome with a policy of its own:
 //!   [`render_login_browser_policy`] allows only the issuer's origin, the signed `card_hosts` and the broker's redirect. It is written next to the
 //!   broker drop-in and removed with it; the unit does not start without the file. With `[school.oidc] idp_hint` the step
@@ -71,6 +73,11 @@ pub const BROKER_FILE: &str = "10-mastersos.conf";
 /// never reads it (it would refuse to start on an unknown configuration key). Relative to the system root.
 pub const DOMAINS_DIR: &str = "etc/authd/oidc";
 pub const DOMAINS_FILE: &str = "mastersos-allowed-domains";
+/// A whole comment line of the drop-in that tells the patched broker the domain file is required: while it is missing or
+/// unreadable that broker lets only the users named in `allowed_users` through, so a file that goes away never turns
+/// `ALL` into everyone. A broker without patch 0006 reads it as a comment and starts as before. Must match
+/// `mastersosRequiredMarker` in the patch.
+pub const DOMAINS_MARKER: &str = "# mastersos: allowed domains required (patch 0006)";
 
 /// The broker registration that ships in the image (not active there), relative to the system root.
 /// The agent copies it to [`BROKER_DECL_DIR`]/[`BROKER_DECL_FILE`] only when the school has SSO configured.
@@ -516,17 +523,25 @@ pub fn effective_policy(
 /// pinned tag accepts, patched or not: on a rollback the older broker reads it as `ALL` and starts at once.
 /// Names that fail `checks::admin_user` stay out (the file is INI: no stray separators).
 pub fn render_broker_users(policy: &LoginPolicy) -> String {
-    let admins: Vec<String> = policy
-        .admin_users
-        .iter()
-        .filter(|_| !policy.allowed_domains.is_empty())
-        .filter(|u| checks::admin_user(u).is_ok())
-        .map(|u| u.to_ascii_lowercase())
-        .collect();
+    let admins = if policy.allowed_domains.is_empty() {
+        Vec::new()
+    } else {
+        broker_admins(policy)
+    };
     let users: Vec<&str> = std::iter::once("ALL")
         .chain(admins.iter().map(String::as_str))
         .collect();
     format!("allowed_users = {}\n", users.join(", "))
+}
+
+/// The school's valid administrators, in lower case, as the broker lists them.
+fn broker_admins(policy: &LoginPolicy) -> Vec<String> {
+    policy
+        .admin_users
+        .iter()
+        .filter(|u| checks::admin_user(u).is_ok())
+        .map(|u| u.to_ascii_lowercase())
+        .collect()
 }
 
 /// The broker's domain file ([`DOMAINS_FILE`], read by `patches/authd-oidc/0006-allowed-domains.patch`), one domain per
@@ -561,8 +576,38 @@ pub fn render_domains_file(policy: &LoginPolicy) -> Option<String> {
 
 /// The authd OIDC broker drop-in. The caller has passed `oidc` through `checks::oidc`. No `offline_access`: a login goes
 /// through the school's page every time, so nothing uses a refresh token and none should sit on disk.
+///
+/// With a domain list the drop-in carries [`DOMAINS_MARKER`], so the patched broker requires the domain file.
 pub fn render_broker_conf(oidc: &Oidc, policy: &LoginPolicy) -> String {
-    let users = render_broker_users(policy);
+    broker_conf(
+        oidc,
+        !policy.allowed_domains.is_empty(),
+        &render_broker_users(policy),
+    )
+}
+
+/// The drop-in written when the domain file is wanted but could not be written: the administrators by name, no `ALL`,
+/// so neither a missing nor a stale domain file lets anyone else through, on a patched broker or an older one. `None`
+/// when the school has no valid administrator (an empty `allowed_users` would mean the upstream default): then the
+/// caller writes no drop-in at all and school sign-in is off until the file can be written.
+pub fn render_broker_conf_admins_only(oidc: &Oidc, policy: &LoginPolicy) -> Option<String> {
+    let admins = broker_admins(policy);
+    if admins.is_empty() {
+        return None;
+    }
+    Some(broker_conf(
+        oidc,
+        true,
+        &format!("allowed_users = {}\n", admins.join(", ")),
+    ))
+}
+
+fn broker_conf(oidc: &Oidc, marker: bool, users: &str) -> String {
+    let marker = if marker {
+        format!("{DOMAINS_MARKER}\n")
+    } else {
+        String::new()
+    };
     let secret = oidc
         .client_secret
         .as_ref()
@@ -570,6 +615,7 @@ pub fn render_broker_conf(oidc: &Oidc, policy: &LoginPolicy) -> String {
         .unwrap_or_default();
     format!(
         "# Generated by mastersos-agent from the school's settings; do not edit.\n\
+         {marker}\
          [oidc]\n\
          issuer = {}\n\
          client_id = {}\n\
@@ -815,16 +861,28 @@ fn apply(
             None
         }
     });
-    let want = valid_oidc.map(|o| render_broker_conf(o, policy));
+    let mut want = valid_oidc.map(|o| render_broker_conf(o, policy));
     // The domain file goes with the drop-in. Written before it and removed after it, so that a broker started in between
     // never runs the school's sign-in without the domains.
     let want_domains = want.as_ref().and_then(|_| render_domains_file(policy));
     if want_domains.is_some() {
         match sync_domains(&env.paths.root, want_domains.as_deref()) {
             Ok(changed) => env.sys.broker_restart_pending |= changed,
-            Err(e) => problems.push(format!("broker domain file: {e:#}")),
+            Err(e) => {
+                // Fail closed: never `ALL` with a missing or stale domain file. Only the administrators, by name; with
+                // none, no school sign-in at all.
+                want = valid_oidc.and_then(|o| render_broker_conf_admins_only(o, policy));
+                let now = if want.is_some() {
+                    "only the administrators may sign in with the school's provider until it is written"
+                } else {
+                    "school sign-in is off until it is written"
+                };
+                problems.push(format!("broker domain file: {e:#}; {now}"));
+            }
         }
     }
+    // The sign-in card goes with the drop-in.
+    let valid_oidc = valid_oidc.filter(|_| want.is_some());
     match sync_broker(&env.paths.root, want.as_deref()) {
         Ok(changed) => env.sys.broker_restart_pending |= changed,
         Err(e) => problems.push(format!("broker drop-in: {e:#}")),
@@ -1992,6 +2050,107 @@ client_id = "laptops"
         );
         assert!(broker(root.path()).exists());
         assert!(domain_lines(root.path()).is_empty());
+    }
+
+    /// The domain file cannot be written (here a directory sits where it goes, so it can be neither replaced nor read):
+    /// fail closed. The drop-in names only the administrators, no `ALL`, so no domain gets through on a patched broker
+    /// (whatever the file says) or an older one; the step reports it. A later run that can write the file restores `ALL`.
+    #[test]
+    fn domain_file_write_failure_lets_only_the_administrators_through() {
+        let root = tmp_root();
+        let r = FakeRunner::new();
+        let mut sys = SysState::default();
+        let mut school = school_with(Some(oidc("https://sso.school.ac.th")));
+        school.allowed_domains = vec!["school.ac.th".into()];
+        school.admin_users = vec!["IT@vendor.th".into(), "head@school.ac.th".into()];
+        let g = sso_group();
+        // First a good run: ALL, with the marker and the file.
+        assert_eq!(
+            run_bundle(root.path(), &school, &g, &r, &mut sys),
+            vec![ok(ITEM)]
+        );
+        let text = fs::read_to_string(broker(root.path())).unwrap();
+        assert!(text.lines().any(|l| l == DOMAINS_MARKER), "{text}");
+        assert_eq!(
+            users_section(&text),
+            ["allowed_users = ALL, it@vendor.th, head@school.ac.th"]
+        );
+        // The file can no longer be written.
+        fs::remove_file(domains_file(root.path())).unwrap();
+        fs::create_dir(domains_file(root.path())).unwrap();
+        let out = run_bundle(root.path(), &school, &g, &r, &mut sys);
+        assert_eq!(out.len(), 1);
+        assert!(!out[0].ok);
+        let detail = out[0].detail.as_deref().unwrap_or_default();
+        assert!(detail.contains("broker domain file"), "{detail}");
+        assert!(detail.contains("only the administrators"), "{detail}");
+        let text = fs::read_to_string(broker(root.path())).unwrap();
+        assert!(text.lines().any(|l| l == DOMAINS_MARKER), "{text}");
+        assert_eq!(
+            users_section(&text),
+            ["allowed_users = it@vendor.th, head@school.ac.th"],
+            "{text}"
+        );
+        assert!(!text.contains("ALL"), "{text}");
+        // The drop-in changed: the broker is restarted so that the administrators-only list holds at once.
+        assert_eq!(r.calls(), vec![RESTART, RESTART]);
+        assert!(decl(root.path()).exists());
+        // Fixed: ALL again.
+        fs::remove_dir(domains_file(root.path())).unwrap();
+        assert_eq!(
+            run_bundle(root.path(), &school, &g, &r, &mut sys),
+            vec![ok(ITEM)]
+        );
+        assert_eq!(
+            users_section(&fs::read_to_string(broker(root.path())).unwrap()),
+            ["allowed_users = ALL, it@vendor.th, head@school.ac.th"]
+        );
+        assert_eq!(domain_lines(root.path()), ["school.ac.th"]);
+        assert_eq!(r.calls(), vec![RESTART, RESTART, RESTART]);
+    }
+
+    /// The same failure with no administrator to name: no drop-in, no registration, no sign-in card. School sign-in is off
+    /// (reported), never open to every domain.
+    #[test]
+    fn domain_file_write_failure_without_administrators_turns_school_sign_in_off() {
+        let root = tmp_root();
+        let r = FakeRunner::new();
+        let mut sys = SysState::default();
+        let mut school = school_with(Some(oidc("https://sso.school.ac.th")));
+        school.allowed_domains = vec!["school.ac.th".into()];
+        let g = sso_group();
+        run_bundle(root.path(), &school, &g, &r, &mut sys);
+        assert!(broker(root.path()).exists());
+        assert!(card_policy(root.path()).exists());
+        fs::remove_file(domains_file(root.path())).unwrap();
+        fs::create_dir(domains_file(root.path())).unwrap();
+        let out = run_bundle(root.path(), &school, &g, &r, &mut sys);
+        assert_eq!(out.len(), 1);
+        assert!(!out[0].ok);
+        let detail = out[0].detail.as_deref().unwrap_or_default();
+        assert!(detail.contains("school sign-in is off"), "{detail}");
+        assert!(!broker(root.path()).exists());
+        assert!(!decl(root.path()).exists());
+        assert!(!card_policy(root.path()).exists());
+        assert_eq!(r.calls(), vec![RESTART, RESTART]);
+    }
+
+    /// Only a drop-in with a domain list carries the marker; it is a comment, so the keys stay those of upstream.
+    #[test]
+    fn marker_only_with_domains() {
+        let mut p = all();
+        let conf = render_broker_conf(&oidc("https://sso.school.ac.th"), &p);
+        assert!(!conf.contains(DOMAINS_MARKER), "{conf}");
+        p.allowed_domains = vec!["school.ac.th".into()];
+        let conf = render_broker_conf(&oidc("https://sso.school.ac.th"), &p);
+        assert_eq!(conf.lines().nth(1), Some(DOMAINS_MARKER), "{conf}");
+        assert!(DOMAINS_MARKER.starts_with('#') && !DOMAINS_MARKER.contains('\n'));
+        p.admin_users = vec!["x, y@z".into()];
+        assert_eq!(
+            render_broker_conf_admins_only(&oidc("https://sso.school.ac.th"), &p),
+            None,
+            "an invalid administrator is no administrator"
+        );
     }
 
     /// The domain file goes with the drop-in: no SSO, no file (and an unpatched broker never cared about it anyway).
@@ -3227,6 +3386,12 @@ client_id = "laptops"
         assert!(
             patch.contains(&format!("+const mastersosDomainsFile = \"{DOMAINS_FILE}\"")),
             "the patch reads another file name"
+        );
+        assert!(
+            patch.contains(&format!(
+                "+const mastersosRequiredMarker = \"{DOMAINS_MARKER}\""
+            )),
+            "the patch looks for another marker"
         );
         let unit = fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),

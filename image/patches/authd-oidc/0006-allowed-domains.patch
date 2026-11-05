@@ -62,15 +62,12 @@ diff --git a/authd-oidc-brokers/internal/broker/config_test.go b/authd-oidc-brok
 diff --git a/authd-oidc-brokers/internal/broker/broker.go b/authd-oidc-brokers/internal/broker/broker.go
 --- a/authd-oidc-brokers/internal/broker/broker.go
 +++ b/authd-oidc-brokers/internal/broker/broker.go
-@@ -297,6 +297,11 @@
+@@ -297,6 +297,8 @@
  	if err != nil {
  		return cfg, err
  	}
 +	// MastersOS (0006): the school's domains sit beside broker.conf, never in it (mastersos_domains.go).
-+	parsedConfig.mastersosDomains, err = mastersosReadDomains(mastersosDomainsPath(cfg.ConfigFile))
-+	if err != nil {
-+		return cfg, err
-+	}
++	parsedConfig.mastersosDomains = mastersosLoadDomains(cfg.ConfigFile)
  	cfg.userConfig = parsedConfig
  	return cfg, nil
  }
@@ -78,7 +75,7 @@ diff --git a/authd-oidc-brokers/internal/broker/mastersos_domains.go b/authd-oid
 new file mode 100644
 --- /dev/null
 +++ b/authd-oidc-brokers/internal/broker/mastersos_domains.go
-@@ -0,0 +1,102 @@
+@@ -0,0 +1,150 @@
 +package broker
 +
 +// MastersOS carried patch (image/patches/authd-oidc/0006-allowed-domains.patch).
@@ -93,24 +90,35 @@ new file mode 100644
 +// refuses to start on an unknown key, while it never reads this file, so going back to an older image keeps the school's
 +// sign-in working (with the older image's PAM check as its only domain check).
 +//
-+// No file: no domain filter, exactly as upstream. With the file (even an empty one), a user passes only when listed by
-+// name in allowed_users (compared case-insensitively here, as the school's administrators are written in lower case) or
-+// when the part of the user name after its last '@' equals one of the domains. ALL and OWNER in allowed_users apply only
-+// to users who pass. The file is read once, when the broker starts; whoever changes it restarts the broker.
++// Whether the file must be there is said by the drop-in that grants ALL, in a comment line (mastersosRequiredMarker): a
++// broker without this patch reads it as a comment, so the drop-in still starts it; this one then refuses everyone not
++// listed by name in allowed_users while the file is missing or unreadable. The file going away, or not being written,
++// never turns ALL into everyone.
++//
++// The filter is on when the file is there or the marker asks for it. Then a user passes only when listed by name in
++// allowed_users (compared case-insensitively here, as the school's administrators are written in lower case) or when the
++// part of the user name after its last '@' equals one of the domains read from the file. ALL and OWNER in allowed_users
++// apply only to users who pass. With neither file nor marker nothing changes, exactly as upstream. The file and the marker
++// are read once, when the broker starts; whoever changes them restarts the broker.
 +
 +import (
 +	"bufio"
 +	"bytes"
++	"context"
 +	"errors"
-+	"fmt"
 +	"io/fs"
 +	"os"
 +	"path/filepath"
 +	"strings"
++
++	"github.com/canonical/authd/log"
 +)
 +
 +// mastersosDomainsFile is the file's name, in the directory of broker.conf.
 +const mastersosDomainsFile = "mastersos-allowed-domains"
++
++// mastersosRequiredMarker, a whole line of a broker.conf.d file, says the domain file must be there.
++const mastersosRequiredMarker = "# mastersos: allowed domains required (patch 0006)"
 +
 +// mastersosLegacyDomainsKey is the [users] key an earlier version of this patch read (images built from 143866c7 until
 +// this version). It is accepted, so that a drop-in still carrying it does not stop the broker until the agent rewrites
@@ -120,7 +128,7 @@ new file mode 100644
 +// mastersosMaxDomainsFile caps what is read: the agent writes at most a few hundred short lines.
 +const mastersosMaxDomainsFile = 1 << 20
 +
-+// mastersosDomainFilter is the content of the domain file; the zero value (no file) filters nothing.
++// mastersosDomainFilter is the content of the domain file; the zero value (no file, no marker) filters nothing.
 +type mastersosDomainFilter struct {
 +	active  bool
 +	domains []string
@@ -130,18 +138,49 @@ new file mode 100644
 +	return filepath.Join(filepath.Dir(cfgPath), mastersosDomainsFile)
 +}
 +
-+// mastersosReadDomains reads the domain file. A missing file is no filter; a file that cannot be read is an error (the
-+// broker does not start rather than let everyone through).
-+func mastersosReadDomains(path string) (mastersosDomainFilter, error) {
-+	content, err := os.ReadFile(path)
++// mastersosRequired reports whether any file in the drop-in directory carries mastersosRequiredMarker. The broker has
++// already parsed every one of them, so a directory that cannot be read here counts as requiring the file.
++func mastersosRequired(dropInDir string) bool {
++	entries, err := os.ReadDir(dropInDir)
 +	if errors.Is(err, fs.ErrNotExist) {
-+		return mastersosDomainFilter{}, nil
++		return false
 +	}
 +	if err != nil {
-+		return mastersosDomainFilter{}, fmt.Errorf("could not read the allowed domains %q: %v", path, err)
++		return true
 +	}
-+	if len(content) > mastersosMaxDomainsFile {
-+		return mastersosDomainFilter{}, fmt.Errorf("the allowed domains %q are larger than %d bytes", path, mastersosMaxDomainsFile)
++	for _, e := range entries {
++		if e.IsDir() {
++			continue
++		}
++		content, err := os.ReadFile(filepath.Join(dropInDir, e.Name()))
++		if err != nil {
++			return true
++		}
++		for _, line := range strings.Split(string(content), "\n") {
++			if strings.TrimSpace(line) == mastersosRequiredMarker {
++				return true
++			}
++		}
++	}
++	return false
++}
++
++// mastersosReadDomains reads the domain file. Missing: the filter is on (with no domain) only when required. There but
++// unreadable or too large: on, with no domain, so only the users listed by name pass (never everyone).
++func mastersosReadDomains(path string, required bool) mastersosDomainFilter {
++	content, err := os.ReadFile(path)
++	if errors.Is(err, fs.ErrNotExist) {
++		if required {
++			log.Warningf(context.Background(), "%s is missing but required: only the users named in allowed_users may sign in", path)
++		}
++		return mastersosDomainFilter{active: required}
++	}
++	if err == nil && len(content) > mastersosMaxDomainsFile {
++		err = errors.New("too large")
++	}
++	if err != nil {
++		log.Warningf(context.Background(), "could not read %s (%v): only the users named in allowed_users may sign in", path, err)
++		return mastersosDomainFilter{active: true}
 +	}
 +	f := mastersosDomainFilter{active: true}
 +	s := bufio.NewScanner(bytes.NewReader(content))
@@ -153,14 +192,20 @@ new file mode 100644
 +		}
 +	}
 +	if err := s.Err(); err != nil {
-+		return mastersosDomainFilter{}, fmt.Errorf("could not read the allowed domains %q: %v", path, err)
++		log.Warningf(context.Background(), "could not read %s (%v): only the users named in allowed_users may sign in", path, err)
++		return mastersosDomainFilter{active: true}
 +	}
-+	return f, nil
++	return f
 +}
 +
-+// mastersosAllowedByDomain reports whether userName passes the domain file: always without one; otherwise when it is listed
-+// by name in allowed_users (in any ASCII case) or belongs to one of the domains. Only call this with the ownerMutex locked
-+// (for reading).
++// mastersosLoadDomains is what the broker reads at start: the marker in broker.conf.d, then the domain file.
++func mastersosLoadDomains(cfgPath string) mastersosDomainFilter {
++	return mastersosReadDomains(mastersosDomainsPath(cfgPath), mastersosRequired(GetDropInDir(cfgPath)))
++}
++
++// mastersosAllowedByDomain reports whether userName passes the domain filter: always when it is off; otherwise when it is
++// listed by name in allowed_users (in any ASCII case) or belongs to one of the domains. Only call this with the ownerMutex
++// locked (for reading).
 +func (uc *userConfig) mastersosAllowedByDomain(userName string) bool {
 +	if !uc.mastersosDomains.active {
 +		return true
@@ -196,11 +241,11 @@ diff --git a/authd-oidc-brokers/internal/broker/mastersos_domains_internal_test.
 new file mode 100644
 --- /dev/null
 +++ b/authd-oidc-brokers/internal/broker/mastersos_domains_internal_test.go
-@@ -0,0 +1,129 @@
+@@ -0,0 +1,146 @@
 +package broker
 +
 +// MastersOS carried patch (image/patches/authd-oidc/0006-allowed-domains.patch): the school's domains, read from
-+// mastersos-allowed-domains beside broker.conf.
++// mastersos-allowed-domains beside broker.conf, and the marker comment in the drop-in that makes the file required.
 +
 +import (
 +	"os"
@@ -212,30 +257,36 @@ new file mode 100644
 +	"github.com/stretchr/testify/require"
 +)
 +
-+// The agent's drop-in: only keys and values any broker of this tag accepts, with or without this patch.
-+const mastersosDropIn = "[oidc]\nissuer = https://issuer.example\nclient_id = laptops\n\n[users]\nallowed_users = ALL, it@vendor.example\n"
++// The agent's drop-in for a school with domains: only keys and values any broker of this tag accepts, with or without
++// this patch, plus the marker, a comment to a broker without it.
++const mastersosDropIn = "# Generated by mastersos-agent\n" + mastersosRequiredMarker +
++	"\n[oidc]\nissuer = https://issuer.example\nclient_id = laptops\n\n[users]\nallowed_users = ALL, it@vendor.example\n"
++
++// The agent's drop-in for a school without domains: no marker.
++const mastersosDropInNoDomains = "[oidc]\nissuer = https://issuer.example\nclient_id = laptops\n\n[users]\nallowed_users = ALL\n"
 +
 +// mastersosLoad writes broker.conf, broker.conf.d/10-mastersos.conf and, unless domains is nil, the domain file, and
 +// loads them the way the broker does when it starts.
-+func mastersosLoad(t *testing.T, domains *string) (Config, error) {
++func mastersosLoad(t *testing.T, dropIn string, domains *string) Config {
 +	t.Helper()
 +	dir := t.TempDir()
 +	cfgPath := filepath.Join(dir, "broker.conf")
 +	require.NoError(t, os.WriteFile(cfgPath, []byte("[oidc]\n\n[users]\nallowed_users = ALL\n"), 0o600))
 +	require.NoError(t, os.Mkdir(cfgPath+".d", 0o700))
-+	require.NoError(t, os.WriteFile(filepath.Join(cfgPath+".d", "10-mastersos.conf"), []byte(mastersosDropIn), 0o600))
++	require.NoError(t, os.WriteFile(filepath.Join(cfgPath+".d", "10-mastersos.conf"), []byte(dropIn), 0o600))
 +	if domains != nil {
 +		require.NoError(t, os.WriteFile(filepath.Join(dir, mastersosDomainsFile), []byte(*domains), 0o644))
 +	}
-+	return loadBrokerConfig(Config{ConfigFile: cfgPath}, &testutils.MockProvider{})
++	cfg, err := loadBrokerConfig(Config{ConfigFile: cfgPath}, &testutils.MockProvider{})
++	require.NoError(t, err, "the drop-in must parse strictly: an unknown key stops the broker from starting")
++	return cfg
 +}
 +
 +func ptr(s string) *string { return &s }
 +
 +// The drop-in parses as upstream; the domains come from the file: administrators by name, others only from the domains.
 +func TestMastersOSAllowedDomainsLimitAllUsers(t *testing.T) {
-+	cfg, err := mastersosLoad(t, ptr("# written by mastersos-agent\nschool.example\r\n\n  Staff.School.Example  \n"))
-+	require.NoError(t, err)
++	cfg := mastersosLoad(t, mastersosDropIn, ptr("# written by mastersos-agent\nschool.example\r\n\n  Staff.School.Example  \n"))
 +	require.True(t, cfg.allUsersAllowed)
 +	require.Equal(t, []string{"school.example", "staff.school.example"}, cfg.mastersosDomains.domains)
 +
@@ -258,36 +309,51 @@ new file mode 100644
 +	}
 +}
 +
-+// No file: ALL means everyone, as upstream (no school domains, or SSO set up by an agent that predates the file).
++// Neither file nor marker (a school without domains): ALL means everyone, as upstream.
 +func TestMastersOSNoDomainFileKeepsAll(t *testing.T) {
-+	cfg, err := mastersosLoad(t, nil)
-+	require.NoError(t, err)
++	cfg := mastersosLoad(t, mastersosDropInNoDomains, nil)
 +	require.False(t, cfg.mastersosDomains.active)
 +	require.True(t, cfg.userNameIsAllowed("someone@gmail.com"))
 +}
 +
-+// An empty file (every domain of the school was invalid) lets only the users listed by name through.
++// The marker asks for the file and it is gone (deleted at runtime, never written): only the users listed by name pass.
++// ALL never becomes everyone because a file is missing.
++func TestMastersOSMissingRequiredFileFailsClosed(t *testing.T) {
++	cfg := mastersosLoad(t, mastersosDropIn, nil)
++	require.True(t, cfg.mastersosDomains.active)
++	require.True(t, cfg.userNameIsAllowed("it@vendor.example"))
++	require.False(t, cfg.userNameIsAllowed("ann@school.example"))
++	require.False(t, cfg.userNameIsAllowed("someone@gmail.com"))
++}
++
++// A file without any domain (every domain of the school was invalid) lets only the users listed by name through.
 +func TestMastersOSEmptyDomainFileLetsOnlyListedUsers(t *testing.T) {
-+	cfg, err := mastersosLoad(t, ptr("# no valid domain\n\n"))
-+	require.NoError(t, err)
++	cfg := mastersosLoad(t, mastersosDropIn, ptr("# no valid domain\n\n"))
 +	require.True(t, cfg.mastersosDomains.active)
 +	require.True(t, cfg.userNameIsAllowed("it@vendor.example"))
 +	require.False(t, cfg.userNameIsAllowed("ann@school.example"))
 +}
 +
-+// A file that is there but cannot be read stops the broker instead of letting everyone through.
-+func TestMastersOSUnreadableDomainFileFails(t *testing.T) {
++// A file that is there but cannot be read (or is too large) filters like an empty one, marker or not: never everyone.
++func TestMastersOSUnreadableDomainFileFailsClosed(t *testing.T) {
 +	dir := t.TempDir()
 +	path := filepath.Join(dir, mastersosDomainsFile)
 +	require.NoError(t, os.Mkdir(path, 0o755))
-+	_, err := mastersosReadDomains(path)
-+	require.Error(t, err)
++	require.Equal(t, mastersosDomainFilter{active: true}, mastersosReadDomains(path, false))
 +
-+	big := make([]byte, mastersosMaxDomainsFile+1)
 +	require.NoError(t, os.Remove(path))
-+	require.NoError(t, os.WriteFile(path, big, 0o644))
-+	_, err = mastersosReadDomains(path)
-+	require.Error(t, err)
++	require.NoError(t, os.WriteFile(path, make([]byte, mastersosMaxDomainsFile+1), 0o644))
++	require.Equal(t, mastersosDomainFilter{active: true}, mastersosReadDomains(path, false))
++}
++
++// The marker counts only as a whole line of a file in broker.conf.d.
++func TestMastersOSRequiredMarker(t *testing.T) {
++	dir := t.TempDir()
++	require.False(t, mastersosRequired(filepath.Join(dir, "absent")))
++	require.NoError(t, os.WriteFile(filepath.Join(dir, "10-mastersos.conf"), []byte("# mastersos: allowed domains\n[users]\n"), 0o600))
++	require.False(t, mastersosRequired(dir))
++	require.NoError(t, os.WriteFile(filepath.Join(dir, "20-other.conf"), []byte("[users]\n  "+mastersosRequiredMarker+"  \r\n"), 0o600))
++	require.True(t, mastersosRequired(dir))
 +}
 +
 +// Without ALL only the listed users pass, whatever their domain.
@@ -312,13 +378,9 @@ new file mode 100644
 +// A drop-in from the earlier version of the patch (allowed_domains in [users]) still starts the broker; the key does
 +// nothing: only the file filters.
 +func TestMastersOSLegacyDomainsKeyIsIgnored(t *testing.T) {
-+	main := configFile{path: "broker.conf", content: []byte("[oidc]\n\n[users]\nallowed_users = ALL\n")}
-+	dropIn := configFile{path: "10-mastersos.conf", content: []byte(mastersosDropIn + "allowed_domains = school.example\n")}
-+	uc, err := parseConfig(main, []configFile{dropIn}, &testutils.MockProvider{}, false)
-+	require.NoError(t, err)
-+	uc.ownerMutex = new(sync.RWMutex)
-+	require.False(t, uc.mastersosDomains.active)
-+	require.True(t, uc.userNameIsAllowed("someone@gmail.com"))
++	cfg := mastersosLoad(t, mastersosDropInNoDomains+"allowed_domains = school.example\n", nil)
++	require.False(t, cfg.mastersosDomains.active)
++	require.True(t, cfg.userNameIsAllowed("someone@gmail.com"))
 +}
 +
 +// The file sits beside broker.conf, outside broker.conf.d: a broker without this patch never reads it.
