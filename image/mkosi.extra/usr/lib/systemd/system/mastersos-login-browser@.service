@@ -17,6 +17,13 @@ ExecStart=/usr/lib/mastersos/login-browser
 Restart=no
 TimeoutStopSec=5
 KillMode=control-group
+# The sign-in handoff (docs/specs/2026-11-05-browser-signin-handoff-design.md). SIGINT, not SIGTERM: Chrome writes its cookies
+# to disk only every 30 s or so, and on SIGINT it writes them before exiting. The two agent steps run as root outside the
+# sandbox ("+"): begin forgets whatever an earlier card left (and the card does not start if it cannot), stash copies this
+# card's cookie database out of the private /tmp after every process of the unit has exited, before systemd removes it.
+KillSignal=SIGINT
+ExecStartPre=+/usr/bin/mastersos-agent signin-handoff begin %i
+ExecStopPost=+/usr/bin/mastersos-agent signin-handoff stash %i
 
 BindReadOnlyPaths=/var/lib/mastersos-public/login-browser/policies:/etc/opt/chrome/policies/managed
 # No leading "-": if the profile is not loaded the browser does not start, it never runs unconfined.

@@ -172,6 +172,20 @@ MastersOS 带四个补丁（`patches/authd-oidc/`，按文件名顺序打）。
 
 取消或 3 分钟无操作回到用户列表。断网时提示连不上学校，带「重试」；Wi-Fi 在顶部可以连。本地 IT 账号从邮箱输入屏的 IT 入口进，密码照旧。
 
+## 卡片的登录交给桌面浏览器
+
+设计：`docs/specs/2026-11-05-browser-signin-handoff-design.md`。卡片里登录学校之后，身份系统设在卡片里的 cookie 交给这个人自己的
+桌面 Chrome：桌面上用同一个身份系统单点登录的网站一打开就是登录好的。对哪一家身份系统都一样，学校不用配任何东西。
+
+- 只交给刚用卡片登录的那个学校账号（`gdm-authd` 上名字带 `@`，邮箱等于卡片 URL 的 `login_hint`），并且只在两分钟内。
+  每开一次卡片先作废上一次留下的一切；取消、登录被拒、换人、解锁、访客、锁定应用、本机账号都拿不到。
+- 只交卡片策略放行的主机（issuer、`card_hosts` 以及它们上级域名的域 cookie）的 cookie。会话 cookie 改成**交接后 12 小时过期**，
+  所以桌面上的学校登录最多维持一个上学日；持久 cookie 保留身份系统自己定的期限。学校想让桌面上的登录更短，在身份系统里缩短会话。
+- 桌面 Chrome 已经开着时这次不交（Chrome 占着 cookie 库）：学生在桌面上照常登录一次即可。第一次登录（还没有 Chrome 配置）也交。
+- 怎么查：卡片单元的日志 `journalctl -u 'mastersos-login-browser@*'`（`signin-handoff: handed to uid …`）、用户的
+  `journalctl --user -u mastersos-signin-import`（`… cookies merged` / `in a new profile` / `nothing was handed over`）。
+- 身份系统一侧要注意：卡片里的会话就是桌面上的会话。在身份系统里登出或停用账号，桌面上的单点登录也随之失效。
+
 ## 代价与边界
 
 - **没有网就进不去**：学校账号没有离线登录。已经在用的桌面不受断网影响；屏幕回到登录页之后要联网才能回到桌面。

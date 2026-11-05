@@ -2843,4 +2843,76 @@ grep -qF "itSignIn: _('IT maintenance sign-in')," "$ld/strings.js" || {
 }
 [ "$r" = 0 ] && ok 64 "login: \"Managed by <school>\" opens the IT maintenance sign-in; no Local manager link in the card"
 
+# 65. The sign-in handoff (design 2026-11-05 browser sign-in handoff): the card unit stops Chrome with SIGINT (it writes its
+#     cookies then) and runs the agent's begin and stash steps as root outside the sandbox; the names the agent uses are the
+#     image's (the card's profile in login-browser, the unit, the URL file card.js writes, the handoff directory in tmpfiles
+#     and in the user unit's condition); pam-session claims for the card; the user unit runs signin-import as the user and is
+#     pulled in only by the regular desktop sessions' targets through plain-file drop-ins, never by a link or [Install].
+r=0
+sh=$core/mastersos-agent/src/signin_handoff.rs
+su=$ex/usr/lib/systemd/user
+for l in 'KillSignal=SIGINT' 'ExecStartPre=+/usr/bin/mastersos-agent signin-handoff begin %i' \
+	'ExecStopPost=+/usr/bin/mastersos-agent signin-handoff stash %i' 'TimeoutStopSec=5' 'KillMode=control-group' 'PrivateTmp=yes'; do
+	grep -qxF -- "$l" "$lbu" 2>/dev/null || {
+		bad 65 "$lbu should have $l"
+		r=1
+	}
+done
+for want in 'pub const CARD_PROFILE: &str = "profile";' 'pub const CARD_UNIT: &str = "mastersos-login-browser";' \
+	'pub const URL_FILE: &str = "mastersos-login-url";' 'pub const HANDOFF_DIR: &str = "/run/mastersos-signin";' \
+	'const HANDOFF_REL: &str = "run/mastersos-signin";' 'pub const CLAIM_SERVICE: &str = "gdm-authd";'; do
+	grep -qxF -- "$want" "$sh" || {
+		bad 65 "$sh should have: $want"
+		r=1
+	}
+done
+grep -qE -- '--user-data-dir=/tmp/profile \\$' "$ex/usr/lib/mastersos/login-browser" || {
+	bad 65 "login-browser should keep the card's profile at /tmp/profile (signin_handoff::CARD_PROFILE)"
+	r=1
+}
+grep -qxF "const URL_FILE = 'mastersos-login-url';" "$ex/usr/share/gnome-shell/extensions/mastersos-login@mastersos.org/card.js" || {
+	bad 65 "card.js should leave the URL in mastersos-login-url (signin_handoff::URL_FILE)"
+	r=1
+}
+for l in 'd /run/mastersos-signin 0711 root root -' 'd /run/mastersos-signin/private 0700 root root -'; do
+	grep -qxF -- "$l" "$ex/usr/lib/tmpfiles.d/mastersos.conf" || {
+		bad 65 "tmpfiles.d/mastersos.conf should have: $l"
+		r=1
+	}
+done
+grep -qF 'crate::signin_handoff::claim_from_pam(&env_str("PAM_SERVICE"), &user, uid);' "$core/mastersos-agent/src/system/guest.rs" || {
+	bad 65 "pam-session should claim the card's cookies (signin_handoff::claim_from_pam)"
+	r=1
+}
+for sub in signin-handoff signin-import; do
+	grep -qF "Some(OsStr::new(\"$sub\"))" "$core/mastersos-agent/src/main.rs" || {
+		bad 65 "main.rs should dispatch $sub"
+		r=1
+	}
+done
+for l in 'PartOf=gnome-session.target' 'ConditionUser=!@system' 'ConditionPathExists=/run/mastersos-signin/%U' 'Type=oneshot' \
+	'ExecStart=/usr/bin/mastersos-agent signin-import' 'Restart=no'; do
+	grep -qxF -- "$l" "$su/mastersos-signin-import.service" 2>/dev/null || {
+		bad 65 "$su/mastersos-signin-import.service should have the line: $l"
+		r=1
+	}
+done
+if grep -qxF '[Install]' "$su/mastersos-signin-import.service" 2>/dev/null; then
+	bad 65 "$su/mastersos-signin-import.service must have no [Install] (drop-ins pull it in)"
+	r=1
+fi
+for s in ubuntu gnome; do
+	d=$su/gnome-session@$s.target.d/mastersos-signin-import.conf
+	if [ -L "$d" ] || [ ! -f "$d" ] || ! grep -qxF 'Wants=mastersos-signin-import.service' "$d"; then
+		bad 65 "$d should be a plain file with Wants=mastersos-signin-import.service"
+		r=1
+	fi
+done
+if grep -rlF 'mastersos-signin-import.service' "$su" | grep -vE '/(mastersos-signin-import\.service|gnome-session@(ubuntu|gnome)\.target\.d/mastersos-signin-import\.conf)$' | grep -q . ||
+	find "$ex" -name 'mastersos-signin-import.service' -type l | grep -q .; then
+	bad 65 "mastersos-signin-import.service is pulled in by something other than the two desktop session drop-ins"
+	r=1
+fi
+[ "$r" = 0 ] && ok 65 "sign-in handoff: card unit stops on SIGINT with begin/stash, names match, pam-session claims, user unit only in desktop sessions"
+
 exit $fail
