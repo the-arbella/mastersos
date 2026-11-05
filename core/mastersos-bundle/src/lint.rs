@@ -453,6 +453,18 @@ pub fn feature_path(m: &Manifest, feature: &str) -> String {
         FEATURE_KIOSK => layers()
             .find(|(_, empty, _)| !empty)
             .map(|(base, _, _)| format!("{base}.apps.kiosk")),
+        FEATURE_SUPPORT => m
+            .defaults
+            .iter()
+            .filter(|d| !d.support.is_empty())
+            .map(|_| "defaults.support".to_owned())
+            .chain(
+                m.configs
+                    .iter()
+                    .filter(|c| !c.support.is_empty())
+                    .map(|c| format!("config.{}.support", c.id)),
+            )
+            .next(),
         FEATURE_WIFI_EXT if !m.school.wifi.is_empty() => Some("school.wifi".to_owned()),
         FEATURE_WIFI_EXT => layers().find_map(|(base, _, wifi)| {
             wifi.iter()
@@ -2487,6 +2499,27 @@ config = "a"
         assert_eq!(feature_path(&m, crate::FEATURE_SCHOOL_ID), "school.id");
         assert_eq!(feature_path(&m, crate::FEATURE_OIDC_CARD), "school.oidc");
         assert_eq!(feature_path(&m, "nope"), "school");
+    }
+
+    #[test]
+    fn feature_path_points_at_support() {
+        let body = |defaults: &str| {
+            manifest2(&format!(
+                "{defaults}\n[[config]]\nid = \"a\"\nname = \"a\"\n\n[[config]]\nid = \"b\"\nname = \"b\"\n\
+                 [config.support]\nenabled = false\n\n[[group]]\nid = \"default\"\nname = \"D\"\nconfig = \"a\"\n"
+            ))
+        };
+        assert_eq!(
+            feature_path(&body(""), crate::FEATURE_SUPPORT),
+            "config.b.support"
+        );
+        assert_eq!(
+            feature_path(
+                &body("[defaults]\nsupport.enabled = true"),
+                crate::FEATURE_SUPPORT
+            ),
+            "defaults.support"
+        );
     }
 
     #[test]

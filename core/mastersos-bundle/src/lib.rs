@@ -4,6 +4,7 @@
 pub mod archive;
 pub mod check;
 pub mod checks;
+pub mod diag;
 pub mod escrow;
 pub mod heartbeat;
 pub mod keyid;
@@ -27,6 +28,7 @@ pub mod webauthn;
 pub const LONG_POLL_SECS: u64 = 60;
 
 pub use archive::*;
+pub use diag::*;
 pub use escrow::*;
 pub use heartbeat::*;
 pub use lint::*;

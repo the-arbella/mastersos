@@ -21,6 +21,7 @@ const MAX_RESULTS: usize = 200;
 /// `school_id` (plan 6 Task 10b) is checked against the seed in `accept_for_school`;
 /// `kiosk`（计划 9 Task 6）：kiosk 步骤建账号与策略、`mastersos-kiosk` 在锁定会话里起应用，两半都在了才报告；
 /// `config` (config profiles design §5): the new `[[config]]` shape and the `learning`/`full` modes.
+/// `support` (remote diagnostics and help design): `[config.support]` is read into `Config::support_enabled`.
 pub const SUPPORTED_FEATURES: &[&str] = &[
     mastersos_bundle::FEATURE_UPDATE_MIRROR,
     mastersos_bundle::FEATURE_ESCROW_RECIPIENTS,
@@ -30,6 +31,7 @@ pub const SUPPORTED_FEATURES: &[&str] = &[
     mastersos_bundle::FEATURE_WIFI_EXT,
     mastersos_bundle::FEATURE_OIDC_CARD,
     mastersos_bundle::FEATURE_FORMAT_2,
+    mastersos_bundle::FEATURE_SUPPORT,
 ];
 
 /// 机器的硬件与系统身份。
@@ -215,7 +217,8 @@ mod tests {
                 "config",
                 "wifi_ext",
                 "oidc_card",
-                "format_2"
+                "format_2",
+                "support"
             ]
         );
         assert_eq!(r.manifest_features, SUPPORTED_FEATURES);
@@ -230,6 +233,7 @@ mod tests {
             mastersos_bundle::FEATURE_WIFI_EXT,
             mastersos_bundle::FEATURE_OIDC_CARD,
             mastersos_bundle::FEATURE_FORMAT_2,
+            mastersos_bundle::FEATURE_SUPPORT,
         ];
         assert!(SUPPORTED_FEATURES.iter().all(|f| all.contains(f)));
     }
@@ -250,6 +254,12 @@ mod tests {
     #[test]
     fn supported_features_include_wifi_ext() {
         assert!(SUPPORTED_FEATURES.contains(&mastersos_bundle::FEATURE_WIFI_EXT));
+    }
+
+    /// Remote diagnostics and help design: this agent reads `[config.support]`.
+    #[test]
+    fn supported_features_include_support() {
+        assert!(SUPPORTED_FEATURES.contains(&mastersos_bundle::FEATURE_SUPPORT));
     }
 
     /// Defaults and IT account design §15: this agent reads every `format = 2` construct.
