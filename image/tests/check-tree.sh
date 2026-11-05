@@ -762,10 +762,7 @@ PY
 	bad 17 "$pol 的总线策略不对（见上）"
 	r=1
 fi
-# $MASTERSOS_DIAG_AUTHD_ARGS is literal unit text (developer diagnostics: -vv with the switch, empty otherwise)
-# shellcheck disable=SC2016
-for l in 'Type=dbus' "BusName=$bus" 'ExecStart=/usr/libexec/authd-oidc --config /etc/authd/oidc/broker.conf $MASTERSOS_DIAG_AUTHD_ARGS' \
-	'EnvironmentFile=-/run/mastersos/diag.env' \
+for l in 'Type=dbus' "BusName=$bus" 'ExecStart=/usr/libexec/authd-oidc --config /etc/authd/oidc/broker.conf' \
 	'StateDirectory=authd-oidc' 'ConfigurationDirectory=authd/oidc' 'ProtectSystem=strict' 'ProtectHome=yes' \
 	'PrivateTmp=yes' 'NoNewPrivileges=yes' 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6' \
 	'ReadWritePaths=/var/lib/authd-oidc' 'CapabilityBoundingSet=' \
@@ -2842,5 +2839,34 @@ grep -qF "itSignIn: _('IT maintenance sign-in')," "$ld/strings.js" || {
 	r=1
 }
 [ "$r" = 0 ] && ok 64 "login: \"Managed by <school>\" opens the IT maintenance sign-in; no Local manager link in the card"
+
+# 65. The USB developer diagnostics were removed (docs/specs/2026-11-05-remote-diagnostics-and-help-design.md, design 1):
+#     none of their scripts, units, links, drop-ins, udev rule or tests may come back, and a machine installed with the old
+#     switch loses /var/lib/mastersos-diag on its next boot (tmpfiles R).
+r=0
+sys=$rel/mkosi.extra/usr/lib/systemd/system
+for gone in "$rel/mkosi.extra/usr/lib/mastersos/diag-export" "$rel/mkosi.extra/usr/lib/mastersos/diag-setup" \
+	"$sys/mastersos-diag-adopt.service" "$sys/mastersos-diag-setup.service" "$sys/mastersos-diag-export@.service" \
+	"$sys/sysinit.target.wants/mastersos-diag-adopt.service" "$sys/sysinit.target.wants/mastersos-diag-setup.service" \
+	"$sys/authd.service.d/90-mastersos-diag.conf" "$sys/wpa_supplicant.service.d/90-mastersos-diag.conf" \
+	"$sys/mastersos-agent.service.d/90-mastersos-diag.conf" "$sys/mastersos-agent-local.service.d/90-mastersos-diag.conf" \
+	"$rel/mkosi.extra/usr/lib/udev/rules.d/91-mastersos-diag.rules" "$rel/check-execstart-copies.sh" \
+	"$rel/tests/diag-export-test.sh" "$rel/tests/diag-setup-test.sh" "$rel/tests/execstart-copies-test.sh" \
+	"$rel/tests/fixtures/diag"; do
+	if [ -e "$gone" ] || [ -L "$gone" ]; then
+		bad 65 "$gone belongs to the removed USB diagnostics"
+		r=1
+	fi
+done
+if grep -rqE 'diag\.env|MASTERSOS_DIAG_|mastersos-diag-(setup|adopt|export)|debug-install' "$rel/mkosi.extra" "$rel/mkosi.finalize" \
+	"$rel/mkosi.conf" .github/workflows "$core/mastersos-installer/src" 2>/dev/null; then
+	bad 65 "something still refers to the removed USB diagnostics (diag.env, MASTERSOS_DIAG_*, mastersos-diag-*, debug-install)"
+	r=1
+fi
+grep -qxF 'R /var/lib/mastersos-diag' "$rel/mkosi.extra/usr/lib/tmpfiles.d/mastersos-diag-cleanup.conf" 2>/dev/null || {
+	bad 65 "tmpfiles.d/mastersos-diag-cleanup.conf has no line R /var/lib/mastersos-diag"
+	r=1
+}
+[ "$r" = 0 ] && ok 65 "the USB diagnostics are gone, and the old switch folder is removed on boot"
 
 exit $fail

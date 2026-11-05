@@ -1,5 +1,7 @@
 # 诊断开关改为安装时按 d、导出到安装盘的 seed 目录 实施计划
 
+> 已被 docs/specs/2026-11-05-remote-diagnostics-and-help-design.md 取代，U 盘诊断已删除。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 去掉 U 盘上的 `debug.conf`；安装器开头 1 秒内收到含 d 的输入即 debug 安装，首次开机把开关移进加密根分区；导出只写到 U 盘上 seed 所在目录（根目录与往下两层）。

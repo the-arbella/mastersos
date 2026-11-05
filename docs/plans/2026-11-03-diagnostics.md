@@ -1,5 +1,7 @@
 # 诊断模式（插 U 盘导出日志）实施计划
 
+> 已被 docs/specs/2026-11-05-remote-diagnostics-and-help-design.md 取代，U 盘诊断已删除。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 装机时带 `debug.conf` 的机器，各组件开调试日志；插上任何 vfat/exfat 的 USB 盘就把诊断包写上去，无需登录、无需网络。

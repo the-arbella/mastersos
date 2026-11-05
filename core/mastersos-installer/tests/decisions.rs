@@ -551,7 +551,7 @@ fn screens_show_what_the_brief_requires() {
         text: seed_toml(),
         seed: Box::new(Seed::parse(&seed_toml()).unwrap()),
     };
-    let t = confirm_text(&target(), &seed, false);
+    let t = confirm_text(&target(), &seed);
     assert!(
         t.contains("M")
             && t.contains("512")
@@ -559,7 +559,7 @@ fn screens_show_what_the_brief_requires() {
             && t.contains("teacher")
     );
     assert!(!t.contains("tok-SECRET"));
-    assert!(confirm_text(&target(), &SeedFound::None, false).contains("unmanaged"));
+    assert!(confirm_text(&target(), &SeedFound::None).contains("unmanaged"));
     assert!(finish_text(MokStep::Import).contains("mastersos"));
     assert!(!finish_text(MokStep::None).contains("MOK"));
 }
@@ -924,7 +924,6 @@ fn tpm_checked_before_any_disk_write() {
             mode: Mode::Stick,
             ventoy_part_file: Path::new(VENTOY_PART_FILE),
             ventoy_mount: Path::new(VENTOY_MOUNT),
-            debug: false,
         };
         let e = run_install_with(&r, &mut tty, &env).unwrap_err();
         let msg = format!("{e:#}");
@@ -992,7 +991,6 @@ fn usable_tpm_reaches_confirm_screen() {
         mode: Mode::Stick,
         ventoy_part_file: Path::new(VENTOY_PART_FILE),
         ventoy_mount: Path::new(VENTOY_MOUNT),
-        debug: false,
     };
     let e = run_install_with(&r, &mut tty, &env).unwrap_err();
     assert!(format!("{e:#}").contains("Cancelled"), "{e:#}");
@@ -1042,7 +1040,6 @@ fn tpm_checked_before_disk_picker() {
         mode: Mode::Stick,
         ventoy_part_file: Path::new(VENTOY_PART_FILE),
         ventoy_mount: Path::new(VENTOY_MOUNT),
-        debug: false,
     };
     let e = run_install_with(&r, &mut tty, &env).unwrap_err();
     assert!(format!("{e:#}").contains(Unusable::NoTpm.text()), "{e:#}");
@@ -1137,7 +1134,6 @@ fn install(r: &FakeRunner, tty: &mut FakeTty, root: &Path, profile: Profile) -> 
         mode: Mode::Stick,
         ventoy_part_file: Path::new(VENTOY_PART_FILE),
         ventoy_mount: Path::new(VENTOY_MOUNT),
-        debug: false,
     };
     run_install_with(r, tty, &env)
 }
@@ -1370,7 +1366,6 @@ fn ventoy_run(
         },
         ventoy_part_file: part_file,
         ventoy_mount: mount,
-        debug: false,
     };
     let res = run_install_with(&r, &mut tty, &env);
     (res, r)
@@ -1466,7 +1461,6 @@ fn ventoy_to_confirm(
         },
         ventoy_part_file: &pf,
         ventoy_mount: Path::new("/run/mastersos-ventoy"),
-        debug: false,
     };
     let e = run_install_with(&r, &mut tty, &env).unwrap_err();
     let s = seen.borrow().clone();
@@ -2356,7 +2350,7 @@ fn confirm_screen_shows_school_and_wifi() {
         seed: Box::new(Seed::parse(&text).unwrap()),
         text,
     };
-    let t = confirm_text(&target(), &seed, false);
+    let t = confirm_text(&target(), &seed);
     assert!(t.contains("School: EIS"), "{t}");
     assert!(t.contains("Wi-Fi: Campus +1"), "{t}");
     let text = seed_with(None, "https://eis.example", &[]);
@@ -2364,7 +2358,7 @@ fn confirm_screen_shows_school_and_wifi() {
         seed: Box::new(Seed::parse(&text).unwrap()),
         text,
     };
-    let t = confirm_text(&target(), &seed, false);
+    let t = confirm_text(&target(), &seed);
     assert!(
         t.contains("Wi-Fi: none (connect a cable or set it up after install)"),
         "{t}"
@@ -2392,7 +2386,7 @@ fn screen_text_is_ascii_only() {
     };
     let found = choose_seed(&files, &mut tty).unwrap();
     let mut screen = tty.shown.join("\n");
-    screen.push_str(&confirm_text(&target(), &found, false));
+    screen.push_str(&confirm_text(&target(), &found));
     assert!(screen.is_ascii(), "{screen:?}");
     assert!(
         !screen.chars().any(|c| c.is_control() && c != '\n'),
@@ -2425,7 +2419,6 @@ fn long_fields_fit_in_80_columns() {
     let t = confirm_text(
         &target(),
         &choose_seed(&files[1..], &mut FakeTty::default()).unwrap(),
-        true,
     );
     for l in t.lines() {
         assert!(l.len() <= 79, "{} cols: {l}", l.len());
@@ -2458,7 +2451,6 @@ fn run_with_seeds(
         mode: Mode::Stick,
         ventoy_part_file: Path::new(VENTOY_PART_FILE),
         ventoy_mount: Path::new(VENTOY_MOUNT),
-        debug: false,
     };
     let res = run_install_with(&r, &mut tty, &env);
     (res, tty.shown.clone(), r)
@@ -2513,45 +2505,7 @@ fn all_invalid_seeds_refuse_before_the_tpm_check() {
     assert!(r.calls().iter().all(|c| is_read_only(c)));
 }
 
-#[test]
-fn has_debug_key_cases() {
-    use mastersos_installer::tty::has_debug_key;
-    for yes in [&b"d"[..], b"dddd", b"ssssdraf", b"D"] {
-        assert!(has_debug_key(yes), "{yes:?}");
-    }
-    for no in [&b""[..], b"sss\n", b"\x1b[A"] {
-        assert!(!has_debug_key(no), "{no:?}");
-    }
-}
-
-#[test]
-fn sniff_without_tty_is_off() {
-    // cargo test's stdin is not a terminal
-    if rustix::termios::tcgetattr(std::io::stdin()).is_err() {
-        assert!(!mastersos_installer::tty::sniff_debug());
-    }
-}
-
-#[test]
-fn write_debug_marker_writes_empty_file() {
-    let d = tempfile::tempdir().unwrap();
-    let dir = d.path().join("seed");
-    write_seed_dir(&dir, &SeedFound::None).unwrap();
-    write_debug_marker(&dir).unwrap();
-    let m = fs::metadata(dir.join(DEBUG_MARKER)).unwrap();
-    assert_eq!(DEBUG_MARKER, "debug-install");
-    assert!(m.is_file());
-    assert_eq!(m.len(), 0);
-    assert_eq!(m.permissions().mode() & 0o777, 0o644);
-}
-
-#[test]
-fn confirm_shows_diagnostics_only_when_debug() {
-    assert!(confirm_text(&target(), &SeedFound::None, true).contains("Developer diagnostics: ON"));
-    assert!(!confirm_text(&target(), &SeedFound::None, false).contains("Developer diagnostics"));
-}
-
-/// d held past the hidden window's 10 s cap: the d's typed ahead must not answer the warnings prompt (or any later one).
+/// A key held at power-on: the characters typed ahead must not answer the warnings prompt (or any later one).
 #[test]
 fn held_keys_do_not_answer_the_prompts() {
     let (tmp, r) = tpm_ok_machine("lsblk-single-nvme.json");
@@ -2566,7 +2520,7 @@ fn held_keys_do_not_answer_the_prompts() {
     let shown = tty.shown.join("\n");
     assert!(
         shown.contains("ERASES"),
-        "the held d's answered the warnings prompt: {shown}"
+        "the keys typed ahead answered the warnings prompt: {shown}"
     );
     assert!(tty.answers.is_empty(), "{:?}", tty.answers);
 }
