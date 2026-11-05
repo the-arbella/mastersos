@@ -10,8 +10,9 @@
 //! - `POST /v1/diagnostics` with a [`DiagUploadRequest`]: `201` with a [`DiagUploadResponse`]
 //!   carrying a presigned S3 `PUT` ([`PresignedUpload`]); `200` `{"id","complete":true}`
 //!   without `upload` when that seq or ticket is already complete (the machine skips the `PUT`
-//!   and the complete call); an incomplete one gets the same id and a new URL. `413` over the
-//!   size limit; `409` [`ERR_NOT_YOURS`] when the seq is not a `collect-diagnostics` message
+//!   and the complete call); an incomplete one gets the same id and a new URL. `422`
+//!   [`ERR_INVALID`] over the size limit (every body or limit rejection on these routes is
+//!   `422`); `409` [`ERR_NOT_YOURS`] when the seq is not a `collect-diagnostics` message
 //!   sent to this machine or the ticket is not this machine's; `410` [`ERR_EXPIRED`] when the
 //!   ticket is older than [`TICKET_ATTACH_WINDOW_HOURS`].
 //! - The machine `PUT`s the archive to `upload.url` with `upload.headers` exactly as given.
@@ -205,7 +206,7 @@ pub struct PresignedUpload {
     pub url: String,
     /// Headers signed into the URL (`Content-Length`, `x-amz-checksum-sha256`,
     /// `x-amz-sdk-checksum-algorithm: SHA256`, tagging). Send exactly these: no `Content-MD5`
-    /// and no `Content-Type` of the machine's own. `Expect: 100-continue` is allowed.
+    /// and no `Content-Type` of the machine's own, and no `Expect`.
     pub headers: BTreeMap<String, String>,
     /// When the URL expires, by the cloud's clock. Informational only.
     #[cfg_attr(feature = "openapi", schema(value_type = String, format = DateTime))]
@@ -460,9 +461,9 @@ pub enum DiagFileType {
 }
 
 /// The fixed names of diagnostic sources ([`DiagFile::source`], [`DiagSkipped::source`]).
-/// Each source is its own file (or one file per boot for [`JOURNAL`]).
+/// Each source is its own file (or one file per boot for [`JOURNAL`](source::JOURNAL)).
 ///
-/// The cloud keys on them when it makes the vendor copy: [`WIFI_SCAN`] and [`COREDUMP_INFO`]
+/// The cloud keys on them when it makes the vendor copy: [`WIFI_SCAN`](source::WIFI_SCAN) and [`COREDUMP_INFO`](source::COREDUMP_INFO)
 /// are dropped entirely; in the rest, IP and MAC/BSSID addresses, SSIDs, serial numbers and
 /// `/home/<x>` paths are pseudonymized. Adding a source is a protocol change.
 pub mod source {
