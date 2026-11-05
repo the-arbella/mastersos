@@ -339,6 +339,7 @@ async fn run_collect(
         kind: DiagKind::Inbox,
         boots,
         since_minutes,
+        journal_window: None,
         screenshot: None,
         max_bytes: DIAG_INBOX_MAX_BYTES,
     };
@@ -421,8 +422,14 @@ pub(crate) async fn archive_item(cx: &DrainCtx<'_>, mut item: Item, now: DateTim
                     final_ack(cx, *seq, InboxResultState::Done, &format!("diag:{id}")).await
                 }
                 Target::Ticket { client_id } => {
-                    crate::support::send::attachment_finished(cx, client_id, "attached");
-                    true
+                    let recorded =
+                        crate::support::send::attachment_finished(cx, client_id, "attached");
+                    if !recorded {
+                        // Kept until the request records it: the next try finds it complete.
+                        item.retry.failed((cx.clock)(), None, cx.jitter.unit());
+                        put(cx, &item);
+                    }
+                    recorded
                 }
             };
             if acked {
@@ -457,7 +464,13 @@ async fn give_up(cx: &DrainCtx<'_>, item: &Item, seq: Option<u64>, why: String) 
         ..
     } = &item.job
     {
-        crate::support::send::attachment_finished(cx, client_id, &why);
+        if !crate::support::send::attachment_finished(cx, client_id, &why) {
+            // Kept until the request records it, so its attachment is never collected again.
+            let mut kept = item.clone();
+            kept.retry.failed((cx.clock)(), None, cx.jitter.unit());
+            put(cx, &kept);
+            return;
+        }
     }
     let acked = match seq {
         Some(seq) => final_ack(cx, seq, InboxResultState::Failed, &why).await,
@@ -522,7 +535,10 @@ pub(crate) async fn trim(cx: &DrainCtx<'_>) {
             Job::Archive {
                 target: Target::Ticket { client_id },
                 ..
-            } => crate::support::send::attachment_finished(cx, client_id, DETAIL_QUEUE_FULL),
+            } => {
+                // Not recorded: the sweep marks it done later (its archive is gone either way).
+                crate::support::send::attachment_finished(cx, client_id, DETAIL_QUEUE_FULL);
+            }
             _ => {}
         }
     }

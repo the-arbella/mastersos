@@ -119,6 +119,9 @@ pub struct CollectOpts {
     pub boots: u8,
     /// Light mode (help tickets): only the journal of the last M minutes, as `journal/recent.txt`.
     pub since_minutes: Option<u32>,
+    /// Light mode anchored to a moment (help tickets, Task 5b): only the journal from `since` to `until`, as
+    /// `journal/recent.txt`; wins over `since_minutes` and `boots`.
+    pub journal_window: Option<(DateTime<Utc>, DateTime<Utc>)>,
     /// A PNG the student chose to attach (read through `root` too).
     pub screenshot: Option<PathBuf>,
     /// The archive never exceeds this (`DIAG_INBOX_MAX_BYTES` / `DIAG_TICKET_MAX_BYTES`).
@@ -266,8 +269,9 @@ pub fn collect(
     let root = o.root.as_path();
     let mut g = Gather::default();
 
-    match o.since_minutes {
-        Some(m) => {
+    match (o.journal_window, o.since_minutes) {
+        (Some((since, until)), _) => journal_window(&mut g, runner, since, until),
+        (None, Some(m)) => {
             let since = format!("-{m}min");
             let args = [
                 "--since",
@@ -281,7 +285,7 @@ pub fn collect(
                 g.text(src, "journal/recent.txt".into(), &t, Some(0));
             }
         }
-        None => {
+        (None, None) => {
             for k in 0..o.boots.clamp(1, MAX_BOOTS) {
                 let boot = if k == 0 {
                     "0".to_string()
@@ -510,6 +514,48 @@ fn power_supply(g: &mut Gather, root: &Path) {
         g.skip(src, "no power supplies");
     } else {
         g.text(src, "power-supply.txt".into(), &text, None);
+    }
+}
+
+/// The journal from `since` to `until` as `journal/recent.txt` (a help ticket's window around its
+/// request). When the journal has nothing before `since` it was rotated (or the machine was off)
+/// and the window may be cut: `skipped` says so, beside what is left.
+fn journal_window(g: &mut Gather, runner: &dyn Runner, since: DateTime<Utc>, until: DateTime<Utc>) {
+    let stamp = |t: DateTime<Utc>| t.format("%Y-%m-%d %H:%M:%S UTC").to_string();
+    let (s, u) = (stamp(since), stamp(until));
+    let src = source::JOURNAL_RECENT;
+    let args = [
+        "--since",
+        s.as_str(),
+        "--until",
+        u.as_str(),
+        "-o",
+        "short-iso-precise",
+        "--no-pager",
+    ];
+    if let Some(t) = g.run(runner, src, "journalctl", &args, JOURNAL_TIMEOUT) {
+        g.text(src, "journal/recent.txt".into(), &t, Some(0));
+    }
+    let before = [
+        "--until",
+        s.as_str(),
+        "-n",
+        "1",
+        "-q",
+        "-o",
+        "short-unix",
+        "--no-pager",
+    ];
+    let older = runner
+        .run(&Cmd::new("journalctl", &before).timeout(JOURNAL_TIMEOUT))
+        .ok()
+        .filter(|o| o.code == 0)
+        .is_some_and(|o| !o.stdout.trim().is_empty());
+    if !older {
+        g.skip(
+            src,
+            &format!("the journal has nothing before {s}: the window from {s} to {u} may be cut (rotated)"),
+        );
     }
 }
 

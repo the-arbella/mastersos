@@ -114,6 +114,7 @@ fn diag_collect(
         kind: DiagKind::Inbox,
         boots: boots.unwrap_or(1),
         since_minutes,
+        journal_window: None,
         screenshot: screenshot
             .map(std::path::absolute)
             .transpose()

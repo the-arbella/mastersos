@@ -321,6 +321,18 @@ async fn pass(m: &Machine, c: &Cloud, runner: Arc<dyn Runner>, now: DateTime<Utc
     drain_once(&cx).await
 }
 
+/// The journal window of a request made at [`T0`]: 30 minutes before to 2 after.
+const WINDOW_T0: &str = "--since 2026-11-05 07:30:00 UTC --until 2026-11-05 08:02:00 UTC";
+
+/// The `--since … --until …` of the attachment's journal call.
+fn journal_window(r: &FakeRunner) -> Option<String> {
+    r.calls().iter().find_map(|l| {
+        let rest = l.strip_prefix("journalctl --since ")?;
+        let end = rest.find(" -o ")?;
+        Some(format!("--since {}", &rest[..end]))
+    })
+}
+
 fn count<T>(b: &Mutex<Vec<T>>) -> usize {
     b.lock().unwrap().len()
 }
@@ -403,13 +415,7 @@ async fn drain_posts_then_uploads_ticket_attachment() {
         names.contains(&"journal/recent.txt".to_string()),
         "{names:?}"
     );
-    assert!(
-        r.calls()
-            .iter()
-            .any(|l| l.starts_with("journalctl --since -30min")),
-        "{:?}",
-        r.calls()
-    );
+    assert_eq!(journal_window(&r), Some(WINDOW_T0.to_string()));
 
     let item = m.item(&id);
     assert_eq!(item.state, ItemState::Sent);
@@ -619,6 +625,118 @@ async fn lost_sender_item_is_queued_again() {
     let c = cloud(ticket("5"), None, 200).await;
     pass(&m, &c, runner(), at(1)).await;
     assert_eq!(m.item(&id).ticket.as_deref(), Some("5"));
+}
+
+/// Made offline at T0, sent five hours later: the logs are still the ones around T0, never the
+/// later ones (another student, the login screen).
+#[tokio::test]
+async fn late_send_attaches_the_journal_around_the_request() {
+    let m = Machine::new();
+    let id = m.submit(ME, false, t(T0));
+    let c = cloud(ticket("1042"), None, 200).await;
+    let r = runner();
+    pass(&m, &c, r.clone(), at(5 * 60)).await;
+    assert!(m.item(&id).attach_done);
+    assert_eq!(journal_window(&r), Some(WINDOW_T0.to_string()));
+    assert!(
+        !r.calls().iter().any(|l| l.contains("-30min")),
+        "{:?}",
+        r.calls()
+    );
+}
+
+#[tokio::test]
+async fn prompt_send_attaches_the_same_window() {
+    let m = Machine::new();
+    m.submit(ME, false, t(T0));
+    let c = cloud(ticket("1042"), None, 200).await;
+    let r = runner();
+    pass(&m, &c, r.clone(), t(T0)).await;
+    assert_eq!(journal_window(&r), Some(WINDOW_T0.to_string()));
+}
+
+/// The record of a finished attachment could not be written (the store's lock failed): the
+/// archive stays, nothing is collected again, and the next pass records it without a second
+/// upload (the cloud says the ticket's attachment is complete).
+#[tokio::test]
+async fn attachment_record_is_retried_without_a_second_upload() {
+    let m = Machine::new();
+    let id = m.submit(ME, true, t(T0));
+    let c = cloud(ticket("1042"), None, 500).await;
+    pass(&m, &c, runner(), at(1)).await;
+    let target = Target::Ticket {
+        client_id: id.clone(),
+    };
+    assert!(m.queue.has(&archive_name(&target)));
+
+    // The lock cannot be taken.
+    let lock = m.store().dir().join(".lock");
+    std::fs::remove_file(&lock).unwrap();
+    std::fs::create_dir(&lock).unwrap();
+    let c2 = cloud(ticket("1042"), None, 200).await;
+    let r = runner();
+    pass(&m, &c2, r.clone(), at(3)).await;
+    assert_eq!(count(&c2.puts), 1, "uploaded");
+    assert!(m.queue.has(&archive_name(&target)), "kept until recorded");
+    assert!(job(&m, &id).is_none(), "not queued to collect again");
+    assert!(!r.calls().iter().any(|l| l.starts_with("journalctl")));
+    std::fs::remove_dir(&lock).unwrap();
+    assert!(!m.item(&id).attach_done);
+
+    // The lock works again; the cloud has the attachment already.
+    let c3 = cloud(
+        ticket("1042"),
+        Some(ResponseTemplate::new(200).set_body_json(json!({"id": "att1", "complete": true}))),
+        200,
+    )
+    .await;
+    let r = runner();
+    pass(&m, &c3, r.clone(), at(10)).await;
+    assert_eq!(count(&c3.puts), 0, "no second upload");
+    assert!(!r.calls().iter().any(|l| l.starts_with("journalctl")));
+    assert!(m.item(&id).attach_done);
+    assert!(m.queue.list().unwrap().is_empty());
+}
+
+/// A screenshot without its request (a crash between the two writes) goes after 10 minutes; one
+/// being written now stays.
+#[tokio::test]
+async fn orphan_screenshot_is_swept() {
+    let m = Machine::new();
+    let s = m.store();
+    s.lock().unwrap();
+    let old = s.dir().join("0192f3a4-5b6c-7d8e-9f00-112233445566.png");
+    let fresh = s.dir().join("0192f3a4-5b6c-7d8e-9f00-112233445577.png");
+    std::fs::write(&old, PNG).unwrap();
+    std::fs::write(&fresh, PNG).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&old)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(11 * 60))
+        .unwrap();
+    let c = cloud(ticket("1"), None, 200).await;
+    pass(&m, &c, runner(), at(1)).await;
+    assert!(!old.exists());
+    assert!(fresh.exists());
+}
+
+/// A request that cannot be written leaves no screenshot behind.
+#[test]
+fn failed_item_write_leaves_no_screenshot() {
+    let m = Machine::new();
+    let s = m.store();
+    let _l = s.lock().unwrap();
+    let id = "0192f3a4-5b6c-7d8e-9f00-112233445566";
+    std::fs::create_dir(s.dir().join(format!("{id}.json"))).unwrap();
+    let req: mastersos_bundle::diag::SupportRequest = serde_json::from_value(json!({
+        "client_id": id, "category": "wifi", "text": "", "user": {"kind": "none"},
+        "session": "login", "created_at": T0, "snapshot": {"os_version": "1"}, "screenshot": true,
+    }))
+    .unwrap();
+    let item = super::super::store::Item::new(req, ME, t(T0));
+    assert!(s.put_new(&item, Some(PNG)).is_err());
+    assert!(!m.has_screenshot(id));
 }
 
 #[test]

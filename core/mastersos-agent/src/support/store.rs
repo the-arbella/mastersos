@@ -196,15 +196,39 @@ impl Store {
     /// Writes a new item and its screenshot (screenshot first: an item never points at a missing one). Hold the lock.
     pub fn put_new(&self, item: &Item, screenshot: Option<&[u8]>) -> Result<()> {
         let d = self.open()?;
+        let shot = item_name(&item.request.client_id, SCREENSHOT_EXT)?;
         if let Some(png) = screenshot {
-            safefs::write_at(
-                &d,
-                &item_name(&item.request.client_id, SCREENSHOT_EXT)?,
-                png,
-                0o600,
-            )?;
+            safefs::write_at(&d, &shot, png, 0o600)?;
         }
-        self.write_item(&d, item)
+        let written = self.write_item(&d, item);
+        if written.is_err() && screenshot.is_some() {
+            // Not left without its item (the sender's sweep would find it only after a while).
+            if let Err(e) = safefs::remove_at(&d, &shot) {
+                log::warn!("support queue: removing {shot} failed: {e:#}");
+            }
+        }
+        written
+    }
+
+    /// The client ids of screenshots last written longer than `age` ago. Hold the lock.
+    pub fn screenshots_older_than(&self, age: std::time::Duration) -> Result<Vec<String>> {
+        let d = self.open()?;
+        let mut out = vec![];
+        for name in safefs::list_at(&d)? {
+            let Some(id) = name.strip_suffix(SCREENSHOT_EXT) else {
+                continue;
+            };
+            if !mastersos_bundle::valid_school_id(id) {
+                continue;
+            }
+            let old = safefs::mtime_at(&d, &name)?
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|a| a >= age);
+            if old {
+                out.push(id.to_string());
+            }
+        }
+        Ok(out)
     }
 
     /// Replaces an existing item (the sender: ticket, state, attachment). Hold the lock.

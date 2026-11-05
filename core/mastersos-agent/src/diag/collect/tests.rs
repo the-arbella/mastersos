@@ -71,6 +71,7 @@ fn opts(root: &Path) -> CollectOpts {
         kind: DiagKind::Inbox,
         boots: 1,
         since_minutes: None,
+        journal_window: None,
         screenshot: None,
         max_bytes: DIAG_INBOX_MAX_BYTES,
     }
@@ -263,6 +264,69 @@ fn manifest_validates() {
         .calls()
         .contains(&"journalctl --since -30min -o short-iso-precise --no-pager".to_string()));
     assert_eq!(c.manifest.kind, DiagKind::Ticket);
+}
+
+/// A ticket's journal is the window around the request, whenever the archive is made; a journal
+/// that no longer reaches back to its start says so.
+#[test]
+fn journal_window_is_explicit_and_rotation_is_skipped() {
+    let root = tree();
+    let out = tempfile::tempdir().unwrap();
+    let mut o = opts(root.path());
+    o.kind = DiagKind::Ticket;
+    o.max_bytes = DIAG_TICKET_MAX_BYTES;
+    o.since_minutes = Some(30);
+    let since = Utc.with_ymd_and_hms(2026, 11, 5, 8, 30, 0).unwrap();
+    let until = Utc.with_ymd_and_hms(2026, 11, 5, 9, 2, 0).unwrap();
+    o.journal_window = Some((since, until));
+    let window =
+        "journalctl --since 2026-11-05 08:30:00 UTC --until 2026-11-05 09:02:00 UTC -o short-iso-precise --no-pager";
+    let before = "journalctl --until 2026-11-05 08:30:00 UTC -n 1 -q -o short-unix --no-pager";
+
+    // The journal reaches back past the start.
+    let r = FakeRunner::new();
+    r.respond(window, Output::ok("in the window\n"));
+    r.respond(before, Output::ok("1762330000.000000 host earlier\n"));
+    let c = collect(&o, "dev-1", out.path(), &r, now()).unwrap();
+    c.manifest.validate().unwrap();
+    let calls = r.calls();
+    assert!(calls.contains(&window.to_string()), "{calls:?}");
+    assert!(
+        !calls.iter().any(|l| l.contains("-30min")),
+        "the window wins over since_minutes: {calls:?}"
+    );
+    assert!(c
+        .manifest
+        .files
+        .iter()
+        .any(|f| f.path == "journal/recent.txt"));
+    assert!(
+        !c.manifest
+            .skipped
+            .iter()
+            .any(|s| s.source == source::JOURNAL_RECENT),
+        "{:?}",
+        c.manifest.skipped
+    );
+
+    // Rotated: nothing before the start.
+    let r = FakeRunner::new();
+    r.respond(window, Output::ok("only the end\n"));
+    r.respond(before, Output::ok(""));
+    let c = collect(&o, "dev-1", out.path(), &r, now()).unwrap();
+    c.manifest.validate().unwrap();
+    let skipped: Vec<&str> = c
+        .manifest
+        .skipped
+        .iter()
+        .filter(|s| s.source == source::JOURNAL_RECENT)
+        .map(|s| s.reason.as_str())
+        .collect();
+    assert_eq!(skipped.len(), 1, "{skipped:?}");
+    assert!(
+        skipped[0].contains("2026-11-05 08:30:00 UTC"),
+        "{skipped:?}"
+    );
 }
 
 #[test]

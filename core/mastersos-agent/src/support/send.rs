@@ -14,15 +14,16 @@
 //!    `too_many` waits for `Retry-After`, other keep-actions back off; `support_disabled` turns
 //!    every queued request `disabled` and drops their items; `invalid` (and any drop or give-up)
 //!    turns this one `failed`. Not held for low battery: it is a small JSON.
-//! 2. `sent`: collect the attachment (journal of the last [`ATTACH_SINCE_MINUTES`] minutes, the
+//! 2. `sent`: collect the attachment (the journal from [`ATTACH_BEFORE_MINUTES`] minutes before
+//!    the request was made to [`ATTACH_AFTER_MINUTES`] after, however late it is sent; the
 //!    screenshot if the student attached one) into an `archive` item for [`Target::Ticket`]; the
 //!    archive then uploads like any other (held for power, trimmed for room). The screenshot
 //!    leaves the store as soon as it is in the archive. The archive arriving or being given up
 //!    (`expired` after the server's 48 hours, `not_yours`, dropped for room) marks the request's
 //!    attachment done ([`attachment_finished`]); the ticket stays `sent`.
 //!
-//! [`sweep`] (every pass) deletes finished requests after [`FINISHED_KEEP_DAYS`] days and queues
-//! again a request whose upload item was lost.
+//! [`sweep`] (every pass) deletes finished requests after [`FINISHED_KEEP_DAYS`] days and orphan
+//! screenshots, and repairs a request whose upload item was lost.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -46,8 +47,14 @@ use crate::upload::queue::{
 pub const STORE_DIR: &str = "support-queue";
 /// A finished request (ticket and attachment in, or refused) is kept this long for `status`.
 pub const FINISHED_KEEP_DAYS: i64 = 7;
-/// The attachment's journal reaches back this far.
-pub const ATTACH_SINCE_MINUTES: u32 = 30;
+/// The attachment's journal is the window around the request's `created_at`, never around the
+/// send (sent hours later, the latest logs may be another student's or the login screen's): from
+/// this many minutes before …
+pub const ATTACH_BEFORE_MINUTES: i64 = 30;
+/// … to this many after.
+pub const ATTACH_AFTER_MINUTES: i64 = 2;
+/// A screenshot without its request (a crash between the two writes) older than this is deleted.
+pub const ORPHAN_SCREENSHOT_AGE: Duration = Duration::from_secs(10 * 60);
 /// The snapshot's network line is at most this long.
 pub const NETWORK_MAX_CHARS: usize = 200;
 /// Sent this much later than it was made, the network line says it is from sending time.
@@ -323,7 +330,7 @@ async fn attach(
         .request
         .screenshot
         .then(|| store.dir().join(format!("{id}.png")));
-    let c = match run_collect(cx, shot).await {
+    let c = match run_collect(cx, shot, item.request.created_at).await {
         Ok(c) => c,
         Err(e) => {
             attachment_finished(cx, id, &format!("collect: {e:#}"));
@@ -359,9 +366,14 @@ async fn attach(
     }
 }
 
-/// The ticket attachment: the recent journal and the screenshot (`shot`, in the store; the
-/// collector reads it through the root and checks only its size and PNG signature).
-async fn run_collect(cx: &DrainCtx<'_>, shot: Option<PathBuf>) -> Result<crate::diag::Collected> {
+/// The ticket attachment: the journal around `created_at` (the request's moment, however late it
+/// is sent) and the screenshot (`shot`, in the store; the collector reads it through the root and
+/// checks only its size and PNG signature).
+async fn run_collect(
+    cx: &DrainCtx<'_>,
+    shot: Option<PathBuf>,
+    created_at: DateTime<Utc>,
+) -> Result<crate::diag::Collected> {
     let root = cx.paths.root.clone();
     let screenshot = shot.and_then(|p| match p.strip_prefix(&root) {
         Ok(rel) => Some(PathBuf::from("/").join(rel)),
@@ -374,7 +386,11 @@ async fn run_collect(cx: &DrainCtx<'_>, shot: Option<PathBuf>) -> Result<crate::
         root,
         kind: DiagKind::Ticket,
         boots: 1,
-        since_minutes: Some(ATTACH_SINCE_MINUTES),
+        since_minutes: None,
+        journal_window: Some((
+            created_at - TimeDelta::minutes(ATTACH_BEFORE_MINUTES),
+            created_at + TimeDelta::minutes(ATTACH_AFTER_MINUTES),
+        )),
         screenshot,
         max_bytes: DIAG_TICKET_MAX_BYTES,
     };
@@ -389,8 +405,10 @@ async fn run_collect(cx: &DrainCtx<'_>, shot: Option<PathBuf>) -> Result<crate::
 }
 
 /// The attachment of `client_id` arrived or was given up (`why`): nothing left to send for it.
-/// Its screenshot goes; the ticket stays.
-pub fn attachment_finished(cx: &DrainCtx<'_>, client_id: &str, why: &str) {
+/// Its screenshot goes; the ticket stays. False when that could not be recorded: the caller keeps
+/// its archive item, so the next pass records it (a second upload try finds the cloud complete
+/// and skips the `PUT`) instead of collecting again.
+pub fn attachment_finished(cx: &DrainCtx<'_>, client_id: &str, why: &str) -> bool {
     log::info!("support: the attachment of {client_id}: {why}");
     let store = store(&cx.paths);
     locked(&store, |s| {
@@ -399,18 +417,24 @@ pub fn attachment_finished(cx: &DrainCtx<'_>, client_id: &str, why: &str) {
             s.update(&i)?;
         }
         s.remove_screenshot(client_id)
-    });
+    })
+    .is_some()
 }
 
-/// Every pass: deletes requests finished [`FINISHED_KEEP_DAYS`] days after they were made, and
-/// queues again an unfinished one that has nothing in the upload queue.
+/// Every pass, under the store's lock:
+/// - deletes requests finished [`FINISHED_KEEP_DAYS`] days after they were made;
+/// - queues again a `queued` request that has nothing in the upload queue;
+/// - marks done the attachment of a `sent` request that has neither its upload item nor its
+///   archive (the record of its end was lost): never collected and uploaded twice;
+/// - deletes screenshots older than [`ORPHAN_SCREENSHOT_AGE`] that have no request.
 pub fn sweep(cx: &DrainCtx<'_>, now: DateTime<Utc>) {
     let store = store(&cx.paths);
     if !store.dir().is_dir() {
         return;
     }
     locked(&store, |s| {
-        for i in s.list()? {
+        let items = s.list()?;
+        for i in &items {
             let id = i.request.client_id.as_str();
             if i.finished() {
                 if i.created_at + TimeDelta::days(FINISHED_KEEP_DAYS) <= now {
@@ -422,9 +446,26 @@ pub fn sweep(cx: &DrainCtx<'_>, now: DateTime<Utc>) {
             let archive = archive_name(&Target::Ticket {
                 client_id: id.to_string(),
             });
-            if !cx.queue.has(&support_name(id)) && !cx.queue.has(&archive) {
+            if cx.queue.has(&support_name(id)) || cx.queue.has(&archive) {
+                continue;
+            }
+            if i.state == ItemState::Queued {
                 log::warn!("support: {id} had nothing queued to send it; queueing it again");
                 cx.queue.enqueue_support(id, i.created_at)?;
+            } else {
+                log::warn!(
+                    "support: the attachment of {id} has nothing left queued; marking it done"
+                );
+                let mut done = i.clone();
+                done.attach_done = true;
+                s.update(&done)?;
+                s.remove_screenshot(id)?;
+            }
+        }
+        for id in s.screenshots_older_than(ORPHAN_SCREENSHOT_AGE)? {
+            if !items.iter().any(|i| i.request.client_id == id) {
+                log::warn!("support: removing the screenshot {id}.png, which has no request");
+                s.remove_screenshot(&id)?;
             }
         }
         Ok(())
