@@ -310,7 +310,10 @@ async fn run(cli: Cli) -> Result<()> {
             if let Loaded::Kit(kit) = &key {
                 register_escrow_recipient(&api, kit, &label, &mut out).await?;
             }
-            println!("When done, ask the operator to delete this keys token (mastersos-server cloud school token delete).");
+            println!(
+                "Done. The key token expires by itself within 60 minutes; delete the token file {} now.",
+                server.token_file.display()
+            );
         }
         Cmd::Verify { server, pin_dir } => {
             let v =
