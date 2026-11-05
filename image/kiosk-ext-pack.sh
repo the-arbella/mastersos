@@ -7,10 +7,11 @@
 # (the image carries them, so a fresh Chrome profile installs with no network) or an https directory. Writes to the output dir:
 #   mastersos-kiosk-ext.crx          crx3，签名的 zip（条目排序、时间固定：同一把钥匙、同一份源码打出同样的字节）
 #   updates.xml                      appid = id，codebase = <base_url>/mastersos-kiosk-ext.crx，version 取 manifest
-#   org.mastersos.kiosk_exit.json    native messaging 宿主清单（kiosk-ext/ 的模板填上 id）
+#   org.mastersos.kiosk_exit.json    native messaging 宿主清单：退出（kiosk-ext/ 的模板填上 id）
+#   org.mastersos.support.json       native messaging 宿主清单：Get help（同上）
 #   kiosk-ext.json                   {"id", "update_url": "<base_url>/updates.xml"}，agent 的 kiosk 步骤读它
-# 并在 stdout 打印 id（只有这一行）。前两个放到 <base_url> 下；后两个由 build.sh 装进镜像（计划 9 Task 8）：
-# 宿主清单进 /etc/opt/chrome/native-messaging-hosts/，kiosk-ext.json 进 /usr/lib/mastersos/。
+# 并在 stdout 打印 id（只有这一行）。前两个放到 <base_url> 下；其余由 build.sh 装进镜像（计划 9 Task 8）：
+# 两份宿主清单进 /etc/opt/chrome/native-messaging-hosts/，kiosk-ext.json 进 /usr/lib/mastersos/。
 # crx 的拼法与签名在 kiosk-ext-pack.py（只用 python3 标准库与 openssl 命令）。测试：tests/kiosk-ext-pack-test.sh。
 set -euo pipefail
 
@@ -35,4 +36,4 @@ if [ ! -d "$out" ] || [ ! -w "$out" ]; then die "输出目录 $out 写不了"; f
 
 # MASTERSOS_KIOSK_EXT_SRC 换扩展源码目录（测试用）
 exec python3 -I "$here/kiosk-ext-pack.py" \
-	"${MASTERSOS_KIOSK_EXT_SRC:-$here/../kiosk-extension}" "$here/kiosk-ext/org.mastersos.kiosk_exit.json.in" "$key" "$out" "$base"
+	"${MASTERSOS_KIOSK_EXT_SRC:-$here/../kiosk-extension}" "$here/kiosk-ext" "$key" "$out" "$base"

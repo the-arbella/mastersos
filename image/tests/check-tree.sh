@@ -1380,7 +1380,8 @@ fi
 #     都只是 exec 进 agent 的 kiosk 子命令（core 的 kiosk_session.rs）；可执行、进 CI 的 shellcheck；desktop.rs 的启动器执行前者
 r=0
 for f in "usr/bin/mastersos-kiosk|exec /usr/bin/mastersos-agent kiosk \"\$@\"" \
-	"usr/lib/mastersos/mastersos-kiosk-exit|exec /usr/bin/mastersos-agent kiosk exit-host \"\$@\""; do
+	"usr/lib/mastersos/mastersos-kiosk-exit|exec /usr/bin/mastersos-agent kiosk exit-host \"\$@\"" \
+	"usr/lib/mastersos/mastersos-support-host|exec /usr/bin/mastersos-agent support native-host \"\$@\""; do
 	p=$rel/mkosi.extra/${f%%|*}
 	if [ ! -x "$p" ] || [ "$(git ls-files -s -- "$p" | cut -c1-6)" = 100644 ] || [ "$(head -n1 "$p")" != '#!/bin/bash' ] ||
 		! grep -qxF -- "${f#*|}" "$p"; then
@@ -1396,7 +1397,7 @@ grep -qF 'pub const KIOSK_BIN: &str = "/usr/bin/mastersos-kiosk";' "$core/master
 	bad 33 "$core/mastersos-agent/src/system/desktop.rs 的 KIOSK_BIN 应是 /usr/bin/mastersos-kiosk"
 	r=1
 }
-[ "$r" = 0 ] && ok 33 "mastersos-kiosk 与 mastersos-kiosk-exit 可执行、只 exec 进 agent 的 kiosk 子命令，CI shellcheck 它们"
+[ "$r" = 0 ] && ok 33 "mastersos-kiosk、mastersos-kiosk-exit 与 mastersos-support-host 可执行、只 exec 进 agent 的子命令，CI shellcheck 它们"
 
 # 34. 锁定应用的镜像这一侧（计划 9 Task 8，设计 §4.3、§4.4、§4.6、§5）：gnome-kiosk 会话、pam_namespace 的实例目录与 namespace.init、
 #     kiosk 账号的 dconf、kernel.sysrq、错误页、考试扩展的打包与安装。路径与 agent / bundle 里的常量逐个对上
@@ -1415,7 +1416,8 @@ k_policies=$(const_of "$kagent" POLICIES_DIR)
 k_extfile=$(const_of "$kagent" EXAM_EXT_FILE)
 k_errpage=$(const_of "$kbundle" ERROR_PAGE)
 k_exithost=$(const_of "$kbundle" EXIT_HOST)
-for v in k_session k_polydir k_prefix k_public k_policies k_extfile k_errpage k_exithost; do
+k_supporthost=$(const_of "$kbundle" SUPPORT_HOST)
+for v in k_session k_polydir k_prefix k_public k_policies k_extfile k_errpage k_exithost k_supporthost; do
 	[ -n "${!v}" ] || {
 		bad 34 "读不出 agent / bundle 里的常量 ${v#k_}（$kagent、$kbundle）"
 		r=1
@@ -1582,11 +1584,17 @@ if ! python3 -I -c 'import json, sys; d = json.load(open(sys.argv[1])); sys.exit
 	bad 34 "$tmpl 的 name 应是 ${k_exithost}、path 是 /usr/lib/mastersos/mastersos-kiosk-exit"
 	r=1
 fi
+tmpl=$rel/kiosk-ext/$k_supporthost.json.in
+if ! python3 -I -c 'import json, sys; d = json.load(open(sys.argv[1])); sys.exit(0 if d["name"] == sys.argv[2] and d["path"] == "/usr/lib/mastersos/mastersos-support-host" else 1)' "$tmpl" "$k_supporthost" 2>/dev/null; then
+	bad 34 "$tmpl 的 name 应是 ${k_supporthost}、path 是 /usr/lib/mastersos/mastersos-support-host"
+	r=1
+fi
 # build.sh：打包考试扩展、按 agent 读的路径装 kiosk-ext.json、宿主清单进 /etc/opt/chrome/native-messaging-hosts/<EXIT_HOST>.json；
 # 钥匙经 keyset 的 $priv；agent 等二进制 0755（kiosk 账号要能执行 /usr/bin/mastersos-agent）
 # shellcheck disable=SC2016 # 字面的 $here、$priv、$bin、$extra，是要找的源码文本
 for l in '"$here/kiosk-ext-pack.sh"' 'kext_key=$priv/kiosk-ext.pem' 'rm -rf "$kext_tree" "$kext_out"' "\"\$kext_tree/$k_extfile\"" \
-	"\"\$kext_tree/etc/opt/chrome/native-messaging-hosts/$k_exithost.json\"" 'install -m 0755 "$bin" "$extra/usr/bin/"'; do
+	"\"\$kext_tree/etc/opt/chrome/native-messaging-hosts/$k_exithost.json\"" \
+	"\"\$kext_tree/etc/opt/chrome/native-messaging-hosts/$k_supporthost.json\"" 'install -m 0755 "$bin" "$extra/usr/bin/"'; do
 	grep -qF -- "$l" "$rel/build.sh" || {
 		bad 34 "build.sh 应有 $l"
 		r=1
@@ -1601,8 +1609,8 @@ grep -qxF '	"${SRCDIR:?}/pam-hooks.sh" /etc/pam.d /usr/lib/pam.d' "$rel/mkosi.po
 # 考试扩展的附加树里只有那两个文件（第 16 条只认 $kext_tree 这个名字，这里管它装了什么）
 # shellcheck disable=SC2016 # 同上
 kext_installs=$(grep -E '^[[:space:]]*install .*"\$kext_tree/' "$rel/build.sh" | grep -vE '^[[:space:]]*install -d ' | grep -oE '"\$kext_tree/[^"]*"' | LC_ALL=C sort | tr '\n' ' ')
-[ "$kext_installs" = "\"\$kext_tree/\$kext_dir/mastersos-kiosk-ext.crx\" \"\$kext_tree/\$kext_dir/updates.xml\" \"\$kext_tree/etc/opt/chrome/native-messaging-hosts/$k_exithost.json\" \"\$kext_tree/$k_extfile\" " ] || {
-	bad 34 "build.sh 往 \$kext_tree 里只装 kiosk-ext.json、宿主清单、crx 与 updates.xml，实际：${kext_installs:-<无>}"
+[ "$kext_installs" = "\"\$kext_tree/\$kext_dir/mastersos-kiosk-ext.crx\" \"\$kext_tree/\$kext_dir/updates.xml\" \"\$kext_tree/etc/opt/chrome/native-messaging-hosts/$k_exithost.json\" \"\$kext_tree/etc/opt/chrome/native-messaging-hosts/$k_supporthost.json\" \"\$kext_tree/$k_extfile\" " ] || {
+	bad 34 "build.sh 往 \$kext_tree 里只装 kiosk-ext.json、两份宿主清单、crx 与 updates.xml，实际：${kext_installs:-<无>}"
 	r=1
 }
 [ "$r" = 0 ] && ok 34 "锁定应用：gnome-kiosk 会话（target drop-in + org.mastersos.KioskApp.service）、dconf file-db 锁住 switch-to-session、pam_namespace 实例父目录 0000 与 namespace.init、sysrq=0、错误页、考试扩展装进镜像"

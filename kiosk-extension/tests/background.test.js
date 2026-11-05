@@ -11,7 +11,8 @@ function event() {
   return { addListener: (f) => ls.push(f), fire: (...a) => ls.forEach((f) => f(...a)), ls };
 }
 
-function load({ connectThrows = false } = {}) {
+/** `native(host, msg, cb, chrome)` answers chrome.runtime.sendNativeMessage (the Get help host). */
+function load({ connectThrows = false, native = () => {} } = {}) {
   const ports = [];
   const onMessage = event();
   const onInstalled = event();
@@ -22,6 +23,7 @@ function load({ connectThrows = false } = {}) {
       lastError: undefined,
       onMessage,
       onInstalled,
+      sendNativeMessage: vi.fn((host, msg, cb) => native(host, msg, cb, chrome)),
       connectNative: vi.fn((name) => {
         if (connectThrows) throw new Error("Specified native messaging host not found.");
         const port = { name, onMessage: event(), onDisconnect: event(), postMessage: vi.fn(), disconnect: vi.fn() };
@@ -111,5 +113,118 @@ describe("后台", () => {
       chrome.runtime.onInstalled.fire({ reason });
       expect(chrome.tabs.query, reason).not.toHaveBeenCalled();
     }
+  });
+});
+
+// Get help (plan 2026-11-05 Task 7): the content script's {cmd:"help-…"} messages become one native message each to
+// org.mastersos.support (mastersos-agent support native-host, which forwards to /run/mastersos/support.sock and fills
+// in the real kiosk:<app id> session). No screenshot in kiosk (Ruling P1). Only known fields go either way.
+describe("Get help", () => {
+  const HOST = "org.mastersos.support";
+  const answer = (reply) => (_h, _m, cb) => cb(reply);
+
+  it("help-enabled asks the host {op:\"enabled\"} and passes a boolean back", () => {
+    const { chrome, send } = load({ native: answer({ ok: true, enabled: true, extra: 1 }) });
+    const { keep, sendResponse } = send({ cmd: "help-enabled" });
+    expect(keep).toBe(true);
+    expect(chrome.runtime.sendNativeMessage).toHaveBeenCalledTimes(1);
+    expect(chrome.runtime.sendNativeMessage.mock.calls[0].slice(0, 2)).toEqual([HOST, { op: "enabled" }]);
+    expect(sendResponse).toHaveBeenCalledWith({ ok: true, enabled: true });
+    expect(chrome.runtime.connectNative).not.toHaveBeenCalled();
+  });
+
+  it("sends_native_message_shape: submit carries session \"kiosk\" and screenshot_png_b64 null", () => {
+    const { chrome, send } = load({
+      native: answer({ ok: true, client_id: "0b0c-1", state: "queued", user: "x" }),
+    });
+    const { keep, sendResponse } = send({ cmd: "help-submit", category: "hardware", text: "no sound" });
+    expect(keep).toBe(true);
+    const [h, m] = chrome.runtime.sendNativeMessage.mock.calls[0];
+    expect(h).toBe(HOST);
+    expect(m).toEqual({ op: "submit", category: "hardware", text: "no sound", session: "kiosk", screenshot_png_b64: null });
+    expect(Object.keys(m)).toEqual(["op", "category", "text", "session", "screenshot_png_b64"]);
+    expect(sendResponse).toHaveBeenCalledWith({ ok: true, client_id: "0b0c-1", state: "queued" });
+  });
+
+  it("submit errors pass through as a short code", () => {
+    for (const e of ["rate_limited", "disabled", "invalid"]) {
+      const { send } = load({ native: answer({ ok: false, error: e }) });
+      const { sendResponse } = send({ cmd: "help-submit", category: "wifi", text: "" });
+      expect(sendResponse).toHaveBeenCalledWith({ ok: false, error: e });
+    }
+    const { send } = load({ native: answer({ ok: false, error: "<b>not a code</b>" }) });
+    const { sendResponse } = send({ cmd: "help-submit", category: "wifi", text: "" });
+    expect(sendResponse).toHaveBeenCalledWith({ ok: false });
+  });
+
+  it("status asks {op:\"status\",client_id} and passes state and ticket back", () => {
+    for (const [ticket, want] of [
+      ["1042", "1042"],
+      [1042, "1042"],
+    ]) {
+      const { chrome, send } = load({ native: answer({ ok: true, state: "sent", ticket }) });
+      const { sendResponse } = send({ cmd: "help-status", client_id: "c1" });
+      expect(chrome.runtime.sendNativeMessage.mock.calls[0][1]).toEqual({ op: "status", client_id: "c1" });
+      expect(sendResponse).toHaveBeenCalledWith({ ok: true, state: "sent", ticket: want });
+    }
+    const { send } = load({ native: answer({ ok: true, state: "queued" }) });
+    const { sendResponse } = send({ cmd: "help-status", client_id: "c1" });
+    expect(sendResponse).toHaveBeenCalledWith({ ok: true, state: "queued" });
+  });
+
+  it("host missing, crashed or answering garbage: {ok:false, error:\"unreachable\"}", () => {
+    const cases = [
+      (_h, _m, cb, chrome) => {
+        chrome.runtime.lastError = { message: "Specified native messaging host not found." };
+        cb(undefined);
+        chrome.runtime.lastError = undefined;
+      },
+      () => {
+        throw new Error("Access to the specified native messaging host is forbidden.");
+      },
+      answer(undefined),
+      answer("ok"),
+      answer([1]),
+    ];
+    for (const native of cases) {
+      const { send } = load({ native });
+      const { sendResponse } = send({ cmd: "help-enabled" });
+      expect(sendResponse).toHaveBeenCalledWith({ ok: false, error: "unreachable" });
+    }
+  });
+
+  it("malformed messages are ignored and reach no host", () => {
+    const { chrome, send } = load({ native: answer({ ok: true }) });
+    const bad = [
+      { cmd: "help-enabled", x: 1 },
+      { cmd: "help-submit", category: "printer", text: "" },
+      { cmd: "help-submit", category: "wifi" },
+      { cmd: "help-submit", category: "wifi", text: 3 },
+      { cmd: "help-submit", category: "wifi", text: "x".repeat(1001) },
+      { cmd: "help-submit", category: "wifi", text: "", session: "login" },
+      { cmd: "help-submit", category: "wifi", text: "", screenshot_png_b64: "iVBOR" },
+      { cmd: "help-submit", category: "wifi", text: "", user: "teacher" },
+      { cmd: "help-status" },
+      { cmd: "help-status", client_id: "" },
+      { cmd: "help-status", client_id: 5 },
+      { cmd: "help-status", client_id: "x".repeat(200) },
+      { cmd: "help" },
+    ];
+    for (const m of bad) {
+      const { keep, sendResponse } = send(m);
+      expect(keep, JSON.stringify(m)).toBe(false);
+      expect(sendResponse).not.toHaveBeenCalled();
+    }
+    expect(chrome.runtime.sendNativeMessage).not.toHaveBeenCalled();
+    // 1000 characters is still fine
+    const { keep } = send({ cmd: "help-submit", category: "wifi", text: "x".repeat(1000) });
+    expect(keep).toBe(true);
+  });
+
+  it("help messages from another extension are ignored", () => {
+    const { chrome, send } = load({ native: answer({ ok: true, enabled: true }) });
+    const { keep } = send({ cmd: "help-enabled" }, { id: "pppppppppppppppppppppppppppppppp", tab: { id: 1 } });
+    expect(keep).toBe(false);
+    expect(chrome.runtime.sendNativeMessage).not.toHaveBeenCalled();
   });
 });

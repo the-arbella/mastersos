@@ -6,9 +6,20 @@
 // Also (per-app mock env, design §4.9): on install, reload the tabs of every mock env's hosts — each locked session is a
 // fresh profile and downloads the extension again, so the first page may have loaded before the mock env existed.
 // Never on update: reloading in the middle of a test is worse than a missing signal.
+// Get help (plan 2026-11-05 Task 7): the content script's {cmd:"help-enabled" | "help-submit" | "help-status"} become
+// one native message each to org.mastersos.support (/usr/lib/mastersos/mastersos-support-host → mastersos-agent
+// support native-host, which forwards one JSON line to /run/mastersos/support.sock and answers one line). The host
+// decides who is asking and fills in the real kiosk:<app id> session; "kiosk" here is only a placeholder. No
+// screenshot in kiosk (Ruling P1): screenshot_png_b64 is always null. Only known fields go either way.
 "use strict";
 
 const EXIT_HOST = "org.mastersos.kiosk_exit";
+const SUPPORT_HOST = "org.mastersos.support";
+// SupportCategory's wire names (mastersos-bundle diag.rs)
+const CATEGORIES = ["wifi", "sign_in", "app", "hardware", "battery", "other"];
+const TEXT_MAX = 1000; // UTF-16 units: never more characters than that
+const ID_MAX = 128;
+const CODE_RE = /^[a-z_]{1,32}$/;
 // Every mock env's hosts (its content scripts' `matches` in manifest.json); add the next app's here too.
 const MOCK_TAB_PATTERNS = ["https://*.nwea.org/*", "https://*.mapnwea.org/*"];
 
@@ -52,10 +63,66 @@ function requestExit(respond) {
   }
 }
 
+const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+const hasKeys = (o, keys) => Object.keys(o).length === keys.length && keys.every((k) => Object.hasOwn(o, k));
+
+/** The native request for a well-formed help message, or null (then it is ignored). */
+function helpRequest(msg) {
+  if (!isObj(msg)) return null;
+  if (msg.cmd === "help-enabled" && hasKeys(msg, ["cmd"])) return { op: "enabled" };
+  if (msg.cmd === "help-submit" && hasKeys(msg, ["cmd", "category", "text"])) {
+    if (!CATEGORIES.includes(msg.category) || typeof msg.text !== "string" || msg.text.length > TEXT_MAX) return null;
+    return { op: "submit", category: msg.category, text: msg.text, session: "kiosk", screenshot_png_b64: null };
+  }
+  if (msg.cmd === "help-status" && hasKeys(msg, ["cmd", "client_id"])) {
+    const id = msg.client_id;
+    if (typeof id !== "string" || id.length === 0 || id.length > ID_MAX) return null;
+    return { op: "status", client_id: id };
+  }
+  return null;
+}
+
+/** Only the fields the content script uses, with the right types. */
+function helpReply(r) {
+  if (!isObj(r) || typeof r.ok !== "boolean") return { ok: false, error: "unreachable" };
+  const out = { ok: r.ok };
+  if (!r.ok) {
+    if (typeof r.error === "string" && CODE_RE.test(r.error)) out.error = r.error;
+    return out;
+  }
+  if (typeof r.enabled === "boolean") out.enabled = r.enabled;
+  if (typeof r.client_id === "string" && r.client_id.length > 0 && r.client_id.length <= ID_MAX) {
+    out.client_id = r.client_id;
+  }
+  if (typeof r.state === "string" && CODE_RE.test(r.state)) out.state = r.state;
+  if ((typeof r.ticket === "string" && /^[A-Za-z0-9-]{1,32}$/.test(r.ticket)) || Number.isSafeInteger(r.ticket)) {
+    out.ticket = String(r.ticket);
+  }
+  return out;
+}
+
+function askSupport(req, respond) {
+  try {
+    chrome.runtime.sendNativeMessage(SUPPORT_HOST, req, (reply) => {
+      // host not installed, forbidden by policy, crashed or exited without answering
+      if (chrome.runtime.lastError) respond({ ok: false, error: "unreachable" });
+      else respond(helpReply(reply));
+    });
+  } catch {
+    respond({ ok: false, error: "unreachable" });
+  }
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (!sender || sender.id !== chrome.runtime.id || !isExit(msg)) return false;
-  requestExit(sendResponse);
-  return true; // 异步回答
+  if (!sender || sender.id !== chrome.runtime.id) return false;
+  if (isExit(msg)) {
+    requestExit(sendResponse);
+    return true; // 异步回答
+  }
+  const req = helpRequest(msg);
+  if (!req) return false;
+  askSupport(req, sendResponse);
+  return true;
 });
 
 chrome.runtime.onInstalled.addListener((details) => {

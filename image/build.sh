@@ -157,7 +157,7 @@ fi
 
 # --- 考试扩展（计划 9 Task 8）：打包、装进镜像的两个文件经附加树进去（不写进 git 的树）----------------------
 #   kiosk-ext.json                 → /usr/lib/mastersos/kiosk-ext.json（agent 的 kiosk 步骤读 id 与 update_url）
-#   org.mastersos.kiosk_exit.json  → /etc/opt/chrome/native-messaging-hosts/（factory；/etc/opt/chrome 是策略表里的 dir，这个子目录
+#   org.mastersos.kiosk_exit.json、org.mastersos.support.json → /etc/opt/chrome/native-messaging-hosts/（factory；/etc/opt/chrome 是策略表里的 dir，这个子目录
 #                                    不在表里，机器上是指回 factory 的链接，跟着镜像走；不在被 pam_namespace 换掉的 policies/managed 下）
 #   mastersos-kiosk-ext.crx、updates.xml → 产物目录的 kiosk-ext/，publish.sh <版本> chrome 放进发布根的 chrome/
 # 目录一级级显式 0755：finalize 按 factory 里的权限生成 /etc/opt、/etc/opt/chrome 的 d 行，不能让构建用户的 umask 决定它们
@@ -182,6 +182,7 @@ print(u.get("version"))' "$kext_out/updates.xml")
 	install -m 0644 "$kext_out/mastersos-kiosk-ext.crx" "$kext_tree/$kext_dir/mastersos-kiosk-ext.crx"
 	install -m 0644 "$kext_out/updates.xml" "$kext_tree/$kext_dir/updates.xml"
 	install -m 0644 "$kext_out/org.mastersos.kiosk_exit.json" "$kext_tree/etc/opt/chrome/native-messaging-hosts/org.mastersos.kiosk_exit.json"
+	install -m 0644 "$kext_out/org.mastersos.support.json" "$kext_tree/etc/opt/chrome/native-messaging-hosts/org.mastersos.support.json"
 	echo "build.sh: 考试扩展 id=$kext_id version=$kext_version，in the image at /$kext_dir"
 fi
 

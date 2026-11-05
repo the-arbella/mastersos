@@ -15,13 +15,23 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
 // not reattach its host.
 const cleanups = [];
 
-/** Run the content script once; returns the attached host, the peeked closed shadow root and the chrome stub. */
-function inject(reply = { ok: true }) {
-  const sendMessage = vi.fn((_msg, cb) => {
+/**
+ * Run the content script once; returns the attached host, the peeked closed shadow root and the chrome stub.
+ * `reply` answers the Exit message; `help` answers the Get help messages ({cmd:"help-…"}), by default
+ * "turned off" (so the menu shows only Exit). `sendMessage` records only the Exit messages, `help` the others.
+ */
+function inject(reply = { ok: true }, { help: helpReply } = {}) {
+  const exitSend = vi.fn((_msg, cb) => {
     if (typeof reply === "function") reply(cb);
     else cb(reply);
   });
-  const chrome = { runtime: { sendMessage, lastError: undefined } };
+  const help = vi.fn(
+    helpReply || ((msg, cb) => cb(msg.cmd === "help-enabled" ? { ok: true, enabled: false } : { ok: false })),
+  );
+  const route = (msg, cb) =>
+    (msg && typeof msg.cmd === "string" && msg.cmd.startsWith("help-") ? help : exitSend)(msg, cb);
+  const sendMessage = exitSend;
+  const chrome = { runtime: { sendMessage: route, lastError: undefined } };
   let root = null;
   let host = null;
   const orig = Element.prototype.attachShadow;
@@ -56,7 +66,7 @@ function inject(reply = { ok: true }) {
     globalThis.setInterval = realSetInterval;
     document.addEventListener = realAdd;
   }
-  return { host, root, chrome, sendMessage };
+  return { host, root, chrome, sendMessage, help };
 }
 
 /** Stubs for jsdom's missing Popover API and :popover-open / :modal. */
@@ -94,7 +104,7 @@ afterEach(() => {
 const fab = (root) => root.querySelector("button.fab");
 const dock = (root) => root.querySelector(".dock");
 const menu = (root) => root.querySelector("[role=menu]");
-const items = (root) => [...root.querySelectorAll("[role=menuitem]")];
+const items = (root) => [...root.querySelectorAll("[role=menuitem]:not([hidden])")];
 const dialog = (root) => root.querySelector("[role=dialog]");
 const overlay = (root) => root.querySelector(".overlay");
 const title = (root) => root.querySelector(".title").textContent;
@@ -604,6 +614,339 @@ describe("Exit confirmation", () => {
       document.removeEventListener("click", onPage);
       document.removeEventListener("keydown", onPage);
     }
+  });
+});
+
+describe("Get help", () => {
+  const CATS = ["Wi-Fi", "Can't sign in", "An app", "Screen, keys or sound", "Battery", "Other"];
+  const PLACEHOLDER = "What happened? Please don't include passwords or personal details.";
+  const SENT = "Sent. Ticket #1042. IT has been told.";
+  const QUEUED = "Saved. It will be sent when this computer is online.";
+  const LIMITED = "You've sent 3 requests this hour. Please try again later.";
+  const OFF = "Help requests are turned off at this school.";
+  const FAILED = "Couldn't send. Please tell a teacher.";
+
+  const hd = (root) => root.querySelector(".help-dialog");
+  const hOverlay = (root) => hd(root).parentNode;
+  const pills = (root) => [...hd(root).querySelectorAll("[role=radio]")];
+  const area = (root) => hd(root).querySelector("textarea");
+  const send = (root) => hd(root).querySelector("button.send");
+  const hCancel = (root) => hd(root).querySelector("button.help-cancel");
+  const hOk = (root) => hd(root).querySelector("button.help-ok");
+  const hTitle = (root) => hd(root).querySelector(".title").textContent;
+  const hBody = (root) => hd(root).querySelector(".body").textContent;
+  const hError = (root) => hd(root).querySelector(".error");
+  const shown = (e) => {
+    for (let n = e; n && n.nodeType === 1; n = n.parentNode) if (n.hidden) return false;
+    return true;
+  };
+  const visible = (root) =>
+    [...hd(root).querySelectorAll("button, textarea, input")].filter((e) => shown(e) && !e.disabled);
+  const visibleButtons = (root) =>
+    visible(root)
+      .filter((b) => b.localName === "button" && !b.getAttribute("role"))
+      .map((b) => b.textContent);
+  const calls = (help, cmd) => help.mock.calls.map((c) => c[0]).filter((m) => m.cmd === cmd);
+  // promise callbacks only (works with fake timers too)
+  const flush = async () => {
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+  };
+  /** Tear down one injection inside a test that injects several times. */
+  const reset = () => {
+    while (cleanups.length) cleanups.pop()();
+    document.documentElement.querySelectorAll("mastersos-exit").forEach((e) => e.remove());
+  };
+
+  /** A support host that is on and answers submit and each status poll from the lists given. */
+  function host({ enabled = true, submit = { ok: true, client_id: "c1", state: "queued" }, status = [] } = {}) {
+    const left = [...status];
+    return (msg, cb) => {
+      if (msg.cmd === "help-enabled") cb({ ok: true, enabled });
+      else if (msg.cmd === "help-submit") {
+        if (submit !== null) cb(submit); // null: never answers
+      } else if (msg.cmd === "help-status") cb(left.length ? left.shift() : { ok: true, state: "queued" });
+    };
+  }
+  async function openHelp(root) {
+    fab(root).click();
+    await flush();
+    expect(items(root)[0].textContent.trim()).toBe("Get help");
+    items(root)[0].click();
+  }
+  async function fillAndSend(root, cat = 0, text = "") {
+    pills(root)[cat].click();
+    area(root).value = text;
+    send(root).click();
+    await flush();
+  }
+
+  it("menu_has_get_help_before_exit: neutral item with an icon, the enabled query is made once", async () => {
+    const { root, help } = inject(undefined, { help: host() });
+    expect(help).not.toHaveBeenCalled(); // asked only when the menu first opens
+    fab(root).click();
+    await flush();
+    expect(items(root).map((i) => i.textContent.trim())).toEqual(["Get help", "Exit"]);
+    const g = items(root)[0];
+    expect(g.querySelector("svg")).not.toBeNull();
+    expect(g.classList.contains("danger")).toBe(false);
+    expect(items(root)[1].classList.contains("danger")).toBe(true);
+    // arrow keys now move between the two
+    key(root.activeElement, "Home");
+    expect(root.activeElement).toBe(g);
+    key(g, "ArrowDown");
+    expect(root.activeElement).toBe(items(root)[1]);
+    fab(root).click();
+    fab(root).click();
+    await flush();
+    expect(calls(help, "help-enabled")).toEqual([{ cmd: "help-enabled" }]);
+  });
+
+  it("hidden_when_disabled: turned off, an error, no host or no answer all keep Get help hidden", async () => {
+    const answers = [
+      (_m, cb) => cb({ ok: true, enabled: false }),
+      (_m, cb) => cb({ ok: false }),
+      (_m, cb) => cb({ ok: true, enabled: "yes" }),
+      (_m, cb) => cb(undefined),
+      () => {
+        throw new Error("Extension context invalidated.");
+      },
+      () => {}, // never answers
+    ];
+    for (const a of answers) {
+      const { root } = inject(undefined, { help: a });
+      fab(root).click();
+      await flush();
+      expect(items(root).map((i) => i.textContent.trim())).toEqual(["Exit"]);
+      reset();
+    }
+    // lastError (the background is gone)
+    const { root, chrome } = inject(undefined, {
+      help: (_m, cb) => {
+        chrome.runtime.lastError = { message: "Could not establish connection." };
+        cb({ ok: true, enabled: true });
+        chrome.runtime.lastError = undefined;
+      },
+    });
+    fab(root).click();
+    await flush();
+    expect(items(root).map((i) => i.textContent.trim())).toEqual(["Exit"]);
+  });
+
+  it("opens a dialog in English: title, six topics, the placeholder, Cancel / Send; menu closed", async () => {
+    const { root } = inject(undefined, { help: host() });
+    await openHelp(root);
+    expect(menu(root).hidden).toBe(true);
+    expect(hOverlay(root).hidden).toBe(false);
+    expect(hd(root).getAttribute("role")).toBe("dialog");
+    expect(hd(root).getAttribute("aria-modal")).toBe("true");
+    expect(hTitle(root)).toBe("Get help from IT");
+    expect(hd(root).querySelector("[role=radiogroup]")).not.toBeNull();
+    expect(pills(root).map((p) => p.textContent)).toEqual(CATS);
+    expect(pills(root).map((p) => p.getAttribute("aria-checked"))).toEqual(Array(6).fill("false"));
+    expect(area(root).placeholder).toBe(PLACEHOLDER);
+    expect(area(root).maxLength).toBe(1000);
+    expect(visibleButtons(root)).toEqual(["Cancel", "Send"]);
+    expect(root.activeElement).toBe(pills(root)[0]);
+    // the Exit dialog stays closed
+    expect(overlay(root).hidden).toBe(true);
+  });
+
+  it("no_screenshot_option_in_kiosk: no checkbox, no screenshot wording, nothing about it in the message", async () => {
+    const { root, help } = inject(undefined, { help: host() });
+    await openHelp(root);
+    expect(hd(root).querySelector("input")).toBeNull();
+    expect(hd(root).textContent).not.toMatch(/screenshot/i);
+    await fillAndSend(root, 0, "");
+    const [m] = calls(help, "help-submit");
+    expect(Object.keys(m).sort()).toEqual(["category", "cmd", "text"]);
+  });
+
+  it("dialog_requires_category: Send without a topic sends nothing and says so; picking one clears it", async () => {
+    const { root, help } = inject(undefined, { help: host() });
+    await openHelp(root);
+    expect(shown(hError(root))).toBe(false);
+    area(root).value = "no wifi";
+    send(root).click();
+    await flush();
+    expect(calls(help, "help-submit")).toEqual([]);
+    expect(shown(hError(root))).toBe(true);
+    expect(hError(root).textContent).toBe("Choose a topic first.");
+    expect(root.activeElement).toBe(pills(root)[0]);
+    pills(root)[1].click();
+    expect(shown(hError(root))).toBe(false);
+    expect(pills(root)[1].getAttribute("aria-checked")).toBe("true");
+    // one topic at a time
+    pills(root)[2].click();
+    expect(pills(root).map((p) => p.getAttribute("aria-checked"))).toEqual([
+      "false",
+      "false",
+      "true",
+      "false",
+      "false",
+      "false",
+    ]);
+    send(root).click();
+    await flush();
+    expect(calls(help, "help-submit")).toHaveLength(1);
+  });
+
+  it("sends_native_message_shape: the topic's wire id and the trimmed text; an empty description is fine", async () => {
+    const ids = ["wifi", "sign_in", "app", "hardware", "battery", "other"];
+    for (let i = 0; i < 6; i++) {
+      const { root, help } = inject(undefined, { help: host() });
+      await openHelp(root);
+      await fillAndSend(root, i, i === 3 ? "  the screen is black \n" : "");
+      expect(calls(help, "help-submit")).toEqual([
+        { cmd: "help-submit", category: ids[i], text: i === 3 ? "the screen is black" : "" },
+      ]);
+      reset();
+    }
+  });
+
+  it("shows_ticket_or_queued_text: polls every 3 s; a ticket shows the Sent text, then polling stops", async () => {
+    vi.useFakeTimers();
+    const { root, help } = inject(undefined, {
+      help: host({ status: [{ ok: true, state: "queued" }, { ok: true, state: "sent", ticket: "1042" }] }),
+    });
+    await openHelp(root);
+    await fillAndSend(root, 0, "");
+    // waiting: a spinner, the form gone
+    expect(shown(hd(root).querySelector(".spinner"))).toBe(true);
+    expect(shown(area(root))).toBe(false);
+    expect(calls(help, "help-status")).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(calls(help, "help-status")).toEqual([{ cmd: "help-status", client_id: "c1" }]);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(calls(help, "help-status")).toHaveLength(2);
+    expect(hBody(root)).toBe(SENT);
+    expect(shown(hd(root).querySelector(".spinner"))).toBe(false);
+    expect(visibleButtons(root)).toEqual(["OK"]);
+    expect(root.activeElement).toBe(hOk(root));
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(calls(help, "help-status")).toHaveLength(2);
+    hOk(root).click();
+    expect(hOverlay(root).hidden).toBe(true);
+    expect(root.activeElement).toBe(fab(root));
+  });
+
+  it("shows_ticket_or_queued_text: no ticket within 60 s shows the Saved text and stops polling", async () => {
+    vi.useFakeTimers();
+    const { root, help } = inject(undefined, { help: host() });
+    await openHelp(root);
+    await fillAndSend(root, 5, "x");
+    await vi.advanceTimersByTimeAsync(57000);
+    expect(shown(hd(root).querySelector(".spinner"))).toBe(true);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(hBody(root)).toBe(QUEUED);
+    const n = calls(help, "help-status").length;
+    expect(n).toBe(20);
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(calls(help, "help-status")).toHaveLength(n);
+  });
+
+  it("status answers that fail on the way are retried; a later ticket still shows", async () => {
+    vi.useFakeTimers();
+    const { root } = inject(undefined, {
+      help: host({ status: [{ ok: false }, { ok: false, error: "unreachable" }, { ok: true, state: "sent", ticket: "7" }] }),
+    });
+    await openHelp(root);
+    await fillAndSend(root, 0, "");
+    await vi.advanceTimersByTimeAsync(9000);
+    expect(hBody(root)).toBe("Sent. Ticket #7. IT has been told.");
+  });
+
+  it("errors map to their texts: rate limited, turned off, refused, host unreachable, turned off later", async () => {
+    vi.useFakeTimers();
+    const cases = [
+      [{ submit: { ok: false, error: "rate_limited" } }, LIMITED, 0],
+      [{ submit: { ok: false, error: "disabled" } }, OFF, 0],
+      [{ submit: { ok: false, error: "invalid" } }, FAILED, 0],
+      [{ submit: { ok: false, error: "unreachable" } }, FAILED, 0],
+      [{ submit: { ok: false } }, FAILED, 0],
+      [{ submit: { ok: true, state: "queued" } }, FAILED, 0], // no client_id
+      [{ status: [{ ok: true, state: "disabled" }] }, OFF, 3000],
+      [{ status: [{ ok: true, state: "failed" }] }, FAILED, 3000],
+      [{ submit: null }, FAILED, 20000], // never answers: not a spinner forever
+    ];
+    for (const [h, text, wait] of cases) {
+      const { root } = inject(undefined, { help: host(h) });
+      await openHelp(root);
+      await fillAndSend(root, 0, "");
+      await vi.advanceTimersByTimeAsync(wait);
+      expect(hBody(root), JSON.stringify(h)).toBe(text);
+      expect(visibleButtons(root)).toEqual(["OK"]);
+      reset();
+    }
+  });
+
+  it("keyboard: Esc closes and focus goes back to the handle; Tab is trapped in the dialog", async () => {
+    const { root, help } = inject(undefined, { help: host() });
+    await openHelp(root);
+    // the topics are one Tab stop (a radio group); arrows move and pick
+    const e = key(pills(root)[0], "ArrowRight");
+    expect(e.defaultPrevented).toBe(true);
+    expect(root.activeElement).toBe(pills(root)[1]);
+    expect(pills(root)[1].getAttribute("aria-checked")).toBe("true");
+    key(pills(root)[1], "ArrowLeft");
+    key(pills(root)[0], "ArrowLeft");
+    expect(root.activeElement).toBe(pills(root)[5]);
+    expect(pills(root).filter((p) => p.tabIndex === 0)).toEqual([pills(root)[5]]);
+    // Tab: topic -> text -> Cancel -> Send -> topic
+    const order = [];
+    for (let i = 0; i < 4; i++) {
+      const t = key(root.activeElement, "Tab");
+      expect(t.defaultPrevented).toBe(true);
+      order.push(root.activeElement);
+    }
+    expect(order).toEqual([area(root), hCancel(root), send(root), pills(root)[5]]);
+    key(root.activeElement, "Tab", { shiftKey: true });
+    expect(root.activeElement).toBe(send(root));
+    // typing in the text does not reach the page and does not close the dialog
+    const seen = [];
+    const onPage = (ev) => seen.push(ev.type);
+    document.addEventListener("keydown", onPage);
+    try {
+      key(area(root), "a");
+      key(area(root), "Enter");
+    } finally {
+      document.removeEventListener("keydown", onPage);
+    }
+    expect(seen).toEqual([]);
+    expect(hOverlay(root).hidden).toBe(false);
+    const esc = key(area(root), "Escape");
+    expect(esc.defaultPrevented).toBe(true);
+    expect(hOverlay(root).hidden).toBe(true);
+    expect(root.activeElement).toBe(fab(root));
+    expect(calls(help, "help-submit")).toEqual([]);
+  });
+
+  it("Cancel closes without sending; opening again starts from an empty form", async () => {
+    const { root, help } = inject(undefined, { help: host() });
+    await openHelp(root);
+    pills(root)[2].click();
+    area(root).value = "abc";
+    hCancel(root).click();
+    expect(hOverlay(root).hidden).toBe(true);
+    expect(root.activeElement).toBe(fab(root));
+    await openHelp(root);
+    expect(pills(root).every((p) => p.getAttribute("aria-checked") === "false")).toBe(true);
+    expect(area(root).value).toBe("");
+    expect(shown(area(root))).toBe(true);
+    expect(calls(help, "help-submit")).toEqual([]);
+  });
+
+  it("closing while waiting stops polling; a late answer does not reopen anything", async () => {
+    vi.useFakeTimers();
+    const { root, help } = inject(undefined, { help: host() });
+    await openHelp(root);
+    await fillAndSend(root, 0, "");
+    expect(visibleButtons(root)).toEqual(["Close"]);
+    key(hd(root), "Escape");
+    expect(hOverlay(root).hidden).toBe(true);
+    expect(root.activeElement).toBe(fab(root));
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(calls(help, "help-status")).toEqual([]);
+    expect(hOverlay(root).hidden).toBe(true);
   });
 });
 

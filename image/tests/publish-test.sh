@@ -538,7 +538,7 @@ with_ext() {
 	fi
 	rm -rf "$d/kiosk-ext"
 	eid=$(MASTERSOS_KIOSK_EXT_SRC=$src "$img/kiosk-ext-pack.sh" "$key" "$d/kiosk-ext" "$cb")
-	rm -f "$d/kiosk-ext/kiosk-ext.json" "$d/kiosk-ext/org.mastersos.kiosk_exit.json"
+	rm -f "$d/kiosk-ext/kiosk-ext.json" "$d/kiosk-ext/org.mastersos.kiosk_exit.json" "$d/kiosk-ext/org.mastersos.support.json"
 	sed -i '/^kiosk_ext/d' "$d/build-info.txt"
 	printf 'kiosk_ext_id=%s\nkiosk_ext_version=%s\nkiosk_ext_update_url=%s/updates.xml\nkiosk_ext_crx_sha256=%s\nkiosk_ext_updates_sha256=%s\n' \
 		"$eid" "$ev" "$cb" "$(sha256sum <"$d/kiosk-ext/mastersos-kiosk-ext.crx" | cut -d' ' -f1)" \

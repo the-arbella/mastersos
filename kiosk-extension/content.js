@@ -1,8 +1,13 @@
 // Content script of the MastersOS exam extension (plan 9 Task 7, design §4.7): every page of a locked session gets a
 // small icon-only "Options" handle docked to the middle of the right edge (exam pages keep Next / Submit bottom right
-// and status top right). It opens a small menu of actions (today only "Exit"); Exit asks to confirm in a dialog, then
+// and status top right). It opens a small menu of actions ("Get help", "Exit"); Exit asks to confirm in a dialog, then
 // asks the background (background.js) to end the locked session over native messaging. Exiting and failure show in
 // that same dialog. Actions are the ACTIONS list below: adding one is one more entry there.
+// Get help (plan 2026-11-05 Task 7) opens a second dialog: a topic (required), an optional description, Send. The
+// background passes it to the local support service, which queues it and sends it to the school's IT; this script
+// then asks for its status every 3 s for up to 60 s and shows the ticket number, or that it is saved for later. No
+// screenshot here (Ruling P1). The item is shown only after the service says help requests are on (asked once, when
+// the menu first opens; any error keeps it hidden).
 //
 // It must not break the exam page:
 //   - The handle, menu and dialog live in a closed shadow root (page scripts cannot reach it, page style sheets do not
@@ -34,6 +39,10 @@
   const HANDLE_H = 48; // px, keep in step with .fab in STYLE
   const DRAG_PX = 6; // a press only becomes a drag after moving this far
   const EXIT_TIMEOUT_MS = 20000; // session still there this long after "requested": treat as not exited
+  const ASK_TIMEOUT_MS = 15000; // a help message the background never answers counts as failed
+  const POLL_MS = 3000; // help status: every 3 s ...
+  const POLL_FOR_MS = 60000; // ... for up to 60 s, then "saved, sent later"
+  const TEXT_MAX = 1000; // the support service's limit on the description
 
   const TEXT = {
     handle: "Options",
@@ -47,7 +56,32 @@
     failedTitle: "Could not exit",
     failedBody: "Could not leave. Please ask a teacher.",
     ok: "OK",
+    help: "Get help",
+    helpTitle: "Get help from IT",
+    helpTopic: "What is it about?",
+    helpDetails: "Details (optional)",
+    helpPlaceholder: "What happened? Please don't include passwords or personal details.",
+    helpNeedTopic: "Choose a topic first.",
+    send: "Send",
+    close: "Close",
+    sendingTitle: "Sending…",
+    sendingBody: "Telling IT. This can take up to a minute.",
+    helpSent: (ticket) => `Sent. Ticket #${ticket}. IT has been told.`,
+    helpQueued: "Saved. It will be sent when this computer is online.",
+    helpLimited: "You've sent 3 requests this hour. Please try again later.",
+    helpOff: "Help requests are turned off at this school.",
+    helpFailed: "Couldn't send. Please tell a teacher.",
   };
+
+  /** Help topics: [wire id (SupportCategory in mastersos-bundle), label]. */
+  const TOPICS = [
+    ["wifi", "Wi-Fi"],
+    ["sign_in", "Can't sign in"],
+    ["app", "An app"],
+    ["hardware", "Screen, keys or sound"],
+    ["battery", "Battery"],
+    ["other", "Other"],
+  ];
 
   // Icons as [tag, attributes] lists, drawn on a 24x24 grid (built with createElementNS: no innerHTML).
   const ICONS = {
@@ -61,6 +95,12 @@
       ["path", { d: "M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4" }],
       ["path", { d: "M15 8l4 4-4 4" }],
       ["path", { d: "M19 12H9" }],
+    ],
+    // a question mark in a circle
+    help: [
+      ["circle", { cx: 12, cy: 12, r: 9 }],
+      ["path", { d: "M9.6 9.2a2.5 2.5 0 0 1 4.85.8c0 1.7-2.45 2.2-2.45 3.6" }],
+      ["path", { d: "M12 17.2h.01" }],
     ],
   };
 
@@ -140,6 +180,29 @@ button::-moz-focus-inner { border: 0; }
 .actions[hidden] { display: flex; visibility: hidden; } /* keeps its height: the card does not jump */
 .actions button[hidden] { display: none; }
 .actions button:disabled { opacity: .5; cursor: default; }
+.actions button.send { border-color: #1b1d2a; background: #1b1d2a; color: #fff; }
+.actions button.send:hover { background: #33364a; }
+.help-dialog { max-width: 480px; max-height: calc(100vh - 32px); overflow-y: auto; }
+.body[hidden], .form[hidden], .error[hidden] { display: none; }
+.form { display: flex; flex-direction: column; gap: 8px; margin: 0; }
+.field-label { display: block; margin: 0; font: 600 14px/1.3 ${FONT}; color: #1b1d2a; }
+.field-label.next { margin-top: 10px; }
+.pills { display: flex; flex-wrap: wrap; gap: 8px; }
+.pills button {
+  box-sizing: border-box; height: 36px; margin: 0; padding: 0 14px; font: 500 14px/1 ${FONT}; color: #1b1d2a;
+  background: #fff; border: 1px solid #c9ccd6; border-radius: 18px; cursor: pointer; white-space: nowrap;
+}
+.pills button:hover { background: #f1f2f6; }
+.pills button[aria-checked="true"] { background: #1b1d2a; border-color: #1b1d2a; color: #fff; }
+.error { margin: 0; font: 500 14px/1.4 ${FONT}; color: #b3261e; }
+textarea {
+  box-sizing: border-box; display: block; width: 100%; height: 104px; min-height: 64px; max-height: 40vh; margin: 0;
+  padding: 10px 12px; resize: vertical; font: 400 15px/1.45 ${FONT}; color: #1b1d2a; background: #fff;
+  border: 1px solid #c9ccd6; border-radius: 8px;
+}
+textarea::placeholder { color: #6b6f7b; }
+textarea:focus { outline: none; border-color: #1b1d2a; }
+textarea:focus-visible { outline: 2px solid #d9653b; outline-offset: 2px; }
 `;
 
   const doc = document;
@@ -274,7 +337,65 @@ button::-moz-focus-inner { border: 0; }
   actions.append(cancel, confirm, ok);
   dialog.append(text, actions);
   overlay.append(dialog);
-  root.append(style, dock, overlay);
+
+  // ---- Get help dialog: form, then sending / result in the same card ----------
+  const helpOverlay = el("div", "overlay");
+  helpOverlay.hidden = true;
+  const helpDialog = el("div", "dialog help-dialog");
+  helpDialog.setAttribute("role", "dialog");
+  helpDialog.setAttribute("aria-modal", "true");
+  helpDialog.setAttribute("aria-labelledby", "mastersos-help-title");
+  helpDialog.setAttribute("aria-describedby", "mastersos-help-body");
+  const helpText = el("div", "text");
+  helpText.setAttribute("aria-live", "polite");
+  const helpHead = el("div", "head");
+  const helpSpinner = el("span", "spinner");
+  helpSpinner.setAttribute("aria-hidden", "true");
+  helpSpinner.hidden = true;
+  const helpTitle = el("h2", "title", TEXT.helpTitle);
+  helpTitle.id = "mastersos-help-title";
+  helpHead.append(helpSpinner, helpTitle);
+  const helpBody = el("p", "body");
+  helpBody.id = "mastersos-help-body";
+  helpBody.hidden = true;
+  helpText.append(helpHead, helpBody);
+  const form = el("div", "form");
+  const topicLabel = el("p", "field-label", TEXT.helpTopic);
+  topicLabel.id = "mastersos-help-topic";
+  const pillBox = el("div", "pills");
+  pillBox.setAttribute("role", "radiogroup");
+  pillBox.setAttribute("aria-labelledby", "mastersos-help-topic");
+  pillBox.setAttribute("aria-required", "true");
+  const pills = TOPICS.map(([id, label]) => {
+    const b = button("", label);
+    b.setAttribute("role", "radio");
+    b.setAttribute("aria-checked", "false");
+    b.dataset.topic = id;
+    return b;
+  });
+  pillBox.append(...pills);
+  const helpError = el("p", "error", TEXT.helpNeedTopic);
+  helpError.setAttribute("role", "alert");
+  helpError.hidden = true;
+  const detailsLabel = el("label", "field-label next", TEXT.helpDetails);
+  detailsLabel.htmlFor = "mastersos-help-text";
+  const area = doc.createElement("textarea");
+  area.id = "mastersos-help-text";
+  area.maxLength = TEXT_MAX;
+  area.rows = 4;
+  area.placeholder = TEXT.helpPlaceholder;
+  area.spellcheck = true;
+  form.append(topicLabel, pillBox, helpError, detailsLabel, area);
+  const helpActions = el("div", "actions");
+  const helpCancel = button("help-cancel", TEXT.cancel);
+  const helpSend = button("send", TEXT.send);
+  const helpClose = button("help-close", TEXT.close);
+  const helpOk = button("help-ok", TEXT.ok);
+  const helpButtons = [helpCancel, helpSend, helpClose, helpOk];
+  helpActions.append(...helpButtons);
+  helpDialog.append(helpText, form, helpActions);
+  helpOverlay.append(helpDialog);
+  root.append(style, dock, overlay, helpOverlay);
 
   // Events on our own elements end at the shadow root and are not seen by page handlers (only ours are stopped; the
   // page's events are left alone).
@@ -296,22 +417,32 @@ button::-moz-focus-inner { border: 0; }
   }
 
   // ---- menu -------------------------------------------------------------------
-  /** The menu's actions, in order. `icon` is a key of ICONS; `danger` paints the item red. */
-  const ACTIONS = [{ id: "exit", label: TEXT.exit, icon: "exit", danger: true, run: openConfirm }];
+  /**
+   * The menu's actions, in order. `icon` is a key of ICONS; `danger` paints the item red; `hidden` keeps it out of the
+   * menu until something shows it (Get help: when the support service says it is on).
+   */
+  const ACTIONS = [
+    { id: "help", label: TEXT.help, icon: "help", hidden: true, run: openHelp },
+    { id: "exit", label: TEXT.exit, icon: "exit", danger: true, run: openConfirm },
+  ];
 
-  const menuItems = ACTIONS.map((a) => {
+  const allItems = ACTIONS.map((a) => {
     const b = button(a.danger ? "danger" : "");
     b.append(svgIcon(ICONS[a.icon]), el("span", "label", a.label));
     b.setAttribute("role", "menuitem");
     b.dataset.action = a.id;
     b.tabIndex = -1;
+    b.hidden = a.hidden === true;
     b.addEventListener("click", () => {
       closeMenu(false);
       a.run();
     });
     return b;
   });
-  menu.append(...menuItems);
+  menu.append(...allItems);
+  const helpItem = allItems[0];
+  /** The items shown right now (keyboard moves only between these). */
+  const visibleItems = () => allItems.filter((b) => !b.hidden);
 
   const menuOpen = () => !menu.hidden;
 
@@ -324,9 +455,10 @@ button::-moz-focus-inner { border: 0; }
       menu.hidden = false;
       fab.setAttribute("aria-expanded", "true");
       doc.addEventListener("pointerdown", onOutsidePress, true);
+      askHelpEnabled();
     }
-    const i = (focusIndex + menuItems.length) % menuItems.length;
-    menuItems[i].focus();
+    const items = visibleItems();
+    items[(focusIndex + items.length) % items.length].focus();
   }
   function closeMenu(refocus) {
     if (!menuOpen()) return;
@@ -347,6 +479,7 @@ button::-moz-focus-inner { border: 0; }
     // Enter and Space: the native button turns them into a click
   });
   menu.addEventListener("keydown", (e) => {
+    const menuItems = visibleItems();
     const i = menuItems.indexOf(root.activeElement);
     let next = null;
     if (e.key === "Escape") {
@@ -504,6 +637,172 @@ button::-moz-focus-inner { border: 0; }
       });
     } catch {
       failed(); // after the extension is reloaded, chrome.runtime no longer works in old pages
+    }
+  });
+
+  // ---- Get help -----------------------------------------------------------------
+  /**
+   * One message to the background; resolves with its answer (an object) or null when there is none: no background,
+   * lastError, not an object, or no answer within ASK_TIMEOUT_MS.
+   */
+  function ask(msg) {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (r) => {
+        if (done) return;
+        done = true;
+        clearTimeout(t);
+        resolve(r);
+      };
+      const t = setTimeout(() => finish(null), ASK_TIMEOUT_MS);
+      try {
+        chrome.runtime.sendMessage(msg, (reply) => {
+          const err = chrome.runtime.lastError;
+          finish(!err && reply !== null && typeof reply === "object" ? reply : null);
+        });
+      } catch {
+        finish(null); // after the extension is reloaded, chrome.runtime no longer works in old pages
+      }
+    });
+  }
+
+  let helpAsked = false;
+  /** Once per page, when the menu first opens: show Get help only on a clear "on". */
+  function askHelpEnabled() {
+    if (helpAsked) return;
+    helpAsked = true;
+    ask({ cmd: "help-enabled" }).then((r) => {
+      if (r && r.ok === true && r.enabled === true) helpItem.hidden = false;
+    });
+  }
+
+  let helpState = "closed"; // closed | form | sending | result
+  let helpRun = 0; // bumped on every send and close: answers for an older run are dropped
+  let pollTimer = null;
+  let picked = -1;
+
+  function pick(i, focus) {
+    picked = i;
+    pills.forEach((p, j) => {
+      p.setAttribute("aria-checked", String(j === i));
+      p.tabIndex = j === (i < 0 ? 0 : i) ? 0 : -1; // the group is one Tab stop
+    });
+    if (i >= 0) helpError.hidden = true;
+    if (focus) pills[i < 0 ? 0 : i].focus();
+  }
+  /** Show one state of the help card: title, spinner, body text, form and which buttons. */
+  function helpView(next, bodyText) {
+    helpState = next;
+    const shown = { form: [helpCancel, helpSend], sending: [helpClose], result: [helpOk] }[next];
+    helpTitle.textContent = next === "sending" ? TEXT.sendingTitle : TEXT.helpTitle;
+    helpSpinner.hidden = next !== "sending";
+    helpBody.hidden = next === "form";
+    helpBody.textContent = bodyText || "";
+    form.hidden = next !== "form";
+    for (const b of helpButtons) b.hidden = !shown.includes(b);
+  }
+  function stopPolling() {
+    if (pollTimer !== null) clearTimeout(pollTimer);
+    pollTimer = null;
+  }
+  function openHelp() {
+    helpRun += 1;
+    stopPolling();
+    area.value = "";
+    helpError.hidden = true;
+    pick(-1, false);
+    helpOverlay.hidden = false;
+    helpView("form");
+    pills[0].focus();
+  }
+  function closeHelp() {
+    helpRun += 1;
+    stopPolling();
+    helpState = "closed";
+    helpOverlay.hidden = true;
+    fab.focus();
+  }
+  function helpResult(text) {
+    stopPolling();
+    helpView("result", text);
+    helpOk.focus();
+  }
+  const ERROR_TEXT = { rate_limited: TEXT.helpLimited, disabled: TEXT.helpOff };
+
+  function sendHelp() {
+    if (picked < 0) {
+      helpError.hidden = false;
+      pills[0].focus();
+      return;
+    }
+    const run = ++helpRun;
+    const msg = { cmd: "help-submit", category: TOPICS[picked][0], text: area.value.trim().slice(0, TEXT_MAX) };
+    helpView("sending", TEXT.sendingBody);
+    helpClose.focus();
+    ask(msg).then((r) => {
+      if (run !== helpRun) return;
+      if (!r || r.ok !== true || typeof r.client_id !== "string" || r.client_id === "") {
+        helpResult((r && ERROR_TEXT[r.error]) || TEXT.helpFailed);
+        return;
+      }
+      const id = r.client_id;
+      const until = Date.now() + POLL_FOR_MS;
+      const poll = () => {
+        pollTimer = null;
+        ask({ cmd: "help-status", client_id: id }).then((st) => {
+          if (run !== helpRun) return;
+          if (st && st.ok === true && st.state === "sent" && typeof st.ticket === "string" && st.ticket !== "") {
+            helpResult(TEXT.helpSent(st.ticket));
+          } else if (st && st.ok === true && st.state === "disabled") {
+            helpResult(TEXT.helpOff);
+          } else if (st && st.ok === true && st.state === "failed") {
+            helpResult(TEXT.helpFailed);
+          } else if (Date.now() >= until) {
+            helpResult(TEXT.helpQueued); // it is in the service's queue: sent when online
+          } else {
+            pollTimer = setTimeout(poll, POLL_MS); // still queued, or this one answer got lost: ask again
+          }
+        });
+      };
+      pollTimer = setTimeout(poll, POLL_MS);
+    });
+  }
+
+  pills.forEach((p, i) => p.addEventListener("click", () => pick(i, true)));
+  pillBox.addEventListener("keydown", (e) => {
+    const i = pills.indexOf(root.activeElement);
+    if (i < 0) return;
+    const n = pills.length;
+    const next = {
+      ArrowRight: i + 1,
+      ArrowDown: i + 1,
+      ArrowLeft: i - 1 + n,
+      ArrowUp: i - 1 + n,
+      Home: 0,
+      End: n - 1,
+    }[e.key];
+    if (next === undefined) return;
+    e.preventDefault();
+    pick(next % n, true);
+  });
+  helpSend.addEventListener("click", sendHelp);
+  helpCancel.addEventListener("click", closeHelp);
+  helpClose.addEventListener("click", closeHelp); // the request is already with the service: closing loses nothing
+  helpOk.addEventListener("click", closeHelp);
+  helpDialog.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeHelp();
+    } else if (e.key === "Tab") {
+      // focus stays in the card: the topic group (one stop), the text, the visible buttons
+      const stops = [...helpDialog.querySelectorAll("button, textarea")].filter(
+        (x) => x.tabIndex >= 0 && !x.disabled && !x.closest("[hidden]"),
+      );
+      e.preventDefault();
+      if (stops.length === 0) return;
+      const i = stops.indexOf(root.activeElement);
+      const next = i < 0 ? 0 : (i + (e.shiftKey ? stops.length - 1 : 1)) % stops.length;
+      stops[next].focus();
     }
   });
 

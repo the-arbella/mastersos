@@ -55,8 +55,8 @@ else
 fi
 
 got=$(find "$tmp/out" -mindepth 1 -printf '%f\n' | sort | tr '\n' ' ')
-if [ "$got" = "kiosk-ext.json mastersos-kiosk-ext.crx org.mastersos.kiosk_exit.json updates.xml " ]; then
-	pass "输出目录恰好四个文件"
+if [ "$got" = "kiosk-ext.json mastersos-kiosk-ext.crx org.mastersos.kiosk_exit.json org.mastersos.support.json updates.xml " ]; then
+	pass "输出目录恰好五个文件"
 else
 	fail "输出目录的文件不对" "$got"
 fi
@@ -161,11 +161,21 @@ assert h == {
 }, h
 assert isinstance(h["description"], str) and h["description"]
 
+s = json.load(open(f"{out}/org.mastersos.support.json"))
+assert s == {
+    "name": "org.mastersos.support",
+    "description": s.get("description"),
+    "path": "/usr/lib/mastersos/mastersos-support-host",
+    "type": "stdio",
+    "allowed_origins": [f"chrome-extension://{want_id}/"],
+}, s
+assert isinstance(s["description"], str) and s["description"]
+
 e = json.load(open(f"{out}/kiosk-ext.json"))
 assert e == {"id": want_id, "update_url": base + "/updates.xml"}, e
 PY
 ); then
-	pass "updates.xml（appid、codebase、version）、宿主清单（name、path、stdio、allowed_origins）、kiosk-ext.json 都对"
+	pass "updates.xml（appid、codebase、version）、两份宿主清单（name、path、stdio、allowed_origins）、kiosk-ext.json 都对"
 else
 	fail "updates.xml / 宿主清单 / kiosk-ext.json 不对" "$out"
 fi
@@ -177,6 +187,12 @@ if grep -qF 'pub const EXIT_HOST: &str = "org.mastersos.kiosk_exit";' "$core/mas
 	pass "宿主名 = mastersos-bundle 的 EXIT_HOST，path 指向镜像里可执行的 mastersos-kiosk-exit"
 else
 	fail "宿主名或 path 与 EXIT_HOST / mkosi.extra 的包装对不上"
+fi
+if grep -qF 'pub const SUPPORT_HOST: &str = "org.mastersos.support";' "$core/mastersos-bundle/src/kiosk.rs" &&
+	[ -x "$img/mkosi.extra/usr/lib/mastersos/mastersos-support-host" ]; then
+	pass "求助宿主名 = mastersos-bundle 的 SUPPORT_HOST，path 指向镜像里可执行的 mastersos-support-host"
+else
+	fail "求助宿主名或 path 与 SUPPORT_HOST / mkosi.extra 的包装对不上"
 fi
 
 # 结尾带 / 的 base_url 一样

@@ -1,0 +1,7 @@
+{
+  "name": "org.mastersos.support",
+  "description": "MastersOS 考试扩展的求助宿主 / MastersOS exam extension Get help host",
+  "path": "/usr/lib/mastersos/mastersos-support-host",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://__EXAM_EXTENSION_ID__/"]
+}
