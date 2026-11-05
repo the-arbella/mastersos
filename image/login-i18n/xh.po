@@ -33,8 +33,8 @@ msgstr "Iphepha lokungena alikwazanga ukuvulwa."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Akukwazeki ukufikelela isikolo. Qhagamshela kwi-Wi-Fi ukusuka kwibha ephezulu, uze uzame kwakhona."
 
-msgid "Local manager"
-msgstr "Umlawuli wasekhaya"
+msgid "IT maintenance sign-in"
+msgstr "Ukungena kolondolozo lwe-IT"
 
 msgid "Username"
 msgstr "Igama lomsebenzisi"

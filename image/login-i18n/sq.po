@@ -32,8 +32,8 @@ msgstr "Faqja e hyrjes nuk u hap dot."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Nuk lidhet dot me shkollën. Lidhu me Wi-Fi nga shiriti lart dhe provo përsëri."
 
-msgid "Local manager"
-msgstr "Administratori lokal"
+msgid "IT maintenance sign-in"
+msgstr "Hyrje për mirëmbajtjen e IT-së"
 
 msgid "Username"
 msgstr "Emri i përdoruesit"

@@ -32,8 +32,8 @@ msgstr "Halaman log masuk tidak dapat dibuka."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Tidak dapat menghubungi sekolah. Sambung ke Wi-Fi daripada bar atas, kemudian cuba lagi."
 
-msgid "Local manager"
-msgstr "Pentadbir tempatan"
+msgid "IT maintenance sign-in"
+msgstr "Log masuk penyelenggaraan IT"
 
 msgid "Username"
 msgstr "Nama pengguna"

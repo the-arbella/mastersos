@@ -32,8 +32,8 @@ msgstr "تعذّر فتح صفحة تسجيل الدخول."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "تعذّر الوصول إلى المدرسة. اتصل بشبكة Wi-Fi من الشريط العلوي ثم أعد المحاولة."
 
-msgid "Local manager"
-msgstr "المسؤول المحلي"
+msgid "IT maintenance sign-in"
+msgstr "تسجيل دخول صيانة تقنية المعلومات"
 
 msgid "Username"
 msgstr "اسم المستخدم"

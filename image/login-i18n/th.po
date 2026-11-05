@@ -32,8 +32,8 @@ msgstr "ไม่สามารถเปิดหน้าลงชื่อเ
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "ไม่สามารถเชื่อมต่อกับโรงเรียนได้ เชื่อมต่อ Wi-Fi จากแถบด้านบน แล้วลองอีกครั้ง"
 
-msgid "Local manager"
-msgstr "ผู้ดูแลระบบภายในเครื่อง"
+msgid "IT maintenance sign-in"
+msgstr "ลงชื่อเข้าใช้สำหรับการดูแลระบบ IT"
 
 msgid "Username"
 msgstr "ชื่อผู้ใช้"

@@ -32,8 +32,8 @@ msgstr "Не удалось открыть страницу входа."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Не удаётся связаться со школой. Подключитесь к Wi-Fi в верхней панели и повторите попытку."
 
-msgid "Local manager"
-msgstr "Локальный администратор"
+msgid "IT maintenance sign-in"
+msgstr "Вход для обслуживания ИТ"
 
 msgid "Username"
 msgstr "Имя пользователя"

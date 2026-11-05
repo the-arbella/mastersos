@@ -32,7 +32,7 @@ msgstr ""
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr ""
 
-msgid "Local manager"
+msgid "IT maintenance sign-in"
 msgstr ""
 
 msgid "Username"

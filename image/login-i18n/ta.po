@@ -32,8 +32,8 @@ msgstr "உள்நுழைவுப் பக்கத்தைத் தி�
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "பள்ளியுடன் இணைக்க முடியவில்லை. மேல் பட்டியிலிருந்து Wi-Fi உடன் இணைத்து, மீண்டும் முயலவும்."
 
-msgid "Local manager"
-msgstr "உள்ளூர் நிர்வாகி"
+msgid "IT maintenance sign-in"
+msgstr "IT பராமரிப்பு உள்நுழைவு"
 
 msgid "Username"
 msgstr "பயனர்பெயர்"

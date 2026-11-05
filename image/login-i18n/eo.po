@@ -32,8 +32,8 @@ msgstr "La saluta paĝo ne povis esti malfermita."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Ne eblas atingi la lernejon. Konektu al Wi-Fi per la supra breto kaj reprovu."
 
-msgid "Local manager"
-msgstr "Loka administranto"
+msgid "IT maintenance sign-in"
+msgstr "Ensaluto por IT-prizorgado"
 
 msgid "Username"
 msgstr "Uzantnomo"

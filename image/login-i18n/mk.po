@@ -32,8 +32,8 @@ msgstr "Страницата за најава не можеше да се от�
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Училиштето не може да се достигне. Поврзете се на Wi-Fi од горната лента, па обидете се повторно."
 
-msgid "Local manager"
-msgstr "Локален администратор"
+msgid "IT maintenance sign-in"
+msgstr "Најава за ИТ одржување"
 
 msgid "Username"
 msgstr "Корисничко име"

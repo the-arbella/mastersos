@@ -32,8 +32,8 @@ msgstr "نەتوانرا پەڕەی چوونەژوورەوە بکرێتەوە."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "نەتوانرا پەیوەندی بە قوتابخانەوە بکرێت. لە شریتی سەرەوە بە Wi-Fi ببەستەرەوە، پاشان دووبارە هەوڵبدەرەوە."
 
-msgid "Local manager"
-msgstr "بەڕێوەبەری ناوخۆیی"
+msgid "IT maintenance sign-in"
+msgstr "چوونەژوورەوەی چاککردنەوەی IT"
 
 msgid "Username"
 msgstr "ناوی بەکارهێنەر"

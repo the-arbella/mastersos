@@ -32,8 +32,8 @@ msgstr "ছাইন ইনৰ পৃষ্ঠা খুলিব পৰা ন�
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "বিদ্যালয়ৰ লগত সংযোগ কৰিব পৰা নগ'ল। ওপৰৰ বাৰৰ পৰা Wi-Fi-ত সংযোগ কৰক, তাৰ পিছত পুনৰ চেষ্টা কৰক।"
 
-msgid "Local manager"
-msgstr "স্থানীয় প্ৰশাসক"
+msgid "IT maintenance sign-in"
+msgstr "আইটি পৰিচালনাৰ ছাইন-ইন"
 
 msgid "Username"
 msgstr "ব্যৱহাৰকাৰীৰ নাম"

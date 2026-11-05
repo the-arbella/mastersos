@@ -33,8 +33,8 @@ msgstr "Ur izmir ara ad yettwaldi usebter n unekcum."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Ur izmir ara ad yaweḍ ɣer uɣerbaz. Qqen ɣer Wi-Fi seg ufeggag n ufella, sakin ɛreḍ i tikelt-nniḍen."
 
-msgid "Local manager"
-msgstr "Anedbal adigan"
+msgid "IT maintenance sign-in"
+msgstr "Tuqqna i weṛjeṛ n IT"
 
 msgid "Username"
 msgstr "Isem n useqdac"

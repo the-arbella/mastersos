@@ -1,8 +1,27 @@
-/* MastersOS login screen: shelf, notice, sign-in card, language screen, links under the email field. */
+/* MastersOS login screen: shelf, notice, sign-in card, language screen, the list under the email field. */
+/* "Managed by <school>": plain text, until on the username step the pointer or the keyboard reaches it (IT sign-in). */
 .mastersos-login-managed {
     color: rgba(255, 255, 255, 0.72);
     font-size: 10pt;
-    padding: 0 4px 10px 4px;
+    padding: 3px 4px;
+    margin-bottom: 7px;
+    border-radius: 6px;
+    transition-duration: 100ms;
+}
+
+.mastersos-login-managed:hover {
+    color: #ffe6c8;
+    text-decoration: underline;
+    background-color: rgba(255, 255, 255, 0.08);
+}
+
+.mastersos-login-managed:active {
+    background-color: rgba(255, 255, 255, 0.16);
+}
+
+.mastersos-login-managed:focus {
+    color: #ffe6c8;
+    box-shadow: inset 0 0 0 2px #ffb35c;
 }
 
 .mastersos-shelf-row {
@@ -120,22 +139,6 @@
 }
 
 .mastersos-card-cancel:focus {
-    box-shadow: inset 0 0 0 2px #ffb35c;
-}
-
-.mastersos-login-link {
-    color: #ffcf9a;
-    font-size: 10.5pt;
-    padding: 6px 8px;
-    border-radius: 8px;
-}
-
-.mastersos-login-link:hover {
-    color: #ffe6c8;
-    background-color: rgba(255, 255, 255, 0.08);
-}
-
-.mastersos-login-link:focus {
     box-shadow: inset 0 0 0 2px #ffb35c;
 }
 

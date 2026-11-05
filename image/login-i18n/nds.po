@@ -32,8 +32,8 @@ msgstr "De Anmellsiet leet sik nich opmaken."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "De School is nich to erreken. Verbinn di boven in de Balken mit Wi-Fi un versöök dat nochmal."
 
-msgid "Local manager"
-msgstr "Lokaal Administrator"
+msgid "IT maintenance sign-in"
+msgstr "Anmellen för IT-Wartung"
 
 msgid "Username"
 msgstr "Brukernaam"

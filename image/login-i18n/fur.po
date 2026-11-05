@@ -32,8 +32,8 @@ msgstr "No si à rivât a vierzi la pagjine di acès."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "No si rive a contatâ la scuele. Conetiti a une rêt Wi-Fi de sbare parsore e torne prove."
 
-msgid "Local manager"
-msgstr "Aministradôr locâl"
+msgid "IT maintenance sign-in"
+msgstr "Jentrade pe manutenzion informatiche"
 
 msgid "Username"
 msgstr "Non utent"

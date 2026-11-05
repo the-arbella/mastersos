@@ -32,8 +32,8 @@ msgstr "Doedd dim modd agor y dudalen mewngofnodi."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Methu cyrraedd yr ysgol. Cysylltwch â Wi-Fi o'r bar uchaf, yna ceisiwch eto."
 
-msgid "Local manager"
-msgstr "Gweinyddwr lleol"
+msgid "IT maintenance sign-in"
+msgstr "Mewngofnodi cynnal a chadw TG"
 
 msgid "Username"
 msgstr "Enw defnyddiwr"

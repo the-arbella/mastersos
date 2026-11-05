@@ -32,8 +32,8 @@ msgstr "មិនអាចបើកទំព័រចូលប្រើបាន
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "មិនអាចភ្ជាប់ទៅសាលាបានទេ។ សូមភ្ជាប់ Wi-Fi ពីរបារខាងលើ រួចព្យាយាមម្ដងទៀត។"
 
-msgid "Local manager"
-msgstr "អ្នកគ្រប់គ្រងមូលដ្ឋាន"
+msgid "IT maintenance sign-in"
+msgstr "ការចូលសម្រាប់ការថែទាំ IT"
 
 msgid "Username"
 msgstr "ឈ្មោះអ្នកប្រើ"

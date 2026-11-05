@@ -32,8 +32,8 @@ msgstr "ログインページを開けませんでした。"
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "学校に接続できません。上部のバーから Wi-Fi に接続して、もう一度お試しください。"
 
-msgid "Local manager"
-msgstr "ローカル管理者"
+msgid "IT maintenance sign-in"
+msgstr "IT メンテナンス用サインイン"
 
 msgid "Username"
 msgstr "ユーザー名"

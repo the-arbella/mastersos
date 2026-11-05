@@ -32,8 +32,8 @@ msgstr "സൈൻ ഇൻ പേജ് തുറക്കാൻ കഴിഞ്�
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "സ്കൂളുമായി ബന്ധപ്പെടാൻ കഴിയുന്നില്ല. മുകളിലെ ബാറിൽ നിന്ന് Wi-Fi-യിൽ കണക്റ്റ് ചെയ്ത ശേഷം വീണ്ടും ശ്രമിക്കുക."
 
-msgid "Local manager"
-msgstr "ലോക്കൽ അഡ്മിനിസ്ട്രേറ്റർ"
+msgid "IT maintenance sign-in"
+msgstr "ഐടി പരിപാലന സൈൻ ഇൻ"
 
 msgid "Username"
 msgstr "ഉപയോക്തൃനാമം"

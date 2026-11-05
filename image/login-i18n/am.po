@@ -32,8 +32,8 @@ msgstr "የመግቢያ ገጹን መክፈት አልተቻለም።"
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "ትምህርት ቤቱን ማግኘት አልተቻለም። ከላይኛው አሞሌ ከWi-Fi ጋር ይገናኙ፣ ከዚያ እንደገና ይሞክሩ።"
 
-msgid "Local manager"
-msgstr "አካባቢያዊ አስተዳዳሪ"
+msgid "IT maintenance sign-in"
+msgstr "የአይቲ ጥገና መግቢያ"
 
 msgid "Username"
 msgstr "የተጠቃሚ ስም"

@@ -32,8 +32,8 @@ msgstr "સાઇન-ઇન પેજ ખોલી શકાયું નથી.
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "શાળા સુધી પહોંચી શકાતું નથી. ઉપરની પટ્ટીમાંથી Wi-Fi સાથે જોડાઓ, પછી ફરી પ્રયાસ કરો."
 
-msgid "Local manager"
-msgstr "સ્થાનિક એડમિનિસ્ટ્રેટર"
+msgid "IT maintenance sign-in"
+msgstr "IT જાળવણી સાઇન-ઇન"
 
 msgid "Username"
 msgstr "વપરાશકર્તા નામ"

@@ -32,8 +32,8 @@ msgstr "Саҳифаи воридшавӣ кушода нашуд."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Бо мактаб алоқа барқарор нашуд. Аз навори боло ба Wi-Fi пайваст шавед ва бори дигар кӯшиш кунед."
 
-msgid "Local manager"
-msgstr "Маъмури маҳаллӣ"
+msgid "IT maintenance sign-in"
+msgstr "Воридшавӣ барои хизматрасонии IT"
 
 msgid "Username"
 msgstr "Номи корбар"

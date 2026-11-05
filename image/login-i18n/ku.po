@@ -32,8 +32,8 @@ msgstr "Rûpela têketinê nehat vekirin."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Gihîştina dibistanê pêk nehat. Ji darika jorîn bi Wi-Fi ve girêbide, paşê dîsa biceribîne."
 
-msgid "Local manager"
-msgstr "Rêveberê herêmî"
+msgid "IT maintenance sign-in"
+msgstr "Têketina parastina IT"
 
 msgid "Username"
 msgstr "Navê bikarhêner"

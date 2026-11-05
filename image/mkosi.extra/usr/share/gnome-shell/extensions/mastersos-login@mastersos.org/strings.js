@@ -18,7 +18,7 @@ export function strings() {
         appOffline: _('This app needs a network. Connect to Wi-Fi from the top bar, then retry.'),
         email: _('Name or school email'),
         narrow: _('Keep typing to narrow down'),
-        itLink: _('Local manager'),
+        itSignIn: _('IT maintenance sign-in'),
         notAllowed: _('This account cannot sign in on this computer.'),
         notAllowedUse: _('This account cannot sign in on this computer. Use your school email (%s).'),
         wrongAccount: _('You signed in with a different account. Sign in again with the account you chose here.'),

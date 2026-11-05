@@ -32,8 +32,8 @@ msgstr "လော့ဂ်အင်စာမျက်နှာကို ဖွ�
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "ကျောင်းနှင့် ဆက်သွယ်၍ မရပါ။ အပေါ်ဘားမှ Wi-Fi ကို ချိတ်ဆက်ပြီး ထပ်ကြိုးစားပါ။"
 
-msgid "Local manager"
-msgstr "ဒေသတွင်း စီမံခန့်ခွဲသူ"
+msgid "IT maintenance sign-in"
+msgstr "IT ပြုပြင်ထိန်းသိမ်းရေး ဝင်ရောက်ရန်"
 
 msgid "Username"
 msgstr "အသုံးပြုသူအမည်"

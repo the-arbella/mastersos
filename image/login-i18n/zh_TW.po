@@ -32,8 +32,8 @@ msgstr "無法開啟登入頁面。"
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "無法連線到學校。請從頂端列連接 Wi-Fi，然後重試。"
 
-msgid "Local manager"
-msgstr "本機管理員"
+msgid "IT maintenance sign-in"
+msgstr "IT 維護登入"
 
 msgid "Username"
 msgstr "使用者名稱"

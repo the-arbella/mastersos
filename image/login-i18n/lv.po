@@ -32,8 +32,8 @@ msgstr "Pieteikšanās lapu neizdevās atvērt."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Nevar sazināties ar skolu. Izveidojiet savienojumu ar Wi-Fi augšējā joslā un mēģiniet vēlreiz."
 
-msgid "Local manager"
-msgstr "Vietējais administrators"
+msgid "IT maintenance sign-in"
+msgstr "IT uzturēšanas pieteikšanās"
 
 msgid "Username"
 msgstr "Lietotājvārds"

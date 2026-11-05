@@ -32,8 +32,8 @@ msgstr "Die Anmeldeseite konnte nicht geöffnet werden."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Die Schule ist nicht erreichbar. Verbinden Sie sich über die obere Leiste mit dem WLAN und versuchen Sie es erneut."
 
-msgid "Local manager"
-msgstr "Lokaler Administrator"
+msgid "IT maintenance sign-in"
+msgstr "Anmeldung für IT-Wartung"
 
 msgid "Username"
 msgstr "Benutzername"

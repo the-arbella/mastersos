@@ -32,8 +32,8 @@ msgstr "පිවිසුම් පිටුව විවෘත කිරීම
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "පාසලට සම්බන්ධ විය නොහැක. ඉහළ තීරුවෙන් Wi-Fi වෙත සම්බන්ධ වී නැවත උත්සාහ කරන්න."
 
-msgid "Local manager"
-msgstr "දේශීය පරිපාලක"
+msgid "IT maintenance sign-in"
+msgstr "IT නඩත්තු පිවිසුම"
 
 msgid "Username"
 msgstr "පරිශීලක නාමය"

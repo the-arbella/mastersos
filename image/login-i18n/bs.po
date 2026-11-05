@@ -32,8 +32,8 @@ msgstr "Stranica za prijavu se nije mogla otvoriti."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Nije moguće povezati se sa školom. Povežite se na Wi-Fi putem gornje trake, pa pokušajte ponovo."
 
-msgid "Local manager"
-msgstr "Lokalni administrator"
+msgid "IT maintenance sign-in"
+msgstr "Prijava za IT održavanje"
 
 msgid "Username"
 msgstr "Korisničko ime"

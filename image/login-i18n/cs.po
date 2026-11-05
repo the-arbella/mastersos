@@ -32,8 +32,8 @@ msgstr "Přihlašovací stránku se nepodařilo otevřít."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Škola není dostupná. Připojte se k Wi-Fi v horní liště a zkuste to znovu."
 
-msgid "Local manager"
-msgstr "Místní správce"
+msgid "IT maintenance sign-in"
+msgstr "Přihlášení pro údržbu IT"
 
 msgid "Username"
 msgstr "Uživatelské jméno"

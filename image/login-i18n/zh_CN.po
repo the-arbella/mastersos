@@ -32,8 +32,8 @@ msgstr "无法打开登录页面。"
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "无法连接到学校。请从顶部栏连接 Wi-Fi，然后重试。"
 
-msgid "Local manager"
-msgstr "本地管理员"
+msgid "IT maintenance sign-in"
+msgstr "IT 维护登录"
 
 msgid "Username"
 msgstr "用户名"

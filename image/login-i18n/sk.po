@@ -32,8 +32,8 @@ msgstr "Prihlasovaciu stránku sa nepodarilo otvoriť."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Nepodarilo sa spojiť so školou. Pripojte sa k sieti Wi-Fi na hornom paneli a skúste to znova."
 
-msgid "Local manager"
-msgstr "Lokálny správca"
+msgid "IT maintenance sign-in"
+msgstr "Prihlásenie na údržbu IT"
 
 msgid "Username"
 msgstr "Používateľské meno"

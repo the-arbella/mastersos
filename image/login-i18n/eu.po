@@ -32,8 +32,8 @@ msgstr "Ezin izan da saioa hasteko orria ireki."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Ezin da ikastetxea atzitu. Konektatu Wi-Fi sarera goiko barratik eta saiatu berriro."
 
-msgid "Local manager"
-msgstr "Administratzaile lokala"
+msgid "IT maintenance sign-in"
+msgstr "IT mantentze-saioa hastea"
 
 msgid "Username"
 msgstr "Erabiltzaile-izena"

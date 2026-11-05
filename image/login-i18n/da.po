@@ -32,8 +32,8 @@ msgstr "Login-siden kunne ikke åbnes."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Kan ikke nå skolen. Opret forbindelse til Wi-Fi fra den øverste bjælke, og prøv igen."
 
-msgid "Local manager"
-msgstr "Lokal administrator"
+msgid "IT maintenance sign-in"
+msgstr "Log ind til IT-vedligeholdelse"
 
 msgid "Username"
 msgstr "Brugernavn"

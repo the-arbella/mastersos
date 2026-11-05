@@ -32,8 +32,8 @@ msgstr "Ekki tókst að opna innskráningarsíðuna."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Næ ekki sambandi við skólann. Tengstu Wi-Fi úr efri stikunni og reyndu aftur."
 
-msgid "Local manager"
-msgstr "Staðbundinn kerfisstjóri"
+msgid "IT maintenance sign-in"
+msgstr "Innskráning fyrir tölvuviðhald"
 
 msgid "Username"
 msgstr "Notandanafn"

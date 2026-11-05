@@ -32,8 +32,8 @@ msgstr "לא ניתן לפתוח את דף הכניסה."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "אין חיבור לבית הספר. התחברו ל-Wi-Fi מהסרגל העליון ונסו שוב."
 
-msgid "Local manager"
-msgstr "מנהל מערכת מקומי"
+msgid "IT maintenance sign-in"
+msgstr "כניסה לתחזוקת IT"
 
 msgid "Username"
 msgstr "שם משתמש"

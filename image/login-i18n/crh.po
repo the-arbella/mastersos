@@ -32,8 +32,8 @@ msgstr "Kirüv saifesini açmaq mümkün olmadı."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Mektepke bağlanmaq mümkün degil. Üst panelden Wi-Fi ağına bağlanıñız, soñra yañıdan sınañız."
 
-msgid "Local manager"
-msgstr "Yerli idareci"
+msgid "IT maintenance sign-in"
+msgstr "IT hızmeti içün kiriş"
 
 msgid "Username"
 msgstr "Qullanıcı adı"

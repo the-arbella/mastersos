@@ -32,8 +32,8 @@ msgstr "Cha b’ urrainn dhuinn duilleag an inntrigidh fhosgladh."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Chan urrainn dhuinn ceangal ris an sgoil. Ceangail ri Wi-Fi on bhàr gu h-àrd agus feuch a-rithist."
 
-msgid "Local manager"
-msgstr "Rianaire ionadail"
+msgid "IT maintenance sign-in"
+msgstr "Clàradh a-steach airson obair-chàraidh IT"
 
 msgid "Username"
 msgstr "Ainm-cleachdaiche"

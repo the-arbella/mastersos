@@ -146,6 +146,7 @@ export default class MastersosLoginExtension extends Extension {
         this._picked = null;
         this._dismissed = false;
         this._pollId = 0;
+        this._itSignIn = false;
         this._domains = [];
         this._dialog = null;
         this._shelf = null;
@@ -336,14 +337,14 @@ export default class MastersosLoginExtension extends Extension {
             function () {
                 original.call(this);
                 this._authPrompt.setQuestion(ext._text.email);
-                ext._setAddPerson(true);
+                ext._setItSignIn(true);
                 ext._takeUsernameStep(this);
             });
 
         this._patch(LoginDialog.LoginDialog.prototype, '_beginVerification', original =>
             function (params) {
                 ext._hideMatches();
-                ext._setAddPerson(false);
+                ext._setItSignIn(false);
                 ext._clearNotice();
                 original.call(this, params);
             });
@@ -480,19 +481,6 @@ export default class MastersosLoginExtension extends Extension {
             });
 
         const prompt = dlg._authPrompt;
-        const link = (text, onClick) => {
-            const button = new St.Button({
-                label: text,
-                style_class: 'mastersos-login-link',
-                can_focus: true,
-                reactive: true,
-                x_align: Clutter.ActorAlign.CENTER,
-                visible: false,
-            });
-            button.connect('clicked', onClick);
-            prompt._inputWell.add_child(button);
-            return button;
-        };
         // The people found and the school addresses offered as the person types, right under the entry (a plain list: a popup
         // menu would take the keyboard).
         this._matchBox = new St.BoxLayout({
@@ -502,17 +490,12 @@ export default class MastersosLoginExtension extends Extension {
             visible: false,
         });
         prompt._inputWell.add_child(this._matchBox);
-        // "Local manager" goes straight to the IT account's password: nobody types its user name.
-        this._itLink = link(this._text.itLink, () => {
-            this._itLink.hide();
-            this._signInAs(IT_ACCOUNT);
-        });
 
         this._dialogIds = [
             prompt.connect('reset', () => {
                 // Coming back to this VT resets the prompt too. The card's sign-in ended with it, so its page could only fail.
                 // GNOME's _onReset ran first (it connected earlier) and, with disable-user-list, is back on the username
-                // step that shows "Local manager": leave it shown. Leaving that step hides it (_beginVerification).
+                // step, where "Managed by" opens the IT sign-in: leave it on. Leaving that step turns it off (_beginVerification).
                 this._card?.close();
                 this._hideMatches();
                 this._shelf?.refreshApps();
@@ -525,7 +508,10 @@ export default class MastersosLoginExtension extends Extension {
             shutDown: () => SystemActions.getDefault().activatePowerOff(),
             guest: () => this._signInAs(GUEST),
             openApp: app => this._openApp(app),
+            // "Managed by <school>" goes straight to the IT account's password: nobody types its user name.
+            itSignIn: () => this._signInAs(IT_ACCOUNT),
         });
+        this._shelf.setItSignIn(this._itSignIn);
 
         // A long list scrolls inside the area; the box around it grows to the whole dialog.
         const fitList = () => {
@@ -607,8 +593,10 @@ export default class MastersosLoginExtension extends Extension {
         indicator.menu.addMenuItem(this._languageItem, 0);
     }
 
-    _setAddPerson(on) {
-        this._itLink?.set({visible: on});
+    // The IT maintenance sign-in behind "Managed by" is there on the username step only.
+    _setItSignIn(on) {
+        this._itSignIn = on;
+        this._shelf?.setItSignIn(on);
     }
 
     _leaveCurrentSignIn() {
@@ -932,8 +920,6 @@ export default class MastersosLoginExtension extends Extension {
             Main.layoutManager.disconnect(this._monitorsId);
             this._monitorsId = 0;
         }
-        this._itLink?.destroy();
-        this._itLink = null;
         this._matchBox?.destroy();
         this._matchBox = null;
         for (const undo of this._restore.reverse())

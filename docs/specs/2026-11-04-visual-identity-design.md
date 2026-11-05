@@ -120,7 +120,7 @@ logo 与开机画面简单、温暖、不说教，不改。
 
 - `.mastersos-login-background`：背景改成夜间壁纸（`background-image: url(file:///usr/share/backgrounds/mastersos/mastersos-night.jpg)`，
   `background-size: cover`），上面一层上下渐暗的遮罩，保证白字对比度。
-- 用户名那一步的卡片区（头像、输入框、Local manager）：半透明深色毛玻璃（GNOME Shell 的 CSS 没有 backdrop-filter；用
+- 用户名那一步的卡片区（头像、输入框；2026-11-05 起不再有 Local manager，IT 维护登录在左下角的 “Managed by”）：半透明深色毛玻璃（GNOME Shell 的 CSS 没有 backdrop-filter；用
   半透明底色加细描边与阴影做出效果图的观感，能用 Shell 的 blur effect 就用，实施者取舍）、圆角 24、输入框聚焦用暖色描边，
   `.mastersos-pill:focus` 等的 `#8ab4f8` 蓝色焦点一并改成品牌暖色。
   只画一层卡片（2026-11-05）：GNOME 50 给 AuthPrompt 与其内的输入区 `_inputWell` 同一个类 `login-dialog-prompt-layout`，

@@ -32,8 +32,8 @@ msgstr "صفحهٔ ورود باز نشد."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "دسترسی به مدرسه ممکن نیست. از نوار بالا به Wi-Fi وصل شوید و دوباره تلاش کنید."
 
-msgid "Local manager"
-msgstr "مدیر محلی"
+msgid "IT maintenance sign-in"
+msgstr "ورود برای نگهداری فناوری اطلاعات"
 
 msgid "Username"
 msgstr "نام کاربری"

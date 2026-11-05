@@ -32,8 +32,8 @@ msgstr "Pagina de autentificare nu a putut fi deschisă."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Nu se poate contacta școala. Conectează-te la Wi-Fi din bara de sus, apoi reîncearcă."
 
-msgid "Local manager"
-msgstr "Administrator local"
+msgid "IT maintenance sign-in"
+msgstr "Autentificare pentru mentenanță IT"
 
 msgid "Username"
 msgstr "Nume de utilizator"

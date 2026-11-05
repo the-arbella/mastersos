@@ -32,8 +32,8 @@ msgstr "Ne c'haller ket digeriñ ar bajenn gevreañ."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Ne c'haller ket tizhout ar skol. Kevreit ouzh ur rouedad Wi-Fi diwar ar varrenn el laez, hag adklaskit."
 
-msgid "Local manager"
-msgstr "Merour lec'hel"
+msgid "IT maintenance sign-in"
+msgstr "Kevreañ evit trezalc'h an urzhiataerezh"
 
 msgid "Username"
 msgstr "Anv implijer"

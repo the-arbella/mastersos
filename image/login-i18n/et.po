@@ -32,8 +32,8 @@ msgstr "Sisselogimislehte ei õnnestunud avada."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Kooliga ei saa ühendust. Looge ülariba kaudu Wi-Fi-ühendus ja proovige uuesti."
 
-msgid "Local manager"
-msgstr "Kohalik administraator"
+msgid "IT maintenance sign-in"
+msgstr "IT-hoolduse sisselogimine"
 
 msgid "Username"
 msgstr "Kasutajanimi"

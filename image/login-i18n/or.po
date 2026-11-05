@@ -32,8 +32,8 @@ msgstr "ସାଇନ୍-ଇନ୍ ପୃଷ୍ଠା ଖୋଲାଯାଇପା
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "ବିଦ୍ୟାଳୟକୁ ସଂଯୋଗ ହୋଇପାରୁନାହିଁ। ଉପର ବାରରୁ Wi-Fi ସହିତ ସଂଯୋଗ କରନ୍ତୁ, ତାପରେ ପୁନଃ ଚେଷ୍ଟା କରନ୍ତୁ।"
 
-msgid "Local manager"
-msgstr "ସ୍ଥାନୀୟ ପ୍ରଶାସକ"
+msgid "IT maintenance sign-in"
+msgstr "IT ରକ୍ଷଣାବେକ୍ଷଣ ସାଇନ୍-ଇନ୍"
 
 msgid "Username"
 msgstr "ଉପଯୋଗକର୍ତ୍ତା ନାମ"

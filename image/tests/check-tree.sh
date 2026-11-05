@@ -2703,7 +2703,7 @@ done
 
 # 61. GNOME 50 gives the class login-dialog-prompt-layout to both the AuthPrompt (avatar and input) and its _inputWell
 #     (authPrompt.js), so on 20261104 ".login-dialog .login-dialog-prompt-layout" (visual identity) drew a second bordered box
-#     around the entry and "Local manager" inside the card. Only the AuthPrompt, the login dialog's own child, is the card;
+#     around the entry (and the "Local manager" link of the time) inside the card. Only the AuthPrompt, the login dialog's own child, is the card;
 #     the entry keeps its warm focus ring.
 r=0
 if ! why=$(python3 -I - "$ld/stylesheet.css" 2>&1 <<'CARD'
@@ -2794,5 +2794,53 @@ grep -qE '^    setManaged\(' "$ld/shelf.js" || {
 	r=1
 }
 [ "$r" = 0 ] && ok 63 "login: new branding and locked apps are applied while the login screen is up"
+
+# 64. The IT maintenance sign-in moved from a "Local manager" link under the email field to the "Managed by <school>" line on
+#     the shelf (product owner, 2026-11-05): the card keeps only the entry, and the line reads as plain text until the pointer
+#     or the keyboard reaches it. It is a focusable St.Button (track_hover for the hover look, an accessible name that says
+#     what it opens) that starts exactly what the link did, _signInAs(IT_ACCOUNT), and like the link it is clickable only on
+#     the username step: _askForUsernameAndBeginVerification turns it on, _beginVerification (any sign-in, the card) off.
+r=0
+for want in "itSignIn: () => this._signInAs(IT_ACCOUNT)" 'this._shelf?.setItSignIn('; do
+	grep -qF "$want" "$lx" || {
+		bad 64 "extension.js does not wire the Managed-by line to the IT sign-in ($want)"
+		r=1
+	}
+done
+if grep -qE '_itLink|itLink|mastersos-login-link' "$lx" "$ld/strings.js" "$ld/stylesheet.css" ||
+	grep -qxF 'msgid "Local manager"' "$rel/login-i18n/mastersos-login.pot"; then
+	bad 64 "the Local manager link (or its string or style) is still there"
+	r=1
+fi
+step=$(awk '/_askForUsernameAndBeginVerification., original =>/ {on = 1} on {print} on && /^            \}\);$/ {exit}' "$lx")
+begin=$(awk '/._beginVerification., original =>/ {on = 1} on {print} on && /^            \}\);$/ {exit}' "$lx")
+on=$(awk '/^    _setItSignIn\(on\) \{/ {on = 1} on {print} on && /^    \}$/ {exit}' "$lx")
+if ! grep -qF 'ext._setItSignIn(true)' <<<"$step" || ! grep -qF 'ext._setItSignIn(false)' <<<"$begin" ||
+	! grep -qF 'this._shelf?.setItSignIn(' <<<"$on"; then
+	bad 64 "extension.js: the IT sign-in is not on exactly on the username step (_setItSignIn true/false)"
+	r=1
+fi
+sh=$(awk '/^    setItSignIn\(on\) \{/ {on = 1} on {print} on && /^    \}$/ {exit}' "$ld/shelf.js")
+for want in 'reactive' 'can_focus' 'track_hover' 'accessible_name'; do
+	grep -qF "$want" <<<"$sh" || {
+		bad 64 "shelf.js setItSignIn does not set $want"
+		r=1
+	}
+done
+if ! grep -qF "this._managed = new St.Button(" "$ld/shelf.js" || ! grep -qF 'actions.itSignIn()' "$ld/shelf.js"; then
+	bad 64 "shelf.js: the Managed-by line is not a button that calls actions.itSignIn()"
+	r=1
+fi
+for sel in '.mastersos-login-managed:hover' '.mastersos-login-managed:focus'; do
+	grep -qF "$sel {" "$ld/stylesheet.css" || {
+		bad 64 "stylesheet.css has no $sel"
+		r=1
+	}
+done
+grep -qF "itSignIn: _('IT maintenance sign-in')," "$ld/strings.js" || {
+	bad 64 "strings.js has no itSignIn text for the accessible name"
+	r=1
+}
+[ "$r" = 0 ] && ok 64 "login: \"Managed by <school>\" opens the IT maintenance sign-in; no Local manager link in the card"
 
 exit $fail

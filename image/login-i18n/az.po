@@ -32,8 +32,8 @@ msgstr "Giriş səhifəsi açıla bilmədi."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Məktəbə qoşulmaq mümkün olmadı. Yuxarı paneldən Wi-Fi şəbəkəsinə qoşulun, sonra yenidən cəhd edin."
 
-msgid "Local manager"
-msgstr "Lokal administrator"
+msgid "IT maintenance sign-in"
+msgstr "İT xidməti üçün giriş"
 
 msgid "Username"
 msgstr "İstifadəçi adı"

@@ -32,8 +32,8 @@ msgstr "No s'ha puesto ubrir a pachina d'inicio de sesión."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "No se puede connectar con a escuela. Connecta-te a una Wi-Fi dende a barra superior y torna a intentar-lo."
 
-msgid "Local manager"
-msgstr "Administrador local"
+msgid "IT maintenance sign-in"
+msgstr "Inicio de sesión de mantenimiento informatico"
 
 msgid "Username"
 msgstr "Nombre d'usuario"

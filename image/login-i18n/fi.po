@@ -32,8 +32,8 @@ msgstr "Kirjautumissivua ei voitu avata."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Koulua ei tavoiteta. Yhdistä Wi-Fi-verkkoon yläpalkista ja yritä uudelleen."
 
-msgid "Local manager"
-msgstr "Paikallinen ylläpitäjä"
+msgid "IT maintenance sign-in"
+msgstr "IT-huollon kirjautuminen"
 
 msgid "Username"
 msgstr "Käyttäjänimi"

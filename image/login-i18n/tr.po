@@ -32,8 +32,8 @@ msgstr "Oturum açma sayfası açılamadı."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Okula ulaşılamıyor. Üst çubuktan Wi-Fi'ye bağlanın ve yeniden deneyin."
 
-msgid "Local manager"
-msgstr "Yerel yönetici"
+msgid "IT maintenance sign-in"
+msgstr "BT bakım oturumu açma"
 
 msgid "Username"
 msgstr "Kullanıcı adı"

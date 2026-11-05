@@ -32,8 +32,8 @@ msgstr "Không thể mở trang đăng nhập."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Không thể kết nối với nhà trường. Hãy kết nối Wi-Fi từ thanh trên cùng rồi thử lại."
 
-msgid "Local manager"
-msgstr "Quản trị viên cục bộ"
+msgid "IT maintenance sign-in"
+msgstr "Đăng nhập bảo trì CNTT"
 
 msgid "Username"
 msgstr "Tên người dùng"

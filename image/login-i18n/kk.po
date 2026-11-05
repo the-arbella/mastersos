@@ -32,8 +32,8 @@ msgstr "Кіру бетін ашу мүмкін болмады."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Мектепке қосылу мүмкін емес. Жоғарғы жолақтан Wi-Fi желісіне қосылып, қайталап көріңіз."
 
-msgid "Local manager"
-msgstr "Жергілікті әкімші"
+msgid "IT maintenance sign-in"
+msgstr "IT қызмет көрсету үшін кіру"
 
 msgid "Username"
 msgstr "Пайдаланушы аты"

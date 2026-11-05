@@ -32,8 +32,8 @@ msgstr "Die aanmeldbladsy kon nie oopgemaak word nie."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Kan nie die skool bereik nie. Koppel via die boonste balk aan Wi-Fi en probeer dan weer."
 
-msgid "Local manager"
-msgstr "Plaaslike administrateur"
+msgid "IT maintenance sign-in"
+msgstr "IT-onderhoud-aanmelding"
 
 msgid "Username"
 msgstr "Gebruikernaam"

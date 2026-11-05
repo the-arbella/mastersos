@@ -32,8 +32,8 @@ msgstr "Δεν ήταν δυνατό το άνοιγμα της σελίδας �
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Δεν είναι δυνατή η σύνδεση με το σχολείο. Συνδεθείτε στο Wi-Fi από την επάνω γραμμή και δοκιμάστε ξανά."
 
-msgid "Local manager"
-msgstr "Τοπικός διαχειριστής"
+msgid "IT maintenance sign-in"
+msgstr "Σύνδεση συντήρησης IT"
 
 msgid "Username"
 msgstr "Όνομα χρήστη"

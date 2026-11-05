@@ -32,8 +32,8 @@ msgstr "Nepavyko atidaryti prisijungimo puslapio."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Nepavyksta pasiekti mokyklos. Prisijunkite prie Wi-Fi viršutinėje juostoje ir bandykite dar kartą."
 
-msgid "Local manager"
-msgstr "Vietinis administratorius"
+msgid "IT maintenance sign-in"
+msgstr "IT priežiūros prisijungimas"
 
 msgid "Username"
 msgstr "Naudotojo vardas"

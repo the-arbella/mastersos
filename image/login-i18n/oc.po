@@ -32,8 +32,8 @@ msgstr "Impossible de dobrir la pagina de connexion."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Impossible de contactar l'escòla. Connectatz-vos al Wi-Fi dempuèi la barra de dessús, puèi tornatz ensajar."
 
-msgid "Local manager"
-msgstr "Administrator local"
+msgid "IT maintenance sign-in"
+msgstr "Connexion per la mantenença informatica"
 
 msgid "Username"
 msgstr "Nom d'utilizaire"

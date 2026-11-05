@@ -32,8 +32,8 @@ msgstr "Nun se pudo abrir la páxina d'aniciu de sesión."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Nun se pue acceder a la escuela. Conéctate a una rede Wi-Fi dende la barra de riba y volvi intentalo."
 
-msgid "Local manager"
-msgstr "Alministrador llocal"
+msgid "IT maintenance sign-in"
+msgstr "Aniciu de sesión de mantenimientu informáticu"
 
 msgid "Username"
 msgstr "Nome d'usuariu"

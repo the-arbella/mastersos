@@ -32,8 +32,8 @@ msgstr "A bejelentkezési oldal nem nyitható meg."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Az iskola nem érhető el. Csatlakozz a Wi-Fi-hez a felső sávon, majd próbáld újra."
 
-msgid "Local manager"
-msgstr "Helyi rendszergazda"
+msgid "IT maintenance sign-in"
+msgstr "Bejelentkezés informatikai karbantartáshoz"
 
 msgid "Username"
 msgstr "Felhasználónév"

@@ -33,8 +33,8 @@ msgstr "ནང་འཛུལ་ཤོག་ལེབ་ ཁ་ཕྱེ་མ�
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "སློབ་གྲྭ་དང་ འབྲེལ་མ་ཚུགས། སྟེང་གི་ཕྲ་རིང་ལས་ Wi-Fi ལུ་ མཐུད་ཞིནམ་ལས་ ལོག་ཚོད་ལྟ་འབད།"
 
-msgid "Local manager"
-msgstr "ས་གནས་ཀྱི་ འཛིན་སྐྱོང་པ།"
+msgid "IT maintenance sign-in"
+msgstr "IT རྒྱུན་སྐྱོང་ནང་བསྐྱོད།"
 
 msgid "Username"
 msgstr "ལག་ལེན་པའི་མིང་།"

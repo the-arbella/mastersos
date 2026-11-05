@@ -32,8 +32,8 @@ msgstr "كىرىش بېتىنى ئاچقىلى بولمىدى."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "مەكتەپكە ئۇلانغىلى بولمىدى. ئۈستى بالداقتىن Wi-Fi غا ئۇلاڭ، ئاندىن قايتا سىناڭ."
 
-msgid "Local manager"
-msgstr "يەرلىك باشقۇرغۇچى"
+msgid "IT maintenance sign-in"
+msgstr "IT ئاسراش كىرىشى"
 
 msgid "Username"
 msgstr "ئىشلەتكۈچى ئىسمى"

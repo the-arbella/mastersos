@@ -33,8 +33,8 @@ msgstr "Niy szło ôtwarcić zajty logowaniŏ."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Niy idzie sie połōnczyć ze szkołōm. Połōncz sie z Wi-Fi z gōrnego posku, a potym sprōbuj zaś."
 
-msgid "Local manager"
-msgstr "Lokalny administrator"
+msgid "IT maintenance sign-in"
+msgstr "Logowanie do serwisu IT"
 
 msgid "Username"
 msgstr "Miano użytkowńika"

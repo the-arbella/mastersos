@@ -203,7 +203,8 @@ agent 的 `branding` 步骤（快步骤，开机 GDM 之前也跑，但开机时
 - `logo.png`：登录界面的 Logo，管理台在浏览器里做好的 PNG，高 96 px、宽 ≤ 480（GDM 按 48 px 高显示，高分屏 96 px）。GDM 的 dconf 片段
   `/etc/dconf/db/gdm.d/80-mastersos-branding` 只有 `[org/gnome/login-screen] logo=` 一个键，指向它；登录界面横幅只由 `90-mastersos-lock`（锁定提示）写。
 - `logo-icon.png`：快捷菜单那一行的图标，40×40（按 20 px 显示）。用户会话里的 `mastersos-managed@` 扩展读 `logo_icon`；`mastersos-login@`
-  只读 `school_name` 与 `domains`，「Managed by …」放在 GDM 自己的 Logo 上方。
+  只读 `school_name` 与 `domains`，「Managed by …」放在左下角那排按钮上方；在用户名那一步它也是 IT 维护账号（`itadmin`）的入口，
+  平时看着是普通文字，鼠标移上去或键盘聚焦才显出可点。
 
 两张图各自按设置包里的 `[school] logo_sha256` / `logo_icon_sha256` 从 `<服务端>/logos/<sha256>.png` 下载（≤ 128 KiB、20 秒），sha256 对得上才用；
 缓存里已有对得上的就不再下载，设置里没有了就删掉文件。下载失败或不匹配：那一处不显示 Logo、本项报失败、下一轮再试。旧 agent 缓存的 `logo.webp` 见到就删。

@@ -1,4 +1,6 @@
-// The row of pill buttons at the bottom left of the login screen: Shut down, Browse as Guest, Apps. The notice
+// The row of pill buttons at the bottom left of the login screen: Shut down, Browse as Guest, Apps, under the
+// "Managed by <school>" line, which is also the way into the IT maintenance account (it looks like text until hovered or
+// focused, and works only on the username step). The notice
 // (why a sign-in did not go through, with Retry when trying again can help) sits beside it, outside the login area.
 // Apps lists the locked apps the school shows on the login screen, read from /var/lib/mastersos-public/kiosk/<id>/.
 
@@ -76,17 +78,28 @@ function pill(iconName, label, onClick) {
 }
 
 export class Shelf {
-    // actions: {shutDown(), guest(), openApp(app)}
+    // actions: {shutDown(), guest(), openApp(app), itSignIn()}
     constructor(text, managedLine, actions) {
         this._actions = actions;
         this._text = text;
         this._apps = [];
+        this._itSignIn = false;
 
         this.actor = new St.BoxLayout({style_class: 'mastersos-shelf', orientation: Clutter.Orientation.VERTICAL});
-        this._managed = new St.Label({
+        // A button that starts out inert: setItSignIn turns it on (St.Button handles Enter and Space when focused).
+        this._managedLabel = new St.Label({y_align: Clutter.ActorAlign.CENTER});
+        this._managed = new St.Button({
             style_class: 'mastersos-login-managed',
+            child: this._managedLabel,
             x_align: Clutter.ActorAlign.START,
+            reactive: false,
+            can_focus: false,
+            track_hover: false,
             visible: false,
+        });
+        this._managed.connect('clicked', () => {
+            if (this._itSignIn)
+                actions.itSignIn();
         });
         this.actor.add_child(this._managed);
         this._row = new St.BoxLayout({style_class: 'mastersos-shelf-row'});
@@ -131,9 +144,25 @@ export class Shelf {
 
     // "Managed by <school>", or nothing when there is no school name.
     setManaged(line) {
-        this._managed.text = line ?? '';
+        this._managedLabel.text = line ?? '';
         this._managed.visible = !!line;
+        this.setItSignIn(this._itSignIn);
         this._reposition();
+    }
+
+    // On: the Managed-by line takes clicks, hover and keyboard focus and opens the IT maintenance sign-in. Off (a sign-in
+    // has started, or the card is open): plain text again.
+    setItSignIn(on) {
+        this._itSignIn = on;
+        const line = this._managedLabel.text;
+        this._managed.set({
+            reactive: on,
+            can_focus: on,
+            track_hover: on,
+            accessible_name: on && line ? `${line}. ${this._text.itSignIn}` : line,
+        });
+        if (!on)
+            this._managed.hover = false;
     }
 
     // onRetry null: no Retry button.

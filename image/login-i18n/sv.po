@@ -32,8 +32,8 @@ msgstr "Det gick inte att öppna inloggningssidan."
 msgid "Cannot reach the school. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Det går inte att nå skolan. Anslut till Wi-Fi från översta fältet och försök igen."
 
-msgid "Local manager"
-msgstr "Lokal administratör"
+msgid "IT maintenance sign-in"
+msgstr "Inloggning för IT-underhåll"
 
 msgid "Username"
 msgstr "Användarnamn"
