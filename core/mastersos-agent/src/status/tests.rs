@@ -218,6 +218,164 @@ fn nmcli_failure_is_disconnected_not_answering() {
 }
 
 #[test]
+fn nm_activating_is_connecting() {
+    let r = runner(
+        "connecting:none\n",
+        "wifi:connecting (configuring):wlan0\n",
+        "",
+        "",
+    );
+    assert_eq!(
+        classify_network(&r, &known()),
+        (Net::Connecting, Some("Connecting".to_string()))
+    );
+    // The global state may lag behind the Wi-Fi device: an activating device is enough.
+    let r = runner(
+        "disconnected:none\n",
+        "wifi:connecting (getting IP configuration):wlan0\n",
+        "",
+        "",
+    );
+    assert_eq!(
+        classify_network(&r, &known()),
+        (Net::Connecting, Some("Connecting".to_string()))
+    );
+}
+
+#[test]
+fn connecting_is_not_a_headline() {
+    let s = Status::new(
+        Net::Connecting,
+        Some("Connecting".into()),
+        Settings::Ok,
+        None,
+        Browser::Ok,
+        None,
+    );
+    assert_eq!(s.headline(), None);
+    assert_eq!(s.message, None);
+    let s = Status::new(
+        Net::Connecting,
+        None,
+        Settings::Waiting,
+        None,
+        Browser::Ok,
+        None,
+    );
+    assert_eq!(s.headline().unwrap().0, "Waiting for school settings.");
+}
+
+// ---------------------------------------------------------------------------
+// Grace period
+// ---------------------------------------------------------------------------
+
+fn secs(n: u64) -> Duration {
+    Duration::from_secs(n)
+}
+
+fn d(s: &str) -> Option<String> {
+    Some(s.to_string())
+}
+
+#[test]
+fn grace_holds_back_problems_that_may_clear() {
+    let t0 = std::time::Instant::now();
+    for net in [Net::NotInRange, Net::Limited, Net::Disconnected] {
+        let mut g = NetGrace::new(t0);
+        assert_eq!(
+            g.observe(net, d("x"), t0 + secs(10)),
+            (Net::Connecting, d("x")),
+            "{net:?}"
+        );
+        assert_eq!(g.wake_at(), Some(t0 + NET_GRACE), "{net:?}");
+    }
+    assert_eq!(NET_GRACE, secs(45));
+}
+
+#[test]
+fn grace_definite_problems_show_at_once() {
+    let t0 = std::time::Instant::now();
+    for net in [Net::NoAdapter, Net::WifiOff, Net::AuthFailed] {
+        let mut g = NetGrace::new(t0);
+        assert_eq!(g.observe(net, d("x"), t0 + secs(1)), (net, d("x")));
+        assert_eq!(g.wake_at(), None, "{net:?}");
+    }
+}
+
+#[test]
+fn grace_shows_after_the_window() {
+    let t0 = std::time::Instant::now();
+    let mut g = NetGrace::new(t0);
+    assert_eq!(
+        g.observe(Net::NotInRange, d("x"), t0 + secs(44)).0,
+        Net::Connecting
+    );
+    assert_eq!(
+        g.observe(Net::NotInRange, d("x"), t0 + NET_GRACE),
+        (Net::NotInRange, d("x"))
+    );
+    assert_eq!(g.wake_at(), None);
+}
+
+#[test]
+fn grace_window_restarts_when_the_network_drops() {
+    let t0 = std::time::Instant::now();
+    let mut g = NetGrace::new(t0);
+    assert_eq!(g.observe(Net::Ok, None, t0 + secs(100)), (Net::Ok, None));
+    assert_eq!(g.wake_at(), None);
+    assert_eq!(
+        g.observe(Net::Disconnected, d("x"), t0 + secs(110)).0,
+        Net::Connecting
+    );
+    assert_eq!(g.wake_at(), Some(t0 + secs(110) + NET_GRACE));
+    assert_eq!(
+        g.observe(Net::Disconnected, d("x"), t0 + secs(150)).0,
+        Net::Connecting
+    );
+    assert_eq!(
+        g.observe(Net::Disconnected, d("x"), t0 + secs(155)).0,
+        Net::Disconnected
+    );
+    // After a definite problem (Wi-Fi switched back on), a new window.
+    assert_eq!(
+        g.observe(Net::WifiOff, None, t0 + secs(200)).0,
+        Net::WifiOff
+    );
+    assert_eq!(
+        g.observe(Net::NotInRange, None, t0 + secs(205)).0,
+        Net::Connecting
+    );
+}
+
+#[test]
+fn grace_activation_is_held_and_restarts_the_window() {
+    let t0 = std::time::Instant::now();
+    let mut g = NetGrace::new(t0);
+    // Still activating long after the start: never shown.
+    assert_eq!(
+        g.observe(Net::Connecting, d("Connecting"), t0 + secs(100)),
+        (Net::Connecting, d("Connecting"))
+    );
+    assert_eq!(g.wake_at(), Some(t0 + secs(100) + NET_GRACE));
+    // The attempt ended without a link: the window counts from the activation.
+    assert_eq!(
+        g.observe(Net::NotInRange, d("x"), t0 + secs(120)).0,
+        Net::Connecting
+    );
+    assert_eq!(
+        g.observe(Net::NotInRange, d("x"), t0 + secs(145)).0,
+        Net::NotInRange
+    );
+}
+
+#[test]
+fn boot_grace_from_uptime() {
+    assert!(in_boot_grace(Some(secs(10))));
+    assert!(!in_boot_grace(Some(NET_GRACE)));
+    assert!(!in_boot_grace(None), "no uptime: no grace");
+}
+
+#[test]
 fn settings_waiting_vs_unreachable() {
     assert_eq!(settings_status(true, None), (Settings::Ok, None));
     assert_eq!(settings_status(false, None), (Settings::Waiting, None));
@@ -279,7 +437,7 @@ fn headline_priority_and_copy() {
     let (sentence, detail) = s.headline().unwrap();
     assert_eq!(
         sentence,
-        "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
+        "No network. Connect to Wi-Fi from the top-right menu."
     );
     assert_eq!(detail, Some("d1"));
     assert_eq!(s.message.as_deref(), Some(sentence));
@@ -355,7 +513,8 @@ fn write_status_is_0644_and_reports_change() {
 
 mod job {
     use std::path::{Path, PathBuf};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
 
     use mastersos_bundle::{DeviceIdent, Manifest, Seed};
     use tokio::sync::watch;
@@ -370,7 +529,7 @@ mod job {
     use crate::system::login::{self, LoginPolicy};
     use crate::system::SysPaths;
 
-    const NET: &str = "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering.";
+    const NET: &str = "No network. Connect to Wi-Fi from the top-right menu.";
 
     struct Lab {
         d: tempfile::TempDir,
@@ -380,10 +539,19 @@ mod job {
         current: watch::Sender<Option<Arc<CurrentGroup>>>,
         fetch_error: watch::Sender<Option<String>>,
         cx: JobCtx,
+        now: Arc<Mutex<Instant>>,
     }
 
     impl Lab {
+        /// A job whose start is past the grace window, so network problems show at once.
         fn new() -> Lab {
+            let lab = Lab::fresh();
+            lab.advance(NET_GRACE);
+            lab
+        }
+
+        /// A job that has just started (inside the grace window).
+        fn fresh() -> Lab {
             let d = tempfile::tempdir().unwrap();
             std::fs::create_dir_all(d.path().join("var/lib")).unwrap();
             let paths = SysPaths {
@@ -393,9 +561,12 @@ mod job {
                 state_dir: d.path().join("var/lib/mastersos"),
             };
             let runner = Arc::new(FakeRunner::new());
-            let job = StatusJob::new(
+            let now = Arc::new(Mutex::new(Instant::now()));
+            let clock = now.clone();
+            let job = StatusJob::with_clock(
                 ChromeStatus::new(paths.state_dir.join("chrome")),
                 d.path().join("usr/bin/google-chrome-stable"),
+                Arc::new(move || *clock.lock().unwrap()),
             );
             let (current, current_rx) = watch::channel(None);
             let (fetch_error, fetch_error_rx) = watch::channel(None);
@@ -431,7 +602,12 @@ mod job {
                 current,
                 fetch_error,
                 cx,
+                now,
             }
+        }
+
+        fn advance(&self, by: Duration) {
+            *self.now.lock().unwrap() += by;
         }
 
         fn root(&self) -> &Path {
@@ -499,6 +675,86 @@ mod job {
         assert!(lab.job.wake_on_signal());
         assert!(lab.job.wake_on_new_bundle());
         assert!(!lab.job.gates_first_report());
+    }
+
+    #[tokio::test]
+    async fn job_holds_the_network_banner_in_the_grace_window() {
+        let lab = Lab::fresh();
+        lab.have_bundle();
+        lab.have_chrome();
+        lab.offline();
+        lab.round().await;
+        let s = read_status(&lab.paths).unwrap();
+        assert_eq!(s.network, Net::Connecting);
+        assert_eq!(s.message, None);
+        assert!(
+            lab.banner().is_none(),
+            "no banner while the network may still come"
+        );
+        // Woken again just after the window ends, not 30 s later.
+        lab.advance(Duration::from_secs(40));
+        assert_eq!(lab.job.every(), Duration::from_secs(6));
+        lab.advance(Duration::from_secs(5));
+        lab.offline();
+        lab.round().await;
+        assert_eq!(read_status(&lab.paths).unwrap().network, Net::Disconnected);
+        assert_eq!(
+            lab.banner().unwrap(),
+            banner::render_gdm_banner(Some(&format!("{NET}\nNot connected")))
+        );
+        assert_eq!(lab.job.every(), Duration::from_secs(30));
+    }
+
+    #[tokio::test]
+    async fn job_shows_definite_problems_in_the_grace_window() {
+        let lab = Lab::fresh();
+        lab.runner
+            .respond(GENERAL, Output::ok("disconnected:none\n"));
+        lab.runner
+            .respond(DEVICES, Output::ok("wifi:unavailable:wlan0\n"));
+        lab.round().await;
+        assert_eq!(read_status(&lab.paths).unwrap().network, Net::WifiOff);
+        assert!(lab.banner().unwrap().contains(NET));
+        assert_eq!(lab.job.every(), Duration::from_secs(30));
+    }
+
+    #[tokio::test]
+    async fn job_connecting_suppresses_the_banner() {
+        let lab = Lab::new();
+        lab.have_bundle();
+        lab.have_chrome();
+        lab.runner.respond(GENERAL, Output::ok("connecting:none\n"));
+        lab.runner
+            .respond(DEVICES, Output::ok("wifi:connecting (configuring):wlan0\n"));
+        lab.round().await;
+        assert_eq!(read_status(&lab.paths).unwrap().network, Net::Connecting);
+        assert!(lab.banner().is_none());
+    }
+
+    #[test]
+    fn refresh_once_at_boot_holds_the_network_banner() {
+        let lab = Lab::new();
+        lab.have_chrome();
+        lab.offline();
+        refresh_once_at(
+            &lab.paths,
+            lab.runner.as_ref(),
+            true,
+            None,
+            Some(Duration::from_secs(12)),
+        );
+        assert_eq!(read_status(&lab.paths).unwrap().network, Net::Connecting);
+        assert!(lab.banner().is_none());
+        lab.offline();
+        refresh_once_at(
+            &lab.paths,
+            lab.runner.as_ref(),
+            true,
+            None,
+            Some(Duration::from_secs(60)),
+        );
+        assert_eq!(read_status(&lab.paths).unwrap().network, Net::Disconnected);
+        assert!(lab.banner().unwrap().contains(NET));
     }
 
     #[tokio::test]

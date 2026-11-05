@@ -101,8 +101,8 @@ msgstr "Ova se aplikacija može otvoriti samo s zaslona za prijavu"
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Ova aplikacija treba mrežu. Spojite se na Wi-Fi putem gornje trake, a zatim pokušajte ponovno."
 
-msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
-msgstr "Nema mreže. Odaberite Wi-Fi mrežu u izborniku gore desno ili priključite mrežni kabel ili telefon s dijeljenjem veze putem USB-a."
+msgid "No network. Connect to Wi-Fi from the top-right menu."
+msgstr "Nema mreže. Spojite se na Wi-Fi putem izbornika gore desno."
 
 msgid "Waiting for school settings."
 msgstr "Čekanje na školske postavke."

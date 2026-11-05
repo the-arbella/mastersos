@@ -101,8 +101,8 @@ msgstr "Esta aplicación nomás se puede ubrir dende a pantalla d'inicio de sesi
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Esta aplicación necesita una reixa. Connecta-te a una Wi-Fi dende a barra superior y torna a intentar-lo."
 
-msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
-msgstr "No i hai reixa. Tría una reixa Wi-Fi en o menú d'alto a la dreita, u connecta un cable de reixa u un telefono con compartición de connexión por USB."
+msgid "No network. Connect to Wi-Fi from the top-right menu."
+msgstr "No i hai reixa. Connecta-te a una Wi-Fi dende o menú d'alto a la dreita."
 
 msgid "Waiting for school settings."
 msgstr "Asperando a configuración d'a escuela."

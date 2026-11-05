@@ -53,7 +53,7 @@ export const OTHERS_EXACT = () => [
 // sentences, the lines after it are technical detail and stay as they are. A lock message from the school is not a msgid
 // and comes back unchanged.
 export const BANNER = () => [
-    _('No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering.'),
+    _('No network. Connect to Wi-Fi from the top-right menu.'),
     _('Waiting for school settings.'),
     _('Installing the web browser. You can sign in; it will appear when ready.'),
     _('The web browser could not be installed yet; it will try again. You can sign in.'),

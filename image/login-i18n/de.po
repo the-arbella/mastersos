@@ -101,8 +101,8 @@ msgstr "Diese App kann nur über den Anmeldebildschirm geöffnet werden"
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Diese App benötigt ein Netzwerk. Verbinden Sie sich über die obere Leiste mit dem WLAN und versuchen Sie es erneut."
 
-msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
-msgstr "Kein Netzwerk. Wählen Sie im Menü oben rechts ein WLAN aus oder schließen Sie ein Netzwerkkabel oder ein Telefon mit USB-Tethering an."
+msgid "No network. Connect to Wi-Fi from the top-right menu."
+msgstr "Kein Netzwerk. Verbinden Sie sich über das Menü oben rechts mit dem WLAN."
 
 msgid "Waiting for school settings."
 msgstr "Warten auf Schuleinstellungen."

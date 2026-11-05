@@ -101,8 +101,8 @@ msgstr "Aquesta aplicació només es pot obrir des de la pantalla d'inici de ses
 msgid "This app needs a network. Connect to Wi-Fi from the top bar, then retry."
 msgstr "Aquesta aplicació necessita una xarxa. Connecteu-vos al Wi-Fi des de la barra superior i torneu-ho a provar."
 
-msgid "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering."
-msgstr "No hi ha xarxa. Trieu una xarxa Wi-Fi al menú de la part superior dreta, o connecteu un cable de xarxa o un telèfon amb compartició de xarxa per USB."
+msgid "No network. Connect to Wi-Fi from the top-right menu."
+msgstr "No hi ha xarxa. Connecteu-vos al Wi-Fi des del menú de la part superior dreta."
 
 msgid "Waiting for school settings."
 msgstr "S'està esperant la configuració de l'escola."

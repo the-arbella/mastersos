@@ -185,7 +185,7 @@ mod tests {
     use crate::runner::FakeRunner;
     use crate::status::{write_status, Browser, Net, Settings};
 
-    const NET: &str = "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering.";
+    const NET: &str = "No network. Connect to Wi-Fi from the top-right menu.";
     const SET: &str = "Waiting for school settings.";
     const CHR: &str = "Installing the web browser. You can sign in; it will appear when ready.";
 

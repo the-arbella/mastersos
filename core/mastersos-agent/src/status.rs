@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use mastersos_bundle::ItemResult;
@@ -28,7 +28,7 @@ pub const STATUS_FILE: &str = "status.json";
 const NMCLI_TIMEOUT: Duration = Duration::from_secs(5);
 const DETAIL_MAX_CHARS: usize = 160;
 
-const MSG_NETWORK: &str = "No network. Choose a Wi-Fi network in the top-right menu, or plug in a network cable or a phone with USB tethering.";
+const MSG_NETWORK: &str = "No network. Connect to Wi-Fi from the top-right menu.";
 const MSG_SETTINGS: &str = "Waiting for school settings.";
 const MSG_CHROME: &str = "Installing the web browser. You can sign in; it will appear when ready.";
 const MSG_CHROME_FAILED: &str =
@@ -50,6 +50,9 @@ pub enum Net {
     AuthFailed,
     Limited,
     Disconnected,
+    /// NetworkManager is still activating a connection, or a problem that may clear by itself is inside the grace
+    /// window ([`NetGrace`]). Not a banner: the network may still come.
+    Connecting,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Debug)]
@@ -106,7 +109,7 @@ impl Status {
 
     /// The first problem by priority network > settings > chrome, as (sentence, detail); `None` when all three are fine.
     pub fn headline(&self) -> Option<(&'static str, Option<&str>)> {
-        if self.network != Net::Ok {
+        if !matches!(self.network, Net::Ok | Net::Connecting) {
             Some((MSG_NETWORK, self.network_detail.as_deref()))
         } else if self.settings != Settings::Ok {
             Some((MSG_SETTINGS, self.settings_detail.as_deref()))
@@ -228,6 +231,10 @@ pub fn classify_network(runner: &dyn Runner, known_ssids: &[String]) -> (Net, Op
         );
     }
 
+    if general.starts_with("connecting:") {
+        return (Net::Connecting, Some("Connecting".to_string()));
+    }
+
     // TYPE:STATE:DEVICE per line (the device name last, so it needs no unescaping of a middle field).
     let devices = nmcli(runner, &["-t", "-f", "TYPE,STATE,DEVICE", "device"]).unwrap_or_default();
     let mut wifi: Option<(String, String)> = None;
@@ -251,6 +258,10 @@ pub fn classify_network(runner: &dyn Runner, known_ssids: &[String]) -> (Net, Op
         }
         return (Net::NoAdapter, Some("No Wi-Fi adapter found".to_string()));
     };
+    // `connecting (configuring)`, `connecting (getting IP configuration)`, ...: the global state can lag behind.
+    if wifi_state.starts_with("connecting") {
+        return (Net::Connecting, Some("Connecting".to_string()));
+    }
     if wifi_state == "unavailable" {
         return (Net::WifiOff, Some("Wi-Fi is turned off".to_string()));
     }
@@ -306,6 +317,94 @@ fn reason_code(out: &str) -> Option<u32> {
 /// not text: 42 "The supplicant is now available" is no failure.
 fn is_auth_reason(code: u32) -> bool {
     matches!(code, 7..=11)
+}
+
+/// How long a network problem that may clear by itself stays off the banner: after the agent starts (boot), after the
+/// network was last fine, after a definite problem, and after NetworkManager last tried to connect. A school laptop's
+/// Wi-Fi often needs 10-30 s after boot to scan and associate.
+pub const NET_GRACE: Duration = Duration::from_secs(45);
+
+/// Whether `net` may clear without the person doing anything (held back in the grace window) or needs them now.
+fn may_clear_by_itself(net: Net) -> bool {
+    match net {
+        // Nothing to hold back.
+        Net::Ok | Net::Connecting => false,
+        // No Wi-Fi hardware: waiting does not change it; a cable or a USB phone is needed.
+        Net::NoAdapter => false,
+        // The radio is switched off (switch, key or rfkill): only the person can turn it on.
+        Net::WifiOff => false,
+        // NetworkManager tried and the password was refused: retrying will not help.
+        Net::AuthFailed => false,
+        // The first scan after boot or resume may not have found the school network yet.
+        Net::NotInRange => true,
+        // Just associated: DHCP, DNS or the connectivity check may still be under way.
+        Net::Limited => true,
+        // NetworkManager not up yet, or between autoconnect attempts.
+        Net::Disconnected => true,
+    }
+}
+
+/// Holds back network problems that may clear by themselves for [`NET_GRACE`] (see [`may_clear_by_itself`]), so the
+/// login screen does not say "No network" while the Wi-Fi is still connecting. The clock is passed in.
+#[derive(Debug)]
+pub struct NetGrace {
+    /// Start of the current window; `None` while the network is fine or a definite problem is shown.
+    since: Option<Instant>,
+    /// When the window holding a problem back ends (the status job runs again then).
+    wake_at: Option<Instant>,
+}
+
+impl NetGrace {
+    /// A window that starts at `start` (the agent's start).
+    pub fn new(start: Instant) -> NetGrace {
+        NetGrace {
+            since: Some(start),
+            wake_at: None,
+        }
+    }
+
+    /// The network state to publish for the classified `net` at `now`: [`Net::Connecting`] while it is held back.
+    pub fn observe(
+        &mut self,
+        net: Net,
+        detail: Option<String>,
+        now: Instant,
+    ) -> (Net, Option<String>) {
+        self.wake_at = None;
+        if net == Net::Connecting {
+            self.since = Some(now);
+            self.wake_at = Some(now + NET_GRACE);
+            return (net, detail);
+        }
+        if !may_clear_by_itself(net) {
+            self.since = None;
+            return (net, detail);
+        }
+        let end = *self.since.get_or_insert(now) + NET_GRACE;
+        if now < end {
+            self.wake_at = Some(end);
+            return (Net::Connecting, detail);
+        }
+        (net, detail)
+    }
+
+    /// When a held-back problem would show, so the status is looked at again then; `None` when nothing is held back.
+    pub fn wake_at(&self) -> Option<Instant> {
+        self.wake_at
+    }
+}
+
+/// The one-shot round before GDM starts has no history: it holds problems back while the machine has been up for
+/// less than [`NET_GRACE`]. Unknown uptime: no grace.
+fn in_boot_grace(uptime: Option<Duration>) -> bool {
+    uptime.is_some_and(|u| u < NET_GRACE)
+}
+
+/// Time since boot from `/proc/uptime` (includes suspend); `None` when unreadable.
+fn boot_uptime() -> Option<Duration> {
+    let text = std::fs::read_to_string("/proc/uptime").ok()?;
+    let secs: f64 = text.split_whitespace().next()?.parse().ok()?;
+    Duration::try_from_secs_f64(secs).ok()
 }
 
 /// Writes `status.json` (0644) in the public dir; `true` when the content changed.
@@ -372,22 +471,23 @@ fn decode_ssid(v: &str) -> String {
     v.to_string()
 }
 
-/// One status round (blocking: `nmcli`, `dconf update`): classify, write `status.json`, then refresh the banner with
-/// the lock text from the login policy on disk. `dconf_pending` carries a failed `dconf update` to the next round
-/// (the banner file is already written then, so the next round sees no change); the resident job starts with it set,
-/// so its first round compiles once even when the banner on disk is unchanged (repairs a failed `apply-local` compile).
+/// One status round (blocking: `nmcli`, `dconf update`): classify the network (through `grace`, see [`NetGrace`]),
+/// write `status.json` with it and `chrome`, then refresh the banner with the lock text from the login policy on disk.
+/// `dconf_pending` carries a failed `dconf update` to the next round (the banner file is already written then, so the
+/// next round sees no change); the resident job starts with it set, so its first round compiles once even when the banner on disk is unchanged (repairs a failed `apply-local` compile).
 fn round(
     paths: &SysPaths,
     runner: &dyn Runner,
     has_bundle: bool,
     fetch_error: Option<&str>,
-    chrome_bin: &Path,
-    chrome_last: Option<&ItemResult>,
+    chrome: (Browser, Option<String>),
     dconf_pending: &AtomicBool,
+    grace: impl FnOnce(Net, Option<String>) -> (Net, Option<String>),
 ) -> Result<()> {
     let (network, network_detail) = classify_network(runner, &known_ssids(&paths.root));
+    let (network, network_detail) = grace(network, network_detail);
     let (settings, settings_detail) = settings_status(has_bundle, fetch_error);
-    let (chrome, chrome_detail) = chrome_status(chrome_bin.exists(), chrome_last);
+    let (chrome, chrome_detail) = chrome;
     let status = Status::new(
         network,
         network_detail,
@@ -420,6 +520,18 @@ pub fn refresh_once(
     has_bundle: bool,
     fetch_error: Option<&str>,
 ) {
+    refresh_once_at(paths, runner, has_bundle, fetch_error, boot_uptime());
+}
+
+/// [`refresh_once`] with the time since boot passed in.
+pub fn refresh_once_at(
+    paths: &SysPaths,
+    runner: &dyn Runner,
+    has_bundle: bool,
+    fetch_error: Option<&str>,
+    uptime: Option<Duration>,
+) {
+    let hold = in_boot_grace(uptime);
     let chrome = ChromeStatus::new(paths.state_dir.join("chrome"));
     let bin = paths.root.join(CHROME_BIN.trim_start_matches('/'));
     if let Err(e) = round(
@@ -427,31 +539,53 @@ pub fn refresh_once(
         runner,
         has_bundle,
         fetch_error,
-        &bin,
-        chrome.last_result().as_ref(),
+        chrome_status(bin.exists(), chrome.last_result().as_ref()),
         &AtomicBool::new(false),
+        |net, detail| {
+            if hold && may_clear_by_itself(net) {
+                (Net::Connecting, detail)
+            } else {
+                (net, detail)
+            }
+        },
     ) {
         log::warn!("device status: {e:#}");
     }
 }
 
+/// The time source of [`StatusJob`] (tests move it by hand).
+pub type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
+
+const EVERY: Duration = Duration::from_secs(30);
+
 /// Background job of the resident `run`: recomputes the status every 30 s, on a wake (SIGUSR1: the NetworkManager
-/// dispatcher, the Chrome service) and on a new bundle. Reports nothing.
+/// dispatcher, the Chrome service), on a new bundle, and just after a grace window holding a network problem back
+/// ends (no dispatcher event comes then). Reports nothing.
 pub struct StatusJob {
     chrome: ChromeStatus,
     chrome_bin: PathBuf,
     dconf_pending: Arc<AtomicBool>,
+    clock: Clock,
+    grace: Arc<Mutex<NetGrace>>,
     /// The last error logged (logged again only when it changes: the job runs every 30 s).
     last_error: Mutex<Option<String>>,
 }
 
 impl StatusJob {
     pub fn new(chrome: ChromeStatus, chrome_bin: PathBuf) -> Self {
+        Self::with_clock(chrome, chrome_bin, Arc::new(Instant::now))
+    }
+
+    /// The grace window starts at `clock()` now (the agent's start).
+    pub fn with_clock(chrome: ChromeStatus, chrome_bin: PathBuf, clock: Clock) -> Self {
+        let start = clock();
         StatusJob {
             chrome,
             chrome_bin,
             // One `dconf update` per agent start: `apply-local`'s may have failed with the banner already on disk.
             dconf_pending: Arc::new(AtomicBool::new(true)),
+            clock,
+            grace: Arc::new(Mutex::new(NetGrace::new(start))),
             last_error: Mutex::new(None),
         }
     }
@@ -462,8 +596,19 @@ impl Job for StatusJob {
         "status"
     }
 
+    /// 30 s, or sooner: 1 s after a grace window holding a network problem back ends.
     fn every(&self) -> Duration {
-        Duration::from_secs(30)
+        let wake_at = self
+            .grace
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .wake_at();
+        match wake_at {
+            Some(t) => {
+                (t.saturating_duration_since((self.clock)()) + Duration::from_secs(1)).min(EVERY)
+            }
+            None => EVERY,
+        }
     }
 
     fn wake_on_signal(&self) -> bool {
@@ -482,11 +627,13 @@ impl Job for StatusJob {
             let has_bundle = cx.current.borrow().is_some();
             let fetch_error = cx.fetch_error.borrow().clone();
             let chrome_last = self.chrome.last_result();
-            let (paths, runner, bin, pending) = (
+            let (paths, runner, bin, pending, grace, clock) = (
                 cx.paths.clone(),
                 cx.runner.clone(),
                 self.chrome_bin.clone(),
                 self.dconf_pending.clone(),
+                self.grace.clone(),
+                self.clock.clone(),
             );
             let r = tokio::task::spawn_blocking(move || {
                 round(
@@ -494,9 +641,12 @@ impl Job for StatusJob {
                     runner.as_ref(),
                     has_bundle,
                     fetch_error.as_deref(),
-                    &bin,
-                    chrome_last.as_ref(),
+                    chrome_status(bin.exists(), chrome_last.as_ref()),
                     &pending,
+                    |net, detail| {
+                        let mut g = grace.lock().unwrap_or_else(|e| e.into_inner());
+                        g.observe(net, detail, clock())
+                    },
                 )
             })
             .await;

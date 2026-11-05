@@ -49,14 +49,18 @@ value() {
 	sed -nE "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"([a-z_]*)\".*/\\1/p" "$public/status.json" 2>/dev/null | head -n1 || :
 }
 # The headline sentence and the detail of the first part that is not ok (network > settings > chrome), one per line.
+# A network still "connecting" (or in the agent's grace window) is no headline, as in status.rs.
 status_text() {
 	local part msg detail=''
 	msg=$(field message)
 	for part in network settings chrome; do
-		if [ -n "$(value "$part")" ] && [ "$(value "$part")" != ok ]; then
+		case "$(value "$part")" in
+		'' | ok | connecting) ;;
+		*)
 			detail=$(field "${part}_detail")
 			break
-		fi
+			;;
+		esac
 	done
 	printf '%s' "$msg"
 	[ -n "$detail" ] && printf '\n%s' "$detail"
