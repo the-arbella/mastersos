@@ -27,10 +27,63 @@ fi
 grep -E '^LOGIN_TIMEOUT' /etc/login.defs
 
 # 语言只能在构建时生成（locale-archive 在只读的 /usr 里）；4b 按 locale -a 检查
-# Every UTF-8 locale glibc lists: a school may set any of them and the login screen offers them (design 2026-11-01).
-# shellcheck disable=SC2046 # one locale per word
-locale-gen $(sed -n 's/^\([^ ]*\) UTF-8$/\1/p' /usr/share/i18n/SUPPORTED)
-echo "postinst: $(locale -a | wc -l) locales"
+# Every UTF-8 locale glibc lists in /usr/share/i18n/SUPPORTED, plus what the language packs ask for in
+# /var/lib/locales/supported.d (ca_ES.UTF-8@valencia, the name the login screen looks for, is only there): a school may set any
+# of them and the login screen offers them (design 2026-11-01). That is the list a plain `locale-gen` builds once every UTF-8
+# line of /etc/locale.gen is on, and each entry gets locale-gen's own localedef call, so the archive holds the same locales.
+# Not locale-gen itself (20261105.15): `locale-gen <names>` compiled 332 locales one after another (4 min) and switched them on
+# in /etc/locale.gen, so mkosi's own "Generating locales" step (it runs a plain locale-gen whenever that file has a line that is
+# on) purged the archive and compiled all 332 again (4 more min). Here they compile in parallel (localedef locks the archive
+# while it adds one and copes with a parallel run creating it) and /etc/locale.gen ends with no line on, so mkosi skips its step.
+locales_start=$SECONDS
+locales_want=$({
+	cat /var/lib/locales/supported.d/* 2>/dev/null || true
+	cat /etc/locale.gen 2>/dev/null || true
+	grep -E '^[^ ]+ UTF-8$' /usr/share/i18n/SUPPORTED
+} | awk '$1 !~ /^#/ && NF >= 2 { print $1, $2 }' | LC_ALL=C sort -u)
+# What the locales package compiled while it was installed (supported.d only), removed the way a plain locale-gen does
+rm -f /usr/lib/locale/locale-archive
+for d in /usr/lib/locale/*; do
+	[ "$d" = /usr/lib/locale/C.utf8 ] || rm -rf "$d"
+done
+# The input file choice is locale-gen's (2.43): the name itself when /usr/share/i18n/locales has it, else the name without
+# codeset; a localedef failure does not stop the others (locale-gen ignores it too), the check below catches a missing locale
+# shellcheck disable=SC2016 # expanded by the inner sh
+printf '%s\n' "$locales_want" | (umask 022 && xargs -P "$(nproc)" -n 2 sh -c '
+	locale=$1 charset=$2
+	base=${locale%%.*}
+	base=${base%%@*}
+	at=${locale#*@}
+	if [ "$at" = "$locale" ]; then at=; else at=@$at; fi
+	if [ -e "/usr/share/i18n/locales/$locale" ]; then input=$locale; else input=$base$at; fi
+	localedef -i "$input" -c -f "$charset" "$locale" || echo "postinst: localedef $locale exited $?" >&2
+' sh)
+# glibc's name for each (codeset lower case, alphanumerics only: th_TH.UTF-8 is th_TH.utf8) must be in locale -a
+locales_missing=$(LC_ALL=C comm -23 \
+	<(printf '%s\n' "$locales_want" | awk '{
+		n = $1
+		if (i = index(n, ".")) {
+			rest = substr(n, i + 1); j = index(rest, "@")
+			cs = j ? substr(rest, 1, j - 1) : rest; mod = j ? substr(rest, j) : ""
+			cs = tolower(cs); gsub(/[^a-z0-9]/, "", cs)
+			n = substr(n, 1, i) cs mod
+		}
+		print n
+	}' | LC_ALL=C sort -u) \
+	<(locale -a | LC_ALL=C sort -u))
+if [ -n "$locales_missing" ]; then
+	echo "postinst: locales not generated: $(printf '%s\n' "$locales_missing" | tr '\n' ' ')" >&2
+	exit 1
+fi
+# Nothing on in /etc/locale.gen (its active lines are in the list above), or mkosi compiles everything again
+if [ -e /etc/locale.gen ]; then
+	sed -i -E 's/^([[:space:]]*[^#[:space:]])/# \1/' /etc/locale.gen
+	if grep -qvE '^[[:space:]]*(#|$)' /etc/locale.gen; then
+		echo "postinst: /etc/locale.gen still has a line on; mkosi would compile every locale again" >&2
+		exit 1
+	fi
+fi
+echo "postinst: $(printf '%s\n' "$locales_want" | wc -l) locales compiled in $((SECONDS - locales_start)) s on $(nproc) CPUs; locale -a lists $(locale -a | wc -l)"
 
 # authd 的 PAM（4a Task 12 去掉 Password 段；4b Task 9 按用户名分流、关掉终端查询）：
 # 4a 在 VM 168 实测，authd 的 Password 段原样留着时 common-password 里它是第一个 Primary、default=die，后面的 pam_unix

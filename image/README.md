@@ -169,7 +169,7 @@ https 扩展地址与 lab 扩展钥匙的生成），结果进 `lab/results/<日
 - **语言与键盘**：是系统设置，`localectl` 存。第一次到登录页时，`branding.json` 的 `locale_managed` 不为真且 `/etc/locale.conf` 没有 `LANG` 才问；受管机器要等 `status.json` 的 `settings` 为 `ok` 才判断，种子刚装好时不会抢先弹出。语言列表来自镜像的语言包，布局来自 `evdev.xml`，打不出拉丁字母的布局自动加 `us` 第二布局。之后从顶部键盘菜单的 Language 改，学校管语言时这一项不显示。
 - **只结束登录页会话**：写完调 `session/auto` 的 Terminate，GDM 用新语言重新拉起。绝不重启 gdm 服务，否则后台桌面一起死。新的登录页用户名可能是 `gdm-greeter-2`，所以卡片浏览器是模板单元 `mastersos-login-browser@<用户>.service`，polkit 规则只放行自己这一个实例。
 - **Ubuntu 默认挡着 keymap**：`mkosi.conf` 删掉 `org.freedesktop.locale1.read-only.conf` 和 localed 的 x11-keyboard drop-in，`/etc/X11` 在策略表里可写。系统键盘不会自动进学生桌面，`mastersos-managed@` 的 `session.js` 登录时从 localed 写入 `input-sources`。
-- **自己的文字**走 gettext（`login-i18n/`），英文回退；Ubuntu 的文字由全部语言包提供，所有 UTF-8 locale 都生成。`login-browser` 按系统语言给 Chrome 传 `--lang`。
+- **自己的文字**走 gettext（`login-i18n/`），英文回退；Ubuntu 的文字由全部语言包提供，所有 UTF-8 locale（加上语言包在 `/var/lib/locales/supported.d` 里要的，如 `ca_ES.UTF-8@valencia`）都由 `mkosi.postinst.chroot` 并行编译一遍；不调 `locale-gen`、`/etc/locale.gen` 不留打开的行，否则 mkosi 自己的「Generating locales」会把全部 locale 再串行编一遍（20261105.15 两遍共约 8 分钟）。`login-browser` 按系统语言给 Chrome 传 `--lang`。
 - **学校账号锁屏**：账号在本机没有密码，系统锁屏没东西可比对。Super+L、闲置、合盖都走 `session.js` 的 `LockToGreeter`：黑幕盖住桌面，`Gdm.goto_login_session_sync` 到登录页，桌面留在后台。VT 切回锁定的桌面也回到这里。`unlock-dialog` 模式没有扩展名单，所以 `extension.js` 把自己留在名单里。走完卡片回到同一会话。没有离线解锁：断网时桌面等到联网后 Retry。本地 IT 账号保留系统锁屏。
 
 - **底栏**：Shut down、Browse as Guest、Add person、Apps。访客与 `kiosk-*` 不进用户列表，`Not listed?` 取消。Apps 读

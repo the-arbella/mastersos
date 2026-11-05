@@ -1028,7 +1028,7 @@ grep -qF '"/etc/dconf/db/gdm.d",' "$core/mastersos-agent/src/system/mod.rs" || {
 	bad 23 "mastersos-agent 的 WRITE_ROOTS 应含 /etc/dconf/db/gdm.d（lock 步骤写登录界面的横幅）"
 	r=1
 }
-# 镜像生成的每个语言（postinst.chroot 的 locale-gen）都要有 GNOME 的界面翻译，否则 school.locale 只改得了日期格式
+# 镜像生成的每个语言（postinst.chroot 编译的 locale）都要有 GNOME 的界面翻译，否则 school.locale 只改得了日期格式
 for p in language-pack-th language-pack-gnome-th language-pack-zh-hans language-pack-gnome-zh-hans language-pack-en language-pack-gnome-en; do
 	grep -qE "^ +$p\$" "$rel/mkosi.conf" || {
 		bad 23 "mkosi.conf 应装 ${p}（school.locale 设成镜像里的语言时界面要有翻译）"
@@ -2176,8 +2176,8 @@ grep -qF 'UnlockDialog.prototype._onReset = function () {};' "$ex/usr/share/gnom
 
 # 50. Language and keyboard from the login screen (design 2026-11-01): the greeter may set exactly those two polkit actions; localed can
 #     write the keymap (Ubuntu blocks SetX11Keyboard with a D-Bus policy file and keeps xorg.conf.d read-only for localed, and /etc/X11 must not
-#     be the read-only factory link); the image carries every Ubuntu language pack and generates every UTF-8 locale; each pack's language
-#     has a complete catalogue.
+#     be the read-only factory link); the image carries every Ubuntu language pack and generates every UTF-8 locale (plus the packs' own)
+#     in one parallel pass, not locale-gen; each pack's language has a complete catalogue.
 r=0
 llr=$ex/usr/share/polkit-1/rules.d/49-mastersos-login-language.rules
 for l in '"org.freedesktop.locale1.set-locale"' '"org.freedesktop.locale1.set-keyboard"' '/^gdm-greeter(-[0-9]+)?$/'; do
@@ -2210,6 +2210,16 @@ grep -qF '/usr/share/i18n/SUPPORTED' "$rel/mkosi.postinst.chroot" || {
 	bad 50 "mkosi.postinst.chroot should generate every UTF-8 locale"
 	r=1
 }
+# ...and what the language packs ask for (ca_ES.UTF-8@valencia is only in supported.d), compiled once: locale-gen there would switch
+# the lines on in /etc/locale.gen and mkosi's own step would then compile every locale a second time, one after another (20261105.15)
+grep -qF '/var/lib/locales/supported.d' "$rel/mkosi.postinst.chroot" || {
+	bad 50 "mkosi.postinst.chroot should also generate the locales in /var/lib/locales/supported.d (the language packs' own)"
+	r=1
+}
+if grep -qE '^[^#]*\blocale-gen\b' "$rel/mkosi.postinst.chroot"; then
+	bad 50 "mkosi.postinst.chroot should not run locale-gen: mkosi would then compile every locale again"
+	r=1
+fi
 if ! why=$(python3 -I - "$rel/login-i18n" "$rel/mkosi.conf" <<'CATALOGUES'
 import glob, os, re, sys
 
