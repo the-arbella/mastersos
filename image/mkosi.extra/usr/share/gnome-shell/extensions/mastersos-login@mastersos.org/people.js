@@ -1,5 +1,5 @@
 // Who the login screen's one entry finds as the person types, and the school addresses it offers (design 2026-11-03, login
-// single field); why a person who signed in was refused.
+// single field); why a person who signed in was refused, and which school domains the refusal names.
 // Pure computation, no gi:// imports: extension.js and image/tests/login-people-test.mjs share it.
 
 export const LIMIT = 5;
@@ -74,4 +74,17 @@ const REFUSALS = [
 
 export function refusalKind(message) {
     return REFUSALS.find(([, re]) => re.test(message ?? ''))?.[0] ?? null;
+}
+
+// At most this many school domains are named in a refusal; with more, the refusal names none.
+export const REFUSAL_DOMAINS = 3;
+
+// The school domains a refused person is pointed to, as one text ("@a.ac.th, @b.ac.th"): all of them, so that a teacher on the
+// second domain does not read the refusal as meant for them. Empty with none, or with more than REFUSAL_DOMAINS (a long list
+// would not fit the line: the plain refusal is clearer).
+export function refusalDomains(domains) {
+    const list = (domains ?? []).filter(d => typeof d === 'string' && d);
+    if (!list.length || list.length > REFUSAL_DOMAINS)
+        return '';
+    return list.map(d => `@${d}`).join(', ');
 }
