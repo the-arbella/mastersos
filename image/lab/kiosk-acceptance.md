@@ -252,6 +252,10 @@ M3(b) 的齿轮在无口令账号上不出现，改用 root 把记录设成 `ubu
 
 ## 5. 按应用的模拟环境：Pearson TestNav（设计 `docs/specs/2026-11-06-testnav-chromeos-mock.md`）
 
+**2026-11-06 改：** 考试扩展 1.4.0 起没有 TestNav 的 mock env，改用 `docs/specs/2026-11-06-kiosk-platform-inject-design.md` §10 的设置
+（`platform = "chromeos"`、`inject = "files/testnav.js"`）；下表的期望照旧，T4 的 `testnav-ua` 不再需要（DNR 已改 `User-Agent` 头），
+改成核对请求头里的 `Sec-CH-UA-Platform: "Chrome OS"`；T2 的 UA 版本号以样例脚本为准。
+
 前提：考试扩展 ≥ 1.3.0 的镜像；配置里有设计 §3.2 的 `testnav` 应用（Pearson 扩展 `gjhfdhjfmmgldldpmfdmbddbegbachgo` 强制安装）；
 为 T4 另配一个 `testnav-ua`（同样的设置，加 `user_agent` 的 CrOS 串）。学校在 PearsonAccess / ADAM 的训练站有一个练习考与一个
 `securityLevel` 1（安全）的测试场次和测试学生。下文 `$K` 是 `kiosk-testnav`。截图全留（`shots/T<n>-<k>.png`）。

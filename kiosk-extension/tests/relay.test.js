@@ -1,7 +1,8 @@
-// Tests for the TestNav mock env's isolated-world relay: page.js's closeApp becomes the background's {cmd:"exit"};
-// any other message is ignored. Runs in vitest's jsdom window (origin http://localhost:3000).
+// Tests for the generic isolated-world relay (design docs/specs/2026-11-06-kiosk-platform-inject-design.md §6): an inject
+// script's {type:"MASTERSOS_MOCK_EXIT"} becomes the background's {cmd:"exit"}; any other message is ignored (here
+// TestNav's own window messages, as the TestNav example runs beside them). Runs in vitest's jsdom window (origin http://localhost:3000).
 // ?raw: vite hands over the source as a string, the script runs once with a stub chrome, as Chrome injects it.
-import SRC from "../mock/testnav/relay.js?raw";
+import SRC from "../relay.js?raw";
 
 const added = [];
 
@@ -32,7 +33,7 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-describe("TestNav mock env: relay.js", () => {
+describe("relay.js", () => {
   it("relays the exit message", () => {
     const { sendMessage } = load();
     post({ type: "MASTERSOS_MOCK_EXIT" });

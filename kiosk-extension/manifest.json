@@ -1,18 +1,11 @@
 {
   "manifest_version": 3,
   "name": "MastersOS 考试扩展 / MastersOS Exam",
-  "description": "锁定会话的「求助」「退出」菜单与按应用的模拟环境 / Get help and Exit menu and per-app mock environments for MastersOS locked sessions",
-  "version": "1.3.0",
+  "description": "锁定会话的「求助」「退出」菜单、ChromeOS 伪装与注入脚本的起始页 / Get help and Exit menu, ChromeOS disguise and inject start page for MastersOS locked sessions",
+  "version": "1.4.0",
   "minimum_chrome_version": "120",
-  "permissions": ["nativeMessaging"],
-  "host_permissions": [
-    "https://*.nwea.org/*",
-    "https://*.mapnwea.org/*",
-    "https://*.testnav.com/*",
-    "https://*.adamexam.com/*",
-    "https://*.act.org/*",
-    "https://*.actaspire.org/*"
-  ],
+  "permissions": ["nativeMessaging", "scripting", "declarativeNetRequest", "tabs"],
+  "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js" },
   "content_scripts": [
     {
@@ -31,19 +24,6 @@
     {
       "matches": ["https://*.nwea.org/*", "https://*.mapnwea.org/*"],
       "js": ["mock/nwea/relay.js"],
-      "run_at": "document_start",
-      "all_frames": false
-    },
-    {
-      "matches": ["https://*.testnav.com/*", "https://*.adamexam.com/*", "https://*.act.org/*", "https://*.actaspire.org/*"],
-      "js": ["mock/testnav/page.js"],
-      "run_at": "document_start",
-      "world": "MAIN",
-      "all_frames": false
-    },
-    {
-      "matches": ["https://*.testnav.com/*", "https://*.adamexam.com/*", "https://*.act.org/*", "https://*.actaspire.org/*"],
-      "js": ["mock/testnav/relay.js"],
       "run_at": "document_start",
       "all_frames": false
     }

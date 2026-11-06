@@ -486,6 +486,7 @@ fn writes_launch_and_policy() {
                 url: "https://test.mapnwea.org/".into()
             },
             user_agent: Some("UA/1".into()),
+            start: None,
         }
     );
     assert_eq!(
@@ -497,12 +498,13 @@ fn writes_launch_and_policy() {
                 target: "org.gnome.Calculator".into()
             },
             user_agent: None,
+            start: None,
         }
     );
     // 策略文件就是 Task 2 合成的那份，别的什么都没有
     let pol = base.join("map").join(POLICIES_DIR).join(POLICY_FILE);
     let got: serde_json::Value = serde_json::from_slice(&fs::read(&pol).unwrap()).unwrap();
-    let want = kiosk::chrome_policy(&g.apps.kiosk["map"], &exam()).unwrap();
+    let want = kiosk::chrome_policy(&g.apps.kiosk["map"], &exam(), None).unwrap();
     assert_eq!(got, serde_json::Value::Object(want));
     assert_eq!(
         fs::read_dir(base.join("map").join(POLICIES_DIR))
@@ -1100,5 +1102,98 @@ fn reset_password_retried_until_initialized() {
             .all(|c| !c.starts_with("passwd") && !c.starts_with("systemctl")),
         "{:?}",
         r.calls()
+    );
+}
+
+/// Design 2026-11-06-kiosk-platform-inject §3: an app with platform and inject starts at the exam extension's start page,
+/// its policy allows that page and force-installs the helper built from the bundle's script; the key is kept in var_dir.
+#[test]
+fn platform_and_inject_build_the_start_page_and_helper() {
+    let root = root();
+    let r = FakeRunner::new();
+    absent(&r, "kiosk-tn");
+    absent(&r, "1900");
+    let bundle = tempfile::tempdir().unwrap();
+    fs::create_dir_all(bundle.path().join("files")).unwrap();
+    fs::write(bundle.path().join("files/tn.js"), "window.tn = 1;\n").unwrap();
+    let g = grp(
+        "[group.apps.kiosk.tn]\nname = \"TN\"\nurl = \"https://home.testnav.com/\"\n\
+         allow = [\"testnav.com\"]\nplatform = \"chromeos\"\ninject = \"files/tn.js\"\n",
+    );
+    let mut sys = SysState::default();
+    let out = run_with(&r, root.path(), &mut sys, &g, Phase::Full, bundle.path());
+    assert_eq!(out, vec![ok_item("tn")]);
+    let dir = root.path().join(PUBLIC_DIR).join("tn");
+    let l: Launch = serde_json::from_slice(&fs::read(dir.join(LAUNCH_FILE)).unwrap()).unwrap();
+    let start = l.start.clone().unwrap();
+    let prefix = format!("chrome-extension://{EXAM_ID}/start.html#");
+    assert!(start.starts_with(&prefix), "{start}");
+    let key = fs::read(
+        root.path()
+            .join("var/lib/mastersos-system")
+            .join(inject::KEY_DIR)
+            .join("tn.p8"),
+    )
+    .unwrap();
+    assert!(!key.is_empty());
+    let pol: serde_json::Value =
+        serde_json::from_slice(&fs::read(dir.join(POLICIES_DIR).join(POLICY_FILE)).unwrap())
+            .unwrap();
+    let forced = pol["ExtensionInstallForcelist"].as_array().unwrap();
+    assert_eq!(forced.len(), 2, "{forced:?}");
+    let helper = forced[1]
+        .as_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    assert!(mastersos_bundle::kiosk::extension_id_ok(&helper));
+    assert!(pol["URLAllowlist"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!(format!("chrome-extension://{EXAM_ID}"))));
+    // the start page's configuration names the helper and the platform
+    let enc = &start[prefix.len()..];
+    assert!(enc.contains(&helper), "{enc}");
+    assert!(enc.contains("%22platform%22%3A%22chromeos%22"), "{enc}");
+    assert!(dir
+        .join(inject::INJECT_DIR)
+        .join(inject::CRX_FILE)
+        .is_file());
+    let xml = fs::read_to_string(dir.join(inject::INJECT_DIR).join(inject::UPDATES_FILE)).unwrap();
+    assert!(xml.contains(&format!("appid='{helper}'")), "{xml}");
+
+    // without inject the helper goes away (the key stays: the id is the same if inject comes back)
+    let g = grp(
+        "[group.apps.kiosk.tn]\nname = \"TN\"\nurl = \"https://home.testnav.com/\"\nplatform = \"chromeos\"\n",
+    );
+    let out = run_with(&r, root.path(), &mut sys, &g, Phase::Full, bundle.path());
+    assert_eq!(out, vec![ok_item("tn")]);
+    assert!(!dir.join(inject::INJECT_DIR).exists());
+    let l: Launch = serde_json::from_slice(&fs::read(dir.join(LAUNCH_FILE)).unwrap()).unwrap();
+    assert!(l.start.unwrap().contains("%22helper%22%3Anull"));
+
+    // a missing script skips the app with the reason
+    let g = grp(
+        "[group.apps.kiosk.tn]\nname = \"TN\"\nurl = \"https://home.testnav.com/\"\ninject = \"files/gone.js\"\n",
+    );
+    let out = run_with(&r, root.path(), &mut sys, &g, Phase::Full, bundle.path());
+    assert_eq!(out.len(), 1);
+    assert!(!out[0].ok);
+    assert!(
+        format!("{:?}", out[0].detail).contains("files/gone.js"),
+        "{:?}",
+        out[0].detail
+    );
+}
+
+#[test]
+fn plain_web_app_has_no_start_page() {
+    let l = launch_of("x", &grp(&web_app("x", "X")).apps.kiosk["x"]).unwrap();
+    assert_eq!(l.start, None);
+    assert_eq!(
+        percent_encode("{\"a\":\"b c/é\"}"),
+        "%7B%22a%22%3A%22b%20c%2F%C3%A9%22%7D"
     );
 }

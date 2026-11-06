@@ -1,8 +1,14 @@
-// Tests for the TestNav mock env's MAIN-world script (design docs/specs/2026-11-06-testnav-chromeos-mock.md). Each case
-// runs the script in a fresh JSDOM window: the UA and chrome.runtime are non-configurable, so one window per case.
-// ?raw: vite hands over the source as a string (not executed as a module), the way Chrome injects it.
+// Tests for the TestNav example inject script (examples/kiosk-inject/testnav.js, design
+// docs/specs/2026-11-06-kiosk-platform-inject-design.md §10; analysis docs/specs/2026-11-06-testnav-chromeos-mock.md).
+// Each case runs the script in a fresh JSDOM window: the UA and chrome.runtime are non-configurable, so one window per
+// case. The file is outside the extension directory (not packed): read as text, the way Chrome gets it.
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import SRC from "../mock/testnav/page.js?raw";
+import { join } from "node:path";
+import PLATFORM from "../platform/chromeos.js?raw";
+
+// Outside the extension directory (not packed, and outside vite's allowed files): read it as text.
+const SRC = readFileSync(join(__dirname, "../../examples/kiosk-inject/testnav.js"), "utf8");
 
 // This directory has no package of its own: resolve jsdom from the web package vitest runs in.
 const { JSDOM } = createRequire(`${process.cwd()}/`)("jsdom");
@@ -12,7 +18,7 @@ const EXT = "gjhfdhjfmmgldldpmfdmbddbegbachgo";
 const LINUX_UA =
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36";
 const CROS_UA =
-  "Mozilla/5.0 (X11; CrOS x86_64 16181.61.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36 TestNavPWAKiosk/1.15.7";
+  "Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36 TestNavPWAKiosk/1.15.7";
 
 function page({ ua = LINUX_UA, runtime } = {}) {
   const dom = new JSDOM("<!doctype html><html><head></head><body></body></html>", {
@@ -21,8 +27,9 @@ function page({ ua = LINUX_UA, runtime } = {}) {
   });
   const w = dom.window;
   // Chrome's own UA (jsdom's is "Mozilla/5.0 (linux) … jsdom/…"); configurable, as Navigator.prototype's is.
-  Object.defineProperty(w.navigator, "userAgent", { get: () => ua, configurable: true });
-  Object.defineProperty(w.navigator, "appVersion", { get: () => ua.replace(/^Mozilla\//, ""), configurable: true });
+  // On Navigator.prototype, as in Chrome.
+  Object.defineProperty(w.Navigator.prototype, "userAgent", { get: () => ua, configurable: true });
+  Object.defineProperty(w.Navigator.prototype, "appVersion", { get: () => ua.replace(/^Mozilla\//, ""), configurable: true });
   // Chrome always has window.chrome; chrome.runtime only when an installed extension is externally connectable.
   w.chrome = runtime ? { app: {}, runtime } : { app: {} };
   return { w, run: () => w.eval(SRC) };
@@ -78,6 +85,18 @@ describe("TestNav mock env: page.js", () => {
     const b = page({ ua: `${set} TestNavPWAKiosk/1.15.7` });
     b.run();
     expect(b.w.navigator.userAgent).toBe(`${set} TestNavPWAKiosk/1.15.7`);
+  });
+
+  it("with platform = chromeos, the suffix goes on the platform script's UA, whichever runs first", () => {
+    for (const order of [
+      [SRC, PLATFORM],
+      [PLATFORM, SRC],
+    ]) {
+      const { w } = page();
+      for (const src of order) w.eval(src);
+      expect(w.navigator.userAgent).toBe(CROS_UA);
+      expect(w.navigator.appVersion).toBe(CROS_UA.replace(/^Mozilla\//, ""));
+    }
   });
 
   it("the UA cannot be replaced afterwards (TestNav extension's late append)", () => {

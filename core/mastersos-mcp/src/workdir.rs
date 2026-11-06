@@ -660,6 +660,12 @@ fn check_at(w: &Workdir, cur: &Snapshot, today: chrono::NaiveDate) -> Result<Vec
         Ok(filled) => {
             let checked = mastersos_bundle::check::check_text(&filled, &present, today);
             out.extend(checked.issues);
+            // The kiosk inject scripts' contents (size, UTF-8): check_text sees only the file names.
+            if let Some(m) = &checked.manifest {
+                out.extend(mastersos_bundle::lint_inject_sources(m, |f| {
+                    cur.files.get(f).map(Vec::as_slice)
+                }));
+            }
             if checked.manifest.is_some_and(|m| m.trust.is_empty())
                 && !out.iter().any(|l| l.code == "trust_empty")
             {

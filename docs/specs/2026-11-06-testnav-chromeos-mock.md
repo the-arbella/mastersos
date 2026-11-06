@@ -2,6 +2,10 @@
 
 **状态：** 阶段 1（离线分析）与阶段 2（`kiosk-extension/mock/testnav/`）完成；阶段 3（VM 124 实测）未做。
 
+**2026-11-06 取代：** §3 的做法（`kiosk-extension/mock/testnav/` 写死在考试扩展里）已被通用的 `platform = "chromeos"` 与
+`inject = "files/<名>.js"` 取代（设计 `docs/specs/2026-11-06-kiosk-platform-inject-design.md`，设置样例在它的 §10）。
+`mock/testnav/` 已删，页面脚本改写成样例 `examples/kiosk-inject/testnav.js`。本文的 §1–§2（页面与 Pearson 扩展读什么）仍然有效。
+
 **目标：** 让 Pearson TestNav（州考、ACT 等用的考试客户端）在 MastersOS 的锁定会话（`[config.apps.kiosk]` 的网页应用）里，
 按「TestNav Web App for ChromeOS」的方式运行：页面认为自己在受管 Chromebook 的 kiosk 里。做法与 NWEA 一样（考试扩展
 `kiosk-extension/README.md`「按应用的模拟环境」）：读页面与厂商扩展的源码，只给出页面实际读到的东西。

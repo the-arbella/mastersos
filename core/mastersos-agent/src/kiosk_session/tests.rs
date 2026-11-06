@@ -14,6 +14,7 @@ fn web(url: &str, ua: Option<&str>) -> Launch {
         name: "NWEA MAP".into(),
         kind: LaunchKind::Web { url: url.into() },
         user_agent: ua.map(String::from),
+        start: None,
     }
 }
 
@@ -160,6 +161,7 @@ fn exec_argv_flatpak_vs_path() {
             target: "org.example.Calc".into(),
         },
         user_agent: None,
+        start: None,
     };
     assert_eq!(
         app_argv(&l, Path::new("/home/kiosk-calc")),
@@ -457,6 +459,7 @@ fn run_refuses_app_when_policy_not_isolated() {
             target: "org.example.Calc".into(),
         },
         user_agent: None,
+        start: None,
     };
     for launch in [web("https://test.mapnwea.org/", None), calc] {
         policy_not_isolated_cases(&launch);
@@ -670,6 +673,7 @@ fn run_exec_app_ends_on_exit() {
             target: "/usr/bin/gnome-calculator".into(),
         },
         user_agent: None,
+        start: None,
     };
     write_launch(root.path(), &calc);
     let env = vars(&[
@@ -758,6 +762,7 @@ fn run_exec_spawn_failure_ends_session() {
                 target: "org.example.Calc".into(),
             },
             user_agent: None,
+            start: None,
         },
     );
     let env = vars(&[
@@ -985,6 +990,7 @@ fn run_falls_back_to_logind_desktop() {
             target: "org.example.Calc".into(),
         },
         user_agent: None,
+        start: None,
     };
     write_launch(root.path(), &calc);
     let env = vars(&[("USER", "kiosk-calc")]);
@@ -1124,4 +1130,23 @@ fn guard_ends_kiosk_accounts_outside_the_kiosk_session() {
             assert_eq!(go(uid, &env), (true, vec![]), "{uid} {d:?}");
         }
     }
+}
+
+/// Design 2026-11-06-kiosk-platform-inject §3.3: a web app with a start page opens it instead of its url.
+#[test]
+fn chrome_argv_opens_the_start_page() {
+    let start = "chrome-extension://abcdefghijklmnopabcdefghijklmnop/start.html#%7B%7D";
+    let l = Launch {
+        start: Some(start.into()),
+        ..web("https://home.testnav.com/", None)
+    };
+    let a = chrome_argv(&l, Path::new("/home/kiosk-tn"));
+    assert_eq!(a.last().unwrap(), start);
+    assert!(!a.iter().any(|x| x.contains("home.testnav.com")), "{a:?}");
+    // launch.json without the key (older agents) still reads
+    let old: Launch = serde_json::from_str(
+        r#"{"id":"x","name":"X","kind":{"type":"web","url":"https://x.example/"}}"#,
+    )
+    .unwrap();
+    assert_eq!(old.start, None);
 }

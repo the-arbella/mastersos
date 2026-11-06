@@ -1455,6 +1455,14 @@ pub struct KioskApp {
     /// characters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_agent: Option<String>,
+    /// Only for web apps (not PWA): `"chromeos"` makes the pages see ChromeOS, in JavaScript and in
+    /// HTTP headers alike ([`FEATURE_KIOSK_PLATFORM`]); not together with `user_agent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
+    /// Only for web apps (not PWA): a `files/….js` script in the bundle, run in the pages of the
+    /// app's sites before any of their own scripts ([`FEATURE_KIOSK_INJECT`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inject: Option<String>,
     /// Chrome extensions force-installed in the session (web / PWA apps).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extensions: Vec<KioskExtension>,
@@ -1707,6 +1715,11 @@ pub const FEATURE_OIDC_IDP_HINT: &str = "oidc_idp_hint";
 /// See [`FEATURE_UPDATE_MIRROR`]: the Device reads `format = 2` (Defaults, `drop`, the IT account,
 /// the school logo and name); the same string as [`format_feature`]`(2)`.
 pub const FEATURE_FORMAT_2: &str = "format_2";
+/// See [`FEATURE_UPDATE_MIRROR`]: `platform` in a kiosk app (the ChromeOS disguise, design
+/// docs/specs/2026-11-06-kiosk-platform-inject-design.md).
+pub const FEATURE_KIOSK_PLATFORM: &str = "kiosk_platform";
+/// See [`FEATURE_UPDATE_MIRROR`]: `inject` in a kiosk app (same design).
+pub const FEATURE_KIOSK_INJECT: &str = "kiosk_inject";
 
 /// Whether `s` is a school id as written in manifests and seeds: a UUID in its canonical text
 /// form, lowercase hex in 8-4-4-4-12 groups (36 characters). One spelling only, so the machine's
@@ -1814,6 +1827,18 @@ pub fn features_used(m: &Manifest) -> Vec<&'static str> {
     }
     if s.oidc.as_ref().is_some_and(|o| o.idp_hint.is_some()) {
         out.push(FEATURE_OIDC_IDP_HINT);
+    }
+    let kiosk_apps = || {
+        defaults
+            .into_iter()
+            .flat_map(|d| d.apps.kiosk.values())
+            .chain(m.configs.iter().flat_map(|c| c.apps.kiosk.values()))
+    };
+    if kiosk_apps().any(|a| a.platform.is_some()) {
+        out.push(FEATURE_KIOSK_PLATFORM);
+    }
+    if kiosk_apps().any(|a| a.inject.is_some()) {
+        out.push(FEATURE_KIOSK_INJECT);
     }
     out
 }

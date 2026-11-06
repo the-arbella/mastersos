@@ -511,6 +511,29 @@ pub fn feature_path(m: &Manifest, feature: &str) -> String {
                     .map(|c| format!("config.{}.update_channel", c.id)),
             )
             .next(),
+        FEATURE_KIOSK_PLATFORM | FEATURE_KIOSK_INJECT => {
+            let platform = feature == FEATURE_KIOSK_PLATFORM;
+            let key = if platform { "platform" } else { "inject" };
+            m.defaults
+                .iter()
+                .map(|d| ("defaults".to_owned(), &d.apps.kiosk))
+                .chain(
+                    m.configs
+                        .iter()
+                        .map(|c| (format!("config.{}", c.id), &c.apps.kiosk)),
+                )
+                .find_map(|(base, apps)| {
+                    apps.iter()
+                        .find(|(_, a)| {
+                            if platform {
+                                a.platform.is_some()
+                            } else {
+                                a.inject.is_some()
+                            }
+                        })
+                        .map(|(id, _)| format!("{base}.apps.kiosk.{id}.{key}"))
+                })
+        }
         FEATURE_WIFI_EXT if !m.school.wifi.is_empty() => Some("school.wifi".to_owned()),
         FEATURE_WIFI_EXT => layers().find_map(|(base, _, wifi)| {
             wifi.iter()
@@ -697,6 +720,27 @@ fn lint_kiosk(v: &View, present: &BTreeSet<String>, out: &mut Vec<Lint>) {
                 .param("icon", icon),
             ));
         }
+        // The script's contents are checked where they are at hand (`lint_inject_sources`, the agent); here only that the
+        // file is in the bundle. A malformed path is already kiosk_inject_invalid from kiosk::check.
+        if let Some(f) = app
+            .inject
+            .as_deref()
+            .filter(|f| kiosk::inject_path_ok(f) && !present.contains(*f))
+        {
+            out.push(v.tag(
+                err(
+                    "kiosk_inject_invalid",
+                    format!(
+                        "Kiosk app {:?} has inject {f:?}, which is not in the bundle: add the script under files/.",
+                        app.name
+                    ),
+                    format!("{at}.inject"),
+                )
+                .param("app_id", id)
+                .param("field", "inject")
+                .param("file", f),
+            ));
+        }
         // Final review I2: "entering" from the desktop only ends the current session and returns to the login screen
         // (one-time auto-login is not built yet, design 9.4), and an app with login_screen = false is not listed
         // there, so the student cannot find it. Relax this once auto-login exists.
@@ -743,6 +787,38 @@ fn lint_kiosk(v: &View, present: &BTreeSet<String>, out: &mut Vec<Lint>) {
             ));
         }
     }
+}
+
+/// The contents of every kiosk `inject` script that is in the bundle ([`kiosk::check_inject_source`]:
+/// size, UTF-8, NUL), for callers that hold the files: `mastersos check` and the server's upload
+/// check. `file` gives a bundle member's bytes, `None` when it is not there (that is already a
+/// [`lint_at`] error). One `kiosk_inject_invalid` per layer and app.
+pub fn lint_inject_sources<'a>(m: &Manifest, file: impl Fn(&str) -> Option<&'a [u8]>) -> Vec<Lint> {
+    let mut out = Vec::new();
+    for v in &views(m) {
+        let base = format!("{}.apps.kiosk", v.base);
+        for (id, app) in &v.apps.kiosk {
+            let Some(f) = app.inject.as_deref().filter(|f| kiosk::inject_path_ok(f)) else {
+                continue;
+            };
+            let Some(bytes) = file(f) else { continue };
+            if let Err(why) = kiosk::check_inject_source(bytes) {
+                out.push(
+                    v.tag(
+                        err(
+                            "kiosk_inject_invalid",
+                            format!("Kiosk app {:?}: inject script {f:?} {why}.", app.name),
+                            format!("{base}.{id}.inject"),
+                        )
+                        .param("app_id", id)
+                        .param("field", "inject")
+                        .param("file", f),
+                    ),
+                );
+            }
+        }
+    }
+    out
 }
 
 /// Kiosk rules about what a Config ends up with: more apps than the cap, and an app that
@@ -2087,6 +2163,8 @@ scanners = [{ name = "s", uri = "http://x" }, { name = "s", uri = "http://y" }]"
             ("kiosk_user_agent_invalid", &["field"]),
             ("kiosk_name_invalid", &["field"]),
             ("kiosk_policy_locked", &["field"]),
+            ("kiosk_platform_invalid", &["field"]),
+            ("kiosk_inject_invalid", &["field"]),
             ("drop_unknown", &["config", "group", "collection", "name"]),
             ("drop_conflict", &["config", "group", "collection", "name"]),
             ("it_account_invalid", &["layer"]),
@@ -2167,6 +2245,8 @@ flatpak = ["libreoffice"]"#,
                 format!("{NWEA}\nlogin_screen = false\nin_session = true"),
             ),
             ("x", format!("{NWEA}\nuser_agent = \"Mozilla/5.0\"")),
+            ("x", format!("{NWEA}\nplatform = \"windows\"")),
+            ("x", format!("{NWEA}\ninject = \"files/missing.js\"")),
             ("x", "name = \"c\"\nexec = \"org.example.Calc\"".to_string()),
         ] {
             run("", &kiosk(id, &fields), "\"local\"");
@@ -2585,6 +2665,65 @@ config = "a"
             "school.oidc.idp_hint"
         );
         assert_eq!(feature_path(&m, "nope"), "school");
+    }
+
+    #[test]
+    fn feature_path_points_at_kiosk_platform_and_inject() {
+        let m = manifest2(
+            r#"
+[[config]]
+id = "a"
+name = "a"
+apps.kiosk.k = { name = "K", url = "https://k.example/" }
+
+[[config]]
+id = "b"
+name = "b"
+apps.kiosk.t = { name = "T", url = "https://t.example/", platform = "chromeos", inject = "files/t.js" }
+
+[[group]]
+id = "default"
+name = "D"
+config = "a"
+"#,
+        );
+        assert_eq!(
+            feature_path(&m, crate::FEATURE_KIOSK_PLATFORM),
+            "config.b.apps.kiosk.t.platform"
+        );
+        assert_eq!(
+            feature_path(&m, crate::FEATURE_KIOSK_INJECT),
+            "config.b.apps.kiosk.t.inject"
+        );
+    }
+
+    #[test]
+    fn inject_file_must_be_in_the_bundle_and_valid() {
+        let m = manifest2(
+            "[[config]]\nid = \"a\"\nname = \"a\"\n\n[config.apps.kiosk.t]\nname = \"T\"\n\
+             url = \"https://t.example/\"\ninject = \"files/t.js\"\n\n\
+             [[group]]\nid = \"default\"\nname = \"D\"\nconfig = \"a\"\n",
+        );
+        let codes = |present: &BTreeSet<String>| -> Vec<&'static str> {
+            lint(&m, present)
+                .into_iter()
+                .filter(|l| l.code == "kiosk_inject_invalid")
+                .map(|l| l.code)
+                .collect()
+        };
+        assert_eq!(codes(&BTreeSet::new()), ["kiosk_inject_invalid"]);
+        let with: BTreeSet<String> = ["files/t.js".to_string()].into();
+        assert!(codes(&with).is_empty());
+        let ok = b"console.log(1);".to_vec();
+        let big = vec![b' '; kiosk::MAX_INJECT_BYTES + 1];
+        let bad = [0xffu8, 0xfe];
+        assert!(lint_inject_sources(&m, |f| (f == "files/t.js").then_some(&ok[..])).is_empty());
+        assert!(lint_inject_sources(&m, |_| None).is_empty());
+        let l = lint_inject_sources(&m, |_| Some(&big[..]));
+        assert_eq!(l.len(), 1, "{l:?}");
+        assert_eq!(l[0].code, "kiosk_inject_invalid");
+        assert_eq!(l[0].path.as_deref(), Some("config.a.apps.kiosk.t.inject"));
+        assert_eq!(lint_inject_sources(&m, |_| Some(&bad[..])).len(), 1);
     }
 
     #[test]

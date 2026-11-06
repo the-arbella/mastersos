@@ -153,9 +153,12 @@ fn chrome_base(home: &Path) -> Vec<String> {
 /// 网页：`google-chrome-stable --kiosk --no-first-run --user-data-dir=<home>/.kiosk-chrome [--user-agent=…] <url>`；
 /// PWA 把 `<url>` 换成 `--app=<url>`（裁定 R3：不算 app id，策略里另有 `WebAppInstallForceList`）。每一项是一个 argv
 /// 元素，不经 shell：UA 里的空格、引号原样是一个参数。本地程序不经 Chrome，同 [`exec_argv`]。
+/// A web app with `platform` or `inject` opens the exam extension's start page (`start`) instead of `<url>`: the start
+/// page puts the disguise and the script in place, then goes to `url` (design
+/// docs/specs/2026-11-06-kiosk-platform-inject-design.md §3.3).
 pub fn chrome_argv(l: &Launch, home: &Path) -> Vec<String> {
     let target = match &l.kind {
-        LaunchKind::Web { url } => url.clone(),
+        LaunchKind::Web { url } => l.start.clone().unwrap_or_else(|| url.clone()),
         LaunchKind::Pwa { url } => format!("--app={url}"),
         LaunchKind::Exec { target } => return exec_argv(target),
     };

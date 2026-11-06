@@ -23,6 +23,8 @@ const MAX_RESULTS: usize = 200;
 /// `config` (config profiles design §5): the new `[[config]]` shape and the `learning`/`full` modes.
 /// `support` (remote diagnostics and help design): `[config.support]` is read into `Config::support_enabled`.
 /// `config_update_channel`: `update_channel` of the Device's Config or the Defaults picks its update channel.
+/// `kiosk_platform`, `kiosk_inject`: the kiosk step writes the start page and builds the inject helper extension, and the
+/// exam extension (1.4.0) answers the start page (design docs/specs/2026-11-06-kiosk-platform-inject-design.md).
 /// `oidc_idp_hint`: the `login` step hands `[school.oidc] idp_hint` to the sign-in card (`login-browser/card.json`).
 pub const SUPPORTED_FEATURES: &[&str] = &[
     mastersos_bundle::FEATURE_UPDATE_MIRROR,
@@ -36,6 +38,8 @@ pub const SUPPORTED_FEATURES: &[&str] = &[
     mastersos_bundle::FEATURE_SUPPORT,
     mastersos_bundle::FEATURE_CONFIG_CHANNEL,
     mastersos_bundle::FEATURE_OIDC_IDP_HINT,
+    mastersos_bundle::FEATURE_KIOSK_PLATFORM,
+    mastersos_bundle::FEATURE_KIOSK_INJECT,
 ];
 
 /// 机器的硬件与系统身份。
@@ -355,7 +359,9 @@ mod tests {
                 "format_2",
                 "support",
                 "config_update_channel",
-                "oidc_idp_hint"
+                "oidc_idp_hint",
+                "kiosk_platform",
+                "kiosk_inject"
             ]
         );
         assert_eq!(r.manifest_features, SUPPORTED_FEATURES);
@@ -373,6 +379,8 @@ mod tests {
             mastersos_bundle::FEATURE_SUPPORT,
             mastersos_bundle::FEATURE_CONFIG_CHANNEL,
             mastersos_bundle::FEATURE_OIDC_IDP_HINT,
+            mastersos_bundle::FEATURE_KIOSK_PLATFORM,
+            mastersos_bundle::FEATURE_KIOSK_INJECT,
         ];
         assert!(SUPPORTED_FEATURES.iter().all(|f| all.contains(f)));
     }
