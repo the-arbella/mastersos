@@ -857,6 +857,8 @@ Write exactly one of `url` (a web page or PWA) and `exec` (a local program).
 | `pwa` | boolean | `false` | `true` only with `url` | `pwa = true` | Install and launch `url` as a PWA. |
 | `allow` | list of strings | the host of `url` | host names (lowercase letters, digits, `.`, `-`; at least two labels; no `*`, scheme, path or port; non-ASCII as punycode) | `allow = ["nwea.org", "mapnwea.org"]` | Sites the session may open, subdomains included; everything else is blocked. The host of `url` is always allowed. Only for web apps. |
 | `user_agent` | string | Chrome's own | at most 512 bytes, no control characters; only with `url` | `user_agent = "Mozilla/5.0 (X11; Linux x86_64) ExampleExamClient/1.0"` | For sites that detect browsers. Exam vendors' secure-client detection needs no change (`kiosk_user_agent`). |
+| `platform` | string | none | `"chromeos"`; only with `url`, not with `pwa = true` or `user_agent` | `platform = "chromeos"` | The pages see ChromeOS: `navigator.userAgent`, `navigator.userAgentData` and the `User-Agent` and `Sec-CH-UA-Platform` headers say ChromeOS, with the real Chrome version. Devices whose agent does not know it reject the version (`feature_unsupported`). |
+| `inject` | string | none | a `files/….js` file in the bundle, UTF-8, at most 64 KiB; only with `url`, not with `pwa = true` | `inject = "files/testnav.js"` | Runs in the pages of the app's sites (`allow` and the host of `url`), in the page's own JavaScript world, before any of the page's scripts. To end the kiosk session from the script: `window.postMessage({ type: "MASTERSOS_MOCK_EXIT" }, location.origin)`. |
 | `extensions` | list of tables | `[]` | see [`[[config.apps.kiosk.<id>.extensions]]`](#configappskioskidextensions) | — | Extensions force-installed in the session. |
 | `chrome_policy` | table | `{}` | Chrome policy names and values, except the locked keys | `chrome_policy = { PrintingEnabled = true }` | Laid over the kiosk session's default locks. The Config's `chrome_policy` is not inherited. Policies that are off by default and may be turned on here: `PrintingEnabled`, `TranslateEnabled`, `SpellcheckEnabled`, `LensOverlaySettings`, `GenAiDefaultSettings`, `UserFeedbackAllowed`. Locked keys (`kiosk_policy_locked`) cannot be set. |
 | `exec` | string | one of `url` / `exec` | a Flatpak app id, or an absolute path under `/usr/` (no arguments, no `..`) | `exec = "org.geogebra.GeoGebra"` | A Flatpak app must also be in `apps.flatpak`. |
@@ -884,6 +886,26 @@ in_session = true
 [config.apps.kiosk.geogebra]
 name = "GeoGebra"
 exec = "org.geogebra.GeoGebra"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "standard"
+```
+
+A web app that sees ChromeOS and runs the school's own script (`files/testnav.js` is in the bundle):
+
+```toml check=ok files=files/testnav.js
+[[config]]
+id = "standard"
+name = "Standard"
+
+[config.apps.kiosk.testnav]
+name = "TestNav"
+url = "https://home.testnav.com/"
+allow = ["testnav.com", "pearsontestcontent.com"]
+platform = "chromeos"
+inject = "files/testnav.js"
 
 [[group]]
 id = "default"
@@ -1231,9 +1253,11 @@ last Version), so only the server's check at `mastersos publish` reports them.
 | `kiosk_flatpak_missing` | warning | kiosk Flatpak not installed |
 | `kiosk_id_invalid` | error | kiosk app id |
 | `kiosk_in_session_only` | error | kiosk app only in sessions |
+| `kiosk_inject_invalid` | error | kiosk `inject` |
 | `kiosk_launch_invalid` | error | kiosk `url` / `exec` / `pwa` / `android` |
 | `kiosk_name_invalid` | error | kiosk `name` |
 | `kiosk_no_entry` | warning | kiosk app shown nowhere |
+| `kiosk_platform_invalid` | error | kiosk `platform` |
 | `kiosk_policy_invalid` | error | kiosk `chrome_policy` value |
 | `kiosk_policy_locked` | error | kiosk `chrome_policy` locked key |
 | `kiosk_too_many` | error | more than 32 kiosk apps |
@@ -2506,6 +2530,38 @@ config = "standard"
 ```
 <!-- /prompt:omit -->
 
+### `kiosk_inject_invalid`
+
+**Level:** error. **Meaning:** a kiosk app's `inject` is not a `files/….js` file, the file is not in
+the bundle, it is larger than 64 KiB or not UTF-8 text, or `inject` is set on a local program
+(`exec`) or a PWA (`pwa = true`).
+
+<!-- prompt:omit -->
+**Why:** the Device builds the script into the kiosk session's browser before the first page loads;
+it must be there, and only Chrome web sessions can run it.
+<!-- /prompt:omit -->
+
+**How to fix:** put the script under `files/` with a `.js` name and write that path; keep it under
+64 KiB; remove `inject` from `exec` and PWA apps.
+
+<!-- prompt:omit -->
+```toml check=kiosk_inject_invalid
+[[config]]
+id = "standard"
+name = "Standard"
+
+[config.apps.kiosk.testnav]
+name = "TestNav"
+url = "https://home.testnav.com/"
+inject = "files/testnav.js"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "standard"
+```
+<!-- /prompt:omit -->
+
 ### `kiosk_launch_invalid`
 
 **Level:** error. **Meaning:** a kiosk app has both `url` and `exec`, neither, `pwa = true` without
@@ -2584,6 +2640,37 @@ name = "Standard"
 name = "NWEA MAP Growth"
 url = "https://test.mapnwea.org/"
 login_screen = false
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "standard"
+```
+<!-- /prompt:omit -->
+
+### `kiosk_platform_invalid`
+
+**Level:** error. **Meaning:** a kiosk app's `platform` is not `"chromeos"`, is set together with
+`user_agent`, or is set on a local program (`exec`) or a PWA (`pwa = true`).
+
+<!-- prompt:omit -->
+**Why:** `"chromeos"` is the only platform the kiosk session can show, and it sets the user agent
+itself.
+<!-- /prompt:omit -->
+
+**How to fix:** write `platform = "chromeos"` on a web app and remove `user_agent`.
+
+<!-- prompt:omit -->
+```toml check=kiosk_platform_invalid
+[[config]]
+id = "standard"
+name = "Standard"
+
+[config.apps.kiosk.testnav]
+name = "TestNav"
+url = "https://home.testnav.com/"
+platform = "chromeos"
+user_agent = "Mozilla/5.0 (X11; CrOS x86_64 14541.0.0)"
 
 [[group]]
 id = "default"

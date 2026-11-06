@@ -1,4 +1,6 @@
 // NWEA mock env, MAIN world, document_start (design §4.9, ruling K9).
+// Deprecated (docs/specs/2026-11-06-kiosk-platform-inject-design.md §5): new settings use inject = "files/nwea.js"
+// with examples/kiosk-inject/nwea.js, which does the same. Kept until the schools using it have moved.
 // On a ChromeOS kiosk, NWEA's extension (acmpckmfpahllclpjpollppelfoafcmh 1.0.0, content-main.js + content.js) puts
 // these into the page, and the test pages (test.mapnwea.org login, /growth/ player) read only these:
 //   window.isKioskChromium, window.extVersion  -> Lockdown / wrcCheck: identity NWEA_CHROME_PWA, version >= 1.0.0

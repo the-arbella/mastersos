@@ -22,6 +22,10 @@ pub const MAX_NAME_CHARS: usize = 64;
 pub const MAX_USER_AGENT_LEN: usize = 512;
 /// `url` 与扩展 `update_url` 最多这么多字节。
 pub const MAX_URL_LEN: usize = 2048;
+/// The one value of `platform` (design docs/specs/2026-11-06-kiosk-platform-inject-design.md §1).
+pub const PLATFORM_CHROMEOS: &str = "chromeos";
+/// An `inject` script is at most this many bytes (64 KiB).
+pub const MAX_INJECT_BYTES: usize = 64 * 1024;
 
 /// 应用自己的 `chrome_policy` 不能写的键（`kiosk_policy_locked`）：设计 §4.5 表里的每一条（`PrintingEnabled`
 /// 除外：表里写明应用可以打开打印），加上扩展与 PWA 的四个，再加 `3rdparty`——扩展的托管配置只从
@@ -127,8 +131,73 @@ impl ExamExtension {
     }
 }
 
+/// The helper extension the agent builds on the Device for an app with `inject` (design §3.4):
+/// its id (from the Device's key for this app) and its local update manifest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InjectHelper {
+    pub id: String,
+    pub update_url: String,
+}
+
+/// Whether `app` starts through the exam extension's start page (`platform` or `inject` written;
+/// design §3.3). Those apps get `chrome-extension://<exam id>` in the allowlist.
+pub fn uses_start_page(app: &KioskApp) -> bool {
+    app.platform.is_some() || app.inject.is_some()
+}
+
+/// The rules for the contents of an `inject` script, where the contents are at hand (the agent,
+/// `mastersos check`): at most [`MAX_INJECT_BYTES`], UTF-8, no NUL. The reason otherwise.
+pub fn check_inject_source(bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() > MAX_INJECT_BYTES {
+        return Err(format!(
+            "is {} bytes, more than the {} KiB an inject script may have",
+            bytes.len(),
+            MAX_INJECT_BYTES / 1024
+        ));
+    }
+    let text = std::str::from_utf8(bytes).map_err(|_| "is not UTF-8 text".to_string())?;
+    if text.contains('\0') {
+        return Err("contains a NUL character".into());
+    }
+    Ok(())
+}
+
+/// The start page's configuration (design §3.3), the JSON after `#` in
+/// `chrome-extension://<exam id>/start.html#…`: the app's `url`, the hosts the disguise and the
+/// script apply to (the same as the allowlist's), `platform`, and the helper extension's id.
+pub fn start_config(app: &KioskApp, helper: Option<&str>) -> Result<Value, KioskError> {
+    let (url, hosts) = start_hosts(app)?;
+    Ok(json!({
+        "v": 1,
+        "url": url,
+        "hosts": hosts,
+        "platform": app.platform,
+        "helper": helper,
+    }))
+}
+
+/// A web app's `url` and the hosts its disguise and inject script apply to: the allowlist's hosts
+/// (`allow`, then the host of `url`, each once). Only for web apps without pwa.
+pub fn start_hosts(app: &KioskApp) -> Result<(&str, Vec<String>), KioskError> {
+    let url = match launch(app)? {
+        KioskLaunch::Web { url, pwa: false } => url,
+        _ => {
+            return fail(
+                "kiosk_platform_invalid",
+                "platform",
+                "platform and inject are only for web apps without pwa".into(),
+            )
+        }
+    };
+    let mut hosts = allow_hosts(app)?;
+    hosts.push(url_host(url)?);
+    let mut seen = BTreeSet::new();
+    hosts.retain(|h| seen.insert(h.clone()));
+    Ok((url, hosts))
+}
+
 /// Chrome 扩展的 id：32 个 a–p。
-fn extension_id_ok(id: &str) -> bool {
+pub fn extension_id_ok(id: &str) -> bool {
     id.len() == 32 && id.bytes().all(|b| (b'a'..=b'p').contains(&b))
 }
 
@@ -260,14 +329,62 @@ pub fn check(id: &str, app: &KioskApp) -> Result<(), KioskError> {
             );
         }
     }
+    let web_only = matches!(how, KioskLaunch::Web { pwa: false, .. });
+    if let Some(p) = &app.platform {
+        let why = if !web_only {
+            Some("platform is only for web apps (url) without pwa = true".to_string())
+        } else if p != PLATFORM_CHROMEOS {
+            Some(format!(
+                "platform {p:?} is not known: the only value is \"{PLATFORM_CHROMEOS}\""
+            ))
+        } else if app.user_agent.is_some() {
+            Some(
+                "platform and user_agent cannot both be set: platform = \"chromeos\" already sets the user agent (remove user_agent)"
+                    .into(),
+            )
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            return fail("kiosk_platform_invalid", "platform", why);
+        }
+    }
+    if let Some(f) = &app.inject {
+        if !web_only {
+            return fail(
+                "kiosk_inject_invalid",
+                "inject",
+                "inject is only for web apps (url) without pwa = true".into(),
+            );
+        }
+        if !inject_path_ok(f) {
+            return fail(
+                "kiosk_inject_invalid",
+                "inject",
+                format!("inject {f:?} must be a files/….js file in the bundle, such as \"files/testnav.js\""),
+            );
+        }
+    }
     // 放行主机、扩展与 chrome_policy 的规则都在合成策略的路上：lint 不知道考试扩展的真 id，传一个占位的
     // （它不是合法的扩展 id，不会与 extensions 里的撞上；撞真 id 由 agent 调 chrome_policy 时报）。
     let placeholder = ExamExtension {
         id: "(exam)".into(),
         update_url: "https://exam.invalid/updates.xml".into(),
     };
-    chrome_policy(app, &placeholder)?;
+    let helper = InjectHelper {
+        id: "(helper)".into(),
+        update_url: "file:///helper.invalid/updates.xml".into(),
+    };
+    chrome_policy(app, &placeholder, app.inject.as_ref().map(|_| &helper))?;
     Ok(())
+}
+
+/// `inject`: a bundle member under `files/` ending in `.js`.
+pub fn inject_path_ok(f: &str) -> bool {
+    f.starts_with("files/")
+        && f.len() > "files/.js".len()
+        && f.ends_with(".js")
+        && crate::check_member_path(f).is_ok()
 }
 
 /// 锁定会话里 Chrome 的托管策略（agent 写进 `/var/lib/mastersos/kiosk/<id>/policies/mastersos-kiosk.json`）：
@@ -283,9 +400,13 @@ pub fn check(id: &str, app: &KioskApp) -> Result<(), KioskError> {
 /// 原生消息宿主也一个都不放行），
 /// 不叠应用自己的 `chrome_policy`（它只对网页 / PWA 有效，网页表单保存时就去掉）；扩展与 `chrome_policy`
 /// 照样校验，lint 报的与 agent 拒的是同一套。
+/// `helper` is the app's inject helper extension (design §3.4), force-installed beside the exam
+/// extension; apps with `platform` or `inject` also get the exam extension's start page
+/// (`chrome-extension://<exam id>`) in the allowlist.
 pub fn chrome_policy(
     app: &KioskApp,
     exam: &ExamExtension,
+    helper: Option<&InjectHelper>,
 ) -> Result<Map<String, Value>, KioskError> {
     let how = launch(app)?;
     let mut allow = allow_hosts(app)?;
@@ -322,10 +443,14 @@ pub fn chrome_policy(
     }
     let mut seen = BTreeSet::new();
     allow.retain(|h| seen.insert(h.clone()));
+    if web.is_some() && uses_start_page(app) {
+        allow.push(format!("chrome-extension://{}", exam.id));
+    }
     allow.push(ERROR_PAGE.to_string());
 
     let forced: Vec<(&str, &str)> = match web {
         Some(_) => std::iter::once((exam.id.as_str(), exam.update_url.as_str()))
+            .chain(helper.map(|h| (h.id.as_str(), h.update_url.as_str())))
             .chain(
                 app.extensions
                     .iter()
@@ -1018,6 +1143,7 @@ url = "https://test.mapnwea.org/"
 
     const EXAM_ID: &str = "ponmlkjihgfedcbaponmlkjihgfedcba";
     const EXT_ID: &str = "abcdefghijklmnopabcdefghijklmnop";
+    const HELPER_ID: &str = "aaaabbbbccccddddaaaabbbbccccdddd";
 
     fn exam() -> ExamExtension {
         ExamExtension {
@@ -1037,7 +1163,7 @@ url = "https://test.mapnwea.org/"
     }
 
     fn policy(app: &KioskApp) -> serde_json::Value {
-        serde_json::Value::Object(chrome_policy(app, &exam()).unwrap())
+        serde_json::Value::Object(chrome_policy(app, &exam(), None).unwrap())
     }
 
     #[test]
@@ -1172,7 +1298,7 @@ url = "https://test.mapnwea.org/"
     fn locked_key_override_is_error() {
         for k in LOCKED_KEYS {
             let a = nwea(&format!("chrome_policy = {{ {} = 1 }}", q(k)));
-            let e = chrome_policy(&a, &exam()).unwrap_err();
+            let e = chrome_policy(&a, &exam(), None).unwrap_err();
             assert_eq!(
                 (e.code, e.field),
                 ("kiosk_policy_locked", "chrome_policy"),
@@ -1184,7 +1310,7 @@ url = "https://test.mapnwea.org/"
         }
         // 日期时间 JSON 表示不了。
         let a = nwea("chrome_policy = { When = 2026-10-16 }");
-        let e = chrome_policy(&a, &exam()).unwrap_err();
+        let e = chrome_policy(&a, &exam(), None).unwrap_err();
         assert_eq!((e.code, e.field), ("kiosk_policy_invalid", "chrome_policy"));
         assert!(e.message.contains("datetime"), "{}", e.message);
         assert_eq!(code(check("x", &a)), "kiosk_policy_invalid");
@@ -1200,7 +1326,7 @@ url = "https://test.mapnwea.org/"
             "URLBlacklist",
         ] {
             let a = nwea(&format!("chrome_policy = {{ {k} = [\"*\"] }}"));
-            let e = chrome_policy(&a, &exam()).unwrap_err();
+            let e = chrome_policy(&a, &exam(), None).unwrap_err();
             assert_eq!(
                 (e.code, e.field),
                 ("kiosk_policy_locked", "chrome_policy"),
@@ -1230,7 +1356,7 @@ url = "https://test.mapnwea.org/"
             ("NativeMessagingUserLevelHosts", "true"),
         ] {
             let a = nwea(&format!("chrome_policy = {{ {k} = {v} }}"));
-            let e = chrome_policy(&a, &exam()).unwrap_err();
+            let e = chrome_policy(&a, &exam(), None).unwrap_err();
             assert_eq!(
                 (e.code, e.field),
                 ("kiosk_policy_locked", "chrome_policy"),
@@ -1239,7 +1365,7 @@ url = "https://test.mapnwea.org/"
         }
         // 本地程序的会话没有考试扩展：一个宿主都不放行（终审 I1）。
         let calc = app("name = \"n\"\nexec = \"org.example.Calc\"");
-        let p = chrome_policy(&calc, &exam()).unwrap();
+        let p = chrome_policy(&calc, &exam(), None).unwrap();
         assert_eq!(p["NativeMessagingAllowlist"], serde_json::json!([]));
         assert_eq!(p["NativeMessagingBlocklist"], serde_json::json!(["*"]));
         assert_eq!(p["NativeMessagingUserLevelHosts"], serde_json::json!(false));
@@ -1249,12 +1375,12 @@ url = "https://test.mapnwea.org/"
     #[test]
     fn locked_message_names_only_offending_keys() {
         let a = nwea("chrome_policy = { SyncDisabled = false, PrintingEnabled = true }");
-        let e = chrome_policy(&a, &exam()).unwrap_err();
+        let e = chrome_policy(&a, &exam(), None).unwrap_err();
         assert!(e.message.contains("SyncDisabled"), "{}", e.message);
         assert!(!e.message.contains("URLBlocklist"), "{}", e.message);
         assert!(!e.message.contains("PrintingEnabled"), "{}", e.message);
         let a = nwea("chrome_policy = { SyncDisabled = false, BrowserSignin = 1 }");
-        let e = chrome_policy(&a, &exam()).unwrap_err();
+        let e = chrome_policy(&a, &exam(), None).unwrap_err();
         assert!(
             e.message.contains("SyncDisabled") && e.message.contains("BrowserSignin"),
             "{}",
@@ -1272,7 +1398,7 @@ url = "https://test.mapnwea.org/"
             "ExtensionAllowedTypes",
         ] {
             let a = nwea(&format!("chrome_policy = {{ {k} = [\"*\"] }}"));
-            let e = chrome_policy(&a, &exam()).unwrap_err();
+            let e = chrome_policy(&a, &exam(), None).unwrap_err();
             assert_eq!(
                 (e.code, e.field),
                 ("kiosk_policy_locked", "chrome_policy"),
@@ -1304,7 +1430,7 @@ url = "https://test.mapnwea.org/"
         )
         .unwrap();
         assert!(!m.configs[0].chrome_policy.is_empty());
-        let p = chrome_policy(&m.configs[0].apps.kiosk["x"], &exam()).unwrap();
+        let p = chrome_policy(&m.configs[0].apps.kiosk["x"], &exam(), None).unwrap();
         assert!(!p.contains_key("HomepageLocation") && !p.contains_key("BookmarkBarEnabled"));
     }
 
@@ -1318,8 +1444,8 @@ url = "https://test.mapnwea.org/"
              [[group.apps.kiosk.x.extensions]]\nid = \"{EXT_ID}\"\n\
              update_url = \"https://vendor.example/updates.xml\"\nconfig = {{ k = 1 }}"
         ));
-        let p = chrome_policy(&a, &exam()).unwrap();
-        let w = serde_json::Value::Object(chrome_policy(&nwea(""), &exam()).unwrap());
+        let p = chrome_policy(&a, &exam(), None).unwrap();
+        let w = serde_json::Value::Object(chrome_policy(&nwea(""), &exam(), None).unwrap());
         assert_eq!(p["URLBlocklist"], serde_json::json!(["*"]));
         assert_eq!(p["URLAllowlist"], serde_json::json!([ERROR_PAGE]));
         assert_eq!(p["ExtensionInstallForcelist"], serde_json::json!([]));
@@ -1357,13 +1483,13 @@ url = "https://test.mapnwea.org/"
         let locked =
             app("name = \"n\"\nexec = \"org.example.Calc\"\nchrome_policy = { URLBlocklist = [] }");
         assert_eq!(
-            chrome_policy(&locked, &exam()).unwrap_err().code,
+            chrome_policy(&locked, &exam(), None).unwrap_err().code,
             "kiosk_policy_locked"
         );
         // 不合规的应用照样报错，不是策略。
         let bad = app("name = \"n\"\nexec = \"/opt/x\"");
         assert_eq!(
-            chrome_policy(&bad, &exam()).unwrap_err().code,
+            chrome_policy(&bad, &exam(), None).unwrap_err().code,
             "kiosk_exec_invalid"
         );
     }
@@ -1452,13 +1578,13 @@ url = "https://test.mapnwea.org/"
         let e = check("x", &two(EXT_ID, EXT_ID)).unwrap_err();
         assert_eq!((e.code, e.field), ("kiosk_extension_invalid", "extensions"));
         assert_eq!(
-            chrome_policy(&two(EXT_ID, EXT_ID), &exam())
+            chrome_policy(&two(EXT_ID, EXT_ID), &exam(), None)
                 .unwrap_err()
                 .code,
             "kiosk_extension_invalid"
         );
         // 写了考试扩展自己的 id：check 不知道真 id（占位），chrome_policy 知道。
-        let e = chrome_policy(&two(EXT_ID, EXAM_ID), &exam()).unwrap_err();
+        let e = chrome_policy(&two(EXT_ID, EXAM_ID), &exam(), None).unwrap_err();
         assert_eq!((e.code, e.field), ("kiosk_extension_invalid", "extensions"));
     }
 
@@ -1546,5 +1672,134 @@ url = "https://test.mapnwea.org/"
             };
             assert!(e.check().is_err(), "{id} {url}");
         }
+    }
+
+    /// Design 2026-11-06-kiosk-platform-inject §1: `platform` is only "chromeos", only on web apps
+    /// without pwa, never with user_agent.
+    #[test]
+    fn platform_rules() {
+        assert_eq!(code(check("x", &web("platform = \"chromeos\""))), "ok");
+        for extra in [
+            "platform = \"ChromeOS\"",
+            "platform = \"windows\"",
+            "platform = \"chromeos\"\npwa = true",
+            "platform = \"chromeos\"\nuser_agent = \"X\"",
+        ] {
+            let e = check("x", &web(extra)).unwrap_err();
+            assert_eq!(
+                (e.code, e.field),
+                ("kiosk_platform_invalid", "platform"),
+                "{extra}"
+            );
+        }
+        let calc =
+            app("name = \"Calc\"\nexec = \"/usr/bin/gnome-calculator\"\nplatform = \"chromeos\"");
+        assert_eq!(code(check("x", &calc)), "kiosk_platform_invalid");
+    }
+
+    #[test]
+    fn inject_rules() {
+        for ok in ["files/testnav.js", "files/a/b.js"] {
+            assert_eq!(
+                code(check("x", &web(&format!("inject = {}", q(ok))))),
+                "ok",
+                "{ok}"
+            );
+        }
+        for bad in [
+            "testnav.js",
+            "files/testnav.mjs",
+            "files/.js",
+            "files/../x.js",
+            "files//x.js",
+            "scripts/x.js",
+            "https://x.example/a.js",
+        ] {
+            let e = check("x", &web(&format!("inject = {}", q(bad)))).unwrap_err();
+            assert_eq!(
+                (e.code, e.field),
+                ("kiosk_inject_invalid", "inject"),
+                "{bad}"
+            );
+        }
+        let e = check("x", &web("inject = \"files/a.js\"\npwa = true")).unwrap_err();
+        assert_eq!(e.code, "kiosk_inject_invalid");
+        let calc =
+            app("name = \"Calc\"\nexec = \"/usr/bin/gnome-calculator\"\ninject = \"files/a.js\"");
+        assert_eq!(code(check("x", &calc)), "kiosk_inject_invalid");
+    }
+
+    #[test]
+    fn inject_source_rules() {
+        assert_eq!(check_inject_source(b"console.log(1);\n"), Ok(()));
+        assert_eq!(check_inject_source(&vec![b' '; MAX_INJECT_BYTES]), Ok(()));
+        assert!(check_inject_source(&vec![b' '; MAX_INJECT_BYTES + 1]).is_err());
+        assert!(check_inject_source(b"\xff\xfe").is_err());
+        assert!(check_inject_source(b"a\0b").is_err());
+    }
+
+    #[test]
+    fn start_page_allowlist_and_helper() {
+        let helper = InjectHelper {
+            id: HELPER_ID.into(),
+            update_url: "file:///var/lib/mastersos-public/kiosk/x/inject/updates.xml".into(),
+        };
+        let plain = chrome_policy(&nwea(""), &exam(), None).unwrap();
+        assert!(!plain["URLAllowlist"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str().unwrap().starts_with("chrome-extension://")));
+        let a = nwea("platform = \"chromeos\"\ninject = \"files/nwea.js\"");
+        let p = chrome_policy(&a, &exam(), Some(&helper)).unwrap();
+        let allow: Vec<&str> = p["URLAllowlist"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            allow,
+            [
+                "nwea.org",
+                "mapnwea.org",
+                "test.mapnwea.org",
+                &format!("chrome-extension://{EXAM_ID}"),
+                ERROR_PAGE
+            ]
+        );
+        let forced = p["ExtensionInstallForcelist"].as_array().unwrap();
+        assert_eq!(forced[1], format!("{HELPER_ID};{}", helper.update_url));
+        assert_eq!(
+            p["ExtensionSettings"][HELPER_ID],
+            json!({"installation_mode": "force_installed", "update_url": helper.update_url})
+        );
+        let cfg = start_config(&a, Some(HELPER_ID)).unwrap();
+        assert_eq!(
+            cfg,
+            json!({
+                "v": 1,
+                "url": "https://test.mapnwea.org/",
+                "hosts": ["nwea.org", "mapnwea.org", "test.mapnwea.org"],
+                "platform": "chromeos",
+                "helper": HELPER_ID,
+            })
+        );
+        let only = start_config(&web("platform = \"chromeos\""), None).unwrap();
+        assert_eq!(only["hosts"], json!(["test.mapnwea.org"]));
+        assert_eq!(only["helper"], Value::Null);
+    }
+
+    #[test]
+    fn platform_and_inject_are_features() {
+        use crate::{FEATURE_KIOSK_INJECT, FEATURE_KIOSK_PLATFORM};
+        let m = parse("[group.apps.kiosk.x]\nname = \"X\"\nurl = \"https://x.example/\"\nplatform = \"chromeos\"\ninject = \"files/x.js\"\n");
+        let used = features_used(&m);
+        assert!(used.contains(&FEATURE_KIOSK_PLATFORM), "{used:?}");
+        assert!(used.contains(&FEATURE_KIOSK_INJECT), "{used:?}");
+        let m = parse("[group.apps.kiosk.x]\nname = \"X\"\nurl = \"https://x.example/\"\n");
+        assert_eq!(features_used(&m), [FEATURE_KIOSK]);
+        assert_eq!(FEATURE_KIOSK_PLATFORM, "kiosk_platform");
+        assert_eq!(FEATURE_KIOSK_INJECT, "kiosk_inject");
     }
 }

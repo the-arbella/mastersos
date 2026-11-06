@@ -12,17 +12,54 @@ function event() {
 }
 
 /** `native(host, msg, cb, chrome)` answers chrome.runtime.sendNativeMessage (the Get help host). */
-function load({ connectThrows = false, native = () => {} } = {}) {
+const LINUX_UA =
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36";
+// The service worker's navigator (real Chrome on Linux).
+const SW_NAV = {
+  userAgent: LINUX_UA,
+  userAgentData: { brands: [{ brand: "Not:A-Brand", version: "8" }, { brand: "Google Chrome", version: "156" }] },
+};
+
+function load({ connectThrows = false, native = () => {}, helper = () => ({ ok: true }) } = {}) {
   const ports = [];
   const onMessage = event();
   const onInstalled = event();
+  const registered = [];
   const chrome = {
-    tabs: { query: vi.fn((_q, cb) => cb([{ id: 3 }, { id: 4 }])), reload: vi.fn() },
+    tabs: {
+      query: vi.fn((q, cb) =>
+        cb(
+          q.url
+            ? [{ id: 3 }, { id: 4 }]
+            : [
+                { id: 7, url: `chrome-extension://${EXT_ID}/start.html#%7B%7D` },
+                { id: 8, url: "https://x.example/" },
+                { id: 9, pendingUrl: `chrome-extension://${EXT_ID}/start.html#x` },
+                { id: 10, url: `chrome-extension://${EXT_ID}/start.htmlx` },
+              ],
+        ),
+      ),
+      reload: vi.fn(),
+      update: vi.fn(async () => ({})),
+    },
+    declarativeNetRequest: { updateSessionRules: vi.fn(async () => {}) },
+    scripting: {
+      getRegisteredContentScripts: vi.fn(async ({ ids }) => registered.filter((r) => ids.includes(r.id))),
+      unregisterContentScripts: vi.fn(async ({ ids }) => {
+        for (const id of ids) registered.splice(registered.findIndex((r) => r.id === id), 1);
+      }),
+      registerContentScripts: vi.fn(async (list) => {
+        registered.push(...list);
+      }),
+    },
     runtime: {
       id: EXT_ID,
       lastError: undefined,
       onMessage,
       onInstalled,
+      getURL: (path) => `chrome-extension://${EXT_ID}/${path}`,
+      // only the inject helper ping goes through here
+      sendMessage: vi.fn((id, msg, cb) => setTimeout(() => cb(helper(id, msg)), 0)),
       sendNativeMessage: vi.fn((host, msg, cb) => native(host, msg, cb, chrome)),
       connectNative: vi.fn((name) => {
         if (connectThrows) throw new Error("Specified native messaging host not found.");
@@ -32,14 +69,14 @@ function load({ connectThrows = false, native = () => {} } = {}) {
       }),
     },
   };
-  new Function("chrome", SRC)(chrome);
+  new Function("chrome", "navigator", SRC)(chrome, SW_NAV);
   expect(onMessage.ls).toHaveLength(1);
   const send = (msg, sender = { id: EXT_ID, tab: { id: 1 }, frameId: 0 }) => {
     const sendResponse = vi.fn();
     const keep = onMessage.ls[0](msg, sender, sendResponse);
     return { keep, sendResponse };
   };
-  return { chrome, ports, send };
+  return { chrome, ports, send, registered };
 }
 
 describe("后台", () => {
@@ -102,9 +139,13 @@ describe("后台", () => {
     const { chrome } = load();
     expect(chrome.runtime.onInstalled.ls).toHaveLength(1);
     chrome.runtime.onInstalled.fire({ reason: "install" });
-    expect(chrome.tabs.query).toHaveBeenCalledTimes(1);
-    expect(chrome.tabs.query.mock.calls[0][0]).toEqual({ url: ["https://*.nwea.org/*", "https://*.mapnwea.org/*"] });
-    expect(chrome.tabs.reload.mock.calls.map((c) => c[0])).toEqual([3, 4]);
+    expect(chrome.tabs.query).toHaveBeenCalledTimes(2);
+    expect(chrome.tabs.query.mock.calls[0][0]).toEqual({
+      url: ["https://*.nwea.org/*", "https://*.mapnwea.org/*"],
+    });
+    // and this extension's start page tabs (opened before it was installed), nothing else
+    expect(chrome.tabs.query.mock.calls[1][0]).toEqual({});
+    expect(chrome.tabs.reload.mock.calls.map((c) => c[0])).toEqual([3, 4, 7, 9]);
   });
 
   it("does not reload on update", () => {
@@ -226,5 +267,125 @@ describe("Get help", () => {
     const { keep } = send({ cmd: "help-enabled" }, { id: "pppppppppppppppppppppppppppppppp", tab: { id: 1 } });
     expect(keep).toBe(false);
     expect(chrome.runtime.sendNativeMessage).not.toHaveBeenCalled();
+  });
+});
+
+// Start page (docs/specs/2026-11-06-kiosk-platform-inject-design.md §3.3).
+describe("launch from the start page", () => {
+  const HELPER = "aaaabbbbccccddddaaaabbbbccccdddd";
+  const START = { id: EXT_ID, url: `chrome-extension://${EXT_ID}/start.html#x`, tab: { id: 5 }, frameId: 0 };
+  const cfg = (extra = {}) => ({
+    v: 1,
+    url: "https://home.testnav.com/",
+    hosts: ["testnav.com", "home.testnav.com"],
+    platform: "chromeos",
+    helper: HELPER,
+    ...extra,
+  });
+  const done = (sendResponse) => vi.waitFor(() => expect(sendResponse).toHaveBeenCalled(), { timeout: 3000 });
+
+  it("puts the disguise, the relay and the helper in place, then opens the app", async () => {
+    const { chrome, send, registered } = load();
+    const { keep, sendResponse } = send({ cmd: "launch", config: cfg() }, START);
+    expect(keep).toBe(true);
+    await done(sendResponse);
+    expect(sendResponse).toHaveBeenCalledWith({ ok: true });
+    const rules = chrome.declarativeNetRequest.updateSessionRules.mock.calls[0][0];
+    expect(rules.removeRuleIds).toEqual([1]);
+    expect(rules.addRules).toHaveLength(1);
+    const r = rules.addRules[0];
+    expect(r.action.requestHeaders).toEqual([
+      {
+        header: "user-agent",
+        operation: "set",
+        value: "Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+      },
+      { header: "sec-ch-ua-platform", operation: "set", value: '"Chrome OS"' },
+      { header: "sec-ch-ua-platform-version", operation: "set", value: '"17005.0.0"' },
+    ]);
+    expect(r.condition.requestDomains).toEqual(["testnav.com", "home.testnav.com"]);
+    expect(r.condition.resourceTypes).toContain("main_frame");
+    expect(r.condition.resourceTypes).toContain("sub_frame");
+    expect(registered.map((x) => [x.id, x.js, x.world || "ISOLATED", x.runAt])).toEqual([
+      ["mastersos-platform", ["platform/chromeos.js"], "MAIN", "document_start"],
+      ["mastersos-relay", ["relay.js"], "ISOLATED", "document_start"],
+    ]);
+    expect(registered[0].matches).toEqual([
+      "https://testnav.com/*",
+      "https://*.testnav.com/*",
+      "https://home.testnav.com/*",
+      "https://*.home.testnav.com/*",
+    ]);
+    expect(registered.every((x) => x.persistAcrossSessions === false)).toBe(true);
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith(HELPER, { cmd: "ping" }, expect.any(Function));
+    expect(chrome.tabs.update).toHaveBeenCalledWith(5, { url: "https://home.testnav.com/" });
+  });
+
+  it("a second launch (Chrome restarted) replaces what the first registered", async () => {
+    const { chrome, send, registered } = load();
+    await done(send({ cmd: "launch", config: cfg() }, START).sendResponse);
+    await done(send({ cmd: "launch", config: cfg({ platform: null }) }, START).sendResponse);
+    expect(registered.map((x) => x.id)).toEqual(["mastersos-relay"]);
+    expect(chrome.declarativeNetRequest.updateSessionRules.mock.calls[1][0]).toEqual({ removeRuleIds: [1], addRules: [] });
+  });
+
+  it("platform only: no relay, no helper ping", async () => {
+    const { chrome, send, registered } = load();
+    await done(send({ cmd: "launch", config: cfg({ helper: null }) }, START).sendResponse);
+    expect(registered.map((x) => x.id)).toEqual(["mastersos-platform"]);
+    expect(chrome.runtime.sendMessage).not.toHaveBeenCalled();
+    expect(chrome.tabs.update).toHaveBeenCalledTimes(1);
+  });
+
+  it("the helper never answers: the app is not opened", async () => {
+    vi.useFakeTimers();
+    try {
+      const { chrome, send } = load({ helper: () => undefined });
+      const { sendResponse } = send({ cmd: "launch", config: cfg() }, START);
+      await vi.advanceTimersByTimeAsync(20000);
+      expect(sendResponse).toHaveBeenCalledWith({ ok: false });
+      expect(chrome.tabs.update).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("only from this extension's start page in a tab", () => {
+    for (const sender of [
+      { ...START, url: `chrome-extension://${EXT_ID}/other.html` },
+      { ...START, url: "https://home.testnav.com/" },
+      { ...START, tab: undefined },
+      { ...START, id: "pppppppppppppppppppppppppppppppp" },
+    ]) {
+      const { chrome, send } = load();
+      const { sendResponse } = send({ cmd: "launch", config: cfg() }, sender);
+      if (sender.id === EXT_ID) expect(sendResponse).toHaveBeenCalledWith({ ok: false });
+      expect(chrome.declarativeNetRequest.updateSessionRules).not.toHaveBeenCalled();
+      expect(chrome.tabs.update).not.toHaveBeenCalled();
+    }
+  });
+
+  it("malformed configurations are refused", () => {
+    for (const c of [
+      null,
+      "x",
+      cfg({ v: 2 }),
+      cfg({ url: "http://home.testnav.com/" }),
+      cfg({ url: "javascript:alert(1)" }),
+      cfg({ hosts: [] }),
+      cfg({ hosts: ["*.testnav.com"] }),
+      cfg({ hosts: ["Testnav.com"] }),
+      cfg({ hosts: ["localhost"] }),
+      cfg({ platform: "windows" }),
+      cfg({ helper: "nope" }),
+      cfg({ platform: null, helper: null }),
+      { ...cfg(), extra: 1 },
+    ]) {
+      const { chrome, send } = load();
+      const { keep, sendResponse } = send({ cmd: "launch", config: c }, START);
+      expect(keep, JSON.stringify(c)).toBe(false);
+      expect(sendResponse).toHaveBeenCalledWith({ ok: false });
+      expect(chrome.tabs.update).not.toHaveBeenCalled();
+    }
   });
 });

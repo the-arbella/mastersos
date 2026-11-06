@@ -48,6 +48,8 @@ use crate::apply::{is_not_found, ApplyContext, Phase};
 use crate::runner::{run_ok, Cmd, Runner};
 use crate::safefs;
 
+pub mod inject;
+
 /// 整体的回报项（单个应用是 `kiosk:<id>`）。
 pub const ITEM: &str = "kiosk";
 /// 每个应用一个目录（相对系统根）：`launch.json`、`policies/`、`icon`、`accountsservice`。
@@ -84,6 +86,11 @@ pub struct Launch {
     pub kind: LaunchKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_agent: Option<String>,
+    /// The exam extension's start page (`chrome-extension://<exam id>/start.html#<config>`) that Chrome opens instead of
+    /// the `url` of a web app with `platform` or `inject` (design docs/specs/2026-11-06-kiosk-platform-inject-design.md
+    /// §3.3); absent for every other app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,7 +143,35 @@ pub fn launch_of(id: &str, app: &KioskApp) -> Result<Launch, KioskError> {
         name: app.name.clone(),
         kind,
         user_agent: app.user_agent.clone(),
+        start: None,
     })
+}
+
+/// The start page of a web app with `platform` or `inject`: the configuration
+/// ([`kiosk::start_config`]) as percent-encoded JSON after `#`.
+pub fn start_url(
+    exam_id: &str,
+    app: &KioskApp,
+    helper: Option<&str>,
+) -> Result<String, KioskError> {
+    let cfg = kiosk::start_config(app, helper)?;
+    Ok(format!(
+        "chrome-extension://{exam_id}/start.html#{}",
+        percent_encode(&cfg.to_string())
+    ))
+}
+
+/// Like JavaScript's `encodeURIComponent` (the start page decodes with `decodeURIComponent`).
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&b) {
+            out.push(char::from(b));
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 /// `id` 的 uid：记着的就沿用；没有就取 [`KIOSK_UIDS`] 里最小的、没记在别的应用名下、`getent passwd` 也查不到的。
@@ -221,21 +256,25 @@ fn load_exam(root: &Path) -> Result<ExamExtension, String> {
     Ok(ext)
 }
 
-/// 校验过的一个应用：启动描述与 Chrome 策略（本地程序没有）。
+/// 校验过的一个应用：启动描述与 Chrome 策略（本地程序没有），以及 `inject` 的助手扩展。
 struct Planned {
     launch: Launch,
     policy: serde_json::Map<String, serde_json::Value>,
+    inject: Option<inject::Prepared>,
 }
 
 /// 应用的全部规则（[`kiosk::check`]）与考试扩展；不行就是原因。考试扩展只在有网页 / PWA 应用时读一次。
 fn plan(
-    root: &Path,
+    ctx: &ApplyContext,
+    paths: &super::SysPaths,
     id: &str,
     app: &KioskApp,
     exam: &mut Option<Result<ExamExtension, String>>,
 ) -> Result<Planned, String> {
+    let root = paths.root.as_path();
     kiosk::check(id, app).map_err(|e| e.message)?;
-    let launch = launch_of(id, app).map_err(|e| e.message)?;
+    let mut launch = launch_of(id, app).map_err(|e| e.message)?;
+    let mut helper = None;
     // 本地程序也有一份禁止一切的策略（终审 I1：程序里的链接会起 Chrome），但用不到考试扩展：不读 kiosk-ext.json，
     // 镜像里没有它时本地程序照样建（传进去的占位 id 不合规，不会与 extensions 里的撞上）
     let policy = match launch.kind {
@@ -244,17 +283,34 @@ fn plan(
                 id: String::new(),
                 update_url: String::new(),
             };
-            kiosk::chrome_policy(app, &none).map_err(|e| e.message)?
+            kiosk::chrome_policy(app, &none, None).map_err(|e| e.message)?
         }
         LaunchKind::Web { .. } | LaunchKind::Pwa { .. } => {
             let ext = exam
                 .get_or_insert_with(|| load_exam(root))
                 .as_ref()
                 .map_err(Clone::clone)?;
-            kiosk::chrome_policy(app, ext).map_err(|e| e.message)?
+            // inject: the script goes into a helper extension built here (design §3.4); a bad or missing script
+            // skips the app like any other failed check
+            if app.inject.is_some() {
+                helper = Some(
+                    inject::prepare(ctx.bundle_dir, &paths.var_dir, id, app, &ext.id)
+                        .map_err(|e| format!("{e:#}"))?,
+                );
+            }
+            let h = helper.as_ref().map(|p: &inject::Prepared| &p.helper);
+            if kiosk::uses_start_page(app) {
+                launch.start =
+                    Some(start_url(&ext.id, app, h.map(|h| h.id.as_str())).map_err(|e| e.message)?);
+            }
+            kiosk::chrome_policy(app, ext, h).map_err(|e| e.message)?
         }
     };
-    Ok(Planned { launch, policy })
+    Ok(Planned {
+        launch,
+        policy,
+        inject: helper,
+    })
 }
 
 /// 一轮里图标下载的共享状态（同 `desktop`）：截止时刻与换一轮也不会好的失败。
@@ -299,7 +355,7 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
     // 1. 清单里的应用：策略源与启动描述 → AccountsService 与账号
     for (id, app) in apps {
         let item = format!("kiosk:{id}");
-        let planned = match plan(&env.paths.root, id, app, &mut round.exam) {
+        let planned = match plan(ctx, env.paths, id, app, &mut round.exam) {
             Ok(p) => p,
             Err(why) => {
                 let why = if env.sys.kiosk_accounts.contains_key(id) {
@@ -460,8 +516,12 @@ fn ensure(
         })?,
     };
 
-    // 策略源与启动描述
+    // 策略源与启动描述；inject 的助手扩展在它们之前（策略与起始页都指着它）
     let dir = sub_dir(&round.base, id)?;
+    match &planned.inject {
+        Some(p) => inject::place(&dir, p).context("write the inject helper extension")?,
+        None => inject::unplace(&dir).context("remove the inject helper extension")?,
+    }
     safefs::write_at(
         &dir,
         LAUNCH_FILE,
@@ -735,6 +795,7 @@ fn remove(env: &mut Env, round: &mut Round, id: &str, st: &KioskAccountState) ->
     remove_named(&eenv, ACCOUNTS_DIR, &user)?;
     safefs::remove_tree_at(&round.base, id)?;
     round.units_changed |= remove_dropin(&env.paths.root, st.uid)?;
+    inject::remove_keys_except(&env.paths.var_dir, &|k| k != id)?;
     Ok(())
 }
 
@@ -746,6 +807,7 @@ fn sweep(env: &mut Env, round: &mut Round) -> Result<()> {
             safefs::remove_tree_at(&round.base, &name)?;
         }
     }
+    inject::remove_keys_except(&env.paths.var_dir, &|k| keep.contains_key(k))?;
     let uids: BTreeSet<u32> = keep.values().map(|s| s.uid).collect();
     let units = match safefs::open_dir(&env.paths.root, Path::new(UNIT_DIR), false) {
         Ok(d) => d,
