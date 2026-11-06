@@ -3336,4 +3336,23 @@ for s in "$ml"/*; do
 done
 [ "$r" = 0 ] && ok 73 "system notices: catalogues complete with login-i18n's language set, every script and agent msgid in the template, compiled into /usr/share/locale, gettext in the image, no hand-picked languages"
 
+
+# 74. /tmp and the seed mount before tmpfiles (2026-11-06): local-fs.target's start job is cancelled on this image (no dm udev rules
+#     in the main system, so coldplug stops usr.mount), so systemd-tmpfiles-setup.service must wait for tmp.mount and the seed
+#     mount itself; otherwise /tmp/.X11-unix lands under the tmpfs and the first desktop session's gnome-shell aborts. GDM also
+#     resets /tmp/.X11-unix and /tmp/.ICE-unix to root:root 1777 before the greeter starts.
+r=0
+tf=$ex/usr/lib/systemd/system/systemd-tmpfiles-setup.service.d/50-mastersos-mounts.conf
+if ! grep -qxF '[Unit]' "$tf" 2>/dev/null || ! grep -qxF 'WantsMountsFor=/tmp /var/lib/mastersos-seed' "$tf"; then
+	bad 74 "$tf should have WantsMountsFor=/tmp /var/lib/mastersos-seed in [Unit]"
+	r=1
+fi
+gx=$ex/usr/lib/systemd/system/gdm.service.d/50-mastersos-x11-unix.conf
+if ! grep -qxF '[Service]' "$gx" 2>/dev/null ||
+	! grep -qxF 'ExecStartPre=-/usr/bin/systemd-tmpfiles --create --boot --prefix=/tmp/.X11-unix --prefix=/tmp/.ICE-unix' "$gx"; then
+	bad 74 "$gx should run ExecStartPre=-/usr/bin/systemd-tmpfiles --create --boot --prefix=/tmp/.X11-unix --prefix=/tmp/.ICE-unix"
+	r=1
+fi
+[ "$r" = 0 ] && ok 74 "systemd-tmpfiles-setup waits for /tmp and the seed mount; GDM resets /tmp/.X11-unix to root:root 1777 before the greeter"
+
 exit $fail
