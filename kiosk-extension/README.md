@@ -11,6 +11,8 @@
 | `background.js` | service worker：收到自己内容脚本的恰好 `{cmd:"exit"}`，`chrome.runtime.connectNative("org.mastersos.kiosk_exit")` 发 `{"cmd":"exit"}`；`{cmd:"help-…"}` 各变成一条 `chrome.runtime.sendNativeMessage("org.mastersos.support", …)`（下「Get help」）；装上（`install`）时重新加载 `MOCK_TAB_PATTERNS` 的标签页 |
 | `mock/nwea/page.js` | NWEA 的 mock env，MAIN 世界、`document_start`：`isKioskChromium`、`extVersion`、`kioskChromiumExit`、UA 后缀、拦 F5 等 |
 | `mock/nwea/relay.js` | 隔离世界、`document_start`：把 `page.js` 的退出请求转成 `{cmd:"exit"}` |
+| `mock/testnav/page.js` | Pearson TestNav 的 mock env，MAIN 世界、`document_start`：ChromeOS 的 UA 与 kiosk 后缀、包装 `chrome.runtime.sendMessage`（下表） |
+| `mock/testnav/relay.js` | 隔离世界、`document_start`：同 NWEA 的 `relay.js`，把 `closeApp` 的退出请求转成 `{cmd:"exit"}` |
 | `tests/` | vitest + jsdom（`environment: "jsdom"`、`globals: true`），没有自己的 package，见下「测试」 |
 
 ## 行为
@@ -102,6 +104,7 @@
 | 应用 | 目录 | 主机 | 给什么 |
 |---|---|---|---|
 | NWEA MAP Growth | `mock/nwea/` | `*.nwea.org`、`*.mapnwea.org` | `window.isKioskChromium = true`、`window.extVersion = "1.0.0"`（不可改）、`window.kioskChromiumExit()`；`navigator.userAgent` 末尾加 ` NWEAChromePWA`；拦 F5、Ctrl+W/N/T/0、左右边缘滑动 |
+| Pearson TestNav | `mock/testnav/` | `*.testnav.com`、`*.adamexam.com`、`*.act.org`、`*.actaspire.org` | `navigator.userAgent` / `appVersion` 的 Linux 段换成 `CrOS x86_64 16181.61.0`、末尾加 ` TestNavPWAKiosk/1.15.7`（不可改）；包装 `chrome.runtime.sendMessage`：发给 TestNav 扩展 `gjhfdhjf…` 的 `checkKioskModeStatus` 回 `kioskMode: true`，无障碍两项回成功，音量与 Verified Access 回「不支持」，`closeApp` 经 `relay.js` 结束会话，其余转给强制安装的 Pearson 扩展。设计 `docs/specs/2026-11-06-testnav-chromeos-mock.md`（设置样例在 §3.2） |
 
 时序：`page.js` 在每个匹配页面的文档开始、早于页面任何脚本，同步写入常量，没有竞态；唯一的先后问题是扩展装上之前第一页已经在加载
 （每个锁定会话都是新 profile、重新下载扩展）——后台在 `install` 时重新加载这些标签页，`update` 时不刷新。

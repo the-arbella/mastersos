@@ -250,6 +250,26 @@ M3(b) 的齿轮在无口令账号上不出现，改用 root 把记录设成 `ubu
 | G2 | 守卫下 student 自动登录、点 NWEA | 桌面与锁定会话照常，`mastersos-kiosk-guard.service` Finished | 2026-10-27 VM 170：符合 |
 | G3 | `grep -rn . /etc/pam.d/gdm-authd` 里没有会问 kiosk 账号的模块（authd 的 broker、MFA） | 没有；有的话齿轮会出现，靠 G1 的守卫兜底 | 待做 |
 
+## 5. 按应用的模拟环境：Pearson TestNav（设计 `docs/specs/2026-11-06-testnav-chromeos-mock.md`）
+
+前提：考试扩展 ≥ 1.3.0 的镜像；配置里有设计 §3.2 的 `testnav` 应用（Pearson 扩展 `gjhfdhjfmmgldldpmfdmbddbegbachgo` 强制安装）；
+为 T4 另配一个 `testnav-ua`（同样的设置，加 `user_agent` 的 CrOS 串）。学校在 PearsonAccess / ADAM 的训练站有一个练习考与一个
+`securityLevel` 1（安全）的测试场次和测试学生。下文 `$K` 是 `kiosk-testnav`。截图全留（`shots/T<n>-<k>.png`）。
+
+| # | 做什么 | 期望 | 不通过时 | 结果 |
+|---|---|---|---|---|
+| T0 | 对照：没装考试扩展的 Chrome（lab 的老师会话）打开 `https://home.testnav.com/` 与客户站点登录页 | 首页没有「PWA Detected」；客户站点照常是浏览器模式；记下页面对 Linux 浏览器说了什么 | 只记录 | |
+| T1 | 点「TestNav」；宿主上 `ls /home/$K/.kiosk-chrome/Default/Extensions/` | 考试扩展与 `gjhfdhjf…` 都装上；Pearson 扩展的 `audio` / `accessibilityFeatures.modify` / `enterprise.platformKeys` 只是警告（`chrome://extensions` 被拦，从宿主读 profile 的 `Preferences` 里它的 `state`） | 装不上：看 `Preferences` 的 `install_warnings` 与 journal；被策略拒：查 `ExtensionSettings` | |
+| T2 | 首页打开后看页面底部的调试信息（`startpage.js` 的 `updateDebugInfo` 把 UA 原样印在 `#debugInfo`；开发者工具被策略关了，只看这里） | 调试信息里 UA 是 `(X11; CrOS x86_64 16181.61.0) … TestNavPWAKiosk/1.15.7`，后面有「PWA Detected」；没有第二个 ` TestNavPWA/1.15.7` | 没有 PWA Detected：`page.js` 的 `chrome.runtime` 替换失败（设计 R5），记下控制台（`journalctl` 里 Chrome 的 stderr）；有两个后缀：UA 被 Pearson 的脚本改掉了 | |
+| T3 | 客户站点登录页的菜单里跑 App Check（不填 Configuration Identifier，再填一次学校给的） | Kiosk Mode Readiness 与 TestNav 连通都绿；填了时 ProctorCache 连通（若学校有）也绿 | Kiosk Mode 红：`checkKioskModeStatus` 没被截下；连通红：缺的主机补进 `allow` | |
+| T4 | 练习考作答到交卷；再用 `testnav` 与 `testnav-ua` 各进一次**安全考**（`securityLevel` 1）开考 | 两者都能开考、作答、交卷。若只有 `testnav-ua` 能开考，说明服务器看 HTTP `User-Agent` 头：README 的样例改成带 `user_agent`；两者都不能开考：记下错误号与文字，查是否看 `Sec-CH-UA-Platform`（DNR 改头再试） | 两个都不行：写进设计 §6 R2，联系 Pearson | |
+| T5 | 作答中：PNP 给了缩放的学生放大 / 缩小；音量滑块；点一个考试里被封锁的链接；Ctrl+Shift+0、浏览器后退键 | 缩放生效（Pearson 扩展的 `setZoomLevel`）；音量滑块不起作用但不报致命错误（已知，设计 §5）；被封锁的导航不走；键被拦 | 缩放失败：Pearson 扩展没装上或没转发；音量报致命错误：`checkAudioLevel` 改回答一个固定值并补测试 | |
+| T6 | 设置里给 `testnav` 加 `pwa = true` 再进一次；宿主 `ls "/home/$K/.kiosk-chrome/Default/Web Applications"` | 记下 PWA 有没有装上、是不是全屏；首页 service worker 注册了没有（`Service Worker/` 目录） | 只记录：决定 README 推荐网页还是 PWA | |
+| T7 | 首页与考试结束页上，页面自己的「退出」（若出现）；Options 把手 → Exit | 会话结束、回到登录界面，journal `MASTERSOS_KIOSK=testnav` 有「进入」「退出」；Chrome 没有被「关掉所有窗口」后重开 | 重开：`closeApp` 没被截下 | |
+| T8 | 作答中断网 20 秒再接上；另一次断网后刷新 | 记下 TestNav 的反应（SRF、「8027」错误页是 Pearson 扩展的 `error-page.html`，按 Retry 能回来） | 只记录 | |
+| T9 | 会话里打开 `allow` 之外的地址（考试里的外链、`https://example.com/`） | 被拦（`URLBlocklist`）；Pearson 扩展的代理设置之后，老师会话的 Chrome 代理不受影响（会话结束后另开老师会话看 `chrome://policy` 与网络） | 漏到宿主：安全问题，先下线 | |
+| T10 | `journalctl -b _COMM=chrome` 里搜 `TestNav mock env`、`Illegal invocation`、`TypeError` | 只有 Pearson `user-agent.js` 那条无害的 TypeError（UA 不可改）；没有 `could not wrap` | 有 `could not wrap`：设计 R5 | |
+
 ## 附：扩展测试页（P7）
 
 放在 P2 的同一个 https 主机上（`exttest` 的 `allow` 缺省就是它）。只为验收用，不进镜像。

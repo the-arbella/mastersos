@@ -21,7 +21,14 @@ const TEXT_MAX = 1000; // UTF-16 units: never more characters than that
 const ID_MAX = 128;
 const CODE_RE = /^[a-z_]{1,32}$/;
 // Every mock env's hosts (its content scripts' `matches` in manifest.json); add the next app's here too.
-const MOCK_TAB_PATTERNS = ["https://*.nwea.org/*", "https://*.mapnwea.org/*"];
+const MOCK_TAB_PATTERNS = [
+  "https://*.nwea.org/*",
+  "https://*.mapnwea.org/*",
+  "https://*.testnav.com/*",
+  "https://*.adamexam.com/*",
+  "https://*.act.org/*",
+  "https://*.actaspire.org/*",
+];
 
 /** 恰好 {cmd:"exit"}，不多一个键（与 exit-host 的 read_request 同一条规则）。 */
 function isExit(msg) {

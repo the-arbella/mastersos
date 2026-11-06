@@ -106,7 +106,7 @@ open(f"{tmp}/zip.bin", "wb").write(zbytes)
 
 z = zipfile.ZipFile(io.BytesIO(zbytes))
 names = [i.filename for i in z.infolist()]
-assert names == sorted(names) == ["background.js", "content.js", "manifest.json", "mock/nwea/page.js", "mock/nwea/relay.js"], names
+assert names == sorted(names) == ["background.js", "content.js", "manifest.json", "mock/nwea/page.js", "mock/nwea/relay.js", "mock/testnav/page.js", "mock/testnav/relay.js"], names
 assert all(i.date_time == (1980, 1, 1, 0, 0, 0) for i in z.infolist()), "zip 时间不固定"
 m = json.loads(z.read("manifest.json"))
 src = json.load(open(src_manifest))
@@ -267,7 +267,7 @@ PY
 rc=0
 MASTERSOS_KIOSK_EXT_SRC=$tmp/ext bash "$pack" "$key" "$tmp/out4" "$base" >/dev/null 2>&1 || rc=$?
 if [ "$rc" = 0 ] && got=$(python3 -I -c 'import sys, zipfile; z = open(sys.argv[1], "rb").read(); i = z.index(b"PK\x03\x04"); import io; print(" ".join(zipfile.ZipFile(io.BytesIO(z[i:])).namelist()))' "$tmp/out4/mastersos-kiosk-ext.crx") &&
-	[ "$got" = "background.js content.js icons/16.png manifest.json mock/nwea/page.js mock/nwea/relay.js" ]; then
+	[ "$got" = "background.js content.js icons/16.png manifest.json mock/nwea/page.js mock/nwea/relay.js mock/testnav/page.js mock/testnav/relay.js" ]; then
 	pass "manifest 新加的 icons 跟着打进去，tests/、README.md、点文件不打：$got"
 else
 	fail "扩展目录的文件没有全打进去（rc=$rc）" "${got:-}"

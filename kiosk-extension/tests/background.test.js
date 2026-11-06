@@ -103,7 +103,16 @@ describe("后台", () => {
     expect(chrome.runtime.onInstalled.ls).toHaveLength(1);
     chrome.runtime.onInstalled.fire({ reason: "install" });
     expect(chrome.tabs.query).toHaveBeenCalledTimes(1);
-    expect(chrome.tabs.query.mock.calls[0][0]).toEqual({ url: ["https://*.nwea.org/*", "https://*.mapnwea.org/*"] });
+    expect(chrome.tabs.query.mock.calls[0][0]).toEqual({
+      url: [
+        "https://*.nwea.org/*",
+        "https://*.mapnwea.org/*",
+        "https://*.testnav.com/*",
+        "https://*.adamexam.com/*",
+        "https://*.act.org/*",
+        "https://*.actaspire.org/*",
+      ],
+    });
     expect(chrome.tabs.reload.mock.calls.map((c) => c[0])).toEqual([3, 4]);
   });
 
