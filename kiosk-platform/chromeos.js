@@ -1,7 +1,8 @@
 // ChromeOS disguise, MAIN world, document_start (design docs/specs/2026-11-06-kiosk-platform-inject-design.md §4).
-// Registered by background.js for a kiosk app with platform = "chromeos", on that app's hosts only. The pages see what
-// Chrome on a Chromebook shows them; the request headers are changed to match by background.js's DNR session rule
-// (same formulas: chromeOsUa / chromeOsVersion there and here, kept equal by tests/platform-chromeos.test.js).
+// A static content script of the app's platform extension (built by the agent for a kiosk app with platform =
+// "chromeos", design §3.4), on that app's hosts only. The pages see what Chrome on a Chromebook shows them; the request
+// headers are changed to match by background.js's DNR session rule (same formulas: chromeOsUa / chromeOsVersion there
+// and here, kept equal by kiosk-extension/tests/platform-chromeos.test.js).
 //   - navigator.userAgent / appVersion: "(X11; Linux <arch>)" -> "(X11; CrOS <arch> 14541.0.0)", the frozen ChromeOS
 //     platform part of Chrome's reduced user agent; the Chrome version stays the real one.
 //   - navigator.platform: unchanged ("Linux x86_64" on a Chromebook too).

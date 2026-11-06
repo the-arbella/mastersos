@@ -7,9 +7,11 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import BUILTIN from "../mock/nwea/page.js?raw";
+import { channels, wrapInject } from "./helpers.js";
 
-// Outside the extension directory (not packed, and outside vite's allowed files): read it as text.
-const SRC = readFileSync(join(__dirname, "../../examples/kiosk-inject/nwea.js"), "utf8");
+// Outside the extension directory (not packed, and outside vite's allowed files): read it as text. It runs as the
+// agent puts it in the platform extension: inside kiosk-platform/inject-wrapper.js.
+const SRC = wrapInject(readFileSync(join(__dirname, "../../examples/kiosk-inject/nwea.js"), "utf8"));
 
 // This directory has no package of its own: resolve jsdom from the web package vitest runs in.
 const { JSDOM } = createRequire(`${process.cwd()}/`)("jsdom");
@@ -59,17 +61,17 @@ describe("NWEA example inject script", () => {
     expect(w.kioskChromiumExit).toBe(exit);
   });
 
-  it("kioskChromiumExit posts exactly the exit message to its own origin", () => {
+  it("kioskChromiumExit calls mastersos.exit(): exit on the wrapper's channel", () => {
     const { w, run } = page();
-    const post = vi.fn();
-    w.postMessage = post;
+    const { posted } = channels(w);
     run();
+    expect(posted).toHaveLength(1);
+    expect(posted[0].data).toEqual({ type: "MASTERSOS_EXIT_PORT" });
+    const got = vi.fn();
+    posted[0].transfer[0].onmessage = got;
     w.kioskChromiumExit();
-    expect(post).toHaveBeenCalledTimes(1);
-    const [msg, target] = post.mock.calls[0];
-    expect(msg).toEqual({ type: "MASTERSOS_MOCK_EXIT" });
-    expect(Object.keys(msg)).toEqual(["type"]);
-    expect(target).toBe(ORIGIN);
+    expect(got).toHaveBeenCalledTimes(1);
+    expect(got.mock.calls[0][0].data).toBe("exit");
   });
 
   it("blocks F5 and Ctrl+W/N/T/0", () => {

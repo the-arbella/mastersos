@@ -12,8 +12,8 @@
 // TestNav's own extension (force-installed next to ours) appends " TestNavPWAKiosk/<v>" or " TestNavPWA/<v>" itself,
 // but on Linux it would always say unlocked. Here: the UA gets the kiosk suffix, fixed before any page script runs;
 // and calls to that extension id go through a wrapper that answers the ChromeOS-only methods and forwards the rest to
-// the real extension (or reports an error when it is not installed). closeApp ends the locked session through the
-// exam extension's relay (window.postMessage {type: "MASTERSOS_MOCK_EXIT"}) instead of closing every Chrome window.
+// the real extension (or reports an error when it is not installed). closeApp ends the locked session with
+// mastersos.exit() (the inject wrapper's, kiosk-platform/inject-wrapper.js) instead of closing every Chrome window.
 // Bottom line: generateAppValidityCheckToken (Verified Access) is never forged and never forwarded.
 (() => {
   "use strict";
@@ -26,8 +26,6 @@
   const APP_VERSION = "1.15.7";
   // Only when platform = "chromeos" is missing: the frozen ChromeOS part of Chrome's reduced UA.
   const CROS_BUILD = "14541.0.0";
-  const EXIT = { type: "MASTERSOS_MOCK_EXIT" };
-  const origin = window.location.origin;
 
   // --- navigator.userAgent -------------------------------------------------------------------------------------
   // The kiosk app suffix on the UA. It is read from Navigator.prototype at each access, so the ChromeOS UA of
@@ -73,10 +71,9 @@
     // App API does not ask for it on the ChromeOS PWA path; if anything does, say what TestNav's extension says on
     // any non-ChromeOS platform. Never forward it.
     generateAppValidityCheckToken: () => fail(`generateAppValidityCheckToken ${UNSUPPORTED}`),
-    // TestNav's extension closes every Chrome window; the locked session would restart Chrome. End the session
-    // (the exam extension's relay turns this message into its Exit).
+    // TestNav's extension closes every Chrome window; the locked session would restart Chrome. End the session.
     closeApp: () => {
-      window.postMessage({ ...EXIT }, origin);
+      mastersos.exit();
       return ok();
     },
   };

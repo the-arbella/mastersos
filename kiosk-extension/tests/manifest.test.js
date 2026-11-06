@@ -1,19 +1,31 @@
-// The exam extension's manifest (design §4.7, §4.9; docs/specs/2026-11-06-kiosk-platform-inject-design.md): the exit
-// button stays as it was, the deprecated NWEA mock env only reaches NWEA's hosts, there is no vendor-specific mock env
-// any more, and the start page needs scripting, DNR and tabs.
+// The exam extension's manifest (design §4.7, §4.9; docs/specs/2026-11-06-kiosk-platform-inject-design.md §3.1): it is in
+// every web kiosk session, so it has 1.2.0's permissions (nativeMessaging, NWEA's hosts) plus storage for its managed
+// configuration; scripting, declarativeNetRequest, tabs and <all_urls> are only in the platform extension of the apps
+// that use platform or inject. The deprecated NWEA mock env only reaches NWEA's hosts.
 import M from "../manifest.json";
+import SCHEMA from "../schema.json";
 import BG from "../background.js?raw";
 
 const NWEA = ["https://*.nwea.org/*", "https://*.mapnwea.org/*"];
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 describe("manifest", () => {
-  it("version is 1.4.0", () => {
-    expect(M.version).toBe("1.4.0");
+  it("version 1.5.0, with 1.2.0's permissions and storage", () => {
+    expect(M.version).toBe("1.5.0");
     expect(M.manifest_version).toBe(3);
     expect(M.minimum_chrome_version).toBe("120");
-    expect(M.permissions).toEqual(["nativeMessaging", "scripting", "declarativeNetRequest", "tabs"]);
-    expect(M.host_permissions).toEqual(["<all_urls>"]);
+    expect(M.permissions).toEqual(["nativeMessaging", "storage"]);
+    expect(M.host_permissions).toEqual(NWEA);
+    expect(M.optional_permissions).toBeUndefined();
+    expect(M.optional_host_permissions).toBeUndefined();
+    expect(JSON.stringify(M)).not.toMatch(/scripting|declarativeNetRequest|"tabs"/);
+  });
+
+  it("managed storage holds the platform extension's id and nothing else", () => {
+    expect(M.storage).toEqual({ managed_schema: "schema.json" });
+    expect(SCHEMA.type).toBe("object");
+    expect(Object.keys(SCHEMA.properties)).toEqual(["platform_extension"]);
+    expect(SCHEMA.properties.platform_extension.type).toBe("string");
   });
 
   it("exit button content script is unchanged", () => {
@@ -35,12 +47,9 @@ describe("manifest", () => {
     expect(JSON.stringify(M)).not.toMatch(/testnav/i);
   });
 
-  it("the start page and the platform script are not reachable from web pages", () => {
+  it("nothing reachable from web pages, no request header rules", () => {
     expect(M.web_accessible_resources).toBeUndefined();
     expect(M.externally_connectable).toBeUndefined();
-  });
-
-  it("no static request header rules (the platform rule is a session rule)", () => {
     expect(M.declarative_net_request).toBeUndefined();
   });
 

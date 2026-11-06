@@ -1,10 +1,9 @@
-// The exam extension's start page (design docs/specs/2026-11-06-kiosk-platform-inject-design.md §3.3). A kiosk app with
-// platform or inject starts here instead of at its url: chrome-extension://<id>/start.html#<JSON> (the agent writes it).
-// This page hands the configuration to the background ({cmd:"launch", config}); the background puts the disguise and
-// the inject script in place and only then sends this tab to the app's url. If that fails, or nothing answers within
-// LAUNCH_TIMEOUT_MS, the page says so and offers Try again and Exit (content scripts, and so the Options menu, do not
-// run on extension pages). The page never opens the app's url itself: without the disguise or the script the exam page
-// would see a plain Linux browser.
+// The platform extension's start page (design docs/specs/2026-11-06-kiosk-platform-inject-design.md §3.3). A kiosk app
+// with platform or inject starts here instead of at its url: chrome-extension://<platform extension id>/start.html (the
+// agent writes it into launch.json). This page asks the background ({cmd:"launch"}); the background puts the request
+// header rule in place and only then sends this tab to the app's url (the content scripts are static, so they are
+// there already). If that fails, or nothing answers within LAUNCH_TIMEOUT_MS, the page says so and offers Try again and
+// Exit (the exam extension's Options menu does not run on extension pages). The page never opens the app's url itself.
 (() => {
   "use strict";
   const LAUNCH_TIMEOUT_MS = 20000;
@@ -17,12 +16,6 @@
     exitFailed: "Could not leave. Please ask a teacher.",
   };
   const $ = (id) => document.getElementById(id);
-  let config = null;
-  try {
-    config = JSON.parse(decodeURIComponent(location.hash.slice(1)));
-  } catch {
-    config = null;
-  }
   let attempt = 0;
 
   function show(title, body, actions) {
@@ -45,7 +38,7 @@
       if (mine === attempt) failed();
     }, LAUNCH_TIMEOUT_MS);
     try {
-      chrome.runtime.sendMessage({ cmd: "launch", config }, (r) => {
+      chrome.runtime.sendMessage({ cmd: "launch" }, (r) => {
         void chrome.runtime.lastError;
         if (mine !== attempt) return;
         // ok: the background is sending this tab to the app; nothing else to do here

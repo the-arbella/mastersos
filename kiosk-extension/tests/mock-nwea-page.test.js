@@ -3,6 +3,7 @@
 // ?raw: vite hands over the source as a string (not executed as a module), the way Chrome injects it.
 import { createRequire } from "node:module";
 import SRC from "../mock/nwea/page.js?raw";
+import { channels } from "./helpers.js";
 
 // This directory has no package of its own: resolve jsdom from the web package vitest runs in.
 const { JSDOM } = createRequire(`${process.cwd()}/`)("jsdom");
@@ -52,17 +53,27 @@ describe("NWEA mock env: page.js", () => {
     expect(w.kioskChromiumExit).toBe(exit);
   });
 
-  it("kioskChromiumExit posts exactly the exit message to its own origin", () => {
+  it("posts its channel once, to its own origin; kioskChromiumExit sends exit on it", () => {
     const { w, run } = page();
-    const post = vi.fn();
-    w.postMessage = post;
+    const { posted } = channels(w);
     run();
+    expect(posted).toHaveLength(1);
+    expect(posted[0].data).toEqual({ type: "MASTERSOS_NWEA_EXIT_PORT" });
+    expect(posted[0].origin).toBe(ORIGIN);
+    expect(posted[0].transfer).toHaveLength(1);
+    const got = vi.fn();
+    posted[0].transfer[0].onmessage = got;
     w.kioskChromiumExit();
-    expect(post).toHaveBeenCalledTimes(1);
-    const [msg, target] = post.mock.calls[0];
-    expect(msg).toEqual({ type: "MASTERSOS_MOCK_EXIT" });
-    expect(Object.keys(msg)).toEqual(["type"]);
-    expect(target).toBe(ORIGIN);
+    expect(got).toHaveBeenCalledTimes(1);
+    expect(got.mock.calls[0][0].data).toBe("exit");
+  });
+
+  it("without MessageChannel the signals are still there and exit does nothing", () => {
+    const { w, run } = page();
+    delete w.MessageChannel;
+    run();
+    expect(w.isKioskChromium).toBe(true);
+    expect(() => w.kioskChromiumExit()).not.toThrow();
   });
 
   it("blocks F5 and Ctrl+W/N/T/0", () => {

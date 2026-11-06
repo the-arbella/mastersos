@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
   "name": "MastersOS 考试扩展 / MastersOS Exam",
-  "description": "锁定会话的「求助」「退出」菜单、ChromeOS 伪装与注入脚本的起始页 / Get help and Exit menu, ChromeOS disguise and inject start page for MastersOS locked sessions",
-  "version": "1.4.0",
+  "description": "锁定会话的「求助」「退出」菜单与按应用的模拟环境 / Get help and Exit menu and per-app mock environments for MastersOS locked sessions",
+  "version": "1.5.0",
   "minimum_chrome_version": "120",
-  "permissions": ["nativeMessaging", "scripting", "declarativeNetRequest", "tabs"],
-  "host_permissions": ["<all_urls>"],
+  "permissions": ["nativeMessaging", "storage"],
+  "host_permissions": ["https://*.nwea.org/*", "https://*.mapnwea.org/*"],
+  "storage": { "managed_schema": "schema.json" },
   "background": { "service_worker": "background.js" },
   "content_scripts": [
     {

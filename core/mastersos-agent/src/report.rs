@@ -23,8 +23,8 @@ const MAX_RESULTS: usize = 200;
 /// `config` (config profiles design §5): the new `[[config]]` shape and the `learning`/`full` modes.
 /// `support` (remote diagnostics and help design): `[config.support]` is read into `Config::support_enabled`.
 /// `config_update_channel`: `update_channel` of the Device's Config or the Defaults picks its update channel.
-/// `kiosk_platform`, `kiosk_inject`: the kiosk step writes the start page and builds the inject helper extension, and the
-/// exam extension (1.4.0) answers the start page (design docs/specs/2026-11-06-kiosk-platform-inject-design.md).
+/// `kiosk_platform`, `kiosk_inject`: the kiosk step builds the app's platform extension (start page, ChromeOS disguise,
+/// inject script) and the exam extension takes its exit (design docs/specs/2026-11-06-kiosk-platform-inject-design.md).
 /// `oidc_idp_hint`: the `login` step hands `[school.oidc] idp_hint` to the sign-in card (`login-browser/card.json`).
 pub const SUPPORTED_FEATURES: &[&str] = &[
     mastersos_bundle::FEATURE_UPDATE_MIRROR,

@@ -1135,7 +1135,7 @@ fn guard_ends_kiosk_accounts_outside_the_kiosk_session() {
 /// Design 2026-11-06-kiosk-platform-inject §3.3: a web app with a start page opens it instead of its url.
 #[test]
 fn chrome_argv_opens_the_start_page() {
-    let start = "chrome-extension://abcdefghijklmnopabcdefghijklmnop/start.html#%7B%7D";
+    let start = "chrome-extension://abcdefghijklmnopabcdefghijklmnop/start.html";
     let l = Launch {
         start: Some(start.into()),
         ..web("https://home.testnav.com/", None)

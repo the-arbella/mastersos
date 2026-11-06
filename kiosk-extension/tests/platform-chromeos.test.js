@@ -1,9 +1,12 @@
-// Tests for the ChromeOS disguise (platform/chromeos.js, docs/specs/2026-11-06-kiosk-platform-inject-design.md §4). Each
-// case runs the script in a fresh JSDOM window with Chrome's shapes put in: userAgent / appVersion getters on
-// Navigator.prototype and a NavigatorUAData class (jsdom has none). The values must equal background.js's DNR rule.
+// Tests for the ChromeOS disguise (kiosk-platform/chromeos.js, docs/specs/2026-11-06-kiosk-platform-inject-design.md
+// §4). Each case runs the script in a fresh JSDOM window with Chrome's shapes put in: userAgent / appVersion getters on
+// Navigator.prototype and a NavigatorUAData class (jsdom has none). The values must equal the platform extension's
+// background.js DNR rule.
 import { createRequire } from "node:module";
-import SRC from "../platform/chromeos.js?raw";
-import BG from "../background.js?raw";
+import { repoFile } from "./helpers.js";
+
+const SRC = repoFile("kiosk-platform/chromeos.js");
+const BG = repoFile("kiosk-platform/background.js");
 
 const { JSDOM } = createRequire(`${process.cwd()}/`)("jsdom");
 
@@ -153,6 +156,7 @@ describe("platform/chromeos.js", () => {
 
   it("the same values as background.js's request header rule", async () => {
     let rule;
+    const id = "abcdefghijklmnopabcdefghijklmnop";
     const chrome = {
       tabs: { query: vi.fn(), reload: vi.fn(), update: vi.fn(async () => ({})) },
       declarativeNetRequest: {
@@ -160,25 +164,25 @@ describe("platform/chromeos.js", () => {
           rule = r.addRules[0];
         }),
       },
-      scripting: {
-        getRegisteredContentScripts: vi.fn(async () => []),
-        unregisterContentScripts: vi.fn(async () => {}),
-        registerContentScripts: vi.fn(async () => {}),
-      },
       runtime: {
-        id: "abcdefghijklmnopabcdefghijklmnop",
+        id,
         onMessage: { addListener: (f) => (chrome.listener = f) },
         onInstalled: { addListener: () => {} },
-        getURL: (p) => `chrome-extension://abcdefghijklmnopabcdefghijklmnop/${p}`,
+        getURL: (p) => `chrome-extension://${id}/${p}`,
       },
     };
-    new Function("chrome", "navigator", BG)(chrome, { userAgent: LINUX_UA, userAgentData: { brands: BRANDS } });
-    const reply = vi.fn();
-    chrome.listener(
-      { cmd: "launch", config: { v: 1, url: "https://a.org/", hosts: ["a.org"], platform: "chromeos", helper: null } },
-      { id: chrome.runtime.id, url: chrome.runtime.getURL("start.html#x"), tab: { id: 1 } },
-      reply,
+    const self = {};
+    const importScripts = () => {
+      self.MASTERSOS_PLATFORM = { v: 1, url: "https://a.org/", hosts: ["a.org"], platform: "chromeos", inject: false, exam: "ponmlkjihgfedcbaponmlkjihgfedcba" };
+    };
+    new Function("chrome", "navigator", "self", "importScripts", BG)(
+      chrome,
+      { userAgent: LINUX_UA, userAgentData: { brands: BRANDS } },
+      self,
+      importScripts,
     );
+    const reply = vi.fn();
+    chrome.listener({ cmd: "launch" }, { id, url: chrome.runtime.getURL("start.html"), tab: { id: 1 } }, reply);
     await vi.waitFor(() => expect(reply).toHaveBeenCalledWith({ ok: true }));
     const { w, run } = page();
     run();

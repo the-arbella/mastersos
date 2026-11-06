@@ -5,10 +5,13 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
-import PLATFORM from "../platform/chromeos.js?raw";
+import { channels, repoFile, wrapInject } from "./helpers.js";
+
+const PLATFORM = repoFile("kiosk-platform/chromeos.js");
 
 // Outside the extension directory (not packed, and outside vite's allowed files): read it as text.
-const SRC = readFileSync(join(__dirname, "../../examples/kiosk-inject/testnav.js"), "utf8");
+// It runs as the agent puts it in the platform extension: inside kiosk-platform/inject-wrapper.js.
+const SRC = wrapInject(readFileSync(join(__dirname, "../../examples/kiosk-inject/testnav.js"), "utf8"));
 
 // This directory has no package of its own: resolve jsdom from the web package vitest runs in.
 const { JSDOM } = createRequire(`${process.cwd()}/`)("jsdom");
@@ -157,18 +160,19 @@ describe("TestNav mock env: page.js", () => {
     expect(w.chrome.runtime.lastError).toBeUndefined();
   });
 
-  it("closeApp posts exactly the exit message to its own origin", async () => {
+  it("closeApp calls mastersos.exit(): exit on the wrapper's channel", async () => {
     const { w, run } = page({ runtime: realRuntime() });
-    const post = vi.fn();
-    w.postMessage = post;
+    const { posted } = channels(w);
     run();
+    expect(posted).toHaveLength(1);
+    expect(posted[0].data).toEqual({ type: "MASTERSOS_EXIT_PORT" });
+    expect(posted[0].origin).toBe(ORIGIN);
+    const got = vi.fn();
+    posted[0].transfer[0].onmessage = got;
     const { r } = await ask(w, "closeApp");
     expect(r).toEqual({ success: true });
-    expect(post).toHaveBeenCalledTimes(1);
-    const [msg, target] = post.mock.calls[0];
-    expect(msg).toEqual({ type: "MASTERSOS_MOCK_EXIT" });
-    expect(Object.keys(msg)).toEqual(["type"]);
-    expect(target).toBe(ORIGIN);
+    expect(got).toHaveBeenCalledTimes(1);
+    expect(got.mock.calls[0][0].data).toBe("exit");
   });
 
   it("method names from the prototype are not handlers", async () => {
@@ -201,12 +205,13 @@ describe("TestNav mock env: page.js", () => {
   it("idempotent when run twice", async () => {
     const rt = realRuntime();
     const { w, run } = page({ runtime: rt });
+    const { posted } = channels(w);
     run();
     run();
     expect(w.navigator.userAgent).toBe(CROS_UA);
-    const post = vi.fn();
-    w.postMessage = post;
+    const got = vi.fn();
+    posted[0].transfer[0].onmessage = got;
     await ask(w, "closeApp");
-    expect(post).toHaveBeenCalledTimes(1);
+    expect(got).toHaveBeenCalledTimes(1);
   });
 });

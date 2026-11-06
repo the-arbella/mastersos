@@ -6,22 +6,34 @@
 //   window.isKioskChromium, window.extVersion  -> Lockdown / wrcCheck: identity NWEA_CHROME_PWA, version >= 1.0.0
 //   window.kioskChromiumExit()                 -> called to close the test window
 // NWEA's extension answers isKioskChromium asynchronously (it asks its background whether chrome.audio exists);
-// ours are constants, written synchronously before any page script runs. Exit goes to relay.js by postMessage and
-// from there to the background's {cmd:"exit"} path; this script never touches chrome.runtime.
+// ours are constants, written synchronously before any page script runs. Exit: before any page script, this script
+// posts {type: "MASTERSOS_NWEA_EXIT_PORT"} with one end of a MessageChannel to relay.js, which takes only the first
+// such message; kioskChromiumExit() sends "exit" on the other end, which only this script holds (the functions it uses
+// are captured first). So the page ends the session through kioskChromiumExit(), as NWEA's does, and a page script
+// posting a message of its own does nothing. This script never touches chrome.runtime.
 (() => {
   "use strict";
   const MARK = Symbol.for("mastersos.mock.nwea");
   if (window[MARK]) return;
   Object.defineProperty(window, MARK, { value: true });
 
-  const EXIT = { type: "MASTERSOS_MOCK_EXIT" };
-  const origin = window.location.origin;
+  const apply = Reflect.apply;
+  let send = null;
+  let port = null;
+  try {
+    send = MessagePort.prototype.postMessage;
+    const channel = new MessageChannel();
+    port = channel.port1;
+    window.postMessage({ type: "MASTERSOS_NWEA_EXIT_PORT" }, window.location.origin, [channel.port2]);
+  } catch {
+    port = null;
+  }
   const constant = (name, value) =>
     Object.defineProperty(window, name, { value, writable: false, configurable: false, enumerable: false });
   constant("isKioskChromium", true);
   constant("extVersion", "1.0.0");
   constant("kioskChromiumExit", function kioskChromiumExit() {
-    window.postMessage({ ...EXIT }, origin);
+    if (port && send) apply(send, port, ["exit"]);
   });
 
   // Same as NWEA's extension: the page sees " NWEAChromePWA" at the end of navigator.userAgent. Its DNR rule that

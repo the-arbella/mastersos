@@ -1,21 +1,19 @@
 # MastersOS 考试扩展
 
 锁定会话（`[group.apps.kiosk]` 的网页 / PWA 应用，设计 `docs/superpowers/specs/2026-10-26-mastersos-kiosk-apps-design.md`
-§4.5、§4.7、§4.9）里强制安装的 MV3 扩展。它做两件事：页面右边缘一个浮动的「Options」把手，菜单里「Get help」给学校 IT 发求助单、「Exit」确认后结束锁定会话；以及锁定应用的
-`platform = "chromeos"`（ChromeOS 伪装）与 `inject`（IT 的注入脚本）的起始页（下文，设计
-`docs/specs/2026-11-06-kiosk-platform-inject-design.md`）。按应用写死的模拟环境（mock env）只剩 NWEA 的一个，已弃用。
+§4.5、§4.7、§4.9）里强制安装的 MV3 扩展。它做两件事：页面右边缘一个浮动的「Options」把手，菜单里「Get help」给学校 IT 发求助单、「Exit」确认后结束锁定会话；以及替应用的
+**平台扩展**（`platform = "chromeos"` 与 `inject`，见下文，设计 `docs/specs/2026-11-06-kiosk-platform-inject-design.md`）把退出转给
+退出宿主。按应用写死的模拟环境（mock env）只剩 NWEA 的一个，已弃用。
 
 | 文件 | 作用 |
 |---|---|
-| `manifest.json` | MV3；`permissions: ["nativeMessaging", "scripting", "declarativeNetRequest", "tabs"]`，`host_permissions: ["<all_urls>"]`（注册脚本与 DNR 会话规则要主机权限；实际只用在应用放行的主机上）；菜单按钮的内容脚本匹配 `<all_urls>`、`all_frames: false`、`document_idle`，NWEA mock env 的内容脚本只匹配它的主机。没有 `web_accessible_resources`：网页打不开起始页。不写 `update_url`：打包时按 `<base_url>` 加进 crx 里的那份 |
+| `manifest.json` | MV3；`permissions: ["nativeMessaging", "storage"]`，`host_permissions` 只有 NWEA mock env 的主机（后台按 URL 查这些标签页要用）——每个网页锁定会话都装它，所以不带只有平台扩展用得到的权限（设计 §3.5）；`storage.managed_schema: "schema.json"`；菜单按钮的内容脚本匹配 `<all_urls>`、`all_frames: false`、`document_idle`，NWEA mock env 的内容脚本只匹配它的主机。不写 `update_url`：打包时按 `<base_url>` 加进 crx 里的那份 |
+| `schema.json` | 托管配置的 schema：只有 `platform_extension`（应用的平台扩展 id，agent 的策略 `3rdparty` 写） |
 | `content.js` | 往 `document.documentElement` 挂 `<mastersos-exit>`，closed shadow root 里是浮动按钮、它的菜单与确认对话框 |
-| `background.js` | service worker：收到自己内容脚本的恰好 `{cmd:"exit"}`，`chrome.runtime.connectNative("org.mastersos.kiosk_exit")` 发 `{"cmd":"exit"}`；`{cmd:"help-…"}` 各变成一条 `chrome.runtime.sendNativeMessage("org.mastersos.support", …)`（下「Get help」）；起始页的 `{cmd:"launch", config}`（下「起始页」）；装上（`install`）时重新加载 `MOCK_TAB_PATTERNS` 与起始页的标签页 |
-| `start.html`、`start.js` | 起始页：把 `#` 后的配置交给后台，等它把伪装与脚本放好再跳到应用；失败时显示「This app could not start.」与 Try again / Exit |
-| `platform/chromeos.js` | ChromeOS 伪装，MAIN 世界、`document_start`，由后台按应用的主机注册：`userAgent` / `appVersion` 的 `(X11; Linux <arch>)` 换成 `(X11; CrOS <arch> 14541.0.0)`，`userAgentData` 的 `platform` 与高熵值的 `platformVersion` |
-| `relay.js` | 隔离世界、`document_start`，有 `inject` 的应用由后台注册：注入脚本发的恰好 `{type:"MASTERSOS_MOCK_EXIT"}` 转成 `{cmd:"exit"}` |
+| `background.js` | service worker：收到自己内容脚本的恰好 `{cmd:"exit"}`，`chrome.runtime.connectNative("org.mastersos.kiosk_exit")` 发 `{"cmd":"exit"}`；`{cmd:"help-…"}` 各变成一条 `chrome.runtime.sendNativeMessage("org.mastersos.support", …)`（下「Get help」）；别的扩展发来的恰好 `{cmd:"exit"}`（`onMessageExternal`）只在发送方是托管配置 `platform_extension` 里那个 id 时才连退出宿主（下「平台扩展」）；装上（`install`）时重新加载 `MOCK_TAB_PATTERNS` 的标签页 |
 | `mock/nwea/page.js` | **弃用**（改用 `inject` 与 `examples/kiosk-inject/nwea.js`）。NWEA 的 mock env，MAIN 世界、`document_start`：`isKioskChromium`、`extVersion`、`kioskChromiumExit`、UA 后缀、拦 F5 等 |
-| `mock/nwea/relay.js` | 隔离世界、`document_start`：把 `page.js` 的退出请求转成 `{cmd:"exit"}` |
-| `tests/` | vitest + jsdom（`environment: "jsdom"`、`globals: true`），没有自己的 package，见下「测试」 |
+| `mock/nwea/relay.js` | 隔离世界、`document_start`：只接 `page.js` 在页面脚本之前发的第一条 `MASTERSOS_NWEA_EXIT_PORT` 通道，把通道上的 `"exit"`（只有 `kioskChromiumExit()` 发得出）转成 `{cmd:"exit"}` |
+| `tests/` | vitest + jsdom（`environment: "jsdom"`、`globals: true`），没有自己的 package，见下「测试」；也测 `../kiosk-platform/` 与 `../examples/kiosk-inject/` |
 
 ## 行为
 
@@ -97,21 +95,19 @@
 6. Chrome 的错误页与 `URLBlocklist` 的拦截页（`chrome-error://`）没有内容脚本、没有按钮：确认 Alt+F4 ×5 能退出（审阅 M2）。
 - 只在顶层框架（`all_frames: false`）。
 
-## 起始页：ChromeOS 伪装与注入脚本
+## 平台扩展：ChromeOS 伪装与注入脚本
 
 设计 `docs/specs/2026-11-06-kiosk-platform-inject-design.md`（取代下面按应用写死的做法，David 2026-11-06 裁定）。锁定应用写了
-`platform = "chromeos"` 或 `inject = "files/<名>.js"` 时，Chrome 不直接开 `url`，而是开
-`chrome-extension://<本扩展 id>/start.html#<配置 JSON>`（agent 写进 `launch.json`）。后台只认自己起始页发来的 `{cmd:"launch", config}`，
-校验配置之后：
+`platform = "chromeos"` 或 `inject = "files/<名>.js"` 时，agent 在设备上为它生成一个**平台扩展**，只在这个应用的会话里强制安装；
+源码在仓库的 `kiosk-platform/`（编进 agent，不在本目录：本目录整个打进考试扩展）。Chrome 开的是它的起始页
+`chrome-extension://<平台扩展 id>/start.html`；它的后台写 DNR 会话规则（只有 `platform`）再跳到应用，伪装与注入脚本是它
+manifest 里的静态内容脚本。起始页、伪装与脚本要的权限（`tabs`，`platform` 再加 `declarativeNetRequest` 与应用主机）都在它身上，
+本扩展一样不带（设计 §3.5：可选权限没法由策略授予）。
 
-1. `platform`：DNR 会话规则改 `User-Agent`、`Sec-CH-UA-Platform`、`Sec-CH-UA-Platform-Version`（`resourceTypes` 列全，含 `main_frame`；
-   `requestDomains` 是应用的主机），注册 MAIN 世界的 `platform/chromeos.js`；两边的值用同一套公式（`tests/platform-chromeos.test.js` 核对）。
-2. `inject`：注册隔离世界的 `relay.js`，每 100 毫秒问一次 agent 生成的助手扩展（`config.helper`）`{cmd:"ping"}`，最多 15 秒。IT 的脚本在助手扩展里，
-   是它 manifest 里的静态内容脚本（只有这样才保证早于页面脚本）。
-3. 都好了才 `tabs.update` 到应用的 `url`；任何一步不行就回 `{ok:false}`，起始页显示失败，**不开考试页**。
-
-起始页在扩展装上之前打不开：装上（`install`）时后台重新加载地址是起始页的标签页。注册的脚本与会话规则只活在这次浏览器会话里，
-Chrome 重开时又从起始页走一遍。样例脚本在 `examples/kiosk-inject/`（不打进扩展）：`testnav.js`、`nwea.js`。
+退出（设计 §6）：注入脚本调 `mastersos.exit()`（agent 的包装给的，页面自己的脚本拿不到）→ 平台扩展的 `relay.js` → 它的后台 →
+`runtime.sendMessage(<本扩展 id>, {cmd:"exit"})` → 本扩展的 `onMessageExternal`：发送方必须是托管配置 `platform_extension` 里那个 id
+（全新 profile 上托管配置晚几秒到，最多等 15 秒），通过之后与 Exit 按钮同一条路。样例脚本在 `examples/kiosk-inject/`：
+`testnav.js`、`nwea.js`。
 
 **底线**：不伪造任何校验令牌或设备证明（Verified Access 等），只让页面看到的平台像 ChromeOS。
 
@@ -124,6 +120,9 @@ manifest 按应用的主机匹配。**弃用**：不再加新的；NWEA 的留�
 | 应用 | 目录 | 主机 | 给什么 |
 |---|---|---|---|
 | NWEA MAP Growth | `mock/nwea/` | `*.nwea.org`、`*.mapnwea.org` | `window.isKioskChromium = true`、`window.extVersion = "1.0.0"`（不可改）、`window.kioskChromiumExit()`；`navigator.userAgent` 末尾加 ` NWEAChromePWA`；拦 F5、Ctrl+W/N/T/0、左右边缘滑动 |
+
+退出：`page.js` 在页面脚本之前建一个 `MessageChannel`，一端随 `{type:"MASTERSOS_NWEA_EXIT_PORT"}` 发给本窗口，`relay.js` 只接第一条；
+`kioskChromiumExit()` 在留着的另一端发 `"exit"`。NWEA 的页面照旧调 `kioskChromiumExit()`，页面脚本自己 `postMessage` 什么都不会发生（审查低-4）。
 
 时序：`page.js` 在每个匹配页面的文档开始、早于页面任何脚本，同步写入常量，没有竞态；唯一的先后问题是扩展装上之前第一页已经在加载
 （每个锁定会话都是新 profile、重新下载扩展）——后台在 `install` 时重新加载这些标签页，`update` 时不刷新。

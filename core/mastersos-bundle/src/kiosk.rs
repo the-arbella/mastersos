@@ -131,16 +131,23 @@ impl ExamExtension {
     }
 }
 
-/// The helper extension the agent builds on the Device for an app with `inject` (design §3.4):
-/// its id (from the Device's key for this app) and its local update manifest.
+/// The platform extension the agent builds on the Device for an app with `platform` or `inject`
+/// (design §3.4): its id (from the Device's key for this app) and its local update manifest. It
+/// has the start page, the ChromeOS disguise and the inject script, and the permissions they need;
+/// the exam extension has none of them.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InjectHelper {
+pub struct PlatformExtension {
     pub id: String,
     pub update_url: String,
 }
 
-/// Whether `app` starts through the exam extension's start page (`platform` or `inject` written;
-/// design §3.3). Those apps get `chrome-extension://<exam id>` in the allowlist.
+/// The key of the exam extension's managed storage (`3rdparty`) that names the app's platform
+/// extension: the only other extension it takes `{cmd:"exit"}` from.
+pub const EXAM_PLATFORM_KEY: &str = "platform_extension";
+
+/// Whether `app` has a platform extension and starts at its start page (`platform` or `inject`
+/// written; design §3.3). Those apps get `chrome-extension://<platform extension id>` in the
+/// allowlist.
 pub fn uses_start_page(app: &KioskApp) -> bool {
     app.platform.is_some() || app.inject.is_some()
 }
@@ -162,17 +169,18 @@ pub fn check_inject_source(bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-/// The start page's configuration (design §3.3), the JSON after `#` in
-/// `chrome-extension://<exam id>/start.html#…`: the app's `url`, the hosts the disguise and the
-/// script apply to (the same as the allowlist's), `platform`, and the helper extension's id.
-pub fn start_config(app: &KioskApp, helper: Option<&str>) -> Result<Value, KioskError> {
+/// The platform extension's configuration (design §3.4, its `config.js`): the app's `url`, the
+/// hosts the disguise and the script apply to (the same as the allowlist's), `platform`, whether
+/// there is an inject script, and the exam extension's id (where `{cmd:"exit"}` goes).
+pub fn platform_config(app: &KioskApp, exam_id: &str) -> Result<Value, KioskError> {
     let (url, hosts) = start_hosts(app)?;
     Ok(json!({
         "v": 1,
         "url": url,
         "hosts": hosts,
         "platform": app.platform,
-        "helper": helper,
+        "inject": app.inject.is_some(),
+        "exam": exam_id,
     }))
 }
 
@@ -371,11 +379,11 @@ pub fn check(id: &str, app: &KioskApp) -> Result<(), KioskError> {
         id: "(exam)".into(),
         update_url: "https://exam.invalid/updates.xml".into(),
     };
-    let helper = InjectHelper {
-        id: "(helper)".into(),
-        update_url: "file:///helper.invalid/updates.xml".into(),
+    let platform = PlatformExtension {
+        id: "(platform)".into(),
+        update_url: "file:///platform.invalid/updates.xml".into(),
     };
-    chrome_policy(app, &placeholder, app.inject.as_ref().map(|_| &helper))?;
+    chrome_policy(app, &placeholder, uses_start_page(app).then_some(&platform))?;
     Ok(())
 }
 
@@ -400,17 +408,30 @@ pub fn inject_path_ok(f: &str) -> bool {
 /// 原生消息宿主也一个都不放行），
 /// 不叠应用自己的 `chrome_policy`（它只对网页 / PWA 有效，网页表单保存时就去掉）；扩展与 `chrome_policy`
 /// 照样校验，lint 报的与 agent 拒的是同一套。
-/// `helper` is the app's inject helper extension (design §3.4), force-installed beside the exam
-/// extension; apps with `platform` or `inject` also get the exam extension's start page
-/// (`chrome-extension://<exam id>`) in the allowlist.
+/// `platform` is the app's platform extension (design §3.4), for a web app with `platform` or
+/// `inject`: force-installed beside the exam extension, its start page
+/// (`chrome-extension://<platform extension id>`) in the allowlist, and its id in the exam
+/// extension's managed storage ([`EXAM_PLATFORM_KEY`]).
 pub fn chrome_policy(
     app: &KioskApp,
     exam: &ExamExtension,
-    helper: Option<&InjectHelper>,
+    platform: Option<&PlatformExtension>,
 ) -> Result<Map<String, Value>, KioskError> {
     let how = launch(app)?;
     let mut allow = allow_hosts(app)?;
-    let configs = extensions(app, exam)?;
+    let mut configs = extensions(app, exam)?;
+    if let Some(p) = platform {
+        if app.extensions.iter().any(|e| e.id == p.id) {
+            return fail(
+                "kiosk_extension_invalid",
+                "extensions",
+                format!(
+                    "Extension {} is this app's MastersOS platform extension and need not be listed in extensions",
+                    p.id
+                ),
+            );
+        }
+    }
     let own = toml_table_to_json(&app.chrome_policy).map_err(|why| KioskError {
         code: "kiosk_policy_invalid",
         message: format!("chrome_policy cannot be converted to a Chrome JSON policy: {why}"),
@@ -443,14 +464,16 @@ pub fn chrome_policy(
     }
     let mut seen = BTreeSet::new();
     allow.retain(|h| seen.insert(h.clone()));
-    if web.is_some() && uses_start_page(app) {
-        allow.push(format!("chrome-extension://{}", exam.id));
+    let platform = platform.filter(|_| web.is_some());
+    if let Some(p) = platform {
+        allow.push(format!("chrome-extension://{}", p.id));
+        configs.insert(exam.id.clone(), json!({ EXAM_PLATFORM_KEY: p.id }));
     }
     allow.push(ERROR_PAGE.to_string());
 
     let forced: Vec<(&str, &str)> = match web {
         Some(_) => std::iter::once((exam.id.as_str(), exam.update_url.as_str()))
-            .chain(helper.map(|h| (h.id.as_str(), h.update_url.as_str())))
+            .chain(platform.map(|p| (p.id.as_str(), p.update_url.as_str())))
             .chain(
                 app.extensions
                     .iter()
@@ -1739,10 +1762,10 @@ url = "https://test.mapnwea.org/"
     }
 
     #[test]
-    fn start_page_allowlist_and_helper() {
-        let helper = InjectHelper {
+    fn start_page_allowlist_and_platform_extension() {
+        let platform = PlatformExtension {
             id: HELPER_ID.into(),
-            update_url: "file:///var/lib/mastersos-public/kiosk/x/inject/updates.xml".into(),
+            update_url: "file:///var/lib/mastersos-public/kiosk/x/platform/updates.xml".into(),
         };
         let plain = chrome_policy(&nwea(""), &exam(), None).unwrap();
         assert!(!plain["URLAllowlist"]
@@ -1750,31 +1773,52 @@ url = "https://test.mapnwea.org/"
             .unwrap()
             .iter()
             .any(|v| v.as_str().unwrap().starts_with("chrome-extension://")));
+        assert!(plain["3rdparty"]["extensions"].get(EXAM_ID).is_none());
         let a = nwea("platform = \"chromeos\"\ninject = \"files/nwea.js\"");
-        let p = chrome_policy(&a, &exam(), Some(&helper)).unwrap();
+        let p = chrome_policy(&a, &exam(), Some(&platform)).unwrap();
         let allow: Vec<&str> = p["URLAllowlist"]
             .as_array()
             .unwrap()
             .iter()
             .map(|v| v.as_str().unwrap())
             .collect();
+        // the platform extension's start page, not the exam extension's (it has none)
         assert_eq!(
             allow,
             [
                 "nwea.org",
                 "mapnwea.org",
                 "test.mapnwea.org",
-                &format!("chrome-extension://{EXAM_ID}"),
+                &format!("chrome-extension://{HELPER_ID}"),
                 ERROR_PAGE
             ]
         );
         let forced = p["ExtensionInstallForcelist"].as_array().unwrap();
-        assert_eq!(forced[1], format!("{HELPER_ID};{}", helper.update_url));
+        assert_eq!(forced[1], format!("{HELPER_ID};{}", platform.update_url));
         assert_eq!(
             p["ExtensionSettings"][HELPER_ID],
-            json!({"installation_mode": "force_installed", "update_url": helper.update_url})
+            json!({"installation_mode": "force_installed", "update_url": platform.update_url})
         );
-        let cfg = start_config(&a, Some(HELPER_ID)).unwrap();
+        // the exam extension takes {cmd:"exit"} from that id only, next to the vendors' own configs
+        assert_eq!(
+            p["3rdparty"],
+            json!({"extensions": {
+                EXAM_ID: {EXAM_PLATFORM_KEY: HELPER_ID},
+                EXT_ID: {"partner_code": "p", "n": 3},
+            }})
+        );
+        // the platform extension cannot be listed by the app
+        let b = web(&format!(
+            "platform = \"chromeos\"\n[[group.apps.kiosk.x.extensions]]\nid = \"{HELPER_ID}\"\n\
+             update_url = \"https://vendor.example/updates.xml\""
+        ));
+        assert_eq!(
+            chrome_policy(&b, &exam(), Some(&platform))
+                .unwrap_err()
+                .code,
+            "kiosk_extension_invalid"
+        );
+        let cfg = platform_config(&a, EXAM_ID).unwrap();
         assert_eq!(
             cfg,
             json!({
@@ -1782,12 +1826,13 @@ url = "https://test.mapnwea.org/"
                 "url": "https://test.mapnwea.org/",
                 "hosts": ["nwea.org", "mapnwea.org", "test.mapnwea.org"],
                 "platform": "chromeos",
-                "helper": HELPER_ID,
+                "inject": true,
+                "exam": EXAM_ID,
             })
         );
-        let only = start_config(&web("platform = \"chromeos\""), None).unwrap();
+        let only = platform_config(&web("platform = \"chromeos\""), EXAM_ID).unwrap();
         assert_eq!(only["hosts"], json!(["test.mapnwea.org"]));
-        assert_eq!(only["helper"], Value::Null);
+        assert_eq!(only["inject"], json!(false));
     }
 
     #[test]

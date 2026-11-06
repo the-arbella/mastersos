@@ -1,17 +1,18 @@
-// Tests for the start page (start.html + start.js, docs/specs/2026-11-06-kiosk-platform-inject-design.md §3.3): it hands
-// the configuration from its #fragment to the background and never opens the app itself; on failure it offers Try again
-// and Exit. Each case loads start.html in a fresh JSDOM window with a stub chrome.runtime.
+// Tests for the platform extension's start page (kiosk-platform/start.html + start.js,
+// docs/specs/2026-11-06-kiosk-platform-inject-design.md §3.3): it asks the background to launch and never opens the
+// app itself; on failure it offers Try again and Exit. Each case loads start.html in a fresh JSDOM window with a stub
+// chrome.runtime.
 import { createRequire } from "node:module";
-import HTML from "../start.html?raw";
-import SRC from "../start.js?raw";
+import { repoFile } from "./helpers.js";
+
+const HTML = repoFile("kiosk-platform/start.html");
+const SRC = repoFile("kiosk-platform/start.js");
 
 const { JSDOM } = createRequire(`${process.cwd()}/`)("jsdom");
 
-const CFG = { v: 1, url: "https://home.testnav.com/", hosts: ["testnav.com"], platform: "chromeos", helper: null };
-
-function page({ hash = encodeURIComponent(JSON.stringify(CFG)), answer = () => undefined } = {}) {
+function page({ answer = () => undefined } = {}) {
   const dom = new JSDOM(HTML.replace('<script src="start.js"></script>', ""), {
-    url: `https://ext.invalid/start.html#${hash}`,
+    url: "https://ext.invalid/start.html",
     runScripts: "outside-only",
   });
   const w = dom.window;
@@ -33,10 +34,10 @@ function page({ hash = encodeURIComponent(JSON.stringify(CFG)), answer = () => u
 const tick = () => new Promise((r) => setTimeout(r, 5));
 
 describe("start page", () => {
-  it("sends the decoded configuration to the background and waits", async () => {
+  it("asks the background to launch and waits", async () => {
     const { sent, $, run } = page({ answer: () => ({ ok: true }) });
     run();
-    expect(sent).toEqual([{ cmd: "launch", config: CFG }]);
+    expect(sent).toEqual([{ cmd: "launch" }]);
     await tick();
     expect($("title").textContent).toBe("Starting…");
     expect($("actions").hidden).toBe(true);
@@ -61,14 +62,6 @@ describe("start page", () => {
     expect(sent[1]).toEqual({ cmd: "exit" });
     await tick();
     expect($("body").textContent).toBe("Could not leave. Please ask a teacher.");
-  });
-
-  it("a broken fragment still asks (the background refuses null) and shows the failure", async () => {
-    const { sent, $, run } = page({ hash: "%7Bnot-json", answer: () => ({ ok: false }) });
-    run();
-    expect(sent).toEqual([{ cmd: "launch", config: null }]);
-    await tick();
-    expect($("actions").hidden).toBe(false);
   });
 
   it("no answer at all: the failure after the timeout", () => {

@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "platform_extension": {
+      "title": "Platform extension",
+      "description": "The id of the kiosk app's platform extension, the only other extension that may ask to end the session. Set by the agent's kiosk policy; nothing else writes it.",
+      "type": "string"
+    }
+  }
+}

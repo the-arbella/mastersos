@@ -1105,10 +1105,11 @@ fn reset_password_retried_until_initialized() {
     );
 }
 
-/// Design 2026-11-06-kiosk-platform-inject §3: an app with platform and inject starts at the exam extension's start page,
-/// its policy allows that page and force-installs the helper built from the bundle's script; the key is kept in var_dir.
+/// Design 2026-11-06-kiosk-platform-inject §3: an app with platform and inject gets a platform extension built from the
+/// bundle's script and starts at its start page; the policy allows that page, force-installs the extension and names it
+/// in the exam extension's managed storage; the key is kept in var_dir.
 #[test]
-fn platform_and_inject_build_the_start_page_and_helper() {
+fn platform_and_inject_build_the_platform_extension() {
     let root = root();
     let r = FakeRunner::new();
     absent(&r, "kiosk-tn");
@@ -1124,14 +1125,10 @@ fn platform_and_inject_build_the_start_page_and_helper() {
     let out = run_with(&r, root.path(), &mut sys, &g, Phase::Full, bundle.path());
     assert_eq!(out, vec![ok_item("tn")]);
     let dir = root.path().join(PUBLIC_DIR).join("tn");
-    let l: Launch = serde_json::from_slice(&fs::read(dir.join(LAUNCH_FILE)).unwrap()).unwrap();
-    let start = l.start.clone().unwrap();
-    let prefix = format!("chrome-extension://{EXAM_ID}/start.html#");
-    assert!(start.starts_with(&prefix), "{start}");
     let key = fs::read(
         root.path()
             .join("var/lib/mastersos-system")
-            .join(inject::KEY_DIR)
+            .join(platform_ext::KEY_DIR)
             .join("tn.p8"),
     )
     .unwrap();
@@ -1141,30 +1138,33 @@ fn platform_and_inject_build_the_start_page_and_helper() {
             .unwrap();
     let forced = pol["ExtensionInstallForcelist"].as_array().unwrap();
     assert_eq!(forced.len(), 2, "{forced:?}");
-    let helper = forced[1]
+    let ext = forced[1]
         .as_str()
         .unwrap()
         .split(';')
         .next()
         .unwrap()
         .to_string();
-    assert!(mastersos_bundle::kiosk::extension_id_ok(&helper));
-    assert!(pol["URLAllowlist"]
-        .as_array()
-        .unwrap()
-        .contains(&serde_json::json!(format!("chrome-extension://{EXAM_ID}"))));
-    // the start page's configuration names the helper and the platform
-    let enc = &start[prefix.len()..];
-    assert!(enc.contains(&helper), "{enc}");
-    assert!(enc.contains("%22platform%22%3A%22chromeos%22"), "{enc}");
-    assert!(dir
-        .join(inject::INJECT_DIR)
-        .join(inject::CRX_FILE)
-        .is_file());
-    let xml = fs::read_to_string(dir.join(inject::INJECT_DIR).join(inject::UPDATES_FILE)).unwrap();
-    assert!(xml.contains(&format!("appid='{helper}'")), "{xml}");
+    assert!(mastersos_bundle::kiosk::extension_id_ok(&ext));
+    assert_ne!(ext, EXAM_ID);
+    let l: Launch = serde_json::from_slice(&fs::read(dir.join(LAUNCH_FILE)).unwrap()).unwrap();
+    assert_eq!(
+        l.start.as_deref(),
+        Some(format!("chrome-extension://{ext}/start.html").as_str())
+    );
+    let allow = pol["URLAllowlist"].as_array().unwrap();
+    assert!(allow.contains(&serde_json::json!(format!("chrome-extension://{ext}"))));
+    assert!(!allow.contains(&serde_json::json!(format!("chrome-extension://{EXAM_ID}"))));
+    assert_eq!(
+        pol["3rdparty"]["extensions"][EXAM_ID],
+        serde_json::json!({ mastersos_bundle::kiosk::EXAM_PLATFORM_KEY: ext })
+    );
+    let ext_dir = dir.join(platform_ext::EXT_DIR);
+    assert!(ext_dir.join(platform_ext::CRX_FILE).is_file());
+    let xml = fs::read_to_string(ext_dir.join(platform_ext::UPDATES_FILE)).unwrap();
+    assert!(xml.contains(&format!("appid='{ext}'")), "{xml}");
 
-    // without inject the helper goes away (the key stays: the id is the same if inject comes back)
+    // without inject the extension stays (platform needs it), with the same id: the key is the app's
     let g = grp(
         "[group.apps.kiosk.tn]\nname = \"TN\"\nurl = \"https://home.testnav.com/\"\nplatform = \"chromeos\"\n",
     );
@@ -1173,9 +1173,30 @@ fn platform_and_inject_build_the_start_page_and_helper() {
     present(&r, "kiosk-tn", 1900, "TN");
     let out = run_with(&r, root.path(), &mut sys, &g, Phase::Full, bundle.path());
     assert_eq!(out, vec![ok_item("tn")]);
-    assert!(!dir.join(inject::INJECT_DIR).exists());
+    assert!(ext_dir.join(platform_ext::CRX_FILE).is_file());
     let l: Launch = serde_json::from_slice(&fs::read(dir.join(LAUNCH_FILE)).unwrap()).unwrap();
-    assert!(l.start.unwrap().contains("%22helper%22%3Anull"));
+    assert_eq!(
+        l.start.as_deref(),
+        Some(format!("chrome-extension://{ext}/start.html").as_str())
+    );
+
+    // neither: no extension, no start page, nothing in the exam extension's managed storage
+    let g = grp("[group.apps.kiosk.tn]\nname = \"TN\"\nurl = \"https://home.testnav.com/\"\n");
+    let r = FakeRunner::new();
+    present(&r, "kiosk-tn", 1900, "TN");
+    let out = run_with(&r, root.path(), &mut sys, &g, Phase::Full, bundle.path());
+    assert_eq!(out, vec![ok_item("tn")]);
+    assert!(!ext_dir.exists());
+    let l: Launch = serde_json::from_slice(&fs::read(dir.join(LAUNCH_FILE)).unwrap()).unwrap();
+    assert_eq!(l.start, None);
+    let pol: serde_json::Value =
+        serde_json::from_slice(&fs::read(dir.join(POLICIES_DIR).join(POLICY_FILE)).unwrap())
+            .unwrap();
+    assert!(pol.get("3rdparty").is_none(), "{pol}");
+    assert_eq!(
+        pol["ExtensionInstallForcelist"].as_array().unwrap().len(),
+        1
+    );
 
     // a missing script skips the app with the reason
     let g = grp(
@@ -1197,8 +1218,4 @@ fn platform_and_inject_build_the_start_page_and_helper() {
 fn plain_web_app_has_no_start_page() {
     let l = launch_of("x", &grp(&web_app("x", "X")).apps.kiosk["x"]).unwrap();
     assert_eq!(l.start, None);
-    assert_eq!(
-        percent_encode("{\"a\":\"b c/é\"}"),
-        "%7B%22a%22%3A%22b%20c%2F%C3%A9%22%7D"
-    );
 }

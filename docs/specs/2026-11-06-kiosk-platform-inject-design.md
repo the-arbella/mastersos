@@ -1,6 +1,8 @@
 # 锁定应用的 ChromeOS 伪装（`platform`）与注入脚本（`inject`）
 
-**状态：** 设计与实现在分支 `kiosk-testnav-mock`；VM 实测未做（VM 都被占着）。取代
+**状态：** 实现已合入 master（5db00c7d）；独立安全审查（2026-11-06）没有高危，低-6（权限）与低-4（退出）在分支
+`kiosk-narrow-perms` 修掉：起始页、伪装与注入脚本拆进每个应用自己的**平台扩展**（§3.3–§3.5），退出只认注入脚本（§6）。
+VM 实测未做（VM 都被占着）；Chromium 156 容器里的端到端实验见 §3.5、§6。取代
 `2026-11-06-testnav-chromeos-mock.md` 的 §3（按厂商写死在考试扩展里的 TestNav mock）；那份文档的检测分析（§2）仍然有效。
 
 **裁定（David，2026-11-06）：** 考试扩展不再按厂商或应用写 mock，改成两件通用的东西：
@@ -71,7 +73,7 @@
 结论：
 
 1. 伪装**不靠 `--user-agent`**：它只改两样，还把高熵版本号清空，自相矛盾的样子比不改更显眼。
-2. HTTP 层用考试扩展的 **DNR 会话规则**（`updateSessionRules`）改 `User-Agent`、`Sec-CH-UA-Platform`、
+2. HTTP 层用平台扩展（§3.4；1.4.0 时是考试扩展）的 **DNR 会话规则**（`updateSessionRules`）改 `User-Agent`、`Sec-CH-UA-Platform`、
    `Sec-CH-UA-Platform-Version`，`resourceTypes` 列全（含 `main_frame`、`sub_frame`），`requestDomains` 是这个应用放行的主机。
 3. JS 层用 MAIN 世界的内容脚本改 `navigator` 的几处 getter，数值与 DNR 规则同一个公式（§4），两层一致。
 4. 两样都要在**第一页的第一个请求之前**就位（§3）。
@@ -99,61 +101,86 @@
 | `--user-agent` | §2 |
 | 不加载第一页，等扩展装好再开 | 正是下面的做法；但「等」要有东西等，Chrome 本身不会等 |
 
-### 3.3 做法：起始页 + 助手扩展
+### 3.3 做法：平台扩展的起始页
 
-写了 `platform` 或 `inject` 的应用，Chrome 不直接开 `url`，而是开考试扩展里的**起始页**：
+写了 `platform` 或 `inject` 的应用，agent 在设备上为它生成一个**平台扩展**（§3.4），Chrome 不直接开 `url`，而是开平台扩展的
+**起始页**：
 
 ```
-chrome-extension://<考试扩展 id>/start.html#<JSON>
+chrome-extension://<平台扩展 id>/start.html
 ```
 
-JSON（agent 写进 `launch.json` 的 `start`）：`{"v":1,"url":"<url>","hosts":["<放行主机>",…],"platform":"chromeos"|null,"helper":"<助手 id>"|null}`。
+（agent 写进 `launch.json` 的 `start`。）这个应用的配置在平台扩展自己的 `config.js` 里（agent 生成：
+`{"v":1,"url":"<url>","hosts":["<放行主机>",…],"platform":"chromeos"|null,"inject":true|false,"exam":"<考试扩展 id>"}`），
+起始页的地址不再带配置。
 
-1. **扩展还没装上时**，这一页打不开（Chrome 显示错误页，标签页的地址仍是它）。考试扩展装上时（`onInstalled`，`install`）
-   找出地址是自己 `start.html` 的标签页并重新加载。实验里全新 profile 从启动到目标页加载约 0.1 秒。
-2. `start.js` 把 hash 原样发给后台 `{cmd:"launch", config}`。后台只认自己扩展的 `start.html` 发来的（`sender.url`），
-   逐项校验（`url` 是 https、`hosts` 是主机名、`helper` 是扩展 id……），然后：
-   - `platform = "chromeos"`：写 DNR 会话规则（§2 结论 2），注册 MAIN 世界的 `platform/chromeos.js`
-     （`registerContentScripts`，`persistAcrossSessions: false`、`allFrames`、`matchOriginAsFallback`、`document_start`，
-     `matches` 是 `https://<主机>/*` 与 `https://*.<主机>/*`）；
-   - 有 `helper`：注册隔离世界的通用 `relay.js`（§6），并每 100 毫秒问一次助手扩展 `{cmd:"ping"}`，最多 15 秒；
-   - 都好了才 `chrome.tabs.update(tab, {url})`。
-3. 任何一步失败（校验不过、注册失败、15 秒等不到助手），起始页显示「This app could not start. Please ask a teacher.」与
-   「Try again」「Exit」两个按钮（Exit 走与菜单同一个 `{cmd:"exit"}`）。**失败就不开考试页**：IT 要求的伪装或脚本没就位时
-   让考试页以为自己在 Linux 上，比停在这里更糟。
-4. Chrome 在会话里重开（崩溃、关窗）时又从起始页走一遍；会话规则与注册的脚本只活在这一次浏览器会话里，正好重新写。
+1. **扩展还没装上时**，这一页打不开（Chrome 显示错误页，标签页的地址仍是它）。平台扩展装上时（`onInstalled`，`install`）
+   找出地址是自己 `start.html` 的标签页并重新加载。
+2. `start.js` 发 `{cmd:"launch"}`。后台只认自己的 `start.html` 发来的（`sender.id` 与 `sender.url`），然后：
+   - `platform = "chromeos"`：写 DNR 会话规则（§2 结论 2；主机是 `config.js` 的 `hosts`）；
+   - 内容脚本是平台扩展 manifest 里静态声明的（`chromeos.js`、`relay.js`、`inject.js`），扩展在就已经生效，不用注册、也不用等；
+   - 然后 `chrome.tabs.update(tab, {url})`。
+3. 失败（规则写不进去）时，起始页显示「This app could not start. Please ask a teacher.」与「Try again」「Exit」两个按钮
+   （Exit 走 §6 同一条路）。**失败就不开考试页**：IT 要求的伪装没就位时让考试页以为自己在 Linux 上，比停在这里更糟。
+4. Chrome 在会话里重开（崩溃、关窗）时又从起始页走一遍；会话规则只活在这一次浏览器会话里，正好重新写。
 
 起始页不是 `web_accessible_resources`，网页打不开它、也伪造不了它的消息；`URLBlocklist ["*"]` 之下由策略的放行名单单独
-放行 `chrome-extension://<考试扩展 id>`（只在应用写了 `platform` 或 `inject` 时加）。实验（同样的阻止名单）：全新 profile、
-同一 profile 重开两种情况，主框架与 `fetch` 的请求头都是 ChromeOS 的，平台脚本与注入脚本都在页面第一行脚本之前跑过。
+放行 `chrome-extension://<平台扩展 id>`（考试扩展没有起始页，不放行）。
 
-没写 `platform` 也没写 `inject` 的应用，启动方式与策略**一点不变**。
+没写 `platform` 也没写 `inject` 的应用，启动方式与策略**一点不变**：没有平台扩展，考试扩展的托管配置里也没有它。
 
-### 3.4 助手扩展：IT 的脚本怎么进 Chrome
+### 3.4 平台扩展：每个应用一个，agent 在设备上生成
 
 IT 的脚本必须是某个扩展包里的文件、由 manifest 静态声明，才能保证 `document_start` 早于页面脚本（§3.2）。考试扩展的包
-是镜像里签好的，加不了文件，所以 **agent 在设备上为每个写了 `inject` 的应用生成一个助手扩展**：
+是镜像里签好的，加不了文件；它又装在**每一个**网页锁定会话里，不该带着只有少数应用用得到的权限（§3.5）。所以 **agent 在设备上
+为每个写了 `platform` 或 `inject` 的应用生成一个平台扩展**，只在这个应用的会话里强制安装：
 
-- 内容：`manifest.json`（MV3；`content_scripts` 一项：`js: ["inject.js"]`、`world: "MAIN"`、`run_at: "document_start"`、
-  `all_frames: true`、`match_origin_as_fallback: true`，`matches` 同上；`background.service_worker: "ping.js"`；没有任何
-  `permissions`、`host_permissions`、`web_accessible_resources`），`inject.js`（设置包里那个文件，一字不改），`ping.js`
-  （只回答考试扩展 id 发来的 `{cmd:"ping"}`）。
+- 文件：`background.js`、`start.html`、`start.js`、`chromeos.js`、`relay.js`、`inject-wrapper.js` 是本仓库 `kiosk-platform/` 里的，
+  编进 agent（`include_str!`），随镜像走；`config.js` 由 `kiosk::platform_config` 生成；`inject.js` 是设置包里那个文件放进
+  `inject-wrapper.js` 的标记行（脚本本身一字不改，§6）。
+- `manifest.json`（MV3）：
+  - `permissions`：`tabs`（装上时找出起始页的标签页）；写了 `platform` 再加 `declarativeNetRequest`；
+  - `host_permissions`：只有写了 `platform` 时才有，且只是应用的主机（`https://<主机>/*`、`https://*.<主机>/*`；DNR 改请求头要它）；
+  - `content_scripts`（`matches` 同上，都是 `document_start`）：`platform` → `chromeos.js`（MAIN、所有框架、`match_origin_as_fallback`）；
+    `inject` → `relay.js`（隔离世界、只顶层框架）在前，`inject.js`（MAIN、所有框架、`match_origin_as_fallback`）在后；
+  - 没有 `scripting`、没有 `<all_urls>`、没有 `web_accessible_resources`、没有 `externally_connectable`。
 - 打包：CRX3，zip 用 stored（不压缩），签名用 ECDSA P-256（`ring`；Chrome 的 CRX3 校验认 `sha256_with_ecdsa`，实验里装上了）。
-  钥匙每个应用一把，第一次用到时生成，存在 `/var/lib/mastersos-system/kiosk-inject/<id>.p8`（root 0600，`var_dir` 本身 0700）；
+  钥匙每个应用一把，第一次用到时生成，存在 `/var/lib/mastersos-system/kiosk-platform/<id>.p8`（root 0600，`var_dir` 本身 0700）；
   扩展 id 由公钥算出，所以同一个应用的 id 一直不变。钥匙只证明「这个 CRX 没被改过」，不是信任根：脚本的来源是签名的设置包，
-  能改 `PUBLIC_DIR` 的已经是 root。删掉应用时钥匙一并删掉。
-- 放在 `PUBLIC_DIR/<id>/inject/`：`helper.crx` 与 `updates.xml`（`codebase` 是 `file:///var/lib/mastersos-public/kiosk/<id>/inject/helper.crx`），
-  root 0644；策略的 `ExtensionSettings` 与 `ExtensionInstallForcelist` 加上它（与考试扩展同样从 `file://` 强制安装）。
-- 内容（脚本、主机、考试扩展 id）没变就不重写：`inject/source.sha256` 记着上一次的摘要。ECDSA 签名每次不同，不比较 CRX 本身。
-- 不写 `inject` 的应用，`inject/` 整个删掉。
+  能改 `PUBLIC_DIR` 的已经是 root。删掉应用时钥匙一并删掉；之前的 `kiosk-inject/` 钥匙目录与 `inject/` 目录整个删掉。
+- 放在 `PUBLIC_DIR/<id>/platform/`：`platform.crx` 与 `updates.xml`（`codebase` 是
+  `file:///var/lib/mastersos-public/kiosk/<id>/platform/platform.crx`），**root 0644，本机所有账号都读得到**（注入脚本也在里面，
+  所以 manifest-spec 写明脚本里不许放秘密）；策略的 `ExtensionSettings` 与 `ExtensionInstallForcelist` 加上它（与考试扩展同样从
+  `file://` 强制安装），`3rdparty.extensions.<考试扩展 id>.platform_extension` 写它的 id（§6）。应用自己的 `extensions` 不许列它。
+- 内容没变就不重写：`platform/source.sha256` 记着上一次所有文件的摘要。ECDSA 签名每次不同，不比较 CRX 本身。
+- 既没 `platform` 也没 `inject` 的应用，`platform/` 整个删掉。
 
-为什么不是「考试扩展注入」：讨论时的说法是「设备把 agent 解出来的文件交给考试扩展注入」。考试扩展做得到的只有
-`registerContentScripts`（只收包里的文件）与 `userScripts`（要人手打开开关），都放不进任意脚本；所以交接改成「agent 把文件
-包成助手扩展，考试扩展的起始页等它装好」。对 IT 与设置格式没有区别。
+### 3.5 权限：为什么拆出平台扩展（审查低-6）
+
+1.4.0 的考试扩展为了起始页带着 `scripting`、`declarativeNetRequest`、`tabs` 与 `<all_urls>`，而考试扩展装在**每一个**网页锁定
+会话里（NWEA 这种没写新设置的也一样）。要求：只有写了 `platform` 或 `inject` 的应用的会话里才有这些权限。两条路：
+
+| 做法 | 结论 |
+|---|---|
+| 考试扩展把这些写成 `optional_permissions` / `optional_host_permissions`，用策略授予 | **做不到**。Chromium 156 容器实验：强制安装的扩展在后台调 `chrome.permissions.request` 报「This function must be called during a user gesture」，`permissions.contains` 为 false，`getAll()` 只有必选的；策略 `ExtensionSettings` 只有 `blocked_permissions`、`runtime_blocked_hosts` / `runtime_allowed_hosts`（只能拦，不能授），没有授予可选权限的键。起始页上让学生点一下去授予，又等于把权限交给会话里的点击 |
+| 拆出平台扩展，只为这些应用强制安装（1.4.0 的注入助手扩展就是这样装的） | **采用**。权限跟着应用走：没写新设置的会话里根本没有这个扩展；写了的也只拿应用主机上的权限，`scripting` 与 `<all_urls>` 都不要了（静态内容脚本不需要 `scripting`） |
+
+考试扩展 1.5.0 回到 1.2.0 的权限：`nativeMessaging` 与 NWEA 的两个主机，另加 `storage`（只为读自己的托管配置，§6；没有权限提示，
+不能读别的扩展或网页的任何东西）。
+
+实验（Chromium 156，`debian:trixie`，容器里；考试扩展用 `kiosk-extension/` 打包，平台扩展照 agent 的做法拼、ECDSA 签名，策略同
+`chrome_policy`：`URLBlocklist ["*"]`、放行名单只有应用主机与 `chrome-extension://<平台扩展 id>`、`3rdparty`、native messaging 只放行退出宿主）：
+
+| 场景 | 结果 |
+|---|---|
+| 全新 profile，从起始页开 | 平台扩展装上、起始页重新加载、跳到应用；主框架请求头 `User-Agent` 是 CrOS、`Sec-CH-UA-Platform: "Chrome OS"`、`-Version: "17005.0.0"`；JS 的 UA、`userAgentData.platform`、`platformVersion` 一致，`fullVersionList` 照真的 |
+| 同一 profile 重开 | 同上 |
+| 不写新设置的 NWEA（只有考试扩展） | 请求头与 JS 都是 Linux（加 NWEA 的 UA 后缀），内置 mock 照旧 |
 
 ## 4. ChromeOS 伪装的内容
+## 4. ChromeOS 伪装的内容
 
-数值（JS 与 DNR 用同一套公式，`platform/chromeos.js` 与 `background.js` 各有一份，测试核对两份一致）：
+数值（JS 与 DNR 用同一套公式，`kiosk-platform/chromeos.js` 与 `kiosk-platform/background.js` 各有一份，测试核对两份一致）：
 
 - **UA**：真 UA 里的 `(X11; Linux <arch>)` 换成 `(X11; CrOS <arch> 14541.0.0)`，其余照旧（Chrome 的版本号就是真的）。
   `14541.0.0` 是 Chrome UA 精简（UA reduction）之后 ChromeOS 冻结的平台段，真 Chromebook 的 UA 里就是它。`<arch>` 沿用真 UA 的
@@ -193,41 +220,79 @@ IT 的脚本必须是某个扩展包里的文件、由 manifest 静态声明，�
 
 TestNav 的内置 mock（考试扩展 1.3.0 的 `mock/testnav/`）**删掉**，改成 `examples/kiosk-inject/testnav.js`。
 
-## 6. 通用的退出接口
+## 6. 通用的退出接口（审查低-4）
 
-`inject` 脚本跑在页面世界，没有扩展 API。要结束锁定会话（例如考试客户端的「关闭应用」）时：
+1.4.0 的做法是 `relay.js` 在放行主机上接受**任何**页面世界脚本发的 `{type:"MASTERSOS_MOCK_EXIT"}`，不经确认就结束会话；而界面上的
+Exit 按钮要二次确认。改成：**只有注入脚本能发起**，页面自己的脚本发不了。
+
+`inject` 脚本跑在页面世界，没有扩展 API。agent 把它放进 `kiosk-platform/inject-wrapper.js`，脚本在一个函数里运行，拿到一个参数：
 
 ```js
-window.postMessage({ type: "MASTERSOS_MOCK_EXIT" }, location.origin);
+mastersos.exit();   // 结束锁定会话（顶层框架；在框架里什么都不做）
 ```
 
-考试扩展为写了 `inject` 的应用注册隔离世界的 `relay.js`（与 NWEA 的同一条规则）：只认同一个窗口发来、同源、恰好
-`{type: "MASTERSOS_MOCK_EXIT"}` 一个键的消息，转成后台的 `{cmd:"exit"}`，与「Exit」按钮同一条路（native messaging →
-`mastersos-agent kiosk exit-host`）。页面上的任何脚本都能用它——它能做的只是结束学生自己的锁定会话、回到登录界面，与学生
-自己点 Exit 相同。没有别的接口：注入脚本拿不到求助、截图或任何设备信息。
+怎么分辨来源（不靠消息内容，靠先后与能力）：
+
+1. 包装在 `document_start`、页面任何脚本之前运行：先存下 `Reflect.apply` 与 `MessagePort.prototype.postMessage`，建一个
+   `MessageChannel`，把一端（`port2`）随 `{type:"MASTERSOS_EXIT_PORT"}` 发给本窗口，另一端留在闭包里；`mastersos` 是冻结的对象，
+   只传进 IT 的函数，不挂到 `window`。
+2. `relay.js`（平台扩展的隔离世界，同样 `document_start`，manifest 里排在 `inject.js` 前面）只接**这个文档的第一条**
+   `MASTERSOS_EXIT_PORT`：同一窗口、同源、恰好一个端口；第一条不合格也不再接（失败即关）。它对这种消息一律
+   `stopImmediatePropagation`，页面的监听器看不到。之后只把这个端口上的 `"exit"` 转给平台扩展后台的 `{cmd:"exit"}`。
+3. 页面脚本只能在包装之后才运行，它发的同样消息只会是第二条，被忽略；它拿不到包装留着的那一端，换掉
+   `MessagePort.prototype.postMessage` 也碰不到（包装用的是事先存下的）。
+4. 平台扩展后台只认自己的 `relay.js`（顶层框架、https、应用主机）或起始页发来的 `{cmd:"exit"}`，转给考试扩展
+   （`runtime.sendMessage(<考试扩展 id>, {cmd:"exit"})`）。
+5. 考试扩展的 `onMessageExternal` 只认托管配置 `platform_extension` 里那个 id（agent 的策略写的，`schema.json`）；别的扩展
+   （例如厂商的）发来一律 `{ok:false}`。全新 profile 上托管配置比扩展晚几秒到（实验约 5 秒），后台最多等 15 秒；等不到就拒绝。
+   通过之后与 Exit 按钮同一条路（native messaging → `mastersos-agent kiosk exit-host`）。
+
+IT 的脚本自己决定什么时候调 `mastersos.exit()`（例如 TestNav 样例在考试客户端的 `closeApp` 时调）：这仍可能由页面的动作触发，
+但那是学校写的脚本的选择，不再是放行网站上任何脚本都能做的事。注入脚本拿不到求助、截图或任何设备信息。
+
+**NWEA 内置 mock**（考试扩展里，弃用）：同样的握手，消息类型是 `MASTERSOS_NWEA_EXIT_PORT`（与平台扩展的互不相干）。`page.js`
+在页面脚本之前建通道、定义 `kioskChromiumExit()`，只有它在 `page.js` 留着的那一端发 `"exit"`；`relay.js` 只接第一条。NWEA 的页面
+照旧调 `window.kioskChromiumExit()` 退出，用法不变；页面脚本自己 `postMessage` 什么都不会发生。manifest 的顺序也没变
+（`page.js` 在前）：Chrome 先同步跑完两份 `document_start` 脚本，消息在之后的任务里才送到，`relay.js` 已经在听。
+
+考虑过的另一条路是「弹出与 Exit 按钮一样的确认」：要在页面上画对话框，而且 NWEA 页面自己的退出也会多一次确认，改了用法；
+既然能可靠分辨来源，就不用它。
+
+实验（同 §3.5 的容器与策略；页面在 `<head>` 第一行就挂 `message` 监听，退出宿主换成只记日志的脚本）：
+
+| 场景 | 结果 |
+|---|---|
+| 注入脚本 3 秒后调 `mastersos.exit()`，全新 profile 与重开各一次 | 各结束一次（宿主日志里的调用方是考试扩展）；页面的监听器一条通道消息都没看到；`typeof window.mastersos` 是 `undefined` |
+| 页面自己发 `MASTERSOS_EXIT_PORT`（带自己的端口，再发 `"exit"`）与旧的 `MASTERSOS_MOCK_EXIT` | 没有结束 |
+| NWEA：页面调 `kioskChromiumExit()` | 结束一次 |
+| NWEA：页面自己发 `MASTERSOS_NWEA_EXIT_PORT` 与 `MASTERSOS_MOCK_EXIT` | 没有结束 |
 
 ## 7. 安全
 
-- 注入脚本的权限 = 放行网站上页面自己的权限：它与页面同一个 JS 世界，不比页面多拿任何东西。助手扩展没有权限、没有可访问资源。
-- 考试扩展新加的权限：`scripting`、`declarativeNetRequest`、`tabs`（读自己起始页的地址）、`host_permissions: ["<all_urls>"]`
-  （注册脚本与 DNR 规则要对应的主机权限；实际只用在应用的放行主机上，会话里也只开得了这些）。它是强制安装、不弹权限提示。
-- 起始页的配置只来自 Chrome 的命令行（`launch.json`，root 写）；网页打不开起始页，也发不了 `{cmd:"launch"}`（后台查 `sender.url`
-  是自己的 `start.html`）。即使有人能改它，能做的也只是在放行名单里的主机上伪装平台。
+- 注入脚本的权限 = 放行网站上页面自己的权限：它与页面同一个 JS 世界，不比页面多拿任何东西，只多一个 `mastersos.exit()`。
+- 权限只在用到的会话里（§3.5）：考试扩展 `nativeMessaging`、`storage`、NWEA 的两个主机；平台扩展 `tabs`，写了 `platform` 再加
+  `declarativeNetRequest` 与应用主机。都是强制安装、不弹权限提示。
+- 起始页没有可变的输入（配置在扩展包里，包由 root 生成）；网页打不开起始页，也发不了 `{cmd:"launch"}`（后台查 `sender.url`
+  是自己的 `start.html`）。
+- 退出只认注入脚本（§6）；考试扩展只认托管配置里的平台扩展。
+- 注入脚本以 0644 放在设备上（在平台扩展的 CRX 里），本机所有账号都读得到：manifest-spec 写明不许放秘密。
 - 底线见开头：不伪造令牌、证明；样例对 Verified Access 一律回「不支持」。
 
 ## 8. 改了的地方
 
-- `core/mastersos-bundle`：`KioskApp.platform`、`KioskApp.inject`；`kiosk::check` 的规则、`chrome_policy` 加
-  `chrome-extension://<考试扩展>` 放行与助手扩展的强制安装（`InjectHelper`）、`check_inject_source`、`gate_hosts`；
-  lint 的「在包里」；`lint_inject_sources`（有文件内容时查大小与编码，CLI 用）；`FEATURE_KIOSK_PLATFORM`、`FEATURE_KIOSK_INJECT`、
-  `features_used`、`feature_path`；`spec.rs` 的 issue code；`docs/manifest-spec.md`（字段表、两个 code 的段落与例子）与
-  `skills/mastersos-admin/reference/settings-reference.md`（同一份）。
-- `core/mastersos-agent`：`report.rs` 的 `SUPPORTED_FEATURES`；`system/kiosk.rs` 读包里的脚本、生成助手扩展、写 `launch.json`
-  的 `start`；`system/kiosk_inject.rs`（CRX3、zip、钥匙）；`kiosk_session.rs` 有 `start` 时开起始页。
+- `core/mastersos-bundle`：`KioskApp.platform`、`KioskApp.inject`；`kiosk::check` 的规则；`chrome_policy` 加平台扩展
+  （`PlatformExtension`：放行它的起始页、强制安装、考试扩展托管配置的 `platform_extension`、不许应用自己列它）；
+  `platform_config`、`start_hosts`、`check_inject_source`；lint 的「在包里」；`lint_inject_sources`（有文件内容时查大小与编码，
+  CLI 用）；`FEATURE_KIOSK_PLATFORM`、`FEATURE_KIOSK_INJECT`、`features_used`、`feature_path`；`spec.rs` 的 issue code；
+  `docs/manifest-spec.md`（字段表、两个 code 的段落与例子）与 `skills/mastersos-admin/reference/settings-reference.md`（同一份）。
+- `core/mastersos-agent`：`report.rs` 的 `SUPPORTED_FEATURES`；`system/kiosk.rs` 生成平台扩展、写 `launch.json` 的 `start`；
+  `system/kiosk/platform_ext.rs`（文件、manifest、CRX3、zip、钥匙）；`kiosk_session.rs` 有 `start` 时开起始页。
 - `core/mastersos-mcp`：`mastersos check` 调 `lint_inject_sources`。
-- `kiosk-extension`：1.4.0；删 `mock/testnav/`；加 `start.html`、`start.js`、`platform/chromeos.js`、`relay.js`；后台处理
-  `launch`；`mock/nwea/` 标弃用。
-- `examples/kiosk-inject/`：`testnav.js`、`nwea.js`（不打进扩展；`kiosk-extension/tests/` 里有它们的测试）。
+- `kiosk-platform/`：平台扩展的 `background.js`、`start.html`、`start.js`、`chromeos.js`、`relay.js`、`inject-wrapper.js`
+  （不在 `kiosk-extension/` 里：那个目录整个打进考试扩展）。
+- `kiosk-extension`：1.5.0；权限回到 1.2.0 加 `storage`；`schema.json`；后台的 `onMessageExternal` 退出；`mock/nwea/` 的握手；
+  测试也测 `kiosk-platform/` 与样例。
+- `examples/kiosk-inject/`：`testnav.js`、`nwea.js`（不打进扩展；用 `mastersos.exit()`；`kiosk-extension/tests/` 里有它们的测试）。
 
 ## 9. 云端的后续（云端钉着本仓库的一个 commit）
 
@@ -277,6 +342,7 @@ inject = "files/nwea.js"
 ## 11. 没做 / 要实测的
 
 - VM 实测（真的 Google Chrome、真的锁定会话、TestNav 与 NWEA 各开一次）：起始页在 `--kiosk` 下的样子、全新 tmpfs profile 上
-  助手扩展与考试扩展谁先装好、`Sec-CH-UA-*` 在真 Google Chrome 上与 Chromium 是否一样。
+  平台扩展与考试扩展谁先装好（考试扩展的托管配置晚到时退出要等）、`Sec-CH-UA-*` 在真 Google Chrome 上与 Chromium 是否一样、
+  真的 `exit-host` 收到平台扩展转来的退出。
 - PWA 的伪装与注入。
 - Worker 里的 `navigator`。
