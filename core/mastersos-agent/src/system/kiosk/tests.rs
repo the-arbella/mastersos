@@ -1168,6 +1168,9 @@ fn platform_and_inject_build_the_start_page_and_helper() {
     let g = grp(
         "[group.apps.kiosk.tn]\nname = \"TN\"\nurl = \"https://home.testnav.com/\"\nplatform = \"chromeos\"\n",
     );
+    // second round: the account is there now
+    let r = FakeRunner::new();
+    present(&r, "kiosk-tn", 1900, "TN");
     let out = run_with(&r, root.path(), &mut sys, &g, Phase::Full, bundle.path());
     assert_eq!(out, vec![ok_item("tn")]);
     assert!(!dir.join(inject::INJECT_DIR).exists());
@@ -1178,6 +1181,8 @@ fn platform_and_inject_build_the_start_page_and_helper() {
     let g = grp(
         "[group.apps.kiosk.tn]\nname = \"TN\"\nurl = \"https://home.testnav.com/\"\ninject = \"files/gone.js\"\n",
     );
+    let r = FakeRunner::new();
+    present(&r, "kiosk-tn", 1900, "TN");
     let out = run_with(&r, root.path(), &mut sys, &g, Phase::Full, bundle.path());
     assert_eq!(out.len(), 1);
     assert!(!out[0].ok);
