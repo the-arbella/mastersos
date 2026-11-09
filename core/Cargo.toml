@@ -56,7 +56,7 @@ rustix = { version = "1", features = ["fs", "process", "time", "termios", "mount
 # The sign-in handoff reads and writes Chrome's cookie database (SQLite built in: no system library to match)
 rusqlite = { version = "0.32", features = ["bundled", "serialize"] }
 # MCP
-rmcp = { version = "=3.8.0", features = ["server", "transport-io"] }
+rmcp = { version = "=3.9.0", features = ["server", "transport-io"] }
 schemars = "1"
 # 命令行（agent、mastersos-sign）
 clap = { version = "4", features = ["derive"] }
