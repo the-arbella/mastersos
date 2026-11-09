@@ -967,9 +967,9 @@ checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
 
 [[package]]
 name = "flate2"
-version = "1.1.10"
+version = "1.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e634e2e0ebac1ee034020da1ca582e17ffe4e0f5e985823721e168928136dcb"
+checksum = "626d4928326b646e70f65ed36fc7cf9f206bdb68a0019ee7c6b4709da4e084c4"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
@@ -1878,9 +1878,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.34"
+version = "0.4.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
+checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
 name = "lru-slab"
@@ -2529,9 +2529,9 @@ dependencies = [
 
 [[package]]
 name = "psl"
-version = "2.1.247"
+version = "2.1.248"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bcf03dc0cd8c65e109a7848e3b4adf06236a181d937af94bff66966e3876b1aa"
+checksum = "db58c388e851a5e62d8b5373b0f41135edac0bd43009832ba362691089d7367c"
 dependencies = [
  "psl-types",
 ]
@@ -2828,9 +2828,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "3.8.0"
+version = "3.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8be15815186873ea063bf005011d16c356804973489e40c39116ae3a2878d1f"
+checksum = "d24a7e92f4bcaa36b97fa93c4fa7ca8f3e669eced949345b3462dba333c7f909"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -2844,6 +2844,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "thiserror 2.0.21",
  "tokio",
  "tokio-stream",
@@ -2854,9 +2855,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "3.8.0"
+version = "3.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b0748e054a5f5598b3213cf72099ae6b2745ba4d996c59ccf455150a7dbb839"
+checksum = "b3140f24a766f80f9ec1607bde85680959a69b83d46fa9ce87dadab7e67ab029"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -3847,7 +3848,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
