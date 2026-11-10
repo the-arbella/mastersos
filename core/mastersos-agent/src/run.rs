@@ -220,8 +220,12 @@ async fn run_resident(
     // 后台任务的第一轮就看得到本地包选中的分组（Flatpak 对账）
     agent.publish_current();
     // The quiet monitor runs only in the resident agent (`apply-local` has no kiosk session to protect).
-    let (quiet_tx, quiet_rx) = tokio::sync::watch::channel(None);
-    agent.quiet = quiet_rx.clone();
+    // The apply worker already listens on `agent.quiet` (it was spawned in `Agent::start`).
+    let quiet_tx = agent
+        .quiet_tx
+        .take()
+        .context("the quiet sender was already taken")?;
+    let quiet_rx = agent.quiet.clone();
     tokio::spawn(crate::quiet::monitor(
         Arc::new(RealRunner),
         quiet_tx,
@@ -594,6 +598,8 @@ struct Agent {
     fetch_error: tokio::sync::watch::Sender<Option<String>>,
     /// Since when the exam quiet is on (`StatusReport::quiet_since`); constantly `None` outside the resident loop.
     quiet: crate::quiet::QuietRx,
+    /// The sender of `quiet`, until `run_resident` hands it to the quiet monitor.
+    quiet_tx: Option<tokio::sync::watch::Sender<Option<DateTime<Utc>>>>,
     login: Login,
 }
 
@@ -716,6 +722,8 @@ impl Agent {
         });
         let cfg_root = cfg.root.clone();
         let heartbeat_due = later(cfg.heartbeat_every);
+        // The quiet monitor publishes here (`run_resident` takes the sender); without it the quiet never starts.
+        let (quiet_tx, quiet) = tokio::sync::watch::channel(None);
         let worker = (mode == Mode::Resident).then(|| {
             apply_worker::spawn(
                 applier.clone(),
@@ -723,6 +731,7 @@ impl Agent {
                 seed.clone(),
                 machine.ident.clone(),
                 http.clone(),
+                quiet.clone(),
             )
         });
         let mut agent = Agent {
@@ -772,7 +781,8 @@ impl Agent {
             current: tokio::sync::watch::channel(None).0,
             reapply: Arc::new(Notify::new()),
             fetch_error: tokio::sync::watch::channel(None).0,
-            quiet: tokio::sync::watch::channel(None).1,
+            quiet,
+            quiet_tx: Some(quiet_tx),
             login: Login {
                 queue: cfg_root_join(&cfg_root, login_queue::QUEUE_DIR),
                 export: cfg_root_join(&cfg_root, login_queue::EXPORT_DIR),
@@ -1091,6 +1101,7 @@ impl Agent {
                 bundle_dir: &dir,
                 phase,
                 superseded: &superseded,
+                quiet: &AtomicBool::new(false),
             })
         })
         .await

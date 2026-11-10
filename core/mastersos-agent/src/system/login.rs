@@ -1885,6 +1885,7 @@ client_id = "laptops"
             bundle_dir: dir.path(),
             phase: Phase::Boot,
             superseded: &flag,
+            quiet: &std::sync::atomic::AtomicBool::new(false),
         };
         run(
             &ctx,
@@ -3289,6 +3290,7 @@ client_id = "laptops"
             bundle_dir: dir.path(),
             phase: Phase::Full,
             superseded: &flag,
+            quiet: &std::sync::atomic::AtomicBool::new(false),
         };
         let env = Env {
             paths: &p,

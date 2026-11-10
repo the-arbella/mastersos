@@ -7,6 +7,9 @@
 //! - 结果经 `mpsc` 交回主循环，由它合并进 `state.json`（仍只有一个写者）。脚本记录与托管
 //!   路径以应用任务自己上一轮的结果为准，请求里带的只作第一轮的初值——免得主循环还没合并上
 //!   一轮的结果时发来的新请求让脚本重跑。
+//! - Exam quiet (`quiet`): a round does not start while quiet; requests that arrive meanwhile only replace the held one,
+//!   and the newest is applied once the quiet ends. Quiet starting mid-round stops the applier between steps (and
+//!   keeps the files and the apply scripts from starting); the same request then runs again after the quiet.
 //! - 有失败项时 `RETRY_MIN_SECS` 后重跑同一份请求，之后翻倍、上限 `FALLBACK_SECS`；没有失败项时
 //!   每 `REAPPLY_SECS` 也整体重应用一次（spec §4.4：下一次同步时覆盖本机改动）。
 
@@ -21,6 +24,7 @@ use tokio::task::JoinHandle;
 
 use crate::apply::{place, Applier, ApplyContext, Phase};
 use crate::config::{AgentConfig, FALLBACK_SECS};
+use crate::quiet::{wait_until_loud, QuietRx};
 use crate::scripts::run_apply;
 use crate::state::{self, State};
 
@@ -114,6 +118,7 @@ pub fn spawn(
     seed: Seed,
     ident: DeviceIdent,
     http: reqwest::Client,
+    quiet: QuietRx,
 ) -> ApplyHandle {
     let (tx, rx) = watch::channel(None);
     let (out_tx, out_rx) = mpsc::channel(4);
@@ -126,6 +131,7 @@ pub fn spawn(
         ident,
         http,
         pinned: pinned.clone(),
+        quiet,
     };
     let task = tokio::spawn(w.run(rx, current.clone(), out_tx));
     ApplyHandle {
@@ -146,6 +152,17 @@ struct Worker {
     ident: DeviceIdent,
     http: reqwest::Client,
     pinned: Arc<Mutex<Option<String>>>,
+    /// Since when the exam quiet is on; while it is, requests are taken but not applied.
+    quiet: QuietRx,
+}
+
+/// Aborts the task when dropped (the per-round quiet watcher).
+struct AbortOnDrop(JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 /// 这一轮结束（含提前返回）时撤下「正在用」的登记。
@@ -183,9 +200,22 @@ impl Worker {
                     _ = tokio::time::sleep(d) => Some(false),
                 },
             };
-            let Some(fresh) = fresh else {
+            let Some(mut fresh) = fresh else {
                 return; // 主循环退出了
             };
+            // Hold while quiet: newer requests replace the held one (taken below), nothing is applied.
+            let mut quiet = self.quiet.clone();
+            while quiet.borrow().is_some() && quiet.has_changed().is_ok() {
+                tokio::select! {
+                    _ = wait_until_loud(&mut quiet) => {}
+                    r = rx.changed() => {
+                        if r.is_err() {
+                            return; // 主循环退出了
+                        }
+                        fresh = true;
+                    }
+                }
+            }
             let flag = Arc::new(AtomicBool::new(false));
             {
                 // 与 `request` 同一把锁：取请求与换上新标志之间不会插进一个请求。
@@ -203,9 +233,29 @@ impl Worker {
             let init = maps
                 .clone()
                 .unwrap_or_else(|| (req.managed_paths.clone(), req.script_hashes.clone()));
-            let Some(o) = self.apply_once(&req, init, flag).await else {
-                // 作废：新请求已在 watch 里（或主循环在退出），下一圈立即拿到。
-                rerun = None;
+            // Set when the quiet starts during this round; the watcher ends with the round.
+            let quiet_flag = Arc::new(AtomicBool::new(false));
+            let watcher = {
+                let (mut q, f) = (self.quiet.clone(), quiet_flag.clone());
+                AbortOnDrop(tokio::spawn(async move {
+                    // A closed sender (the monitor is gone) counts as loud, as in the hold above.
+                    if q.wait_for(|v| v.is_some()).await.is_ok() && q.has_changed().is_ok() {
+                        f.store(true, Ordering::SeqCst);
+                    }
+                }))
+            };
+            let o = self
+                .apply_once(&req, init, flag.clone(), quiet_flag.clone())
+                .await;
+            drop(watcher);
+            let Some(o) = o else {
+                if !flag.load(Ordering::SeqCst) && quiet_flag.load(Ordering::SeqCst) {
+                    // Stopped by the quiet: come straight back, wait for it to end and run the same request again.
+                    rerun = Some(Duration::ZERO);
+                } else {
+                    // 作废：新请求已在 watch 里（或主循环在退出），下一圈立即拿到。
+                    rerun = None;
+                }
                 continue;
             };
             maps = Some((o.managed_paths.clone(), o.script_hashes.clone()));
@@ -222,12 +272,14 @@ impl Worker {
         }
     }
 
-    /// 跑一轮。applier 这段被作废时返回 None（后两段不跑）。
+    /// 跑一轮。applier 这段被作废时返回 None（后两段不跑）。Also None when the quiet started (`quiet`) before the files
+    /// or before the apply scripts.
     async fn apply_once(
         &self,
         req: &ApplyRequest,
         (managed, hashes): Maps,
         flag: Arc<AtomicBool>,
+        quiet: Arc<AtomicBool>,
     ) -> Option<ApplyOutcome> {
         let applier = self.applier.clone();
         let phase = req.phase;
@@ -244,7 +296,12 @@ impl Worker {
         let _pin = Pin(&self.pinned);
         let bundle_dir = state::version_dir(&self.cfg.state_dir, &bundle);
         let (ident, seed) = (self.ident.clone(), self.seed.clone());
-        let (b, dir, f) = (bundle.clone(), bundle_dir.clone(), flag.clone());
+        let (b, dir, f, q) = (
+            bundle.clone(),
+            bundle_dir.clone(),
+            flag.clone(),
+            quiet.clone(),
+        );
         let mut results = tokio::task::spawn_blocking(move || {
             let m = &b.manifest;
             let sel = select(m, &ident, seed.group.as_deref());
@@ -257,11 +314,12 @@ impl Worker {
                 bundle_dir: &dir,
                 phase,
                 superseded: &f,
+                quiet: &q,
             })
         })
         .await
         .unwrap_or_else(|e| vec![failed("applier", format!("crashed: {e}"))]);
-        if flag.load(Ordering::SeqCst) {
+        if flag.load(Ordering::SeqCst) || quiet.load(Ordering::SeqCst) {
             return None;
         }
         if phase == Phase::Boot {
@@ -279,6 +337,9 @@ impl Worker {
         results.extend(place(&config, &bundle_dir, &self.cfg.root, &mut st, &self.http).await);
         // 脚本那段异常退出时（panic = "abort" 下实际不会发生）沿用放文件之后的记录。
         let (managed, hashes) = (st.managed_paths.clone(), st.script_hashes.clone());
+        if quiet.load(Ordering::SeqCst) {
+            return None;
+        }
         let work = match state::run_dir(&self.cfg.state_dir) {
             Ok(w) => w,
             Err(e) => {
@@ -409,6 +470,14 @@ mod tests {
     }
 
     fn worker(steps: Vec<Step>) -> (ApplyHandle, Arc<FakeRunner>, tempfile::TempDir) {
+        worker_quiet(steps, watch::channel(None).1)
+    }
+
+    /// Same as [`worker`], with the given quiet receiver.
+    fn worker_quiet(
+        steps: Vec<Step>,
+        quiet: QuietRx,
+    ) -> (ApplyHandle, Arc<FakeRunner>, tempfile::TempDir) {
         let d = tempfile::tempdir().unwrap();
         let runner = Arc::new(FakeRunner::new());
         let paths = SysPaths {
@@ -427,7 +496,7 @@ mod tests {
             serial: None,
             device_id: "dev".into(),
         };
-        let h = spawn(applier, cfg, seed(), ident, reqwest::Client::new());
+        let h = spawn(applier, cfg, seed(), ident, reqwest::Client::new(), quiet);
         (h, runner, d)
     }
 
@@ -632,5 +701,123 @@ mod tests {
         for h in jobs.handles {
             h.await.unwrap();
         }
+    }
+
+    fn quiet_now() -> Option<chrono::DateTime<chrono::Utc>> {
+        Some(chrono::Utc::now())
+    }
+
+    /// A request taken while quiet is held (nothing runs), then applied once the quiet ends.
+    #[tokio::test(start_paused = true)]
+    async fn held_while_quiet_then_applied() {
+        let (qtx, qrx) = watch::channel(quiet_now());
+        let (mut h, r, _d) = worker_quiet(vec![step("second", second)], qrx);
+        h.request(req());
+        assert!(
+            timeout(Duration::from_secs(10), h.next_outcome())
+                .await
+                .is_err(),
+            "applied while quiet"
+        );
+        assert!(r.calls().is_empty(), "{:?}", r.calls());
+        assert!(h.pending());
+        qtx.send_replace(None);
+        let o = h.next_outcome().await.unwrap();
+        assert!(!o.had_failures, "{:?}", o.results);
+        assert_eq!(r.calls(), vec!["second"]);
+        assert!(!h.pending());
+    }
+
+    /// Two requests while quiet: only the newest is applied after the quiet ends.
+    #[tokio::test(start_paused = true)]
+    async fn newest_request_wins_after_quiet() {
+        let (qtx, qrx) = watch::channel(quiet_now());
+        let (mut h, r, _d) = worker_quiet(vec![step("second", second)], qrx);
+        for v in ["5", "6"] {
+            let mut x = req();
+            x.script_hashes.insert("version".into(), v.into());
+            h.request(x);
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        assert!(r.calls().is_empty(), "{:?}", r.calls());
+        qtx.send_replace(None);
+        let o = h.next_outcome().await.unwrap();
+        assert_eq!(
+            o.script_hashes.get("version").map(String::as_str),
+            Some("6")
+        );
+        assert!(!h.pending());
+        // No outcome for version 5 (the next one would be the periodic reapply).
+        assert!(timeout(Duration::from_secs(60), h.next_outcome())
+            .await
+            .is_err());
+        assert_eq!(r.calls(), vec!["second"]);
+    }
+
+    /// The quiet sender for [`quiet_on_once`] (only `quiet_mid_round_stops_and_reruns` uses it).
+    static MID_QUIET: Mutex<Option<watch::Sender<Option<chrono::DateTime<chrono::Utc>>>>> =
+        Mutex::new(None);
+    static MID_QUIET_DONE: AtomicBool = AtomicBool::new(false);
+
+    fn one(_: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
+        call(env, "one");
+        vec![]
+    }
+
+    /// Turns the quiet on the first time it runs, and gives the worker time to notice.
+    fn quiet_on_once(_: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
+        call(env, "two");
+        if !MID_QUIET_DONE.swap(true, Ordering::SeqCst) {
+            if let Some(tx) = MID_QUIET.lock().unwrap().as_ref() {
+                tx.send_replace(quiet_now());
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        vec![]
+    }
+
+    fn three(_: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
+        call(env, "three");
+        vec![]
+    }
+
+    /// Quiet starting in the middle of a round stops it before the next step; after the quiet the same request is
+    /// applied again from the first step.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn quiet_mid_round_stops_and_reruns() {
+        let (qtx, qrx) = watch::channel(None);
+        *MID_QUIET.lock().unwrap() = Some(qtx.clone());
+        let (mut h, r, _d) = worker_quiet(
+            vec![
+                step("one", one),
+                step("two", quiet_on_once),
+                step("three", three),
+            ],
+            qrx,
+        );
+        h.request(req());
+        let t0 = Instant::now();
+        while qtx.borrow().is_none() {
+            assert!(
+                t0.elapsed() < Duration::from_secs(5),
+                "step two did not run"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(
+            timeout(Duration::from_secs(2), h.next_outcome())
+                .await
+                .is_err(),
+            "a round finished while quiet"
+        );
+        assert_eq!(r.calls(), vec!["one", "two"], "step three ran while quiet");
+        qtx.send_replace(None);
+        let o = timeout(Duration::from_secs(5), h.next_outcome())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!o.had_failures, "{:?}", o.results);
+        assert_eq!(r.calls(), vec!["one", "two", "one", "two", "three"]);
+        *MID_QUIET.lock().unwrap() = None;
     }
 }

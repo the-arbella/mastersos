@@ -100,6 +100,7 @@ fn run_step_with(
         bundle_dir: bundle,
         phase,
         superseded: &flag,
+        quiet: &std::sync::atomic::AtomicBool::new(false),
     };
     let p = paths(root);
     let mut env = Env {

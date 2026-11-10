@@ -2329,6 +2329,7 @@ mod tests {
             bundle_dir: bundle.path(),
             phase: Phase::Full,
             superseded: &flag,
+            quiet: &std::sync::atomic::AtomicBool::new(false),
         };
         (step().run)(&ctx, &mut env)
     }

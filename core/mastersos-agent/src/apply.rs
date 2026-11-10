@@ -37,6 +37,9 @@ pub struct ApplyContext<'a> {
     pub phase: Phase,
     /// 应用任务收到了更新的请求：applier 在步骤之间看它，置位了就停下（应用任务会从第一步重来）。
     pub superseded: &'a AtomicBool,
+    /// The exam quiet started during this round: the applier stops between steps as for `superseded`, and the worker
+    /// applies the same (or a newer) request again once the quiet ends.
+    pub quiet: &'a AtomicBool,
 }
 
 pub trait Applier: Send + Sync {

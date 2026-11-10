@@ -140,6 +140,7 @@ fn run_with(
         bundle_dir: bundle,
         phase,
         superseded: &flag,
+        quiet: &std::sync::atomic::AtomicBool::new(false),
     };
     (step().run)(&ctx, &mut env)
 }
