@@ -376,6 +376,15 @@ pub fn reconcile(
                     ),
                 });
             }
+            // Stopped by entering the quiet (it stops the transient unit): postponed, not a failure; pending stays
+            Err(_) if quiet() => {
+                postponed = true;
+                out.push(ItemResult {
+                    item: it,
+                    ok: true,
+                    detail: Some("postponed: a locked app session is running".into()),
+                });
+            }
             // pending 里留着：其实装上了（超时在最后一步）下一轮收下；没装上下一轮再装
             Err(e) => out.push(failed(&it, format!("install failed: {e:#}"))),
         }
@@ -451,11 +460,13 @@ pub fn update_due(
 }
 
 /// 到期就 `flatpak update` 一次，成功后记下时刻。对账正在跑（拿着锁）时这一轮跳过、不等它。没到期、跳过时返回 None
-/// （回报里保留上一次的结果）。
+/// （回报里保留上一次的结果）。`quiet()` true right before the update: skipped too (None), the next hourly check
+/// runs it once the quiet is over.
 pub fn update(
     runner: &dyn Runner,
     paths: &SysPaths,
     now: chrono::DateTime<chrono::Utc>,
+    quiet: &dyn Fn() -> bool,
 ) -> Option<ItemResult> {
     let _g = match FLATPAK_LOCK.try_lock() {
         Ok(g) => g,
@@ -467,7 +478,7 @@ pub fn update(
         // 坏了的状态由对账处理（改名、当作空），这里不写它
         Err(e) => return Some(failed(UPDATE_ITEM, format!("{e:#}"))),
     };
-    if !update_due(st.last_update, now) {
+    if !update_due(st.last_update, now) || quiet() {
         return None;
     }
     let cmd = flatpak_cmd(
@@ -599,10 +610,14 @@ impl Job for FlatpakUpdateJob {
         Box::pin(async move {
             if self.first.swap(false, Ordering::SeqCst) {
                 tokio::time::sleep(self.jitter).await;
+                // The round started loud; the quiet may have begun during the jitter.
+                crate::quiet::wait_until_loud(&mut cx.quiet.clone()).await;
             }
-            let (runner, paths) = (self.runner.clone(), cx.paths.clone());
+            let (runner, paths, quiet_rx) =
+                (self.runner.clone(), cx.paths.clone(), cx.quiet.clone());
             match tokio::task::spawn_blocking(move || {
-                update(runner.as_ref(), &paths, chrono::Utc::now())
+                let quiet = || quiet_rx.borrow().is_some();
+                update(runner.as_ref(), &paths, chrono::Utc::now(), &quiet)
             })
             .await
             {
