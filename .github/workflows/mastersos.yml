@@ -173,10 +173,10 @@ jobs:
       - run: bash image/tests/browser-wait-test.sh
       # 考试扩展的 crx3 打包（计划 9 Task 7）：一次性钥匙现生成，openssl 验签，id、updates.xml、宿主清单、kiosk-ext.json、不漏私钥
       - run: bash image/tests/kiosk-ext-pack-test.sh
-      # exam quiet: the ExecCondition= of the download services refuses to start while mastersos-quiet.target is active (exam-quiet Task 7)
-      - run: bash image/tests/quiet-units-test.sh
         env:
           MASTERSOS_KIOSK_EXT_TEST_REQUIRE: "1"
+      # exam quiet: the ExecCondition= of the download services refuses to start while mastersos-quiet.target is active (exam-quiet Task 7)
+      - run: bash image/tests/quiet-units-test.sh
       # PAM 钩子的插行位置（MASTERSOS_PAM_HOOKS=1 时由 postinst 调 pam-hooks.sh），样本是 VM 165 上的原文件
       - run: bash image/tests/pam-hooks-test.sh
       # 锁定应用的 namespace.init（计划 9 Task 8）：kiosk 账号的 Chrome 策略实例怎么填、哪些情形拒绝，换掉路径与属主后跑真的脚本

@@ -30,8 +30,8 @@ STUB
 chmod +x "$tmp/bin/systemctl"
 
 for u in mastersos-update mastersos-chrome mastersos-golden-fetch; do
+	check "$u.service has one ExecCondition" 1 "$(grep -c '^ExecCondition=' "$units/$u.service" || true)"
 	line=$(grep -E '^ExecCondition=' "$units/$u.service")
-	check "$u.service has one ExecCondition" 1 "$(printf '%s\n' "$line" | wc -l)"
 	cmd=${line#ExecCondition=}
 	for state in active inactive; do
 		rc=0
