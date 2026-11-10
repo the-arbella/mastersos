@@ -181,6 +181,9 @@ packages = ["x11-utils"]      # 可选：包没声明、但程序实际要用的
 **`kiosk = false`**
 - 由 `desktop` 步骤把 `mastersos-app-<id>.desktop` 加进 Dock，与受管的 Flatpak 应用一样（`learning` 与 `full` 都加）。
 - `learning` 模式放行它（与配置里的 Flatpak 一样）。依赖带来的程序没有 `.desktop`，只能经终端运行，而 `learning` 的终端已被 exec-block 堵住。
+- 已知限制：`learning` 模式的设备上，计划中的家目录整理（design/learning-session-integrity 的 home-tidy）每次登录都会把
+  应用存在保留名单之外的设置（例如 `~/.config/<app>`）恢复原样，学生在应用里改的设置下次登录就没了。`full` 模式不受影响；
+  `kiosk = true` 的应用本来就是 tmpfs 家目录，不受影响。以后需要时可以按应用往保留名单里加条目。
 
 **`kiosk = true`**
 - 复用现有锁定应用的全部机制：账号 `kiosk-<id>`、AccountsService 记录、`mastersos-kiosk` 会话（gnome-kiosk + gnome-session）、
