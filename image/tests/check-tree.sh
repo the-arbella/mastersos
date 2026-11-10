@@ -3535,4 +3535,18 @@ grep -qE '^ReadWritePaths=.*(^|[ =])/run/mastersos( |$)' "$qd/mastersos-chrome.s
 }
 [ "$r" = 0 ] && ok 78 "deb-apps: SYSEXT_LEVEL, ubuntu-source from the build snapshot, ubuntu-keyring, work dir, unit and timer; Chrome and deb-apps units may write /run/mastersos"
 
+# 79. deb-apps dependency resolution (deb-apps Task 4, spec §4.2): tests/deb-apps-apt-test.sh runs the agent's private apt
+#     commands against real apt in CI, as root and required (a missing tool fails instead of skipping); the agent's
+#     tests_apt.rs keeps its options and apt.conf in step with core/mastersos-agent/src/deb_apps/apt.rs
+r=0
+grep -qxF '      - run: sudo MASTERSOS_DEB_APT_TEST_REQUIRE=1 bash image/tests/deb-apps-apt-test.sh' .github/workflows/mastersos.yml || {
+	bad 79 ".github/workflows/mastersos.yml image-lint should run sudo MASTERSOS_DEB_APT_TEST_REQUIRE=1 bash image/tests/deb-apps-apt-test.sh"
+	r=1
+}
+grep -qF 'include_str!("../../../../image/tests/deb-apps-apt-test.sh")' core/mastersos-agent/src/deb_apps/tests_apt.rs || {
+	bad 79 "core/mastersos-agent/src/deb_apps/tests_apt.rs should compare its apt options with tests/deb-apps-apt-test.sh"
+	r=1
+}
+[ "$r" = 0 ] && ok 79 "deb-apps: the private apt run is tested against real apt in CI and kept in step with the agent"
+
 exit $fail
