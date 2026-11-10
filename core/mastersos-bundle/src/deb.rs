@@ -281,8 +281,18 @@ mod tests {
         ] {
             assert!(check_mirror(bad).is_err(), "{bad:?}");
         }
-        assert!(check_mirror("ftp://x")
-            .unwrap_err()
-            .contains("ubuntu_mirror"));
+        let e = check_mirror("ftp://x").unwrap_err();
+        assert!(e.contains("ubuntu_mirror"), "{e}");
+        assert!(e.contains("archive.ubuntu.com"), "{e}");
+        assert!(!e.contains("cache.school.ac.th"), "{e}");
+    }
+
+    #[test]
+    fn mirror_length_cap_is_2048() {
+        let prefix = "http://m.example/";
+        let of_len = |n: usize| format!("{prefix}{}", "a".repeat(n - prefix.len()));
+        check_mirror(&of_len(2048)).unwrap();
+        let e = check_mirror(&of_len(2049)).unwrap_err();
+        assert!(e.contains("too long") && e.contains("ubuntu_mirror"), "{e}");
     }
 }

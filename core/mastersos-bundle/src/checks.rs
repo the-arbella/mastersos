@@ -1230,6 +1230,11 @@ mod tests {
         ] {
             assert!(update_mirror(ok).is_ok(), "{ok}");
         }
+        // The 254-byte cap of update_mirror is unchanged (ubuntu_mirror has its own, 2048).
+        let of_len = |n: usize| format!("https://c.example/{}", "a".repeat(n - 18));
+        assert!(update_mirror(&of_len(254)).is_ok());
+        let e = update_mirror(&of_len(255)).unwrap_err();
+        assert!(e.contains("update_mirror") && e.contains("too long"), "{e}");
         for bad in [
             "",
             "file:///srv/os",
