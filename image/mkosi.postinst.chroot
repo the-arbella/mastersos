@@ -204,19 +204,36 @@ done
 
 # gnome-shell extensions (phase B, Task 13): the quick-settings "managed by" line must load under the locked learning profile, where
 # disable-user-extensions=true switches the ordinary user-extension path off. Extensions listed in the session mode's JSON are not
-# affected, so add the uuid to ubuntu.json's enabledExtensions here (spike: image/lab/results/2026-10-3x-defaults-install/).
-# ubuntu.json belongs to the gnome-shell/ubuntu-session packages: change it by jq, and fail the build if the result is not as expected.
+# affected. The desktop is our session mastersos (design 2026-11-10, upstream GNOME): mastersos.desktop runs gnome-shell in the mode
+# mastersos, whose JSON (ours, in mkosi.extra) lists the tray and the managed extensions. Check it as the shell will read it.
 mu=mastersos-managed@mastersos.org
 lu=mastersos-login@mastersos.org
-um=/usr/share/gnome-shell/modes/ubuntu.json
-jq -e '.enabledExtensions | type == "array"' "$um" >/dev/null
-jq --arg u "$mu" '.enabledExtensions |= (. - [$u] + [$u])' "$um" >"$um.new"
-cat "$um.new" >"$um"
-rm -f "$um.new"
-[ "$(jq -r --arg u "$mu" '[.enabledExtensions[] | select(. == $u)] | length' "$um")" = 1 ] || {
-	echo "postinst: $um should list $mu in enabledExtensions exactly once" >&2
+um=/usr/share/gnome-shell/modes/mastersos.json
+jq -e --arg u "$mu" '.parentMode == "user" and .enabledExtensions == ["ubuntu-appindicators@ubuntu.com", $u]' "$um" >/dev/null || {
+	echo "postinst: $um should have parentMode user and enable exactly ubuntu-appindicators@ubuntu.com and $mu" >&2
 	exit 1
 }
+# GDM offers only our two sessions: the regular desktop and the locked-app session. Every other session file (gnome, gnome-xorg,
+# anything a package brought) goes, so neither the gear nor GDM's fallback can start a session without our mode and drop-ins.
+for sd in /usr/share/wayland-sessions /usr/share/xsessions; do
+	[ -d "$sd" ] || continue
+	for f in "$sd"/*.desktop; do
+		[ -e "$f" ] || continue
+		case "${f##*/}" in
+		mastersos.desktop | mastersos-kiosk.desktop) ;;
+		*) rm -f -- "$f" || exit 1 ;;
+		esac
+	done
+done
+got=$(cd /usr/share/wayland-sessions && LC_ALL=C && echo *.desktop)
+[ "$got" = "mastersos-kiosk.desktop mastersos.desktop" ] || {
+	echo "postinst: /usr/share/wayland-sessions should hold mastersos-kiosk.desktop mastersos.desktop, has: $got" >&2
+	exit 1
+}
+if [ -d /usr/share/xsessions ] && [ -n "$(ls -A /usr/share/xsessions)" ]; then
+	echo "postinst: /usr/share/xsessions should be empty, has: $(ls -A /usr/share/xsessions)" >&2
+	exit 1
+fi
 # the login screen: custom greeter mode, both extensions in /usr, shell-version covers the installed GNOME, the drop-in forces the mode
 gsmajor=$(gnome-shell --version | sed -nE 's/^GNOME Shell ([0-9]+).*/\1/p')
 [ -n "$gsmajor" ] || {
@@ -233,7 +250,7 @@ for u in "$mu" "$lu"; do
 done
 jq -e --arg u "$lu" '.parentMode == "gdm" and .allowExtensions == true and (.enabledExtensions | index($u))' /usr/share/gnome-shell/modes/mastersos-gdm.json >/dev/null
 grep -qxF 'ExecStart=/usr/bin/gnome-shell --mode=mastersos-gdm' '/usr/lib/systemd/user/org.gnome.Shell@gdm.service.d/50-mastersos-mode.conf'
-echo "postinst: gnome-shell $gsmajor: $mu in ubuntu.json, $lu in mode mastersos-gdm"
+echo "postinst: gnome-shell $gsmajor: session mastersos with $mu in mastersos.json, $lu in mode mastersos-gdm"
 
 # 锁定应用（计划 9 Task 8）：kiosk 会话（DCONF_PROFILE=mastersos-kiosk）的 dconf 数据库在构建时编好，放在只读的 /usr 里
 # （profile 是 file-db：不经 /etc、不靠机器上的 dconf update，agent 编 /etc/dconf/db 时也碰不到它）。核对每个锁住的键在这个

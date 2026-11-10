@@ -2046,7 +2046,7 @@ if grep -qxF '[Install]' "$bwu/mastersos-browser-wait.service" 2>/dev/null; then
 	bad 46 "$bwu/mastersos-browser-wait.service must have no [Install] (drop-ins pull it in)"
 	r=1
 fi
-for s in ubuntu gnome; do
+for s in gnome; do
 	d=$bwu/gnome-session@$s.target.d/mastersos-browser-wait.conf
 	if [ -L "$d" ] || [ ! -f "$d" ] || ! grep -qxF 'Wants=mastersos-browser-wait.service' "$d"; then
 		bad 46 "$d should be a plain file with Wants=mastersos-browser-wait.service"
@@ -2062,12 +2062,18 @@ while IFS= read -r x; do
 	bad 46 "$x: mastersos-browser-wait.service is enabled by drop-ins, not links"
 	r=1
 done < <(find "$bwu" -type l -name 'mastersos-browser-wait*' | LC_ALL=C sort)
-[ "$r" = 0 ] && ok 46 "browser-wait is executable, linted and tested in CI; only the ubuntu and gnome session targets pull it in (plain drop-ins), not the kiosk session"
+if [ -e "$bwu/gnome-session@ubuntu.target.d" ]; then
+	bad 46 "$bwu/gnome-session@ubuntu.target.d exists: the desktop session is mastersos (gnome-session --session=gnome), there is no ubuntu session"
+	r=1
+fi
+[ "$r" = 0 ] && ok 46 "browser-wait is executable, linted and tested in CI; only the gnome session target pulls it in (plain drop-ins), not the kiosk session"
 
 # 47. gnome-shell extensions (phase B Task 13): the login-screen and quick-settings extensions are in /usr with a metadata uuid equal to the
 #     directory name and shell-version covering GNOME 50 (the version the image is built with: spike 2026-10-30, gnome-shell 50.1); the greeter
-#     runs in the custom mode mastersos-gdm (mode JSON + user-unit drop-in forcing --mode); postinst adds the managed uuid to ubuntu.json and
-#     checks it (the locked learning profile only loads extensions listed in the session-mode JSON).
+#     runs in the custom mode mastersos-gdm (mode JSON + user-unit drop-in forcing --mode). The desktop is the session mastersos (upstream GNOME,
+#     design 2026-11-10): mastersos.desktop runs gnome-session --session=gnome in the shell mode mastersos, whose JSON lists the tray and managed
+#     extensions (the locked learning profile only loads extensions listed in the session-mode JSON); postinst checks it and leaves no other
+#     session files for GDM.
 r=0
 gs=$ex/usr/share/gnome-shell
 for u in mastersos-login@mastersos.org mastersos-managed@mastersos.org; do
@@ -2096,12 +2102,23 @@ grep -qxF 'ExecStart=/usr/bin/gnome-shell --mode=mastersos-gdm' "$dropin" 2>/dev
 	bad 47 "$dropin should reset ExecStart and run gnome-shell --mode=mastersos-gdm"
 	r=1
 }
-# shellcheck disable=SC2016 # literal $mu: the source text being looked for
-if ! grep -qF '.enabledExtensions |= (. - [$u] + [$u])' "$rel/mkosi.postinst.chroot" || ! grep -qF 'mu=mastersos-managed@mastersos.org' "$rel/mkosi.postinst.chroot"; then
-	bad 47 "mkosi.postinst.chroot should add mastersos-managed@mastersos.org to ubuntu.json's enabledExtensions and check it"
+jq -e '.parentMode == "user" and .enabledExtensions == ["ubuntu-appindicators@ubuntu.com", "mastersos-managed@mastersos.org"]' "$gs/modes/mastersos.json" >/dev/null 2>&1 || {
+	bad 47 "$gs/modes/mastersos.json should have parentMode user and enable exactly ubuntu-appindicators@ubuntu.com and mastersos-managed@mastersos.org"
+	r=1
+}
+ms=$ex/usr/share/wayland-sessions/mastersos.desktop
+for l in 'Exec=env GNOME_SHELL_SESSION_MODE=mastersos gnome-session --session=gnome' 'DesktopNames=MastersOS;GNOME;' 'TryExec=gnome-session'; do
+	grep -qxF -- "$l" "$ms" 2>/dev/null || {
+		bad 47 "$ms should have the line: $l"
+		r=1
+	}
+done
+if grep -qF 'ubuntu.json' "$rel/mkosi.postinst.chroot" || ! grep -qF 'modes/mastersos.json' "$rel/mkosi.postinst.chroot" ||
+	! grep -qF 'mastersos-kiosk.desktop mastersos.desktop' "$rel/mkosi.postinst.chroot"; then
+	bad 47 "mkosi.postinst.chroot should check modes/mastersos.json (not touch ubuntu.json) and leave only mastersos-kiosk.desktop and mastersos.desktop as sessions"
 	r=1
 fi
-[ "$r" = 0 ] && ok 47 "gnome-shell extensions: both in /usr (uuid = directory, shell-version 50), greeter mode mastersos-gdm with drop-in, postinst adds the managed uuid to ubuntu.json"
+[ "$r" = 0 ] && ok 47 "gnome-shell extensions: both in /usr (uuid = directory, shell-version 50), greeter mode mastersos-gdm with drop-in, desktop session mastersos with mode mastersos.json, no other sessions"
 
 # 48. AppArmor waits for /etc (device trial 2026-10-31): /etc/apparmor.d is a tmpfiles symlink into the factory tree, so apparmor.service
 #     must be ordered after systemd-tmpfiles-setup.service — otherwise the first boot loads no profile and the userns restriction kills
@@ -2506,10 +2523,10 @@ for e in mastersos-login@mastersos.org mastersos-managed@mastersos.org; do
 		r=1
 	fi
 done
-# The desktop runs the ubuntu session mode (parentMode user), so currentMode alone never matches; the overview keeps GNOME's bar
+# The desktop runs the mastersos session mode (parentMode user), so currentMode alone never matches; the overview keeps GNOME's bar
 mext=$gse/mastersos-managed@mastersos.org
 grep -qF "Main.sessionMode.parentMode === 'user'" "$mext/extension.js" || {
-	bad 53 "mastersos-managed: the translucent top bar only checks currentMode === 'user' (the desktop's mode is ubuntu)"
+	bad 53 "mastersos-managed: the translucent top bar only checks currentMode === 'user' (the desktop's mode is mastersos)"
 	r=1
 }
 grep -qF '#panel.mastersos-panel:overview' "$mext/stylesheet.css" || {
@@ -3012,14 +3029,14 @@ if grep -qxF '[Install]' "$su/mastersos-signin-import.service" 2>/dev/null; then
 	bad 67 "$su/mastersos-signin-import.service must have no [Install] (drop-ins pull it in)"
 	r=1
 fi
-for s in ubuntu gnome; do
+for s in gnome; do
 	d=$su/gnome-session@$s.target.d/mastersos-signin-import.conf
 	if [ -L "$d" ] || [ ! -f "$d" ] || ! grep -qxF 'Wants=mastersos-signin-import.service' "$d"; then
 		bad 67 "$d should be a plain file with Wants=mastersos-signin-import.service"
 		r=1
 	fi
 done
-if grep -rlF 'mastersos-signin-import.service' "$su" | grep -vE '/(mastersos-signin-import\.service|gnome-session@(ubuntu|gnome)\.target\.d/mastersos-signin-import\.conf)$' | grep -q . ||
+if grep -rlF 'mastersos-signin-import.service' "$su" | grep -vE '/(mastersos-signin-import\.service|gnome-session@gnome\.target\.d/mastersos-signin-import\.conf)$' | grep -q . ||
 	find "$ex" -name 'mastersos-signin-import.service' -type l | grep -q .; then
 	bad 67 "mastersos-signin-import.service is pulled in by something other than the two desktop session drop-ins"
 	r=1
@@ -3220,14 +3237,14 @@ if grep -qxF '[Install]' "$ru" 2>/dev/null; then
 	bad 72 "$ru must have no [Install] (drop-ins pull it in)"
 	r=1
 fi
-for s in ubuntu gnome; do
+for s in gnome; do
 	d=$su/gnome-session@$s.target.d/mastersos-update-reminder.conf
 	if [ -L "$d" ] || [ ! -f "$d" ] || ! grep -qxF 'Wants=mastersos-update-reminder.service' "$d"; then
 		bad 72 "$d should be a plain file with Wants=mastersos-update-reminder.service"
 		r=1
 	fi
 done
-if grep -rlF 'mastersos-update-reminder.service' "$su" | grep -vE '/(mastersos-update-reminder\.service|gnome-session@(ubuntu|gnome)\.target\.d/mastersos-update-reminder\.conf)$' | grep -q . ||
+if grep -rlF 'mastersos-update-reminder.service' "$su" | grep -vE '/(mastersos-update-reminder\.service|gnome-session@gnome\.target\.d/mastersos-update-reminder\.conf)$' | grep -q . ||
 	find "$ex" -name 'mastersos-update-reminder.service' -type l | grep -q .; then
 	bad 72 "mastersos-update-reminder.service is pulled in by something other than the two desktop session drop-ins"
 	r=1
