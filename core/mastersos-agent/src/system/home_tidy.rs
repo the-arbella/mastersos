@@ -23,8 +23,13 @@ use std::os::unix::ffi::OsStrExt;
 use rustix::fs::{AtFlags, FileType, Mode, Stat};
 use rustix::io::Errno;
 
+use anyhow::Result;
+
 use crate::homes::trash::to_trash_entry_os;
+use crate::runner::{Cmd, Runner};
 use crate::safefs::bounded::dir_flags;
+use crate::system::ephemeral::PAM_CMD_TIMEOUT;
+use crate::system::lock::{self, LOGIN_CMD_TIMEOUT};
 
 /// Top-level dot entries that are kept as they are (none: `.pki` is a container, see [`CONTAINERS`]).
 pub const KEEP_TOP: &[&str] = &[];
@@ -520,6 +525,82 @@ fn tidy_top(home: &OwnedFd, trash: &OwnedFd, limits: Limits, out: &mut Tidy) {
             Err(_) => out.skipped.push(Io),
         }
     }
+}
+
+/// What [`prepare_user_manager`] found. Only `Proceed` lets the home be tidied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Prep {
+    /// No live session and no user manager left: tidy now.
+    Proceed,
+    /// The same person is logged in elsewhere (or a session is opening): moving files under it would break it.
+    SkipActive,
+    /// A leftover could not be ended, or the state could not be read.
+    Failed,
+}
+
+fn pam_cmd(program: &str, args: &[&str]) -> Cmd {
+    Cmd::new(program, args).timeout(PAM_CMD_TIMEOUT)
+}
+
+/// Before the home is tidied at login: end what a previous session left behind (a `closing` session with stray
+/// processes, or a lingering `user@<uid>.service`). Every command is limited to [`PAM_CMD_TIMEOUT`]. Live sessions
+/// (`active`, `online`, `opening`) are left alone. Never reports names or uids.
+pub fn prepare_user_manager(runner: &dyn Runner, uid: u32) -> Prep {
+    let id = uid.to_string();
+    let out = match runner.run(&pam_cmd(
+        "loginctl",
+        &["show-user", &id, "-p", "State", "--value"],
+    )) {
+        Ok(o) => o,
+        Err(_) => return Prep::Failed,
+    };
+    if out.code != 0 {
+        let gone = out.stderr.contains("not logged in") || out.stderr.contains("No such");
+        return if gone { Prep::Proceed } else { Prep::Failed };
+    }
+    match out.stdout.trim() {
+        "active" | "online" | "opening" => Prep::SkipActive,
+        "offline" => Prep::Proceed,
+        "closing" | "lingering" => {
+            let unit = format!("user@{id}.service");
+            let steps: [(&str, Vec<&str>); 3] = [
+                ("loginctl", vec!["disable-linger", &id]),
+                ("loginctl", vec!["terminate-user", &id]),
+                ("systemctl", vec!["stop", &unit]),
+            ];
+            for (program, args) in &steps {
+                match runner.run(&pam_cmd(program, args)) {
+                    Ok(o) if o.code == 0 => {}
+                    _ => return Prep::Failed,
+                }
+            }
+            Prep::Proceed
+        }
+        _ => Prep::Failed,
+    }
+}
+
+/// Learning mode: switch off linger for every person account that is not an administrator (case-insensitive), so no
+/// user manager starts at boot before anyone logs in. All of them are tried; failures are reported as a count only.
+pub fn linger_off_for_students(runner: &dyn Runner, admins: &[String]) -> Result<()> {
+    let users = lock::parse_users(&lock::list_users(runner)?)?;
+    let mut failed = 0usize;
+    for u in users
+        .iter()
+        .filter(|u| u.linger && lock::is_person(u))
+        .filter(|u| !admins.iter().any(|a| a.eq_ignore_ascii_case(&u.user)))
+    {
+        let id = u.uid.to_string();
+        let cmd = Cmd::new("loginctl", &["disable-linger", &id]).timeout(LOGIN_CMD_TIMEOUT);
+        match runner.run(&cmd) {
+            Ok(o) if o.code == 0 => {}
+            _ => failed += 1,
+        }
+    }
+    if failed > 0 {
+        anyhow::bail!("disable linger failed for {failed} account(s)");
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -393,6 +393,11 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
         if let Err(e) = exec_block::write_session_mode(env.paths, true) {
             errs.push(format!("session mode: {e:#}"));
         }
+        // Students get no standing user manager in learning mode (spec invariant 2).
+        let admins = super::login::bundle_policy(ctx, env).admin_users;
+        if let Err(e) = super::home_tidy::linger_off_for_students(env.runner, &admins) {
+            errs.push(format!("linger: {e:#}"));
+        }
     }
     let mut lock_steps_ok = true;
     let (ids, mut out) = match webapps(ctx, env.paths, env.sys) {

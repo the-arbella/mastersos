@@ -374,3 +374,121 @@ fn keep_list_follows_the_rule() {
         }
     }
 }
+
+mod prepare {
+    use super::super::{linger_off_for_students, prepare_user_manager, Prep};
+    use crate::runner::{FakeRunner, Output};
+
+    const SHOW: &str = "loginctl show-user 10001 -p State --value";
+
+    #[test]
+    fn prepare_skips_active() {
+        for state in ["active\n", "online\n"] {
+            let r = FakeRunner::new();
+            r.respond(SHOW, Output::ok(state));
+            assert_eq!(prepare_user_manager(&r, 10001), Prep::SkipActive);
+            assert_eq!(r.calls(), vec![SHOW]);
+        }
+    }
+
+    #[test]
+    fn prepare_stops_leftovers() {
+        for state in ["closing\n", "lingering\n"] {
+            let r = FakeRunner::new();
+            r.respond(SHOW, Output::ok(state));
+            assert_eq!(prepare_user_manager(&r, 10001), Prep::Proceed);
+            assert_eq!(
+                r.calls(),
+                vec![
+                    SHOW,
+                    "loginctl disable-linger 10001",
+                    "loginctl terminate-user 10001",
+                    "systemctl stop user@10001.service",
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn prepare_offline_proceeds() {
+        let r = FakeRunner::new();
+        r.respond(
+            SHOW,
+            Output::fail(
+                1,
+                "Failed to get user: User ID 10001 is not logged in or lingering",
+            ),
+        );
+        assert_eq!(prepare_user_manager(&r, 10001), Prep::Proceed);
+        assert_eq!(r.calls(), vec![SHOW]);
+        let r = FakeRunner::new();
+        r.respond(SHOW, Output::ok("offline\n"));
+        assert_eq!(prepare_user_manager(&r, 10001), Prep::Proceed);
+        assert_eq!(r.calls(), vec![SHOW]);
+    }
+
+    #[test]
+    fn prepare_failure() {
+        let r = FakeRunner::new();
+        r.respond(SHOW, Output::ok("closing\n"));
+        r.respond("loginctl terminate-user", Output::fail(1, "boom"));
+        assert_eq!(prepare_user_manager(&r, 10001), Prep::Failed);
+        // Other failures of the state query, and unknown states, are failures too.
+        let r = FakeRunner::new();
+        r.respond(SHOW, Output::fail(1, "Connection timed out"));
+        assert_eq!(prepare_user_manager(&r, 10001), Prep::Failed);
+        let r = FakeRunner::new();
+        r.respond(SHOW, Output::ok("strange\n"));
+        assert_eq!(prepare_user_manager(&r, 10001), Prep::Failed);
+    }
+
+    #[test]
+    fn prepare_commands_are_bounded() {
+        use crate::runner::{Cmd, Runner};
+        use std::sync::Mutex;
+        struct Spy(Mutex<Vec<std::time::Duration>>);
+        impl Runner for Spy {
+            fn run(&self, cmd: &Cmd) -> anyhow::Result<Output> {
+                self.0.lock().unwrap().push(cmd.timeout);
+                Ok(Output::ok("closing\n"))
+            }
+        }
+        let s = Spy(Mutex::new(Vec::new()));
+        assert_eq!(prepare_user_manager(&s, 10001), Prep::Proceed);
+        let t = s.0.lock().unwrap();
+        assert_eq!(t.len(), 4);
+        assert!(t
+            .iter()
+            .all(|d| *d == crate::system::ephemeral::PAM_CMD_TIMEOUT));
+    }
+
+    #[test]
+    fn linger_off_skips_admins_and_system() {
+        let json = r#"[
+            {"uid":10001,"user":"student@school.ac.th","linger":true,"state":"lingering"},
+            {"uid":10002,"user":"Boss@school.ac.th","linger":true,"state":"lingering"},
+            {"uid":0,"user":"root","linger":true,"state":"online"},
+            {"uid":120,"user":"gdm","linger":true,"state":"online"},
+            {"uid":10003,"user":"other@school.ac.th","linger":false,"state":"active"}
+        ]"#;
+        let r = FakeRunner::new();
+        r.respond("loginctl list-users", Output::ok(json));
+        linger_off_for_students(&r, &["boss@school.ac.th".to_string()]).unwrap();
+        let calls = r.calls();
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        assert_eq!(calls[1], "loginctl disable-linger 10001");
+    }
+
+    #[test]
+    fn linger_off_failures_are_counted_without_ids() {
+        let json = r#"[{"uid":10001,"user":"a@s.th","linger":true,"state":"lingering"}]"#;
+        let r = FakeRunner::new();
+        r.respond("loginctl list-users", Output::ok(json));
+        r.respond("loginctl disable-linger", Output::fail(1, "x"));
+        let e = linger_off_for_students(&r, &[]).unwrap_err().to_string();
+        assert!(
+            e.contains('1') && !e.contains("10001") && !e.contains("a@s.th"),
+            "{e}"
+        );
+    }
+}

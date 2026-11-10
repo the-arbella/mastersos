@@ -1272,7 +1272,8 @@ fn dump_desktop_output(root: &Path, calls: &[String]) -> String {
     for (rel, body) in files {
         s.push_str(&format!("== {rel} {body}\n"));
     }
-    for c in calls {
+    // The linger step (learning mode, added after the snapshot was captured) is not part of the legacy output.
+    for c in calls.iter().filter(|c| !c.starts_with("loginctl ")) {
         s.push_str(&format!(
             "$ {}\n",
             c.replace(super::super::exec_block::STUB, "<stub>")
@@ -1695,4 +1696,21 @@ fn unrelated_failure_does_not_block_full() {
     assert!(!d.ok, "{d:?}");
     assert!(d.detail.as_deref().unwrap().contains("web apps"), "{d:?}");
     assert_eq!(session_mode(root.path()), "full\n");
+}
+
+#[test]
+fn locked_run_switches_off_student_linger_and_full_does_not() {
+    for (kind, locked) in [(Kind::Learning, true), (Kind::Full, false)] {
+        let root = root();
+        let r = MountSim::new(root.path());
+        let bundle = tempfile::tempdir().unwrap();
+        let mut sys = SysState::default();
+        let g = grp(kind, vec![app("LMS", "https://lms.th/", None)]);
+        run_step(root.path(), &r, &mut sys, &g, bundle.path(), Phase::Full);
+        let listed = r
+            .calls()
+            .iter()
+            .any(|c| c.starts_with("loginctl list-users"));
+        assert_eq!(listed, locked, "{:?}", r.calls());
+    }
 }
