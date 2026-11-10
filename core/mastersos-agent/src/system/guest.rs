@@ -35,7 +35,7 @@ use super::kiosk;
 use super::login::{self, LoginPolicy, GUEST_SERVICES};
 use super::{failed, ok, Env, Step};
 use crate::apply::ApplyContext;
-use crate::runner::{run_ok, Cmd, RealRunner};
+use crate::runner::{run_ok, Cmd, RealRunner, Runner};
 use crate::safefs;
 
 pub const GUEST_USER: &str = login::GUEST_USER;
@@ -531,6 +531,7 @@ pub fn pam_session_main() -> ExitCode {
                     if acct.user == GUEST_USER {
                         let _ = crate::login_queue::enqueue(GUEST_UID);
                     }
+                    after_kiosk_open(&runner, acct.uid, &mut std::io::stderr());
                     ExitCode::SUCCESS
                 }
                 Err(e) => {
@@ -542,6 +543,17 @@ pub fn pam_session_main() -> ExitCode {
                 }
             }
         }
+    }
+}
+
+/// A kiosk session just opened: enter the exam quiet now instead of waiting for the agent's poll. Never changes the
+/// PAM result; a failure only writes one line to `err`.
+fn after_kiosk_open(runner: &dyn Runner, uid: u32, err: &mut dyn Write) {
+    if !ephemeral::KIOSK_UIDS.contains(&uid) {
+        return;
+    }
+    if let Err(e) = crate::quiet::enter(runner) {
+        let _ = writeln!(err, "mastersos-agent pam-session: quiet: {e:#}");
     }
 }
 
@@ -579,6 +591,51 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, LazyLock, Mutex};
     use std::time::Duration;
+
+    fn quiet_started(f: &FakeRunner) -> bool {
+        f.calls()
+            .iter()
+            .any(|c| c == "systemctl start --no-block mastersos-quiet.target")
+    }
+
+    #[test]
+    fn kiosk_open_enters_quiet() {
+        let f = FakeRunner::new();
+        let mut err = Vec::new();
+        after_kiosk_open(&f, 1900, &mut err);
+        assert!(quiet_started(&f), "{:?}", f.calls());
+        assert!(err.is_empty());
+    }
+
+    #[test]
+    fn guest_open_does_not_enter_quiet() {
+        let f = FakeRunner::new();
+        let mut err = Vec::new();
+        after_kiosk_open(&f, GUEST_UID, &mut err);
+        assert!(f.calls().is_empty(), "{:?}", f.calls());
+    }
+
+    #[test]
+    fn quiet_failure_does_not_deny() {
+        let f = FakeRunner::new();
+        f.respond(
+            "systemctl start",
+            Output {
+                code: 1,
+                stdout: String::new(),
+                stderr: "boom".into(),
+            },
+        );
+        let mut err = Vec::new();
+        after_kiosk_open(&f, 1900, &mut err);
+        assert!(quiet_started(&f));
+        let text = String::from_utf8(err).unwrap();
+        assert_eq!(text.lines().count(), 1, "{text}");
+        assert!(
+            text.contains("mastersos-agent pam-session: quiet:"),
+            "{text}"
+        );
+    }
 
     /// 这些测试测的都是访客这一个临时账号。
     static G: LazyLock<Ephemeral> = LazyLock::new(ephemeral::guest);
