@@ -1,11 +1,27 @@
 #!/bin/bash
-# Flatpak's exports in the session's XDG_DATA_DIRS: the system installation only (locked-session hardening, 2026-11-10).
-# Flatpak's own generator of the same name (/usr/lib/systemd/user-environment-generators, masked by this file) puts the
-# user's ~/.local/share/flatpak/exports/share in front of every other data directory. gnome-shell treats extensions found
-# in XDG_DATA_DIRS as system extensions and the first copy of a uuid wins, so a student could save a look-alike of
-# mastersos-managed@mastersos.org there and have it run inside the shell under the locked profile. MastersOS installs
-# Flatpaks system-wide (mastersos-agent's flatpak step); per-user installs no longer show in the app grid.
+# Flatpak's exports in the session's XDG_DATA_DIRS: on a learning-mode device the system installation only (locked-session
+# hardening, 2026-11-10). Flatpak's own generator of the same name (/usr/lib/systemd/user-environment-generators, masked by
+# this file) puts the user's ~/.local/share/flatpak/exports/share in front of every other data directory. gnome-shell treats
+# extensions found in XDG_DATA_DIRS as system extensions and the first copy of a uuid wins, so a student could save a
+# look-alike of mastersos-managed@mastersos.org there and have it run inside the shell under the locked profile.
+# The mode is mastersos-agent's session-mode file, read as in 30-systemd-environment-d-generator next to this file: full mode
+# (teachers' devices) and a device with no settings yet keep the user's installation, as on Ubuntu.
 # Tested by image/tests/user-env-test.sh.
 set -euo pipefail
+mode_file=/var/lib/mastersos-public/session-mode
+locks_file=/etc/dconf/db/mastersos.d/locks/50-mastersos
+mode=
+if [ -e "$mode_file" ]; then
+	mode=$(tr -d '[:space:]' <"$mode_file" | tr '[:upper:]' '[:lower:]') || mode=learning
+	[ -n "$mode" ] || mode=learning
+fi
+# The agent's dconf locks are the lock actually enforced: while they exist the session counts as learning, whatever the
+# session-mode copy says (a stale or missing copy then fails towards the lock, not away from it).
+if [ -e "$locks_file" ]; then
+	mode=learning
+fi
 export GIO_USE_VFS=local
-exec flatpak --print-updated-env --print-system-only
+case "$mode" in
+'' | full) exec flatpak --print-updated-env ;;
+*) exec flatpak --print-updated-env --print-system-only ;;
+esac

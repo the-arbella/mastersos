@@ -3367,17 +3367,20 @@ if ! grep -qxF '[Service]' "$gx" 2>/dev/null ||
 fi
 [ "$r" = 0 ] && ok 74 "systemd-tmpfiles-setup waits for /tmp and the seed mount; GDM resets /tmp/.X11-unix to root:root 1777 before the greeter"
 
-# 76. The session environment comes from the system only (locked-session hardening, 2026-11-10): the user manager ignores the
-#     user's environment.d and Flatpak's per-user exports (both masked in /usr/local), and PAM reads no ~/.pam_environment.
+# 76. On a learning-mode device the session environment comes from the system only (locked-session hardening, 2026-11-10): the
+#     user manager ignores the user's environment.d and Flatpak's per-user exports (both masked in /usr/local, reading the agent's
+#     session-mode file; full mode runs them as on Ubuntu), and PAM reads no ~/.pam_environment on any device (deprecated;
+#     environment.d is its replacement).
 #     A DCONF_PROFILE from the home would switch every dconf lock off; a user-writable XDG_DATA_DIRS entry would let gnome-shell
 #     load a look-alike of a system extension.
 r=0
 ug=$ex/usr/local/lib/systemd/user-environment-generators
-for l in "30-systemd-environment-d-generator|XDG_CONFIG_HOME=/nonexistent exec /usr/lib/systemd/user-environment-generators/30-systemd-environment-d-generator \"\$@\"" \
-	"60-flatpak|exec flatpak --print-updated-env --print-system-only"; do
+for l in "30-systemd-environment-d-generator|*) XDG_CONFIG_HOME=/nonexistent exec \"\$orig\" \"\$@\" ;;" \
+	"60-flatpak|*) exec flatpak --print-updated-env --print-system-only ;;"; do
 	f=$ug/${l%%|*}
-	if [ ! -f "$f" ] || [ ! -x "$f" ] || ! grep -qxF -- "${l#*|}" "$f"; then
-		bad 76 "$f should be executable with the line: ${l#*|}"
+	if [ ! -f "$f" ] || [ ! -x "$f" ] || ! grep -qxF -- "${l#*|}" "$f" ||
+		! grep -qxF 'mode_file=/var/lib/mastersos-public/session-mode' "$f"; then
+		bad 76 "$f should be executable, read mode_file=/var/lib/mastersos-public/session-mode and have the learning line: ${l#*|}"
 		r=1
 	fi
 	grep -qE "^ +image/mkosi\.extra/usr/local/lib/systemd/user-environment-generators/${l%%|*}$" .github/workflows/mastersos.yml || {
@@ -3394,7 +3397,7 @@ if ! grep -qF "sed -i -E 's/[[:space:]]+user_readenv=1//'" "$rel/mkosi.postinst.
 	bad 76 "mkosi.postinst.chroot should drop user_readenv=1 from /etc/pam.d and fail the build if any is left"
 	r=1
 fi
-[ "$r" = 0 ] && ok 76 "session environment from the system only: no user environment.d, Flatpak system exports only, no ~/.pam_environment"
+[ "$r" = 0 ] && ok 76 "learning mode: no user environment.d, Flatpak system exports only; full mode as on Ubuntu; no ~/.pam_environment"
 
 # 75. Upstream GNOME (design 2026-11-10): no Ubuntu session layer in the package list (ubuntu-session, ubuntu-settings, Yaru), the tray
 #     extension from gnome-shell-ubuntu-extensions, and postinst removes that package's six other extensions one by one and checks each.

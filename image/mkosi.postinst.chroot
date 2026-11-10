@@ -332,6 +332,7 @@ fi
 # No ~/.pam_environment (locked-session hardening, 2026-11-10): gdm-password and Ubuntu's other GDM services read it with
 # user_readenv=1, and a DCONF_PROFILE or GSETTINGS_BACKEND set there switches every dconf lock of the locked sessions off for
 # the local accounts that sign in with a password. The system's /etc/environment and /etc/default/locale stay (readenv=1).
+# Every device, full mode too: PAM deprecates ~/.pam_environment, and ~/.config/environment.d (read in full mode) replaces it.
 while IFS= read -r f; do
 	sed -i -E 's/[[:space:]]+user_readenv=1//' "$f" || exit 1
 done < <(grep -rlE 'user_readenv=1' /etc/pam.d /usr/lib/pam.d 2>/dev/null || true)

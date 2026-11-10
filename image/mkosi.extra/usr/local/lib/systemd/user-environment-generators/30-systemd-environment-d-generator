@@ -1,10 +1,30 @@
 #!/bin/bash
-# The user manager's environment comes from the system's environment.d only (locked-session hardening, 2026-11-10).
-# systemd's own generator of the same name (/usr/lib/systemd/user-environment-generators, which this file masks: the
-# /usr/local directory comes first) also reads $XDG_CONFIG_HOME/environment.d, ~/.config/environment.d by default. A
-# student can save a file there from the browser, and a DCONF_PROFILE or GSETTINGS_BACKEND line in it switches every dconf
-# lock of the locked sessions off. Run the same generator with a configuration home that does not exist: it still reads
-# /etc, /run, /usr/local/lib and /usr/lib environment.d, and prints only what those files set.
-# Tested by image/tests/user-env-test.sh.
+# On a learning-mode device the user manager's environment comes from the system's environment.d only (locked-session
+# hardening, 2026-11-10). systemd's own generator of the same name (/usr/lib/systemd/user-environment-generators, which this
+# file masks: the /usr/local directory comes first) also reads $XDG_CONFIG_HOME/environment.d, ~/.config/environment.d by
+# default. A student can save a file there from the browser, and a DCONF_PROFILE or GSETTINGS_BACKEND line in it switches
+# every dconf lock of the locked sessions off. In learning mode, run the same generator with a configuration home that does
+# not exist: it still reads /etc, /run, /usr/local/lib and /usr/lib environment.d and prints only what those files set.
+# The mode is mastersos-agent's session-mode file (root 0644, `learning` or `full`, the device's Group decides). Full mode
+# (teachers' devices) and a device with no settings yet run the generator unchanged, as on Ubuntu. Any other content counts
+# as learning (towards the lock), and so does any device with the agent's dconf locks file. The environment is fixed when
+# the user manager starts: a device switched to learning keeps a running manager's environment until it stops (the user
+# signs out of every session, or the machine restarts). Tested by image/tests/user-env-test.sh.
 set -euo pipefail
-XDG_CONFIG_HOME=/nonexistent exec /usr/lib/systemd/user-environment-generators/30-systemd-environment-d-generator "$@"
+mode_file=/var/lib/mastersos-public/session-mode
+locks_file=/etc/dconf/db/mastersos.d/locks/50-mastersos
+orig=/usr/lib/systemd/user-environment-generators/30-systemd-environment-d-generator
+mode=
+if [ -e "$mode_file" ]; then
+	mode=$(tr -d '[:space:]' <"$mode_file" | tr '[:upper:]' '[:lower:]') || mode=learning
+	[ -n "$mode" ] || mode=learning
+fi
+# The agent's dconf locks are the lock actually enforced: while they exist the session counts as learning, whatever the
+# session-mode copy says (a stale or missing copy then fails towards the lock, not away from it).
+if [ -e "$locks_file" ]; then
+	mode=learning
+fi
+case "$mode" in
+'' | full) exec "$orig" "$@" ;;
+*) XDG_CONFIG_HOME=/nonexistent exec "$orig" "$@" ;;
+esac
