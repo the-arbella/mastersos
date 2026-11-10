@@ -511,6 +511,7 @@ fn ctx(p: SysPaths, rx: watch::Receiver<Option<Arc<CurrentGroup>>>) -> Arc<JobCt
         current: rx,
         reapply: Arc::new(Notify::new()),
         fetch_error: tokio::sync::watch::channel(None).1,
+        quiet: tokio::sync::watch::channel(None).1,
     })
 }
 

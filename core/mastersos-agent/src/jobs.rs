@@ -59,6 +59,8 @@ pub struct JobCtx {
     /// The latest settings fetch: `Some(error)` when it failed, `None` when it succeeded (new bundle or nothing new)
     /// or none has finished yet. The status job shows it.
     pub fetch_error: watch::Receiver<Option<String>>,
+    /// Since when the exam quiet is on (`None` when it is not); jobs that could disturb a kiosk session wait on it.
+    pub quiet: crate::quiet::QuietRx,
 }
 
 pub trait Job: Send + Sync {
@@ -270,6 +272,7 @@ mod tests {
             current: watch::channel(None).1,
             reapply: Default::default(),
             fetch_error: watch::channel(None).1,
+            quiet: watch::channel(None).1,
         })
     }
 

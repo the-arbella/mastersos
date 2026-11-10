@@ -161,6 +161,7 @@ pub fn build(
         imported_from_seed_at: None,
         manifest_features: SUPPORTED_FEATURES.iter().map(|f| (*f).to_owned()).collect(),
         os_pending_version: None,
+        quiet_since: None,
     }
 }
 

@@ -219,6 +219,14 @@ async fn run_resident(
     agent.take_logins();
     // 后台任务的第一轮就看得到本地包选中的分组（Flatpak 对账）
     agent.publish_current();
+    // The quiet monitor runs only in the resident agent (`apply-local` has no kiosk session to protect).
+    let (quiet_tx, quiet_rx) = tokio::sync::watch::channel(None);
+    agent.quiet = quiet_rx.clone();
+    tokio::spawn(crate::quiet::monitor(
+        Arc::new(RealRunner),
+        quiet_tx,
+        shutdown.clone(),
+    ));
     let cx = Arc::new(JobCtx {
         fetcher: agent.fetcher.clone(),
         ident: agent.machine.ident.clone(),
@@ -228,6 +236,7 @@ async fn run_resident(
         current: agent.current.subscribe(),
         reapply: agent.reapply.clone(),
         fetch_error: agent.fetch_error.subscribe(),
+        quiet: quiet_rx,
     });
     let spawned = jobs::spawn_all(
         jobs,
@@ -583,6 +592,8 @@ struct Agent {
     reapply: Arc<Notify>,
     /// The latest settings fetch's error, `None` after a good one (`JobCtx::fetch_error`, the status job).
     fetch_error: tokio::sync::watch::Sender<Option<String>>,
+    /// Since when the exam quiet is on (`StatusReport::quiet_since`); constantly `None` outside the resident loop.
+    quiet: crate::quiet::QuietRx,
     login: Login,
 }
 
@@ -761,6 +772,7 @@ impl Agent {
             current: tokio::sync::watch::channel(None).0,
             reapply: Arc::new(Notify::new()),
             fetch_error: tokio::sync::watch::channel(None).0,
+            quiet: tokio::sync::watch::channel(None).1,
             login: Login {
                 queue: cfg_root_join(&cfg_root, login_queue::QUEUE_DIR),
                 export: cfg_root_join(&cfg_root, login_queue::EXPORT_DIR),
@@ -1375,6 +1387,7 @@ impl Agent {
         }
         // read for every report: update-run writes it whenever a round installs a newer version
         r.os_pending_version = report::os_pending_version(&self.cfg.root, r.os_version.as_deref());
+        r.quiet_since = self.quiet.borrow().map(|t| t.to_rfc3339());
         r
     }
 

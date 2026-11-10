@@ -569,6 +569,7 @@ mod tests {
             current: rx,
             reapply: Default::default(),
             fetch_error: watch::channel(None).1,
+            quiet: watch::channel(None).1,
         });
         let shutdown = tokio_util::sync::CancellationToken::new();
         let jobs = spawn_all(

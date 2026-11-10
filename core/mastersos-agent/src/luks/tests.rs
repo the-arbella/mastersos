@@ -419,6 +419,7 @@ async fn lab() -> Lab {
         current: cur_rx,
         reapply: Default::default(),
         fetch_error: tokio::sync::watch::channel(None).1,
+        quiet: tokio::sync::watch::channel(None).1,
     };
     Lab {
         _dir: dir,
