@@ -1195,8 +1195,9 @@ impl Agent {
 
     /// When a pending inbox retry is due (none without one).
     fn inbox_retry_due(&self) -> Option<Instant> {
+        // Not during the exam quiet: `maybe_sync_inbox` would skip it and the due timer would spin the loop.
         self.inbox_retry
-            .filter(|_| self.sync_inbox && !self.resetting)
+            .filter(|_| self.sync_inbox && !self.resetting && self.quiet.borrow().is_none())
     }
 
     /// Syncs the inbox when due ([`inbox::sync`]); first reports a finished factory reset `done`.
@@ -1572,6 +1573,7 @@ impl Agent {
                     if self.quiet.borrow_and_update().is_none() {
                         // Quiet ended: fetch the inbox now (the loop's top) and let the jobs run.
                         self.sync_inbox = true;
+                        self.inbox_retry = None;
                         self.job_wake.notify_waiters();
                     }
                 }
@@ -2180,6 +2182,8 @@ mod tests {
             .send(Some(Utc::now()))
             .unwrap();
         agent.quiet.borrow_and_update();
+        // A backoff pending from before the quiet must not delay the sync after it.
+        agent.inbox_retry = Some(Instant::now() + Duration::from_secs(3600));
         agent.sync_inbox = false;
         let (shutdown, wake) = (CancellationToken::new(), Notify::new());
         let jobs = agent.job_wake.clone();
@@ -2194,6 +2198,33 @@ mod tests {
         assert_eq!(inbox_gets(&srv).await, 1, "one sync right after the quiet");
         assert!(!agent.sync_inbox);
         assert!(futures_now_or_never(jobs_woken).is_some(), "jobs woken");
+    }
+
+    #[tokio::test]
+    async fn inbox_retry_timer_idle_while_quiet() {
+        let (dir, srv) = (tempfile::tempdir().unwrap(), inbox_server().await);
+        let mut agent = inbox_agent(dir.path(), &srv).await;
+        agent
+            .quiet_tx
+            .as_ref()
+            .unwrap()
+            .send(Some(Utc::now()))
+            .unwrap();
+        agent.quiet.borrow_and_update();
+        agent.sync_inbox = true;
+        agent.inbox_retry = Some(Instant::now() - Duration::from_secs(1));
+        // Due retry, but quiet: no timer armed (it would complete at once and spin the loop).
+        assert!(agent.inbox_retry_due().is_none());
+        let (shutdown, wake) = (CancellationToken::new(), Notify::new());
+        let w = agent
+            .wait(Some(later(Duration::from_millis(200))), &shutdown, &wake)
+            .await;
+        assert!(matches!(w, Wake::Elapsed));
+        assert_eq!(inbox_gets(&srv).await, 0);
+        assert!(agent.sync_inbox);
+        // Loud again: the retry is armed.
+        agent.quiet_tx.as_ref().unwrap().send(None).unwrap();
+        assert!(agent.inbox_retry_due().is_some());
     }
 
     fn futures_now_or_never<F: std::future::Future>(f: F) -> Option<F::Output> {
