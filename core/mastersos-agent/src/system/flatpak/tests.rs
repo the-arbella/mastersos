@@ -14,7 +14,7 @@ const TOOL: &str = "org.example.Tool";
 const LIST: &str = "flatpak list --system --app --columns=application";
 const UNIT: &str = "systemd-run --wait --collect --quiet --unit=mastersos-flatpak";
 const INSTALL: &str = "systemd-run --wait --collect --quiet --unit=mastersos-flatpak --property=RuntimeMaxSec=900 flatpak install --system --noninteractive -y flathub";
-const UNINSTALL: &str = "flatpak uninstall --system --noninteractive -y";
+const UNINSTALL: &str = "systemd-run --wait --collect --quiet --unit=mastersos-flatpak --property=RuntimeMaxSec=900 flatpak uninstall --system --noninteractive -y";
 
 fn s(ids: &[&str]) -> Vec<String> {
     ids.iter().map(|i| i.to_string()).collect()
@@ -426,10 +426,7 @@ fn unused_runtimes_removed_after_uninstall() {
     write_state(&p, &[LO]);
     let r = FakeRunner::new();
     r.respond(LIST, Output::ok(&format!("{LO}\n")));
-    r.respond(
-        "flatpak uninstall --system --noninteractive -y --unused",
-        Output::fail(1, "x"),
-    );
+    r.respond(&format!("{UNINSTALL} --unused"), Output::fail(1, "x"));
     let (out, _) = rec(&r, &p, Some(&cur(Kind::Full, &[])));
     let calls = r.calls();
     let app = calls
@@ -438,7 +435,7 @@ fn unused_runtimes_removed_after_uninstall() {
         .unwrap();
     let unused = calls
         .iter()
-        .position(|c| c == "flatpak uninstall --system --noninteractive -y --unused")
+        .position(|c| c == &format!("{UNINSTALL} --unused"))
         .expect("没清运行时");
     assert!(app < unused);
     assert!(find(&out, LO).ok);
@@ -727,4 +724,20 @@ fn reconcile_stops_between_apps_when_quiet() {
     );
     let st = load_state(&p).unwrap();
     assert_eq!((st.pending, st.managed), (set(&[]), set(&[LO])));
+}
+
+/// Quiet begins after the install loop (nothing to install, one app to uninstall): no uninstall is issued.
+#[test]
+fn quiet_after_installs_skips_uninstalls() {
+    let root = tmp_root();
+    let p = paths(root.path());
+    write_state(&p, &[LO]);
+    let r = FakeRunner::new();
+    r.respond(LIST, Output::ok(&format!("{LO}\n")));
+    let (_, _) = reconcile(&r, &p, Some(&cur(Kind::Full, &[TOOL])), &|| true, &|| true);
+    assert!(
+        !r.calls().iter().any(|c| c.contains("flatpak uninstall")),
+        "{:?}",
+        r.calls()
+    );
 }

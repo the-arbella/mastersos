@@ -143,6 +143,12 @@ pub fn spawn_all(
                 loop {
                     // Do not start a round during the exam quiet (a running round is never dropped).
                     if !job.runs_in_quiet() {
+                        // Held by the quiet: open the first-report gate now, the round may be far away
+                        if quiet.borrow().is_some() {
+                            if let Some(tx) = first.take() {
+                                let _ = tx.send(());
+                            }
+                        }
                         tokio::select! {
                             biased;
                             _ = shutdown.cancelled() => return,
@@ -439,6 +445,48 @@ mod tests {
         assert_eq!(runs.load(Ordering::SeqCst), 1);
         tokio::time::sleep(Duration::from_secs(10)).await;
         assert_eq!(runs.load(Ordering::SeqCst), 2);
+        shutdown.cancel();
+        for h in s.handles {
+            h.await.unwrap();
+        }
+    }
+
+    struct Gating;
+
+    impl Job for Gating {
+        fn name(&self) -> &'static str {
+            "gating"
+        }
+        fn every(&self) -> Duration {
+            Duration::from_secs(10)
+        }
+        fn gates_first_report(&self) -> bool {
+            true
+        }
+        fn run<'a>(
+            &'a self,
+            _cx: &'a JobCtx,
+        ) -> Pin<Box<dyn Future<Output = Vec<ItemResult>> + Send + 'a>> {
+            Box::pin(async move { panic!("must not run in quiet") })
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn held_job_opens_first_report_gate() {
+        let (_tx, rx) = watch::channel(Some(chrono::Utc::now()));
+        let shutdown = CancellationToken::new();
+        let mut s = spawn_all(
+            vec![Arc::new(Gating)],
+            cx_quiet(rx),
+            Default::default(),
+            shutdown.clone(),
+            Default::default(),
+        );
+        let first = s.first_rounds.pop().unwrap();
+        tokio::time::timeout(Duration::from_secs(1), first)
+            .await
+            .unwrap()
+            .unwrap();
         shutdown.cancel();
         for h in s.handles {
             h.await.unwrap();

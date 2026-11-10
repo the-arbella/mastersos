@@ -381,14 +381,17 @@ pub fn reconcile(
         }
     }
     let mut removed_any = false;
+    // Quiet may have begun after the install loop: start no uninstall then
+    if !superseded && !postponed && quiet() {
+        postponed = true;
+    }
     if !superseded && !postponed {
         for id in &uninstall {
             let it = item(id);
-            let cmd = Cmd::new(
-                "flatpak",
+            let cmd = flatpak_cmd(
                 &["uninstall", "--system", "--noninteractive", "-y", id],
-            )
-            .timeout(INSTALL_TIMEOUT);
+                INSTALL_TIMEOUT,
+            );
             match run_ok(runner, cmd) {
                 Ok(_) => {
                     removed_any = true;
@@ -408,8 +411,7 @@ pub fn reconcile(
         }
     }
     if removed_any {
-        let cmd = Cmd::new(
-            "flatpak",
+        let cmd = flatpak_cmd(
             &[
                 "uninstall",
                 "--system",
@@ -417,8 +419,8 @@ pub fn reconcile(
                 "-y",
                 "--unused",
             ],
-        )
-        .timeout(INSTALL_TIMEOUT);
+            INSTALL_TIMEOUT,
+        );
         out.push(match run_ok(runner, cmd) {
             Ok(_) => ItemResult {
                 item: RUNTIMES_ITEM.into(),
