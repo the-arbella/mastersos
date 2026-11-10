@@ -943,7 +943,11 @@ grep -qE '^ +image/mkosi\.extra/usr/lib/mastersos/interface-denied$' .github/wor
 	r=1
 }
 # 文件选择框不能跟着 Nautilus 一起被堵掉：FileChooser 走 xdg-desktop-portal-gtk（包要在包表里）
-pc=$rel/mkosi.extra/usr/share/xdg-desktop-portal/ubuntu-portals.conf
+pc=$rel/mkosi.extra/usr/share/xdg-desktop-portal/mastersos-portals.conf
+if [ -e "$rel/mkosi.extra/usr/share/xdg-desktop-portal/ubuntu-portals.conf" ]; then
+	bad 19 "ubuntu-portals.conf is gone with the ubuntu session: the desktop is MastersOS:GNOME and reads mastersos-portals.conf"
+	r=1
+fi
 if ! grep -qxF 'org.freedesktop.impl.portal.FileChooser=gtk;' "$pc" 2>/dev/null || ! grep -qxF 'default=gnome;gtk;' "$pc" ||
 	! grep -qE '^ +xdg-desktop-portal-gtk$' "$rel/mkosi.conf"; then
 	bad 19 "$pc 应让 FileChooser 走 gtk（其余照 gnome-portals.conf），mkosi.conf 应装 xdg-desktop-portal-gtk"
@@ -2367,29 +2371,17 @@ text = open(over).read()
 for want in ("[org.gnome.desktop.background]",
              "picture-uri='file:///usr/share/backgrounds/mastersos/mastersos-day.jpg'",
              "picture-uri-dark='file:///usr/share/backgrounds/mastersos/mastersos-night.jpg'",
-             "picture-options='zoom'", "[org.gnome.desktop.interface]", "color-scheme='default'", "accent-color=",
-             "transparency-mode='FIXED'", "background-opacity=", "custom-background-color=true", "background-color="):
+             "picture-options='zoom'", "[org.gnome.desktop.interface]", "color-scheme='default'", "accent-color="):
     if want not in text:
         errs.append(f"{over} lacks {want}")
-# Ubuntu's own defaults are desktop-specific ([schema:ubuntu], 10_ubuntu-dock and 10_ubuntu-settings), and those beat every
-# plain [schema] override whatever the file order: each section here must have a :ubuntu twin with the same keys.
-sections, cur = {}, None
-for line in text.splitlines():
-    m = re.match(r"^\[([^\]]+)\]$", line.strip())
-    if m:
-        cur = m.group(1)
-        sections.setdefault(cur, [])
-    elif cur and "=" in line and not line.lstrip().startswith("#"):
-        sections[cur].append(line.strip())
-for name, keys in sections.items():
-    if name.endswith(":ubuntu") or name == "org.gnome.login-screen":
-        continue
-    twin = sections.get(name + ":ubuntu")
-    if twin != keys:
-        errs.append(f"{over}: [{name}] has no identical [{name}:ubuntu] (the Ubuntu session would use Ubuntu's values)")
+# One set of defaults (design 2026-11-10, upstream GNOME session): no Ubuntu session, so no [schema:ubuntu] twins, and no Dock.
+if re.search(r"^\[[^\]]*:ubuntu\]", text, re.M):
+    errs.append(f"{over} still has a [schema:ubuntu] section (there is no ubuntu session)")
+if "dash-to-dock" in text:
+    errs.append(f"{over} still sets dash-to-dock (there is no Dock)")
 post = open(os.path.join(os.path.dirname(ex), "mkosi.postinst.chroot")).read()
-if 'XDG_CURRENT_DESKTOP=ubuntu:GNOME' not in post:
-    errs.append("mkosi.postinst.chroot: the defaults are not read back as the Ubuntu session sees them (XDG_CURRENT_DESKTOP=ubuntu:GNOME)")
+if "XDG_CURRENT_DESKTOP=MastersOS:GNOME" not in post or "ubuntu:GNOME" in post:
+    errs.append("mkosi.postinst.chroot: the defaults are not read back as the mastersos session sees them (XDG_CURRENT_DESKTOP=MastersOS:GNOME)")
 if "LOGO=mastersos-logo" not in post:
     errs.append("mkosi.postinst.chroot: os-release has no LOGO=mastersos-logo")
 if total > 15 * 1024 * 1024:
@@ -2401,7 +2393,7 @@ BRAND
 	bad 51 "brand: $why"
 	r=1
 fi
-[ "$r" = 0 ] && ok 51 "brand: wallpapers 3840x2400, logo at every size, background properties, GNOME defaults (light, wallpapers, translucent Dock), about logo, total under 15 MiB"
+[ "$r" = 0 ] && ok 51 "brand: wallpapers 3840x2400, logo at every size, background properties, GNOME defaults (light, wallpapers, one set, no Dock), about logo, total under 15 MiB"
 
 # 52. Boot splash (design 2026-11-04 visual identity §5.2): the mastersos two-step theme is in the image and in the initrd, the two
 #     copies identical (the initrd is built from packages and does not see mkosi.extra); both trees make it the default theme; the
@@ -3371,5 +3363,27 @@ if ! grep -qxF '[Service]' "$gx" 2>/dev/null ||
 	r=1
 fi
 [ "$r" = 0 ] && ok 74 "systemd-tmpfiles-setup waits for /tmp and the seed mount; GDM resets /tmp/.X11-unix to root:root 1777 before the greeter"
+
+# 75. Upstream GNOME (design 2026-11-10): no Ubuntu session layer in the package list (ubuntu-session, ubuntu-settings, Yaru), the tray
+#     extension from gnome-shell-ubuntu-extensions, and postinst removes that package's six other extensions one by one and checks each.
+r=0
+for p in ubuntu-session ubuntu-settings yaru-theme-gnome-shell yaru-theme-gtk yaru-theme-icon; do
+	if grep -qE "^ +$p\$" "$rel/mkosi.conf"; then
+		bad 75 "mkosi.conf installs $p (the Ubuntu session layer is gone)"
+		r=1
+	fi
+done
+grep -qE '^ +gnome-shell-ubuntu-extensions$' "$rel/mkosi.conf" || {
+	bad 75 "mkosi.conf should install gnome-shell-ubuntu-extensions (the tray extension ubuntu-appindicators@ubuntu.com)"
+	r=1
+}
+for u in ubuntu-dock@ubuntu.com ding@rastersoft.com tiling-assistant@ubuntu.com snapd-prompting@canonical.com \
+	snapd-search-provider@canonical.com web-search-provider@ubuntu.com; do
+	grep -qF "$u" "$rel/mkosi.postinst.chroot" || {
+		bad 75 "mkosi.postinst.chroot should remove and check the extension $u"
+		r=1
+	}
+done
+[ "$r" = 0 ] && ok 75 "upstream GNOME: no ubuntu-session, ubuntu-settings or Yaru; the tray from gnome-shell-ubuntu-extensions, its other six extensions removed in postinst"
 
 exit $fail

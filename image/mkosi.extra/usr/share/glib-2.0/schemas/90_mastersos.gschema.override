@@ -1,24 +1,9 @@
-# MastersOS 的 GNOME 默认值（mkosi.postinst.chroot 里 glib-compile-schemas）。
-# Dock：Chrome 由 agent 装成 sysext（Task 9），装好之前这一项不显示；没有 gnome-shell-common 默认里的
+# MastersOS 的 GNOME 默认值（mkosi.postinst.chroot 里 glib-compile-schemas）。One set: the desktop is the upstream GNOME session
+# mastersos (design 2026-11-10), with no [schema:ubuntu] defaults to shadow these and no Dock.
+# favorite-apps is the overview's Dash: Chrome 由 agent 装成 sysext（Task 9），装好之前这一项不显示；没有 gnome-shell-common 默认里的
 # firefox-esr、Evolution、Software 等（镜像里没有这些应用）。4b 的设置包可经 dconf 覆盖。
 [org.gnome.shell]
 favorite-apps=['google-chrome.desktop', 'org.gnome.Nautilus.desktop']
-
-# The Dock before (or without) a settings bundle, for every account: the same full-width bottom shelf mastersos-agent
-# writes (desktop.rs DOCK_LAYOUT), and no drives. Ubuntu's own default is a left Dock listing every volume, even the
-# machine's own unmounted partitions (the encrypted root, the seed partition) and the install stick.
-[org.gnome.shell.extensions.dash-to-dock]
-dock-position='BOTTOM'
-extend-height=true
-always-center-icons=true
-dock-fixed=true
-dash-max-icon-size=44
-show-mounts=false
-# Translucent shelf over the wallpaper (design 2026-11-04 visual identity §5.3); mastersos-agent writes none of these keys.
-transparency-mode='FIXED'
-background-opacity=0.45
-custom-background-color=true
-background-color='#14122a'
 
 # The MastersOS look (design 2026-11-04 visual identity §5.3). Light style by default, for classrooms and projectors (the users
 # are students); the dark style switches to the night picture. The login screen uses the night picture on its own.
@@ -29,34 +14,6 @@ picture-options='zoom'
 primary-color='#13113a'
 
 [org.gnome.desktop.interface]
-color-scheme='default'
-accent-color='orange'
-
-# The same values for the Ubuntu session. Ubuntu sets its defaults per desktop ([schema:ubuntu] in 10_ubuntu-dock and
-# 10_ubuntu-settings: a left Dock, its own wallpaper and Dock apps), and a desktop-specific override beats every plain one
-# whatever the file order, so without these twins the Ubuntu session keeps Ubuntu's values. check-tree item 51 keeps them equal.
-[org.gnome.shell:ubuntu]
-favorite-apps=['google-chrome.desktop', 'org.gnome.Nautilus.desktop']
-
-[org.gnome.shell.extensions.dash-to-dock:ubuntu]
-dock-position='BOTTOM'
-extend-height=true
-always-center-icons=true
-dock-fixed=true
-dash-max-icon-size=44
-show-mounts=false
-transparency-mode='FIXED'
-background-opacity=0.45
-custom-background-color=true
-background-color='#14122a'
-
-[org.gnome.desktop.background:ubuntu]
-picture-uri='file:///usr/share/backgrounds/mastersos/mastersos-day.jpg'
-picture-uri-dark='file:///usr/share/backgrounds/mastersos/mastersos-night.jpg'
-picture-options='zoom'
-primary-color='#13113a'
-
-[org.gnome.desktop.interface:ubuntu]
 color-scheme='default'
 accent-color='orange'
 

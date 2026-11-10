@@ -163,19 +163,17 @@ PY
 
 # GNOME 的默认值（gschema override，排在发行版的 00_/10_ 之后）：Dock 里放 Chrome（Task 9）。改了 override 要重新编译
 glib-compile-schemas /usr/share/glib-2.0/schemas
-# The override only takes if the dash-to-dock schema is in the global directory (the ubuntu-dock package): read it back as
-# the Ubuntu session sees it (XDG_CURRENT_DESKTOP=ubuntu:GNOME), where Ubuntu's [schema:ubuntu] defaults apply.
-dget() { env -u DBUS_SESSION_BUS_ADDRESS XDG_CURRENT_DESKTOP=ubuntu:GNOME GSETTINGS_BACKEND=memory HOME=/nonexistent XDG_CONFIG_HOME=/nonexistent gsettings get org.gnome.shell.extensions.dash-to-dock "$1"; }
-for kv in "dock-position='BOTTOM'" show-mounts=false extend-height=true; do
-	got=$(dget "${kv%%=*}") || { echo "postinst: dash-to-dock schema not found" >&2; exit 1; }
-	if [ "$got" != "${kv#*=}" ]; then
-		echo "postinst: dash-to-dock ${kv%%=*} default is $got (want ${kv#*=})" >&2
+# Read the defaults back as the desktop session sees them (XDG_CURRENT_DESKTOP=MastersOS:GNOME, design 2026-11-10): one set, no
+# [schema:ubuntu] defaults and no ubuntu-settings, so nothing points at Yaru (not installed).
+gget() { env -u DBUS_SESSION_BUS_ADDRESS XDG_CURRENT_DESKTOP=MastersOS:GNOME GSETTINGS_BACKEND=memory HOME=/nonexistent XDG_CONFIG_HOME=/nonexistent gsettings get "$1" "$2"; }
+for sk in "org.gnome.desktop.interface gtk-theme" "org.gnome.desktop.interface icon-theme" "org.gnome.desktop.sound theme-name"; do
+	read -r schema key <<<"$sk"
+	got=$(gget "$schema" "$key") || { echo "postinst: cannot read $schema $key" >&2; exit 1; }
+	if printf '%s' "$got" | grep -qi yaru; then
+		echo "postinst: $schema $key default is $got (Yaru is not installed)" >&2
 		exit 1
 	fi
 done
-# The rest of the look (design 2026-11-04 visual identity §5.3): translucent Dock, light style, the day and night pictures
-dget transparency-mode | grep -qx "'FIXED'" || { echo "postinst: dash-to-dock transparency-mode is not FIXED" >&2; exit 1; }
-gget() { env -u DBUS_SESSION_BUS_ADDRESS XDG_CURRENT_DESKTOP=ubuntu:GNOME GSETTINGS_BACKEND=memory HOME=/nonexistent XDG_CONFIG_HOME=/nonexistent gsettings get "$1" "$2"; }
 for kv in "org.gnome.desktop.background picture-uri 'file:///usr/share/backgrounds/mastersos/mastersos-day.jpg'" \
 	"org.gnome.desktop.background picture-uri-dark 'file:///usr/share/backgrounds/mastersos/mastersos-night.jpg'" \
 	"org.gnome.desktop.interface color-scheme 'default'" \
@@ -193,7 +191,7 @@ done
 # The logo PNGs went in after the hicolor package built its cache: rebuild it so the about page and the shell find them
 # (always: a missing tool fails the build rather than leave a stale cache that hides mastersos-logo)
 gtk-update-icon-cache -f -q /usr/share/icons/hicolor
-echo "postinst: Dock defaults: bottom, no drives, translucent; light style; MastersOS wallpapers"
+echo "postinst: GNOME defaults: one set, no Yaru; light style; MastersOS wallpapers"
 # Boot splash (design 2026-11-04 visual identity §5.2): our theme is the default and two-step, which it uses, is installed
 grep -qx 'Theme=mastersos' /usr/share/plymouth/plymouthd.defaults || { echo "postinst: plymouthd.defaults does not choose mastersos" >&2; exit 1; }
 test -f /usr/share/plymouth/themes/mastersos/mastersos.plymouth || { echo "postinst: mastersos Plymouth theme missing" >&2; exit 1; }
@@ -213,6 +211,21 @@ jq -e --arg u "$mu" '.parentMode == "user" and .enabledExtensions == ["ubuntu-ap
 	echo "postinst: $um should have parentMode user and enable exactly ubuntu-appindicators@ubuntu.com and $mu" >&2
 	exit 1
 }
+# The tray comes from gnome-shell-ubuntu-extensions, which also carries Ubuntu's other extensions: remove those six, each checked.
+for u in ubuntu-dock@ubuntu.com ding@rastersoft.com tiling-assistant@ubuntu.com snapd-prompting@canonical.com \
+	snapd-search-provider@canonical.com web-search-provider@ubuntu.com; do
+	rm -rf -- "/usr/share/gnome-shell/extensions/$u" || exit 1
+	[ ! -e "/usr/share/gnome-shell/extensions/$u" ] || {
+		echo "postinst: /usr/share/gnome-shell/extensions/$u is still there" >&2
+		exit 1
+	}
+done
+for p in ubuntu-session ubuntu-settings yaru-theme-gnome-shell yaru-theme-gtk yaru-theme-icon; do
+	if dpkg-query -W -f='${db:Status-Status}' "$p" 2>/dev/null | grep -qx installed; then
+		echo "postinst: $p is installed (the Ubuntu session layer should be gone)" >&2
+		exit 1
+	fi
+done
 # GDM offers only our two sessions: the regular desktop and the locked-app session. Every other session file (gnome, gnome-xorg,
 # anything a package brought) goes, so neither the gear nor GDM's fallback can start a session without our mode and drop-ins.
 for sd in /usr/share/wayland-sessions /usr/share/xsessions; do
@@ -240,7 +253,7 @@ gsmajor=$(gnome-shell --version | sed -nE 's/^GNOME Shell ([0-9]+).*/\1/p')
 	echo "postinst: cannot read the gnome-shell version" >&2
 	exit 1
 }
-for u in "$mu" "$lu"; do
+for u in "$mu" "$lu" ubuntu-appindicators@ubuntu.com; do
 	md=/usr/share/gnome-shell/extensions/$u/metadata.json
 	jq -e --arg u "$u" --arg v "$gsmajor" '.uuid == $u and (."shell-version" | index($v))' "$md" >/dev/null || {
 		echo "postinst: $md should have uuid $u and shell-version containing $gsmajor (gnome-shell is $gsmajor)" >&2
