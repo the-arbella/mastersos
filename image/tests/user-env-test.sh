@@ -39,14 +39,12 @@ run() { env -i HOME="$home" PATH=/usr/bin:/bin "$@"; }
 # The image's generators, reading the session-mode file from the test's public dir (their only path to it)
 mkdir -p "$tmp/gen" "$tmp/public"
 for g in 30-systemd-environment-d-generator 60-flatpak; do
-	for l in mode_file=/var/lib/mastersos-public/session-mode locks_file=/etc/dconf/db/mastersos.d/locks/50-mastersos; do
-		grep -qxF "$l" "$gens/$g" || {
-			echo "user-env-test: $g has no line $l" >&2
-			exit 1
-		}
-	done
-	sed -e "s|^mode_file=/var/lib/mastersos-public/session-mode$|mode_file=$tmp/public/session-mode|" \
-		-e "s|^locks_file=/etc/dconf/db/mastersos.d/locks/50-mastersos$|locks_file=$tmp/locks|" "$gens/$g" >"$tmp/gen/$g"
+	l=mode_file=/var/lib/mastersos-public/session-mode
+	grep -qxF "$l" "$gens/$g" || {
+		echo "user-env-test: $g has no line $l" >&2
+		exit 1
+	}
+	sed -e "s|^mode_file=/var/lib/mastersos-public/session-mode$|mode_file=$tmp/public/session-mode|" "$gens/$g" >"$tmp/gen/$g"
 	chmod +x "$tmp/gen/$g"
 done
 mode() { if [ "$1" = none ]; then rm -f "$tmp/public/session-mode"; else printf '%s\n' "$1" >"$tmp/public/session-mode"; fi; }
@@ -69,14 +67,15 @@ check "learning: an inherited XDG_CONFIG_HOME is ignored too" no \
 printf ' Learning \n' >"$tmp/public/session-mode"
 check "learning (spaced, capitalised): DCONF_PROFILE left out" no "$(has '^DCONF_PROFILE=' "$(run "$tmp/gen/30-systemd-environment-d-generator")")"
 
+# Garbage (not even text) is learning too: only a file reading `full` (trimmed, any case) or no file is full
+printf '\377\n' >"$tmp/public/session-mode"
+check "garbage: DCONF_PROFILE left out" no "$(has '^DCONF_PROFILE=' "$(run "$tmp/gen/30-systemd-environment-d-generator")")"
+printf ' FULL \n' >"$tmp/public/session-mode"
+check "full (spaced, capitalised): the user's environment.d is read" "$(run "$sysd")" "$(run "$tmp/gen/30-systemd-environment-d-generator")"
+
 for m in full none; do
 	mode "$m"
 	check "$m: the user's environment.d is read as on Ubuntu" "$(run "$sysd")" "$(run "$tmp/gen/30-systemd-environment-d-generator")"
-	# The dconf locks are what is enforced: with the agent's locks file there, the session counts as learning whatever
-	# session-mode says (a stale or missing copy fails towards the lock)
-	: >"$tmp/locks"
-	check "$m with dconf locks present: DCONF_PROFILE left out" no "$(has '^DCONF_PROFILE=' "$(run "$tmp/gen/30-systemd-environment-d-generator")")"
-	rm -f "$tmp/locks"
 done
 
 # Flatpak: system installation only in learning mode
@@ -87,12 +86,11 @@ chmod +x "$tmp/bin/flatpak"
 fp() { env -i HOME="$home" PATH="$tmp/bin:/usr/bin:/bin" "$tmp/gen/60-flatpak"; }
 mode learning
 check "learning: 60-flatpak asks for the system installation only" "GIO_USE_VFS=local ARGS=--print-updated-env --print-system-only" "$(fp)"
+printf '\377\n' >"$tmp/public/session-mode"
+check "garbage: 60-flatpak asks for the system installation only" "GIO_USE_VFS=local ARGS=--print-updated-env --print-system-only" "$(fp)"
 for m in full none; do
 	mode "$m"
 	check "$m: 60-flatpak includes the user's installation" "GIO_USE_VFS=local ARGS=--print-updated-env" "$(fp)"
-	: >"$tmp/locks"
-	check "$m with dconf locks present: 60-flatpak system only" "GIO_USE_VFS=local ARGS=--print-updated-env --print-system-only" "$(fp)"
-	rm -f "$tmp/locks"
 done
 
 echo "user-env-test: $((n - fails))/$n"

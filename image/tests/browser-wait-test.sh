@@ -96,6 +96,21 @@ check "no mode: one notification" 1 "$(count "$c/log/notify")"
 check "no mode: no window" 0 "$(count "$c/log/zenity")"
 check "no mode: body" yes "$(has 'ARG Waiting for school settings.' "$c/log/notify")"
 
+# 3b. session-mode holds garbage: the locked-session branch, as for learning (only `full` or no file is unlocked)
+c=$tmp/c3b
+mkdir -p "$c/pub"
+printf '\377\n' >"$c/pub/session-mode"
+status_json "$c" 'Waiting for school settings.' null
+(
+	sleep 1
+	printf '#!/bin/sh\n' >"$c/chrome"
+	chmod +x "$c/chrome"
+) &
+check "garbage mode: exit 0" 0 "$(run "$c")"
+wait
+check "garbage mode: one window" 1 "$(count "$c/log/zenity")"
+check "garbage mode: no notification" 0 "$(count "$c/log/notify")"
+
 # 4. learning, Chrome shows up later: zenity gets "# ..." lines (sentence and the escaped detail decoded), then 100
 c=$tmp/c4
 mkdir -p "$c/pub"
