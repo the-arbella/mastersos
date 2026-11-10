@@ -185,7 +185,7 @@ agent 的锁定扩展列表与 dconf 输出跟着改。
 1. 构建镜像；构建日志里 postinst 的新断言全过。
 2. VM 全新安装：新账号首次登录进 `mastersos` 会话（`echo $XDG_SESSION_DESKTOP $XDG_CURRENT_DESKTOP` 为 `mastersos MastersOS:GNOME`）；
    若落到 `mastersos-kiosk` 或登录失败，按 spec 补 GDM 默认会话的落实方式。
-3. 从当前正式镜像 A/B 更新到新镜像：已有账号（`Session=ubuntu`）直接登录进 `mastersos`；再回滚到旧槽，仍能登录进 `ubuntu`。
+3. 从当前正式镜像 A/B 更新到新镜像：已有账号（`Session=ubuntu`）直接登录进 `mastersos`；再回滚到旧槽，能登录（预期进纯 `gnome` 会话，见 spec 的回滚代价）。
 4. 截图（新编号，全留）：登录页、登录后的概览、Dash 收藏、半透明顶栏、受管提示、托盘图标、Chrome 上传文件的选择框、锁定应用会话。
 5. 学习模式：放一个冒名 `mastersos-managed@mastersos.org` 到 `~/.local/share/gnome-shell/extensions`，确认不加载。
 6. Dell 真机触屏试用：概览、Dash 启动、三指手势、屏幕键盘。

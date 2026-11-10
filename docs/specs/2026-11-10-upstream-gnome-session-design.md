@@ -87,10 +87,12 @@ David 裁定：不做对照测试，直接换回上游 GNOME 会话，凭判断�
   - `favorite-apps` 照写（上游 Dash 读它）。`Profile::dock_files` 的含义不变（Nautilus 进不进收藏）。
   - 快照 `legacy_browser.snap` 与测试随之更新。
 - 会话名：测试里当作"普通会话"的 `ubuntu` 换成 `mastersos`；保留一条 `ubuntu`（旧设备残留的记录）仍被当作非 kiosk 会话处理的测试。
-- 迁移：**不改写** AccountsService 记录。A/B 更新可能回滚到旧槽，旧镜像没有 `mastersos.desktop`；改写了的记录在旧槽上反而会出问题。
-  靠 GDM 的规则：记录里的会话不存在时用默认会话。新镜像上 `Session=ubuntu` 落到默认的 `mastersos`，回滚后旧镜像上
-  `Session=mastersos` 落到它的默认 `ubuntu`。这一点两个方向都要在 VM 上验证；若 gdm3 50 不按此回退，再补一个只在新槽确认
-  可用后才执行的迁移。
+- 迁移：**不改写** AccountsService 记录。新镜像上 `Session=ubuntu` 找不到会话文件，GDM 依次试 `FallbackSession`、`gnome`、
+  按名字排序的第一个；postinst 只留 `mastersos` 与 `mastersos-kiosk`，`mastersos` 排在前面，所以落到 `mastersos`（终审读 gdm-session.c 核对）。
+- **回滚的代价（终审发现，已接受）**：GDM 会把启动的会话写回记录，新镜像上登录过一次就成了 `Session=mastersos`。回滚到旧槽后，
+  旧 GDM 找不到它，先试 `gnome`（旧镜像有 `gnome.desktop`），于是进的是纯 `gnome` 会话而不是 `ubuntu`：没有 Dock 与受管提示，
+  `XDG_CURRENT_DESKTOP=GNOME` 读 `gnome-portals.conf`，锁住的会话里 Chrome 上传的文件选择框打不开；完全模式只是少了 Dock。
+  新镜像改不了旧镜像，回滚又是应急路径（再升级即恢复），所以接受，重验证清单第 3 项按此核对。
 
 ### 扩展
 
