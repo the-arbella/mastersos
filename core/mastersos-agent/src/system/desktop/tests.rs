@@ -1604,3 +1604,95 @@ fn locked_profile_enables_managed_extension() {
         .unwrap_or_else(|| panic!("no enabled-extensions line:\n{k}"));
     assert!(line.contains("'mastersos-managed@mastersos.org'"), "{line}");
 }
+
+fn session_mode(root: &Path) -> String {
+    let f = root
+        .join("var/lib/mastersos-public")
+        .join(exec_block::SESSION_MODE_FILE);
+    fs::read_to_string(f).unwrap_or_default()
+}
+
+/// Invariant 1: tightening publishes `learning` first, so a failing later step cannot leave the
+/// session believing it is `full`.
+#[test]
+fn tightening_publishes_learning_first() {
+    let root = root();
+    let r = MountSim::new(root.path());
+    let bundle = tempfile::tempdir().unwrap();
+    let mut sys = SysState::default();
+    run_step(
+        root.path(),
+        &r,
+        &mut sys,
+        &grp(Kind::Full, vec![]),
+        bundle.path(),
+        Phase::Full,
+    );
+    assert_eq!(session_mode(root.path()), "full\n");
+    r.fake.respond("dconf update", Output::fail(1, "boom"));
+    let out = run_step(
+        root.path(),
+        &r,
+        &mut sys,
+        &grp(Kind::LegacyBrowser, vec![]),
+        bundle.path(),
+        Phase::Full,
+    )
+    .out;
+    assert!(!item(&out, ITEM).ok);
+    assert_eq!(session_mode(root.path()), "learning\n");
+}
+
+/// Invariant 1: loosening publishes `full` only after the lock-related steps all succeeded.
+#[test]
+fn loosening_publishes_full_last() {
+    let root = root();
+    let r = MountSim::new(root.path());
+    let bundle = tempfile::tempdir().unwrap();
+    let mut sys = SysState::default();
+    run_step(
+        root.path(),
+        &r,
+        &mut sys,
+        &grp(Kind::LegacyBrowser, vec![]),
+        bundle.path(),
+        Phase::Full,
+    );
+    assert_eq!(session_mode(root.path()), "learning\n");
+    r.fake.respond("dconf update", Output::fail(1, "boom"));
+    let full = grp(Kind::Full, vec![]);
+    let out = run_step(root.path(), &r, &mut sys, &full, bundle.path(), Phase::Full).out;
+    assert!(!item(&out, ITEM).ok);
+    assert_eq!(session_mode(root.path()), "learning\n");
+    let out = run_step(root.path(), &r, &mut sys, &full, bundle.path(), Phase::Full).out;
+    assert_eq!(item(&out, ITEM), &ok(ITEM));
+    assert_eq!(session_mode(root.path()), "full\n");
+}
+
+/// A failure outside the lock-related steps (web apps) is still reported but does not hold
+/// `full` back.
+#[test]
+fn unrelated_failure_does_not_block_full() {
+    let root = root();
+    let r = MountSim::new(root.path());
+    let bundle = tempfile::tempdir().unwrap();
+    let mut sys = SysState::default();
+    run_step(
+        root.path(),
+        &r,
+        &mut sys,
+        &grp(Kind::LegacyBrowser, vec![]),
+        bundle.path(),
+        Phase::Full,
+    );
+    assert_eq!(session_mode(root.path()), "learning\n");
+    // `xdg/icons` is a file, so the web app step fails; overrides and dconf do not touch it.
+    fs::remove_dir_all(xdg(root.path()).join("icons")).unwrap();
+    fs::write(xdg(root.path()).join("icons"), "x").unwrap();
+    let g = grp(Kind::Full, vec![app("A", "https://a.th/", None)]);
+    let out = run_step(root.path(), &r, &mut sys, &g, bundle.path(), Phase::Full).out;
+    let d = item(&out, ITEM);
+    assert!(!d.ok, "{d:?}");
+    assert!(d.detail.as_deref().unwrap().contains("web apps"), "{d:?}");
+    assert_eq!(session_mode(root.path()), "full\n");
+}

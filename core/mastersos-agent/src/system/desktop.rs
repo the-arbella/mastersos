@@ -388,6 +388,13 @@ fn dbus_override(file: &str) -> String {
 fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
     let p = profile(ctx.config);
     let mut errs: Vec<String> = Vec::new();
+    // Invariant 1: tightening is published before anything else can fail.
+    if p.locked() {
+        if let Err(e) = exec_block::write_session_mode(env.paths, true) {
+            errs.push(format!("session mode: {e:#}"));
+        }
+    }
+    let mut lock_steps_ok = true;
     let (ids, mut out) = match webapps(ctx, env.paths, env.sys) {
         Ok(r) => r,
         Err(e) => {
@@ -406,6 +413,7 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
     };
     let (keyfile, locks) = render_dconf(ctx.config, &ids, &kiosk, &flatpaks);
     if let Err(e) = apply_dconf(&env.paths.root, env.runner, env.sys, &keyfile, &locks) {
+        lock_steps_ok = false;
         errs.push(format!("dconf: {e:#}"));
     }
     let r = if p.locked() {
@@ -417,10 +425,18 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
         remove_overrides(env.paths)
     };
     if let Err(e) = r {
+        lock_steps_ok = false;
         errs.push(format!("overrides: {e:#}"));
     }
     if let Err(e) = exec_block::apply(env.paths, env.runner, p.locked()) {
+        lock_steps_ok = false;
         errs.push(format!("terminal, file manager and settings: {e:#}"));
+    }
+    // Loosening is published last, and only when every lock-related step succeeded.
+    if !p.locked() && lock_steps_ok {
+        if let Err(e) = exec_block::write_session_mode(env.paths, false) {
+            errs.push(format!("session mode: {e:#}"));
+        }
     }
     out.push(if errs.is_empty() {
         ok(ITEM)

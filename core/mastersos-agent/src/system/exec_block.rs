@@ -161,9 +161,18 @@ fn unbind(runner: &dyn Runner, p: &Path, abs: &str, stub: &[u8]) -> Result<()> {
 /// Why it is not in `system-state.json`: that file is saved only after a whole apply run
 /// (review T13 finding 1), while this one is written under the lock before any mount changes.
 pub const MODE_FILE: &str = "exec-block-mode";
-/// The same mode for the user session, in this file under `public_dir` (0644): `learning\n` or
-/// `full\n`. `/usr/lib/mastersos/browser-wait` reads it (`MODE_FILE` is in the 0700 var dir);
-/// a missing file means no bundle yet, which the session treats as `full`.
+/// The session's copy of the mode, in this file under `public_dir` (0644): `learning\n` or
+/// `full\n`. `/usr/lib/mastersos/browser-wait` and the other session readers use it (`MODE_FILE` is
+/// in the 0700 var dir).
+///
+/// Single authority (invariant 1): only the `desktop` step writes it, through [`write_session_mode`],
+/// and in an order that never leaves the session more open than the device is. Tightening writes
+/// `learning` first, before any other step of the run; loosening writes `full` last, only when the
+/// dconf, overrides and exec-block steps all succeeded. [`write_mode`] does not touch it.
+///
+/// Read rule, everywhere ([`session_mode_locked`]): file missing means no bundle yet, so `full`;
+/// content trimmed and lowercased equal to `full` is `full`; anything else, unreadable or garbage
+/// included, is `learning`.
 pub const SESSION_MODE_FILE: &str = "session-mode";
 /// agent 与 `exec-block` 之间的锁（`/run` 在 agent 的 PrivateTmp 之外，两边看到的是同一个文件）。
 pub const LOCK_DIR: &str = "run/mastersos";
@@ -214,12 +223,33 @@ pub(crate) fn write_mode(paths: &SysPaths, block: bool) -> Result<()> {
     let text: &[u8] = if block { b"browser\n" } else { b"desktop\n" };
     crate::safefs::write_at(&dir, MODE_FILE, text, 0o600)
         .with_context(|| format!("write {MODE_FILE}"))?;
-    // The session's copy, in the new words: see SESSION_MODE_FILE.
+    Ok(())
+}
+
+/// Publishes the session's copy of the mode (`learning\n` or `full\n`, 0644): see [`SESSION_MODE_FILE`].
+pub fn write_session_mode(paths: &SysPaths, learning: bool) -> Result<()> {
     let public = super::public_dir(paths)?;
-    let text: &[u8] = if block { b"learning\n" } else { b"full\n" };
+    let text: &[u8] = if learning { b"learning\n" } else { b"full\n" };
     crate::safefs::write_at(&public, SESSION_MODE_FILE, text, 0o644)
         .with_context(|| format!("write {SESSION_MODE_FILE}"))?;
     Ok(())
+}
+
+/// Whether the session is locked (`learning`) by the file under `public_dir`: the one read rule of
+/// [`SESSION_MODE_FILE`]. Only a missing file (or directory) is `false` besides `full`.
+pub fn session_mode_locked(public_dir: &Path) -> bool {
+    let dir = match crate::safefs::open_abs_dir(public_dir, false) {
+        Ok(d) => d,
+        Err(e) if crate::apply::is_not_found(&e) => return false,
+        Err(_) => return true,
+    };
+    match crate::safefs::read_at(&dir, SESSION_MODE_FILE) {
+        Ok(None) => false,
+        Ok(Some(bytes)) => {
+            !String::from_utf8(bytes).is_ok_and(|t| t.trim().eq_ignore_ascii_case("full"))
+        }
+        Err(_) => true,
+    }
 }
 
 /// 盘上的模式：`Some(true)` 挡住（`learning`，或旧的 `browser`）、`Some(false)` 放开（`full`，或旧的 `desktop`）；
@@ -614,26 +644,58 @@ pub(crate) mod tests {
         }
     }
 
-    /// The session (browser-wait) cannot read the 0700 var dir: `write_mode` also writes a public
-    /// `session-mode` (0644) under `public_dir`, in the new words `learning` / `full`.
+    /// `write_mode` only writes the private file: `session-mode` has its own writer (invariant 1).
     #[test]
-    fn write_mode_also_writes_public_session_mode() {
+    fn write_mode_leaves_session_mode() {
+        let root = tmp_root();
+        let p = paths(root.path());
+        for (block, old) in [(true, &b"browser\n"[..]), (false, b"desktop\n")] {
+            write_mode(&p, block).unwrap();
+            assert!(!p.public_dir.join(SESSION_MODE_FILE).exists());
+            assert_eq!(fs::read(p.var_dir.join(MODE_FILE)).unwrap(), old);
+        }
+        assert_eq!(SESSION_MODE_FILE, "session-mode");
+    }
+
+    #[test]
+    fn write_session_mode_writes_public_file() {
         use std::os::unix::fs::PermissionsExt;
         let root = tmp_root();
         let p = paths(root.path());
         let f = p.public_dir.join(SESSION_MODE_FILE);
-        for (block, want) in [(true, &b"learning\n"[..]), (false, b"full\n")] {
-            write_mode(&p, block).unwrap();
+        for (learning, want) in [(true, &b"learning\n"[..]), (false, b"full\n")] {
+            write_session_mode(&p, learning).unwrap();
             assert_eq!(fs::read(&f).unwrap(), want);
             assert_eq!(
                 fs::metadata(&f).unwrap().permissions().mode() & 0o777,
                 0o644
             );
-            // the private file keeps the old words
-            let old: &[u8] = if block { b"browser\n" } else { b"desktop\n" };
-            assert_eq!(fs::read(p.var_dir.join(MODE_FILE)).unwrap(), old);
         }
-        assert_eq!(SESSION_MODE_FILE, "session-mode");
+    }
+
+    /// The one read rule: missing is full; `full` is full; anything else, unreadable included, is learning.
+    #[test]
+    fn session_mode_rule() {
+        let root = tmp_root();
+        let p = paths(root.path());
+        std::fs::create_dir_all(&p.public_dir).unwrap();
+        let f = p.public_dir.join(SESSION_MODE_FILE);
+        assert!(!session_mode_locked(&p.public_dir));
+        for (bytes, want) in [
+            (&b"full\n"[..], false),
+            (b" FULL ", false),
+            (b"learning\n", true),
+            (b"browser", true),
+            (b"", true),
+            (b"\xff", true),
+        ] {
+            fs::write(&f, bytes).unwrap();
+            assert_eq!(session_mode_locked(&p.public_dir), want, "{bytes:?}");
+        }
+        // unreadable (a directory in the file's place) counts as learning
+        fs::remove_file(&f).unwrap();
+        fs::create_dir(&f).unwrap();
+        assert!(session_mode_locked(&p.public_dir));
     }
 
     /// A mode file an older agent wrote is still understood (the image update replaces the agent,
