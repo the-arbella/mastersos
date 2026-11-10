@@ -3,6 +3,11 @@
 //!
 //! - [`apt`]: the private apt run that computes and downloads the dependencies missing from the image (§4.2), and the
 //!   offline cache source used first after an image change (§4.6).
+//! - [`assemble`]: what of an unpacked package may be merged (§4.3).
+//! - [`round`]: one `mastersos-agent deb-apps` round (`mastersos-deb-apps.service`): fetch, resolve, build, swap in,
+//!   uninstall; its helpers are `inputs` (packages and dependencies), `build` (the trees) and `busy` (is an app in use).
+//! - [`status`]: the results and the public status file, and the resident [`status::DebAppsStatus`] job that hands the
+//!   unit its settings and reports.
 
 /// The agent's private work directory (0700 root, created by tmpfiles; `mastersos-deb-apps.service` may write it).
 pub const WORK_DIR: &str = "/var/lib/mastersos/deb-apps";
@@ -18,8 +23,15 @@ pub const SECURITY_URL: &str = "http://security.ubuntu.com/ubuntu";
 
 pub mod apt;
 pub mod assemble;
+mod build;
+mod busy;
+mod inputs;
+pub mod round;
+pub mod status;
 
 #[cfg(test)]
 mod tests_apt;
 #[cfg(test)]
 mod tests_assemble;
+#[cfg(test)]
+mod tests_round;
