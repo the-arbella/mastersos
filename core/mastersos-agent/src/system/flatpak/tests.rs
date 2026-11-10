@@ -12,7 +12,8 @@ use tokio_util::sync::CancellationToken;
 const LO: &str = "org.libreoffice.LibreOffice";
 const TOOL: &str = "org.example.Tool";
 const LIST: &str = "flatpak list --system --app --columns=application";
-const INSTALL: &str = "flatpak install --system --noninteractive -y flathub";
+const UNIT: &str = "systemd-run --wait --collect --quiet --unit=mastersos-flatpak";
+const INSTALL: &str = "systemd-run --wait --collect --quiet --unit=mastersos-flatpak --property=RuntimeMaxSec=900 flatpak install --system --noninteractive -y flathub";
 const UNINSTALL: &str = "flatpak uninstall --system --noninteractive -y";
 
 fn s(ids: &[&str]) -> Vec<String> {
@@ -45,7 +46,7 @@ fn write_state(p: &SysPaths, managed: &[&str]) {
 
 /// 对账一次，这一轮里一直没有新包。
 fn rec(r: &FakeRunner, p: &SysPaths, c: Option<&CurrentGroup>) -> (Vec<ItemResult>, bool) {
-    reconcile(r, p, c, &|| true)
+    reconcile(r, p, c, &|| true, &|| false)
 }
 
 fn find<'a>(out: &'a [ItemResult], id: &str) -> &'a ItemResult {
@@ -461,7 +462,9 @@ fn new_bundle_stops_install_queue() {
         calls.set(calls.get() + 1);
         calls.get() == 1
     };
-    let (out, _) = reconcile(&r, &p, Some(&cur(Kind::Full, &[LO, TOOL])), &still);
+    let (out, _) = reconcile(&r, &p, Some(&cur(Kind::Full, &[LO, TOOL])), &still, &|| {
+        false
+    });
     let installs: Vec<String> = r
         .calls()
         .into_iter()
@@ -596,7 +599,9 @@ fn update_runs_once_a_day() {
     assert!(upd(&r, &p, now).ok);
     assert_eq!(
         r.calls(),
-        vec!["flatpak update --system --noninteractive -y"]
+        vec![format!(
+            "{UNIT} --property=RuntimeMaxSec=3600 flatpak update --system --noninteractive -y"
+        )]
     );
     let st = load_state(&p).unwrap();
     assert_eq!(st.last_update, Some(now));
@@ -605,7 +610,7 @@ fn update_runs_once_a_day() {
     assert_eq!(update(&r, &p, now + TimeDelta::hours(2)), None);
     assert_eq!(r.calls().len(), 1);
     // 失败：报失败、不记时刻，下一小时再试
-    r.respond("flatpak update", Output::fail(1, "x"));
+    r.respond("systemd-run", Output::fail(1, "x"));
     let later = now + TimeDelta::hours(25);
     let it = upd(&r, &p, later);
     assert_eq!(it.item, "flatpak-update");
@@ -644,11 +649,82 @@ fn pending_is_on_disk_when_install_starts() {
         state: p.var_dir.join(STATE_FILE),
         seen: Default::default(),
     };
-    reconcile(&r, &p, Some(&cur(Kind::Full, &[LO, TOOL])), &|| true);
+    reconcile(
+        &r,
+        &p,
+        Some(&cur(Kind::Full, &[LO, TOOL])),
+        &|| true,
+        &|| false,
+    );
     let seen = r.seen.lock().unwrap();
     assert_eq!(seen.len(), 2);
     assert_eq!(seen[0].pending, set(&[LO]));
     assert!(seen[0].managed.is_empty());
     assert_eq!(seen[1].pending, set(&[TOOL]));
     assert_eq!(seen[1].managed, set(&[LO]));
+}
+
+#[test]
+fn install_runs_in_transient_unit() {
+    let (calls, _) = install_lo(Kind::Full);
+    assert!(
+        calls.iter().any(|c| c.starts_with(
+            "systemd-run --wait --collect --quiet --unit=mastersos-flatpak --property=RuntimeMaxSec=900 flatpak install --system --noninteractive -y flathub "
+        )),
+        "{calls:?}"
+    );
+}
+
+#[test]
+fn update_runs_in_transient_unit() {
+    let root = tmp_root();
+    let p = paths(root.path());
+    let r = FakeRunner::new();
+    let now = chrono::Utc::now();
+    assert!(upd(&r, &p, now).ok);
+    assert!(
+        r.calls().iter().any(|c| c
+            == "systemd-run --wait --collect --quiet --unit=mastersos-flatpak --property=RuntimeMaxSec=3600 flatpak update --system --noninteractive -y"),
+        "{:?}",
+        r.calls()
+    );
+}
+
+#[test]
+fn flatpak_unit_matches_quiet_stop_list() {
+    assert!(crate::quiet::STOP_UNITS.contains(&format!("{FLATPAK_UNIT}.service").as_str()));
+}
+
+/// Quiet starts after the first app: the second is postponed (ok, not a failure, in neither pending nor managed).
+#[test]
+fn reconcile_stops_between_apps_when_quiet() {
+    let root = tmp_root();
+    let p = paths(root.path());
+    let r = FakeRunner::new();
+    let asked = std::cell::Cell::new(0);
+    let quiet = || {
+        asked.set(asked.get() + 1);
+        asked.get() > 1
+    };
+    let (out, _) = reconcile(
+        &r,
+        &p,
+        Some(&cur(Kind::Full, &[LO, TOOL])),
+        &|| true,
+        &quiet,
+    );
+    let installs: Vec<String> = r
+        .calls()
+        .into_iter()
+        .filter(|c| c.starts_with(INSTALL))
+        .collect();
+    assert_eq!(installs, vec![format!("{INSTALL} {LO}")]);
+    let it = find(&out, TOOL);
+    assert!(it.ok, "{it:?}");
+    assert_eq!(
+        it.detail.as_deref(),
+        Some("postponed: a locked app session is running")
+    );
+    let st = load_state(&p).unwrap();
+    assert_eq!((st.pending, st.managed), (set(&[]), set(&[LO])));
 }

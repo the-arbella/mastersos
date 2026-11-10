@@ -638,6 +638,10 @@ impl Job for StatusJob {
         "status"
     }
 
+    fn runs_in_quiet(&self) -> bool {
+        true
+    }
+
     /// 30 s, or sooner: 1 s after a grace window holding a network problem back ends.
     fn every(&self) -> Duration {
         let wake_at = self

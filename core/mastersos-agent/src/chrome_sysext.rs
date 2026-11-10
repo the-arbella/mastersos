@@ -1236,6 +1236,10 @@ impl Job for ChromeStatus {
         "chrome-status"
     }
 
+    fn runs_in_quiet(&self) -> bool {
+        true
+    }
+
     /// `mastersos-chrome.service` 跑完会叫醒 agent，这里只是兜底。
     fn every(&self) -> Duration {
         Duration::from_secs(15 * 60)

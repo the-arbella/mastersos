@@ -539,7 +539,7 @@ mod tests {
         use crate::system::flatpak::FlatpakJob;
         let fp = Arc::new(FakeRunner::new());
         // The install must clearly outlast the apply even on a loaded machine; the bounds below are a third of it.
-        fp.delay("flatpak install", Duration::from_secs(15));
+        fp.delay("systemd-run", Duration::from_secs(15));
         let d = tempfile::tempdir().unwrap();
         let b = bundle();
         let m = &b.manifest;
@@ -581,7 +581,7 @@ mod tests {
         );
         // 等到正在装：在本线程上同步地看（不靠运行时的计时器——工作线程被占住时计时器也不走）
         let t0 = std::time::Instant::now();
-        while !fp.calls().iter().any(|c| c.starts_with("flatpak install")) {
+        while !fp.calls().iter().any(|c| c.contains("flatpak install")) {
             assert!(t0.elapsed() < Duration::from_secs(10), "没开始装");
             std::thread::sleep(Duration::from_millis(5));
         }
