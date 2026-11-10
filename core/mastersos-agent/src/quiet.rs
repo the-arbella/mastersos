@@ -118,16 +118,32 @@ impl Tracker {
     }
 }
 
-/// Starts the quiet target, then stops the units that must not run during it (one command).
-pub fn enter(runner: &dyn Runner) -> Result<()> {
-    run_ok(
-        runner,
-        Cmd::new("systemctl", &["start", "--no-block", TARGET]),
-    )?;
+/// Timeout of every `systemctl` call: `enter` runs in the PAM login path, where a hung systemd must not stall a login.
+pub const CMD_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn start_cmd() -> Cmd {
+    Cmd::new("systemctl", &["start", "--no-block", TARGET]).timeout(CMD_TIMEOUT)
+}
+
+fn stop_units_cmd() -> Cmd {
     let mut args = vec!["stop", "--no-block"];
     args.extend_from_slice(STOP_UNITS);
+    Cmd::new("systemctl", &args).timeout(CMD_TIMEOUT)
+}
+
+fn stop_target_cmd() -> Cmd {
+    Cmd::new("systemctl", &["stop", "--no-block", TARGET]).timeout(CMD_TIMEOUT)
+}
+
+fn is_active_cmd() -> Cmd {
+    Cmd::new("systemctl", &["is-active", "--quiet", TARGET]).timeout(CMD_TIMEOUT)
+}
+
+/// Starts the quiet target, then stops the units that must not run during it (one command).
+pub fn enter(runner: &dyn Runner) -> Result<()> {
+    run_ok(runner, start_cmd())?;
     // Exit status 5 means "unit not loaded": the transient mastersos-flatpak.service is usually not there. That is fine.
-    let out = runner.run(&Cmd::new("systemctl", &args))?;
+    let out = runner.run(&stop_units_cmd())?;
     if out.code != 0 && out.code != 5 {
         anyhow::bail!("systemctl exited with {}", out.code);
     }
@@ -135,17 +151,29 @@ pub fn enter(runner: &dyn Runner) -> Result<()> {
 }
 
 pub fn exit(runner: &dyn Runner) -> Result<()> {
-    run_ok(
-        runner,
-        Cmd::new("systemctl", &["stop", "--no-block", TARGET]),
-    )?;
+    run_ok(runner, stop_target_cmd())?;
     Ok(())
 }
 
 pub fn target_active(runner: &dyn Runner) -> bool {
-    runner
-        .run(&Cmd::new("systemctl", &["is-active", "--quiet", TARGET]))
-        .is_ok_and(|o| o.code == 0)
+    runner.run(&is_active_cmd()).is_ok_and(|o| o.code == 0)
+}
+
+#[cfg(test)]
+mod cmd_timeout_tests {
+    use super::*;
+
+    #[test]
+    fn every_systemctl_command_has_a_short_timeout() {
+        for c in [
+            start_cmd(),
+            stop_units_cmd(),
+            stop_target_cmd(),
+            is_active_cmd(),
+        ] {
+            assert!(c.timeout <= Duration::from_secs(5), "{c:?}");
+        }
+    }
 }
 
 /// Since when the system is quiet; `None` when it is not.

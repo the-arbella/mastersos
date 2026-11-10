@@ -616,6 +616,28 @@ mod tests {
     }
 
     #[test]
+    fn quiet_stop_failure_does_not_deny() {
+        let f = FakeRunner::new();
+        f.respond(
+            "systemctl stop",
+            Output {
+                code: 1,
+                stdout: String::new(),
+                stderr: String::new(),
+            },
+        );
+        let mut err = Vec::new();
+        after_kiosk_open(&f, 1900, &mut err);
+        assert!(quiet_started(&f));
+        let text = String::from_utf8(err).unwrap();
+        assert_eq!(text.lines().count(), 1, "{text}");
+        assert!(
+            text.contains("mastersos-agent pam-session: quiet:"),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn quiet_failure_does_not_deny() {
         let f = FakeRunner::new();
         f.respond(
