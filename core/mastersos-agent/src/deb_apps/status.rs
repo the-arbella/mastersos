@@ -216,10 +216,17 @@ pub(crate) fn write_saved(work: &std::os::fd::OwnedFd, s: &Saved) -> Result<()> 
     t.commit()
 }
 
-/// The settings for the unit from the main loop's current group; `state_dir` locates the applied bundle.
+/// The settings for the unit from the main loop's current group; `state_dir` locates the applied bundle. In a mode
+/// without the Config's apps (the legacy browser mode, deb-apps design §4.1; the same switch as the Flatpaks,
+/// [`crate::system::desktop::Profile::flatpaks`]) no app: the round installs nothing and removes what is installed.
 pub fn wanted_from(cur: &CurrentGroup, state_dir: &Path) -> Wanted {
+    let shown = crate::system::desktop::profile(&cur.config).flatpaks;
     Wanted {
-        apps: cur.config.apps.deb.clone(),
+        apps: if shown {
+            cur.config.apps.deb.clone()
+        } else {
+            BTreeMap::new()
+        },
         ubuntu_mirror: cur.config.apps.ubuntu_mirror.clone(),
         bundle_dir: crate::state::current_version_name(state_dir)
             .map(|n| state_dir.join("versions").join(n)),

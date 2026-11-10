@@ -1225,6 +1225,12 @@ fn plain_web_app_has_no_start_page() {
 // .deb apps with `kiosk = true` (deb-apps design §4.7, §4.8)
 // ---------------------------------------------------------------------------
 
+/// A legacy-shape Group in the desktop mode (`full`): the default mode is the legacy browser mode, which has no .deb
+/// apps (§4.1).
+fn full(apps: &str) -> mastersos_bundle::Config {
+    grp(&format!("mode = \"desktop\"\n{apps}"))
+}
+
 /// `[group.apps.deb.<id>]` with `kiosk = true`; `extra` is more TOML lines for it.
 fn deb_kiosk(id: &str, name: &str, extra: &str) -> String {
     format!(
@@ -1276,7 +1282,7 @@ fn ready_deb_kiosk_app_gets_account() {
     absent(&r, "kiosk-testnav");
     absent(&r, "1900");
     let mut sys = SysState::default();
-    let g = grp(&deb_kiosk("testnav", "TestNav", ""));
+    let g = full(&deb_kiosk("testnav", "TestNav", ""));
     let out = run_step(&r, root.path(), &mut sys, &g, Phase::Full);
     assert_eq!(out, vec![ok_item("testnav")]);
     idx(
@@ -1330,7 +1336,7 @@ fn not_ready_deb_kiosk_app_hidden() {
         absent(&r, "kiosk-testnav");
         absent(&r, "1900");
         let mut sys = SysState::default();
-        let g = grp(&deb_kiosk(
+        let g = full(&deb_kiosk(
             "testnav",
             "TestNav",
             "exec = \"/opt/testnav/bin/testnav\"\n",
@@ -1355,7 +1361,7 @@ fn not_ready_deb_kiosk_app_hidden() {
 fn deb_kiosk_app_turns_ready() {
     let root = root();
     write_deb_public(root.path(), &[("testnav", "installing", None)]);
-    let g = grp(&deb_kiosk("testnav", "TestNav", ""));
+    let g = full(&deb_kiosk("testnav", "TestNav", ""));
     let r = FakeRunner::new();
     absent(&r, "kiosk-testnav");
     absent(&r, "1900");
@@ -1397,14 +1403,14 @@ fn removed_deb_kiosk_app_loses_account() {
         &r,
         p,
         &mut sys,
-        &grp(&deb_kiosk("testnav", "TestNav", "")),
+        &full(&deb_kiosk("testnav", "TestNav", "")),
         Phase::Full,
     );
     assert!(sys.kiosk_accounts.contains_key("testnav"));
 
     let r = FakeRunner::new();
     removal_answers(&r, "kiosk-testnav", 1900);
-    let out = run_step(&r, p, &mut sys, &grp(""), Phase::Full);
+    let out = run_step(&r, p, &mut sys, &full(""), Phase::Full);
     assert!(out.iter().all(|i| i.ok), "{out:?}");
     let calls = r.calls();
     let term = idx(&calls, "loginctl terminate-user kiosk-testnav");
@@ -1420,7 +1426,7 @@ fn removed_deb_kiosk_app_loses_account() {
 /// clash); the icon comes from the .deb app's `icon` like a locked app's.
 #[test]
 fn deb_kiosk_apps_from_config_and_public() {
-    let g = grp(&format!(
+    let g = full(&format!(
         "{}{}{}{}{}",
         deb_kiosk("testnav", "TestNav", "icon = \"files/tn.png\"\n"),
         deb_kiosk("waiting", "Waiting", ""),
@@ -1467,4 +1473,94 @@ fn deb_kiosk_apps_from_config_and_public() {
             .public_dir
             .join(deb_apps::status::PUBLIC_NAME)
     );
+}
+
+/// §4.1: the legacy browser mode has no .deb app, so no `kiosk-<id>` account either: none is made, and one made in
+/// another mode goes the way of a removed locked app.
+#[test]
+fn legacy_browser_has_no_deb_kiosk_account() {
+    let root = root();
+    let p = root.path();
+    write_deb_public(p, &[("testnav", "ready", Some("/opt/testnav/bin/testnav"))]);
+    merged_exec(p, "/opt/testnav/bin/testnav");
+    let legacy = grp(&deb_kiosk("testnav", "TestNav", ""));
+    assert!(legacy.legacy_browser);
+    assert!(deb_kiosk_apps(&legacy, &BTreeMap::new()).is_empty());
+
+    // fresh: nothing made
+    let r = FakeRunner::new();
+    let mut sys = SysState::default();
+    let out = run_step(&r, p, &mut sys, &legacy, Phase::Full);
+    assert!(out.is_empty(), "{out:?}");
+    assert_eq!(count(&r.calls(), "useradd"), 0, "{:?}", r.calls());
+    assert!(!p.join(ACCOUNTS_DIR).join("kiosk-testnav").exists());
+
+    // made in the desktop mode, then the Group turns into the legacy browser mode: removed
+    let r = FakeRunner::new();
+    absent(&r, "kiosk-testnav");
+    absent(&r, "1900");
+    run_step(
+        &r,
+        p,
+        &mut sys,
+        &full(&deb_kiosk("testnav", "TestNav", "")),
+        Phase::Full,
+    );
+    assert!(sys.kiosk_accounts.contains_key("testnav"));
+    let r = FakeRunner::new();
+    removal_answers(&r, "kiosk-testnav", 1900);
+    let out = run_step(&r, p, &mut sys, &legacy, Phase::Full);
+    assert!(out.iter().all(|i| i.ok), "{out:?}");
+    idx(&r.calls(), "userdel kiosk-testnav");
+    assert!(sys.kiosk_accounts.is_empty());
+    assert!(!p.join(ACCOUNTS_DIR).join("kiosk-testnav").exists());
+}
+
+/// The program must be the system's: a group- or world-writable one, or one owned by someone else than the system
+/// root's owner, keeps the app off the login screen.
+#[test]
+fn writable_deb_program_is_not_ready() {
+    let root = root();
+    let p = root.path();
+    write_deb_public(p, &[("testnav", "ready", Some("/opt/testnav/bin/testnav"))]);
+    merged_exec(p, "/opt/testnav/bin/testnav");
+    let prog = p.join("opt/testnav/bin/testnav");
+    fs::set_permissions(&prog, fs::Permissions::from_mode(0o757)).unwrap();
+    let r = FakeRunner::new();
+    absent(&r, "kiosk-testnav");
+    absent(&r, "1900");
+    let mut sys = SysState::default();
+    run_step(
+        &r,
+        p,
+        &mut sys,
+        &full(&deb_kiosk("testnav", "TestNav", "")),
+        Phase::Full,
+    );
+    let a = fs::read_to_string(p.join(ACCOUNTS_DIR).join("kiosk-testnav")).unwrap();
+    assert!(a.ends_with("SystemAccount=true\n"), "{a}");
+    assert_eq!(
+        read_launch_of(p, "testnav").kind,
+        LaunchKind::Exec {
+            target: DEB_NOT_READY_EXEC.into()
+        }
+    );
+    // 0755 again: ready
+    fs::set_permissions(&prog, fs::Permissions::from_mode(0o755)).unwrap();
+    let r = FakeRunner::new();
+    present(&r, "kiosk-testnav", 1900, "TestNav");
+    run_step(
+        &r,
+        p,
+        &mut sys,
+        &full(&deb_kiosk("testnav", "TestNav", "")),
+        Phase::Full,
+    );
+    let a = fs::read_to_string(p.join(ACCOUNTS_DIR).join("kiosk-testnav")).unwrap();
+    assert!(a.ends_with("SystemAccount=false\n"), "{a}");
+    // owned by someone else than the root's owner: not trusted (`/` is root's; the file is the test runner's)
+    use std::os::unix::fs::MetadataExt;
+    let mine = fs::metadata(&prog).unwrap().uid();
+    assert_eq!(trusted_program(Path::new("/"), &prog), mine == 0);
+    assert!(trusted_program(p, &prog));
 }

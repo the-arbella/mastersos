@@ -163,7 +163,9 @@ pub struct Profile {
     /// The file manager has a place in the Dash (the overview's favourites).
     pub dock_files: bool,
     /// The Config's Flatpaks are installed ([`super::flatpak`]), and once installed sit in the
-    /// Dash and stay visible.
+    /// Dash and stay visible. The same holds for the .deb apps (deb-apps design §4.1): without it
+    /// they are neither installed ([`crate::deb_apps::status::wanted_from`]) nor shown, here or as
+    /// locked apps ([`super::kiosk::deb_kiosk_apps`], the login policy).
     pub flatpaks: bool,
 }
 

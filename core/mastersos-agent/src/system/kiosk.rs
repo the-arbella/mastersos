@@ -136,11 +136,15 @@ pub const DEB_NOT_READY_EXEC: &str = "/usr/bin/false";
 /// app is `ready` there, listed on the login screen only then (otherwise [`DEB_NOT_READY_EXEC`], off the login screen,
 /// the account kept). `name` and `icon` come from the settings; without an `icon` the account has the generic avatar
 /// (the package's own icon is a theme name or a path inside the extension, not resolved here). Ids already in
-/// `apps.kiosk` are left out (the lint refuses the clash; the locked app wins).
+/// `apps.kiosk` are left out (the lint refuses the clash; the locked app wins). None in a mode without the Config's
+/// apps ([`desktop::Profile::flatpaks`]: the legacy browser mode, §4.1), so existing accounts are removed.
 pub fn deb_kiosk_apps(
     config: &Config,
     public: &BTreeMap<String, PublicApp>,
 ) -> BTreeMap<String, KioskApp> {
+    if !desktop::profile(config).flatpaks {
+        return BTreeMap::new();
+    }
     config
         .apps
         .deb
@@ -175,13 +179,16 @@ pub fn deb_kiosk_apps(
 /// `apps.kiosk` and the `kiosk = true` .deb apps ([`deb_kiosk_apps`]) of `config`, with the public status the deb-apps
 /// round left under `paths.public_dir` (unreadable: no .deb app is ready). A `ready` app whose program is not there
 /// counts as not ready: after an image upgrade the old extension is no longer merged (`SYSEXT_LEVEL`) while the status
-/// still says ready until the next round, and the login screen must not offer a session that ends at once.
+/// still says ready until the next round, and the login screen must not offer a session that ends at once. So does one
+/// whose program is not a regular file owned by the owner of the system root (root on a device) or is writable by its
+/// group or others: the session would run whatever someone put there.
 fn wanted_apps(config: &Config, paths: &super::SysPaths) -> BTreeMap<String, KioskApp> {
     let mut public =
         deb_apps::status::read_public(&paths.public_dir.join(deb_apps::status::PUBLIC_NAME));
     for p in public.values_mut() {
         let present = p.exec.as_deref().is_some_and(|e| {
-            e.starts_with('/') && paths.root.join(e.trim_start_matches('/')).is_file()
+            e.starts_with('/')
+                && trusted_program(&paths.root, &paths.root.join(e.trim_start_matches('/')))
         });
         if !present {
             p.exec = None;
@@ -190,6 +197,15 @@ fn wanted_apps(config: &Config, paths: &super::SysPaths) -> BTreeMap<String, Kio
     let mut apps = config.apps.kiosk.clone();
     apps.extend(deb_kiosk_apps(config, &public));
     apps
+}
+
+/// `path` (links followed) is a regular file owned by `root`'s owner and not writable by group or others.
+fn trusted_program(root: &Path, path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let (Ok(owner), Ok(m)) = (std::fs::metadata(root), std::fs::metadata(path)) else {
+        return false;
+    };
+    m.is_file() && m.uid() == owner.uid() && m.mode() & 0o022 == 0
 }
 
 pub fn step() -> Step {

@@ -954,6 +954,41 @@ fn changed_public_status_asks_for_an_apply() {
     assert!(again.public_changed());
 }
 
+/// §4.1: the legacy browser mode installs no .deb app — the unit is handed none, so it removes the installed ones —
+/// while the desktop mode hands over the Config's.
+#[tokio::test]
+async fn legacy_browser_wants_no_deb_app() {
+    let fx = Fx::new().await;
+    let cur = |mode: &str| {
+        let mut m = mastersos_bundle::Manifest::parse(&format!(
+            "version = 1\n[[group]]\nid = \"a\"\nname = \"a\"\n{mode}"
+        ))
+        .unwrap();
+        let mut config = mastersos_bundle::effective_config(&m, &m.configs[0]);
+        config.apps.deb.insert("testnav".into(), pinned(&fx));
+        crate::jobs::CurrentGroup {
+            version: 1,
+            group: m.groups.remove(0),
+            config,
+            escrow_recipients: vec![],
+        }
+    };
+    let state = fx.root().join("state");
+    let desktop = wanted_from(&cur("mode = \"desktop\"\n"), &state);
+    assert_eq!(desktop.apps.keys().collect::<Vec<_>>(), ["testnav"]);
+    let legacy_cur = cur("");
+    assert!(legacy_cur.config.legacy_browser);
+    let legacy = wanted_from(&legacy_cur, &state);
+    assert!(legacy.apps.is_empty(), "{legacy:?}");
+
+    ready(&fx.round(&desktop).await, "testnav");
+    assert!(fx.ext("app-testnav").is_dir());
+    let r = fx.round(&legacy).await;
+    assert!(r.is_empty(), "{r:?}");
+    assert!(!fx.ext("app-testnav").exists());
+    assert!(fx.public().is_empty());
+}
+
 impl Fx {
     /// The quiet target becomes active from the `k`th `is-active` call on, counting from the next one.
     fn quiet_from_next(&self, k: usize) {

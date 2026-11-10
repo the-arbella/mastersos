@@ -482,7 +482,12 @@ fn kiosk_users(config: &Config) -> Vec<KioskUser> {
                 .apps
                 .deb
                 .iter()
-                .filter(|(id, a)| a.kiosk && !config.apps.kiosk.contains_key(*id))
+                // none in the legacy browser mode (deb-apps design §4.1), like the kiosk step
+                .filter(|(id, a)| {
+                    a.kiosk
+                        && !config.apps.kiosk.contains_key(*id)
+                        && super::desktop::profile(config).flatpaks
+                })
                 .map(|(id, a)| (id, &a.name)),
         )
         .filter(|(id, _)| kiosk::check_id(id).is_ok())
@@ -2774,7 +2779,7 @@ client_id = "laptops"
     #[test]
     fn policy_lists_deb_kiosk_accounts() {
         let g = mastersos_bundle::Manifest::parse(
-            "version = 1\n[[group]]\nid = \"a\"\nname = \"a\"\n\
+            "version = 1\n[[group]]\nid = \"a\"\nname = \"a\"\nmode = \"desktop\"\n\
              [group.apps.kiosk.nwea]\nname = \"NWEA\"\nurl = \"https://nwea.example.org/\"\n\
              [group.apps.deb.testnav]\nname = \"TestNav\"\nurl = \"https://download.example.org/t.deb\"\nkiosk = true\n\
              [group.apps.deb.calc]\nname = \"Calc\"\nurl = \"https://download.example.org/c.deb\"\n",
@@ -2789,6 +2794,14 @@ client_id = "laptops"
                 kiosk_user("kiosk-nwea", "NWEA"),
                 kiosk_user("kiosk-testnav", "TestNav"),
             ]
+        );
+        // the legacy browser mode has no .deb app (§4.1): only the locked app's account
+        let mut legacy = g.clone();
+        legacy.interface = mastersos_bundle::Interface::Learning;
+        legacy.legacy_browser = true;
+        assert_eq!(
+            policy_from_bundle(&School::default(), &legacy, None).kiosk_users,
+            vec![kiosk_user("kiosk-nwea", "NWEA")]
         );
     }
 
