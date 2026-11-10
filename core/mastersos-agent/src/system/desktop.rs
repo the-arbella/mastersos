@@ -443,12 +443,44 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
             errs.push(format!("session mode: {e:#}"));
         }
     }
+    if p.locked() {
+        out.extend(home_tidy_item(env.paths));
+    }
     out.push(if errs.is_empty() {
         ok(ITEM)
     } else {
         failed(ITEM, errs.join("; "))
     });
     out
+}
+
+/// The `home-tidy` report item from the latest login's result; none when no login has written one. The detail
+/// holds counts and reason names only.
+fn home_tidy_item(paths: &SysPaths) -> Option<ItemResult> {
+    const NAME: &str = "home-tidy";
+    let dir = safefs::open_abs_dir(&paths.var_dir, false).ok()?;
+    let bytes = safefs::read_at(&dir, super::home_tidy::RESULT_FILE).ok()??;
+    let Ok(t) = serde_json::from_slice::<super::home_tidy::LastTidy>(&bytes) else {
+        return Some(failed(NAME, "result unreadable".into()));
+    };
+    let reasons = t.skipped.join(",");
+    let detail = format!(
+        "{}: moved {}, skipped {} [{}]",
+        t.outcome,
+        t.moved,
+        t.skipped.len(),
+        reasons
+    );
+    let clean = t.skipped.is_empty() && matches!(t.outcome.as_str(), "tidied" | "skipped-active");
+    Some(if clean {
+        ItemResult {
+            item: NAME.into(),
+            ok: true,
+            detail: Some(detail),
+        }
+    } else {
+        failed(NAME, detail)
+    })
 }
 
 /// 打开（必要时建出）`dir` 里的子目录 `rel`，强制 0755。

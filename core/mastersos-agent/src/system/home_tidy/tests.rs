@@ -492,3 +492,166 @@ mod prepare {
         );
     }
 }
+
+mod login {
+    use super::super::{on_login, tidy_decision, LastTidy, RESULT_FILE};
+    use crate::runner::{FakeRunner, Output};
+    use crate::system::exec_block;
+    use crate::system::tests::paths;
+
+    const SHOW: &str = "loginctl show-user";
+
+    fn uid() -> u32 {
+        super::me()
+    }
+
+    /// A root with `/home/me/.profile` and the passwd answer for it.
+    fn setup(mode: Option<&str>, home_field: &str) -> (tempfile::TempDir, FakeRunner) {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        std::fs::create_dir_all(d.path().join("home/me")).unwrap();
+        std::fs::write(d.path().join("home/me/.profile"), "x").unwrap();
+        std::fs::create_dir_all(&p.public_dir).unwrap();
+        if let Some(m) = mode {
+            std::fs::write(p.public_dir.join(exec_block::SESSION_MODE_FILE), m).unwrap();
+        }
+        let r = FakeRunner::new();
+        r.respond(
+            "getent passwd",
+            Output::ok(&format!(
+                "me:x:{}:{}:Me:{home_field}:/bin/bash\n",
+                uid(),
+                uid()
+            )),
+        );
+        (d, r)
+    }
+
+    fn result(d: &tempfile::TempDir) -> Option<LastTidy> {
+        let f = paths(d.path()).var_dir.join(RESULT_FILE);
+        serde_json::from_slice(&std::fs::read(f).ok()?).ok()
+    }
+
+    fn profile(d: &tempfile::TempDir) -> bool {
+        d.path().join("home/me/.profile").exists()
+    }
+
+    #[test]
+    fn tidy_decision_by_mode() {
+        for (mode, want) in [
+            (None, false),
+            (Some("full\n"), false),
+            (Some("learning\n"), true),
+            (Some("\u{1}garbage"), true),
+        ] {
+            let (d, _) = setup(mode, "/home/me");
+            assert_eq!(tidy_decision(&paths(d.path()).public_dir), want, "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn on_login_full_mode_touches_nothing() {
+        for mode in [Some("full\n"), None] {
+            let (d, r) = setup(mode, "/home/me");
+            on_login(&paths(d.path()), &r, "me", uid());
+            assert!(profile(&d));
+            assert!(result(&d).is_none());
+            assert!(!paths(d.path()).var_dir.join(RESULT_FILE).exists());
+            assert!(r.calls().is_empty(), "{:?}", r.calls());
+        }
+    }
+
+    #[test]
+    fn on_login_learning_tidies() {
+        let (d, r) = setup(Some("learning\n"), "/home/me");
+        r.respond(SHOW, Output::ok("offline\n"));
+        on_login(&paths(d.path()), &r, "me", uid());
+        assert!(!profile(&d));
+        let t = result(&d).unwrap();
+        assert_eq!(t.outcome, "tidied");
+        assert!(t.moved >= 1);
+        assert!(t.skipped.is_empty());
+        assert!(t.at > 0);
+        use std::os::unix::fs::PermissionsExt;
+        let f = paths(d.path()).var_dir.join(RESULT_FILE);
+        assert_eq!(
+            std::fs::metadata(f).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn on_login_active_skips() {
+        let (d, r) = setup(Some("learning\n"), "/home/me");
+        r.respond(SHOW, Output::ok("active\n"));
+        on_login(&paths(d.path()), &r, "me", uid());
+        assert!(profile(&d));
+        assert_eq!(result(&d).unwrap().outcome, "skipped-active");
+    }
+
+    #[test]
+    fn on_login_prepare_failed() {
+        let (d, r) = setup(Some("learning\n"), "/home/me");
+        r.respond(SHOW, Output::fail(1, "boom"));
+        on_login(&paths(d.path()), &r, "me", uid());
+        assert!(profile(&d));
+        assert_eq!(result(&d).unwrap().outcome, "prepare-failed");
+    }
+
+    #[test]
+    fn on_login_not_a_home() {
+        for field in [
+            "/srv/me",
+            "/home/other",
+            "/home/me/",
+            "/home/../home/me",
+            "",
+        ] {
+            let (d, r) = setup(Some("learning\n"), field);
+            r.respond(SHOW, Output::ok("offline\n"));
+            on_login(&paths(d.path()), &r, "me", uid());
+            assert!(profile(&d), "{field}");
+            assert_eq!(result(&d).unwrap().outcome, "not-a-home", "{field}");
+        }
+        // no passwd record at all
+        let (d, _) = setup(Some("learning\n"), "/home/me");
+        let r = FakeRunner::new();
+        r.respond("getent passwd", Output::fail(2, ""));
+        on_login(&paths(d.path()), &r, "me", uid());
+        assert!(profile(&d));
+        assert_eq!(result(&d).unwrap().outcome, "not-a-home");
+    }
+
+    #[test]
+    fn on_login_never_fails_on_broken_setup() {
+        // var_dir is a file, /home missing, odd names: nothing may panic
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        std::fs::create_dir_all(&p.public_dir).unwrap();
+        std::fs::write(
+            p.public_dir.join(exec_block::SESSION_MODE_FILE),
+            "learning\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(p.var_dir.parent().unwrap()).unwrap();
+        std::fs::write(&p.var_dir, "not a dir").unwrap();
+        let r = FakeRunner::new();
+        r.respond(
+            "getent passwd",
+            Output::ok(&format!("me:x:{}:1:M:/home/me:/bin/sh\n", uid())),
+        );
+        r.respond(SHOW, Output::ok("offline\n"));
+        on_login(&p, &r, "me", uid());
+        on_login(&p, &r, "../x", uid());
+        on_login(&p, &r, "", 0);
+    }
+
+    #[test]
+    fn kebab_names_of_skip_reasons() {
+        use super::super::SkipReason::*;
+        assert_eq!(ForeignContainer.name(), "foreign-container");
+        assert_eq!(ContainerBusy.name(), "container-busy");
+        assert_eq!(TooManyEntries.name(), "too-many-entries");
+        assert_eq!(Io.name(), "io");
+    }
+}

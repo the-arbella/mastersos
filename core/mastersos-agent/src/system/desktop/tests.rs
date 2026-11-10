@@ -1714,3 +1714,52 @@ fn locked_run_switches_off_student_linger_and_full_does_not() {
         assert_eq!(listed, locked, "{:?}", r.calls());
     }
 }
+
+fn learning_run_with_result(json: Option<&str>) -> Vec<ItemResult> {
+    let root = root();
+    let r = MountSim::new(root.path());
+    let bundle = tempfile::tempdir().unwrap();
+    let mut sys = SysState::default();
+    let p = paths(root.path());
+    if let Some(j) = json {
+        fs::create_dir_all(&p.var_dir).unwrap();
+        fs::write(p.var_dir.join(super::super::home_tidy::RESULT_FILE), j).unwrap();
+    }
+    let g = grp(Kind::Learning, vec![app("LMS", "https://lms.th/", None)]);
+    run_step(root.path(), &r, &mut sys, &g, bundle.path(), Phase::Full).out
+}
+
+#[test]
+fn home_tidy_report_item() {
+    let tidied = r#"{"at":1,"moved":3,"skipped":[],"outcome":"tidied"}"#;
+    let out = learning_run_with_result(Some(tidied));
+    let i = item(&out, "home-tidy");
+    assert!(i.ok, "{i:?}");
+
+    for json in [
+        r#"{"at":1,"moved":3,"skipped":["io","container-busy"],"outcome":"tidied"}"#,
+        r#"{"at":1,"moved":0,"skipped":[],"outcome":"prepare-failed"}"#,
+        r#"{"at":1,"moved":0,"skipped":[],"outcome":"not-a-home"}"#,
+        "garbage",
+    ] {
+        let out = learning_run_with_result(Some(json));
+        let i = item(&out, "home-tidy");
+        assert!(!i.ok, "{json}");
+        let d = i.detail.as_deref().unwrap();
+        assert!(!d.contains('/'), "{d}");
+    }
+    let out = learning_run_with_result(Some(
+        r#"{"at":1,"moved":3,"skipped":["io","io","container-busy"],"outcome":"tidied"}"#,
+    ));
+    let d = item(&out, "home-tidy").detail.clone().unwrap();
+    assert!(
+        d.contains("moved 3") && d.contains("io") && d.contains("container-busy"),
+        "{d}"
+    );
+
+    let active = r#"{"at":1,"moved":0,"skipped":[],"outcome":"skipped-active"}"#;
+    assert!(item(&learning_run_with_result(Some(active)), "home-tidy").ok);
+
+    let out = learning_run_with_result(None);
+    assert!(out.iter().all(|r| r.item != "home-tidy"));
+}

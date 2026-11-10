@@ -23,13 +23,17 @@ use std::os::unix::ffi::OsStrExt;
 use rustix::fs::{AtFlags, FileType, Mode, Stat};
 use rustix::io::Errno;
 
+use std::path::Path;
+
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 
 use crate::homes::trash::to_trash_entry_os;
 use crate::runner::{Cmd, Runner};
 use crate::safefs::bounded::dir_flags;
 use crate::system::ephemeral::PAM_CMD_TIMEOUT;
 use crate::system::lock::{self, LOGIN_CMD_TIMEOUT};
+use crate::system::{exec_block, SysPaths};
 
 /// Top-level dot entries that are kept as they are (none: `.pki` is a container, see [`CONTAINERS`]).
 pub const KEEP_TOP: &[&str] = &[];
@@ -147,6 +151,18 @@ pub enum SkipReason {
 }
 
 use SkipReason::*;
+
+impl SkipReason {
+    /// The kebab-case name used in the reported result (a category only, never a name or path).
+    pub fn name(self) -> &'static str {
+        match self {
+            ForeignContainer => "foreign-container",
+            ContainerBusy => "container-busy",
+            TooManyEntries => "too-many-entries",
+            Io => "io",
+        }
+    }
+}
 
 /// Tidy the home directory `home` of `uid`, moving what is not kept into `trash`. Never fails as a whole: every
 /// error is recorded as a [`SkipReason`] and the next item is tried.
@@ -601,6 +617,105 @@ pub fn linger_off_for_students(runner: &dyn Runner, admins: &[String]) -> Result
         anyhow::bail!("disable linger failed for {failed} account(s)");
     }
     Ok(())
+}
+
+/// The latest login's result, in `var_dir` (0600, overwritten each time); the `desktop` step reports it.
+pub const RESULT_FILE: &str = "home-tidy.json";
+
+/// What the latest login hook did. `outcome` is `tidied`, `skipped-active`, `prepare-failed` or `not-a-home`;
+/// `skipped` holds [`SkipReason::name`]s. Nothing here identifies a person or a path.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LastTidy {
+    pub at: u64,
+    pub moved: usize,
+    pub skipped: Vec<String>,
+    pub outcome: String,
+}
+
+/// Whether logins are tidied: the session is locked (learning), see [`exec_block::session_mode_locked`].
+pub fn tidy_decision(public_dir: &Path) -> bool {
+    exec_block::session_mode_locked(public_dir)
+}
+
+fn outcome(name: &str) -> LastTidy {
+    LastTidy {
+        at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+        moved: 0,
+        skipped: Vec::new(),
+        outcome: name.to_string(),
+    }
+}
+
+/// True when the passwd record of `user` (with uid `uid`) says its home is exactly `/home/<user>`.
+fn home_is_standard(runner: &dyn Runner, user: &str, uid: u32) -> bool {
+    let id = uid.to_string();
+    let Ok(out) = runner.run(&pam_cmd("getent", &["passwd", "--", user])) else {
+        return false;
+    };
+    if out.code != 0 {
+        return false;
+    }
+    let Some(line) = out.stdout.lines().next() else {
+        return false;
+    };
+    let f: Vec<&str> = line.split(':').collect();
+    f.len() >= 6 && f[0] == user && f[2] == id && f[5] == format!("/home/{user}")
+}
+
+fn tidy_for_login(paths: &SysPaths, runner: &dyn Runner, user: &str, uid: u32) -> LastTidy {
+    if !home_is_standard(runner, user, uid) {
+        return outcome("not-a-home");
+    }
+    match prepare_user_manager(runner, uid) {
+        Prep::SkipActive => return outcome("skipped-active"),
+        Prep::Failed => return outcome("prepare-failed"),
+        Prep::Proceed => {}
+    }
+    let inner = || -> Result<Option<Tidy>> {
+        let root = crate::safefs::open_abs_dir(&paths.root.join("home"), false)?;
+        let Some(home) = crate::safefs::open_child_dir(&root, user)? else {
+            return Ok(None);
+        };
+        let Some(trash) = crate::homes::trash::open_trash(&root, true)? else {
+            return Ok(None);
+        };
+        Ok(Some(tidy_home(&home, &trash, uid)))
+    };
+    match inner() {
+        // No home yet (it is created later in the login): nothing to tidy.
+        Ok(None) => outcome("tidied"),
+        Ok(Some(t)) => LastTidy {
+            moved: t.moved,
+            skipped: t.skipped.iter().map(|r| r.name().to_string()).collect(),
+            ..outcome("tidied")
+        },
+        Err(_) => LastTidy {
+            skipped: vec![Io.name().to_string()],
+            ..outcome("tidied")
+        },
+    }
+}
+
+fn write_result(paths: &SysPaths, t: &LastTidy) -> Result<()> {
+    let dir = crate::system::var_dir(paths)?;
+    crate::safefs::write_at(&dir, RESULT_FILE, &serde_json::to_vec(t)?, 0o600)?;
+    Ok(())
+}
+
+/// The root PAM login hook for `user`: in learning mode tidy the home before the session starts. Never fails and
+/// never panics: any problem only shows in the result file (or not at all), and the login goes on. In full mode
+/// (or without a session mode) nothing is read from the home, written or run.
+pub fn on_login(paths: &SysPaths, runner: &dyn Runner, user: &str, uid: u32) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if !tidy_decision(&paths.public_dir) {
+            return;
+        }
+        let t = tidy_for_login(paths, runner, user, uid);
+        let _ = write_result(paths, &t);
+    }));
 }
 
 #[cfg(test)]
