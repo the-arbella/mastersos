@@ -15,7 +15,6 @@
 //!
 //! Trees are unpacked and sanitized in the private `<work>/stage` and only then moved to `/var/lib/extensions` ([`STAGE`]).
 
-use std::collections::HashSet;
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -24,7 +23,8 @@ use anyhow::{anyhow, ensure, Context, Result};
 use rustix::fs::{AtFlags, FileType};
 
 use super::assemble::{
-    drop_image_files, pick_launcher, prune, strip_setid, write_desktop, write_release, Policy,
+    drop_image_files, drop_image_lib_dir, normalize_owners, pick_launcher, prune, strip_setid,
+    write_desktop, write_release, ImageOwned, Policy,
 };
 use crate::runner::{run_ok, Cmd, Runner};
 use crate::safefs;
@@ -35,6 +35,52 @@ pub(crate) const OPT_MIRROR: &str = "opt-root";
 pub(crate) const DEPS_EXT: &str = "app-deps";
 const EXTRACT_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const MAX_DEPTH: usize = 64;
+
+/// Kept free on the file system of the work directory and `/var/lib/extensions` beyond what a package needs: a full
+/// `/var` breaks logins, the journal and system updates, so a download or an unpack that would leave less is refused.
+pub(crate) const RESERVE_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// Free bytes for an unprivileged writer on the file system of a path (`statvfs`); injectable for tests.
+pub type FreeSpace = std::sync::Arc<dyn Fn(&Path) -> Result<u64> + Send + Sync>;
+
+/// The system's [`FreeSpace`]: `f_bavail × f_frsize`.
+pub fn statvfs_free(p: &Path) -> Result<u64> {
+    let st = rustix::fs::statvfs(p)
+        .map_err(std::io::Error::from)
+        .with_context(|| format!("checking the free space of {}", p.display()))?;
+    Ok(st.f_bavail.saturating_mul(st.f_frsize))
+}
+
+/// Not enough free space ([`check_space`]); a separate type so a failed build caused by it is retried next round.
+#[derive(Debug)]
+pub(crate) struct NoSpace(String);
+
+impl std::fmt::Display for NoSpace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for NoSpace {}
+
+/// Refuses `what` (a download or an unpack of `size` bytes of packages) unless every one of `dirs` has at least
+/// 3 × `size` plus [`RESERVE_BYTES`] free (the package, its unpacked tree and the tree being replaced).
+pub(crate) fn check_space(free: &FreeSpace, dirs: &[&Path], size: u64, what: &str) -> Result<()> {
+    let need = size.saturating_mul(3).saturating_add(RESERVE_BYTES);
+    for d in dirs {
+        let have = free(d)?;
+        if have < need {
+            return Err(NoSpace(format!(
+                "not enough free disk space for {what}: {} has {} MiB free, {} MiB needed (3 × the package size plus 1 GiB kept free)",
+                d.display(),
+                have / (1024 * 1024),
+                need.div_ceil(1024 * 1024)
+            ))
+            .into());
+        }
+    }
+    Ok(())
+}
 
 /// The extension of app `id`.
 pub(crate) fn app_ext(id: &str) -> String {
@@ -133,13 +179,21 @@ pub(crate) fn discard(ext_dir: &Path, name: &str) {
 /// tree reaches `/var/lib/extensions` (0755) only afterwards ([`publish`]).
 pub(crate) const STAGE: &str = "stage";
 
-/// An empty `<work>/stage/<new_name>` and `dpkg-deb -x` of every package into it; returns the stage and the tree.
-fn unpack(
-    runner: &dyn Runner,
-    work: &Path,
-    new_name: &str,
-    debs: &[PathBuf],
-) -> Result<(OwnedFd, OwnedFd)> {
+/// An empty `<work>/stage/<new_name>` and `dpkg-deb -x` of every package into it; returns the stage and the tree. Refused
+/// first without the free space for it ([`check_space`]).
+fn unpack(b: &Build, new_name: &str, debs: &[PathBuf]) -> Result<(OwnedFd, OwnedFd)> {
+    let (runner, work) = (b.runner, b.work);
+    let mut size = 0u64;
+    for d in debs {
+        let m = std::fs::metadata(d).with_context(|| format!("reading {}", d.display()))?;
+        size = size.saturating_add(m.len());
+    }
+    check_space(
+        b.free,
+        &[work, b.ext_dir],
+        size,
+        &format!("unpacking {new_name}"),
+    )?;
     let w = safefs::open_abs_dir(work, false)?;
     let stage = safefs::open_dir_at(&w, Path::new(STAGE), true)?;
     safefs::set_mode(&stage, 0o700)?;
@@ -175,40 +229,46 @@ fn publish(stage: &OwnedFd, tree: &OwnedFd, ext_dir: &Path, new_name: &str) -> R
         .with_context(|| format!("moving {new_name} into {}", ext_dir.display()))
 }
 
-/// Runs `f` on a freshly unpacked tree, then publishes it; the stage is cleaned up either way.
+/// Runs `f` on a freshly unpacked tree, gives everything in it the agent's own owner (root) without group/other write
+/// ([`normalize_owners`]), then publishes it; the stage is cleaned up either way.
 fn staged(
-    runner: &dyn Runner,
-    work: &Path,
-    ext_dir: &Path,
+    b: &Build,
     new_name: &str,
     debs: &[PathBuf],
     f: impl FnOnce(&OwnedFd) -> Result<()>,
 ) -> Result<()> {
-    let (stage, tree) = unpack(runner, work, new_name, debs)?;
-    let r = f(&tree).and_then(|()| publish(&stage, &tree, ext_dir, new_name));
+    let (stage, tree) = unpack(b, new_name, debs)?;
+    let (uid, gid) = (
+        rustix::process::geteuid().as_raw(),
+        rustix::process::getegid().as_raw(),
+    );
+    let r = f(&tree)
+        .and_then(|()| normalize_owners(&tree, uid, gid).map(drop))
+        .and_then(|()| publish(&stage, &tree, b.ext_dir, new_name));
     if r.is_err() {
         let _ = safefs::remove_tree_at(&stage, new_name);
     }
     r
 }
 
+/// What every build of a round shares.
+pub(crate) struct Build<'a> {
+    pub runner: &'a dyn Runner,
+    pub ext_dir: &'a Path,
+    pub work: &'a Path,
+    pub owned: &'a ImageOwned,
+    pub opt_root: &'a Path,
+    pub level: &'a str,
+    pub free: &'a FreeSpace,
+}
+
 /// Builds `app-<id>.new`: unpack the main package, keep the allowlist, drop what covers the system, clear setuid bits,
 /// find the launcher, add IT's icon, write our `.desktop` and the extension-release. The caller removes `.new` on error.
-pub(crate) fn build_app(
-    runner: &dyn Runner,
-    ext_dir: &Path,
-    work: &Path,
-    owned: &HashSet<String>,
-    opt_root: &Path,
-    level: &str,
-    s: &AppSpec,
-) -> Result<BuiltApp> {
+pub(crate) fn build_app(b: &Build, s: &AppSpec) -> Result<BuiltApp> {
     let name = app_ext(&s.id);
     let mut out = None;
     staged(
-        runner,
-        work,
-        ext_dir,
+        b,
         &format!("{name}.new"),
         std::slice::from_ref(&s.deb),
         |root| {
@@ -218,12 +278,20 @@ pub(crate) fn build_app(
                     package: s.package.clone(),
                 },
             )?;
-            pruned.extend(drop_image_files(root, owned, opt_root)?);
+            pruned.extend(drop_image_lib_dir(root, &s.package, b.owned)?);
+            pruned.extend(drop_image_files(root, b.owned, b.opt_root)?);
             if !pruned.is_empty() {
                 log::info!("deb-apps: {}: removed {}", s.id, pruned.join(", "));
             }
             let setid = strip_setid(root)?;
             let launcher = pick_launcher(root, s.exec.as_deref())?;
+            // a locked app's program goes through the kiosk step's rule too (mastersos_bundle::kiosk::check)
+            ensure!(
+                !s.kiosk || mastersos_bundle::kiosk::exec_path_ok(&launcher.exec),
+                "the program {:?} cannot start a locked app (kiosk = true): its path must be under /usr/ or /opt/ and \
+                 use only letters, digits, '.', '_', '-' and '+' in each part; write exec with such a path",
+                launcher.exec
+            );
             let icon = match &s.icon {
                 None => None,
                 Some((bytes, ext)) => {
@@ -239,7 +307,7 @@ pub(crate) fn build_app(
                 }
             };
             write_desktop(root, &s.id, &s.name, &launcher, icon.as_deref(), s.kiosk)?;
-            write_release(root, &name, level)?;
+            write_release(root, &name, b.level)?;
             out = Some(BuiltApp {
                 exec: launcher.exec,
                 pruned: pruned.len(),
@@ -252,35 +320,20 @@ pub(crate) fn build_app(
 }
 
 /// Builds `app-deps.new` from the dependency packages (the Ubuntu deny list). The caller removes `.new` on error.
-pub(crate) fn build_deps(
-    runner: &dyn Runner,
-    ext_dir: &Path,
-    work: &Path,
-    owned: &HashSet<String>,
-    opt_root: &Path,
-    level: &str,
-    debs: &[PathBuf],
-) -> Result<()> {
-    staged(
-        runner,
-        work,
-        ext_dir,
-        &format!("{DEPS_EXT}.new"),
-        debs,
-        |root| {
-            let mut pruned = prune(root, &Policy::UbuntuDeny)?;
-            pruned.extend(drop_image_files(root, owned, opt_root)?);
-            if !pruned.is_empty() {
-                log::info!("deb-apps: dependencies: removed {}", pruned.join(", "));
-            }
-            let setid = strip_setid(root)?;
-            if !setid.is_empty() {
-                log::warn!(
-                    "deb-apps: dependencies: cleared setuid/setgid on {}",
-                    setid.join(", ")
-                );
-            }
-            write_release(root, DEPS_EXT, level)
-        },
-    )
+pub(crate) fn build_deps(b: &Build, debs: &[PathBuf]) -> Result<()> {
+    staged(b, &format!("{DEPS_EXT}.new"), debs, |root| {
+        let mut pruned = prune(root, &Policy::UbuntuDeny)?;
+        pruned.extend(drop_image_files(root, b.owned, b.opt_root)?);
+        if !pruned.is_empty() {
+            log::info!("deb-apps: dependencies: removed {}", pruned.join(", "));
+        }
+        let setid = strip_setid(root)?;
+        if !setid.is_empty() {
+            log::warn!(
+                "deb-apps: dependencies: cleared setuid/setgid on {}",
+                setid.join(", ")
+            );
+        }
+        write_release(root, DEPS_EXT, b.level)
+    })
 }

@@ -352,9 +352,20 @@ fn setuid_bit_cleared() {
     assert_eq!(strip_setid(&fd).unwrap(), Vec::<String>::new());
 }
 
-/// A factory dpkg info dir: `info/*.list` plus the `diversions` file next to it.
+/// The image's list of `/usr` next to the factory dir (`usr-paths`): the dpkg paths below plus what no package has.
+const USR_PATHS: &str = "d usr\nd usr/bin\nl usr/bin/cat\nf usr/bin/ls\nf usr/bin/mastersos-agent\n\
+f usr/bin/mastersos-kiosk\nd usr/lib\nd usr/lib/mastersos\nf usr/lib/mastersos/usr-paths\nd usr/lib/python3\n\
+d usr/lib/repart.d\nf usr/lib/repart.d/10-root.conf\nd usr/share\nd usr/share/dconf\nd usr/share/doc\n\
+d usr/share/doc/coreutils\nf usr/share/doc/coreutils/copyright\nl usr/share/doc/libfoo1\nd usr/share/empty\n";
+
+fn owned_of(f: &tempfile::TempDir) -> ImageOwned {
+    image_owned(&f.path().join("info"), &f.path().join("usr-paths")).unwrap()
+}
+
+/// A factory dpkg info dir: `info/*.list` plus the `diversions` file next to it, and `usr-paths`.
 fn factory() -> tempfile::TempDir {
     let t = tempfile::tempdir().unwrap();
+    fs::write(t.path().join("usr-paths"), USR_PATHS).unwrap();
     let info = t.path().join("info");
     fs::create_dir_all(&info).unwrap();
     fs::write(
@@ -376,7 +387,7 @@ fn factory() -> tempfile::TempDir {
 #[test]
 fn image_file_dropped() {
     let f = factory();
-    let owned = image_owned(&f.path().join("info")).unwrap();
+    let owned = owned_of(&f);
     for p in [
         "usr/bin/ls",
         "usr/bin/cat",
@@ -386,6 +397,7 @@ fn image_file_dropped() {
         assert!(owned.contains(p), "{p}: {owned:?}");
     }
     assert!(!owned.contains("usr/not/a/list"));
+    assert!(owned.contains("usr/bin/mastersos-agent"), "from usr-paths");
     assert!(!owned.contains("") && !owned.contains("."));
 
     let opt = tempfile::tempdir().unwrap();
@@ -436,10 +448,152 @@ fn image_file_dropped() {
 
 #[test]
 fn image_owned_needs_the_lists() {
-    let f = tempfile::tempdir().unwrap();
-    assert!(image_owned(&f.path().join("missing")).is_err());
+    let f = factory();
+    let up = f.path().join("usr-paths");
+    assert!(image_owned(&f.path().join("missing"), &up).is_err());
     // A dir with no .list at all is not a dpkg database
-    assert!(image_owned(f.path()).is_err());
+    let empty = tempfile::tempdir().unwrap();
+    assert!(image_owned(empty.path(), &up).is_err());
+}
+
+#[test]
+fn image_owned_needs_the_list_of_usr() {
+    let f = factory();
+    let info = f.path().join("info");
+    let e = err(image_owned(&info, &f.path().join("missing")));
+    assert!(
+        e.contains("missing") && e.contains("no .deb app is assembled"),
+        "{e}"
+    );
+    for bad in [
+        "",
+        "d usr\nf usr/bin/x y\nx\n",
+        "d usr\nff usr/bin/x\n",
+        "d usr\nf /usr/bin/x\n",
+        "d usr\nf usr/../etc/shadow\n",
+        "d usr\nf etc/passwd\n",
+        "d usr\nf usr//bin\n",
+        "f usr/bin/x\n",
+    ] {
+        fs::write(f.path().join("bad"), bad).unwrap();
+        assert!(
+            image_owned(&info, &f.path().join("bad")).is_err(),
+            "{bad:?}"
+        );
+    }
+    // a name with a space is fine: only the first space separates the type
+    fs::write(f.path().join("ok"), "d usr\nd usr/share\nf usr/share/a b\n").unwrap();
+    assert!(image_owned(&info, &f.path().join("ok"))
+        .unwrap()
+        .contains("usr/share/a b"));
+}
+
+#[test]
+fn files_outside_dpkg_are_not_covered() {
+    let f = factory();
+    let owned = owned_of(&f);
+    let opt = tempfile::tempdir().unwrap();
+    let t = tempfile::tempdir().unwrap();
+    let r = t.path();
+    // run as root after every merge; in no dpkg list
+    put(r, "usr/bin/mastersos-agent", "x", 0o755);
+    // a directory where the image has a file (from mkosi.extra)
+    put(r, "usr/bin/mastersos-kiosk/x", "x", 0o755);
+    // a file where the image has a directory no package owns, and a file over one of its files
+    put(r, "usr/share/dconf", "x", 0o644);
+    put(r, "usr/lib/repart.d/10-root.conf", "x", 0o644);
+    // new things inside image directories merge, also into an empty one
+    put(r, "usr/lib/repart.d/99-new.conf", "x", 0o644);
+    put(r, "usr/share/empty/new", "x", 0o644);
+    put(r, "usr/bin/vendor-tool", "x", 0o755);
+    let fd = open(r);
+    let mut dropped = drop_image_files(&fd, &owned, opt.path()).unwrap();
+    dropped.sort();
+    assert_eq!(
+        dropped,
+        vec![
+            "usr/bin/mastersos-agent",
+            "usr/bin/mastersos-kiosk",
+            "usr/lib/repart.d/10-root.conf",
+            "usr/share/dconf",
+        ]
+    );
+    for kept in [
+        "usr/lib/repart.d/99-new.conf",
+        "usr/share/empty/new",
+        "usr/bin/vendor-tool",
+    ] {
+        assert!(exists(r, kept), "{kept}");
+    }
+}
+
+#[test]
+fn vendor_lib_dir_only_when_the_image_has_none() {
+    let f = factory();
+    let owned = owned_of(&f);
+    for (package, keeps) in [("python3", false), ("testnav", true)] {
+        let t = tempfile::tempdir().unwrap();
+        let r = t.path();
+        put(r, &format!("usr/lib/{package}/x.py"), "x", 0o644);
+        let fd = open(r);
+        prune(&fd, &vendor(package)).unwrap();
+        assert!(
+            exists(r, &format!("usr/lib/{package}/x.py")),
+            "{package}: kept by prune"
+        );
+        let got = drop_image_lib_dir(&fd, package, &owned).unwrap();
+        assert_eq!(got.is_none(), keeps, "{package}");
+        assert_eq!(exists(r, &format!("usr/lib/{package}")), keeps, "{package}");
+    }
+    // not a Debian package name: refused, never a directory name
+    let t = tempfile::tempdir().unwrap();
+    put(t.path(), "usr/lib/x86_64-linux-gnu/libevil.so", "x", 0o644);
+    let fd = open(t.path());
+    assert!(err(prune(&fd, &vendor("x86_64-linux-gnu"))).contains("malformed package name"));
+    assert!(drop_image_lib_dir(&fd, "x86_64-linux-gnu", &owned).is_err());
+}
+
+#[test]
+fn owners_and_write_bits_normalized() {
+    use std::os::unix::fs::MetadataExt;
+    let t = tempfile::tempdir().unwrap();
+    let r = t.path();
+    put(r, "opt/x/bin/x", "x", 0o777);
+    put(r, "opt/x/data", "x", 0o666);
+    put(r, "opt/x/keep", "x", 0o644);
+    fs::create_dir_all(r.join("opt/x/shared")).unwrap();
+    fs::set_permissions(r.join("opt/x/shared"), fs::Permissions::from_mode(0o777)).unwrap();
+    link(r, "opt/x/link", "/etc/passwd");
+    let root = rustix::process::geteuid().is_root();
+    if root {
+        // a vendor file owned by a local user (uid 1000), as dpkg-deb -x as root keeps it
+        for p in ["opt/x/data", "opt/x/shared", "opt/x/link"] {
+            std::os::unix::fs::lchown(r.join(p), Some(1000), Some(1000)).unwrap();
+        }
+    }
+    let (uid, gid) = (
+        rustix::process::geteuid().as_raw(),
+        rustix::process::getegid().as_raw(),
+    );
+    let fd = open(r);
+    assert!(normalize_owners(&fd, uid, gid).unwrap() >= 3);
+    for (p, mode) in [
+        ("opt/x/bin/x", 0o755),
+        ("opt/x/data", 0o644),
+        ("opt/x/keep", 0o644),
+        ("opt/x/shared", 0o755),
+    ] {
+        let m = fs::symlink_metadata(r.join(p)).unwrap();
+        assert_eq!(m.mode() & 0o7777, mode, "{p}");
+        assert_eq!((m.uid(), m.gid()), (uid, gid), "{p}");
+    }
+    let l = fs::symlink_metadata(r.join("opt/x/link")).unwrap();
+    assert!(l.file_type().is_symlink());
+    assert_eq!((l.uid(), l.gid()), (uid, gid));
+    // the link was not followed
+    assert_ne!(fs::metadata("/etc/passwd").unwrap().uid(), 1000);
+    // nothing left to change
+    assert_eq!(normalize_owners(&fd, uid, gid).unwrap(), 0);
 }
 
 fn desktop(exec: &str) -> String {

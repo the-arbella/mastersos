@@ -4,7 +4,7 @@ use std::io::Write;
 use std::os::fd::OwnedFd;
 use std::time::Duration;
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{ensure, Context, Result};
 use reqwest::header::{
     HeaderMap, HeaderValue, ETAG, IF_MODIFIED_SINCE, IF_NONE_MATCH, LAST_MODIFIED,
 };
@@ -25,6 +25,21 @@ pub struct Fetched {
     pub etag: Option<String>,
     pub last_modified: Option<String>,
 }
+
+/// The downloaded file's sha256 is not the wanted one (nothing was written). Kept as a type so callers can remember it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShaMismatch {
+    pub got: String,
+    pub want: String,
+}
+
+impl std::fmt::Display for ShaMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "sha256 does not match ({} ≠ {})", self.got, self.want)
+    }
+}
+
+impl std::error::Error for ShaMismatch {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FetchOutcome {
@@ -77,6 +92,64 @@ pub async fn download_with(
     cond: Option<&Fetched>,
     first_bytes: &mut (dyn FnMut() -> Result<()> + Send),
 ) -> Result<FetchOutcome> {
+    download_hooks(
+        http,
+        url,
+        want_sha256,
+        max,
+        timeout,
+        dir,
+        name,
+        cond,
+        &mut |_| Ok(()),
+        first_bytes,
+    )
+    .await
+}
+
+/// [`download`], calling `on_length` with the response's `Content-Length` (`None` when it has none) once the headers of a
+/// successful response are in, before anything is written; an error from it ends the download (deb-apps checks the free
+/// space there).
+#[allow(clippy::too_many_arguments)]
+pub async fn download_sized(
+    http: &reqwest::Client,
+    url: &str,
+    want_sha256: Option<&str>,
+    max: u64,
+    timeout: Duration,
+    dir: &OwnedFd,
+    name: &str,
+    cond: Option<&Fetched>,
+    on_length: &mut (dyn FnMut(Option<u64>) -> Result<()> + Send),
+) -> Result<FetchOutcome> {
+    download_hooks(
+        http,
+        url,
+        want_sha256,
+        max,
+        timeout,
+        dir,
+        name,
+        cond,
+        on_length,
+        &mut || Ok(()),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn download_hooks(
+    http: &reqwest::Client,
+    url: &str,
+    want_sha256: Option<&str>,
+    max: u64,
+    timeout: Duration,
+    dir: &OwnedFd,
+    name: &str,
+    cond: Option<&Fetched>,
+    on_length: &mut (dyn FnMut(Option<u64>) -> Result<()> + Send),
+    first_bytes: &mut (dyn FnMut() -> Result<()> + Send),
+) -> Result<FetchOutcome> {
     let mut req = http.get(url).timeout(timeout);
     if let Some(c) = cond {
         if let Some(v) = c.etag.as_deref().and_then(header_value) {
@@ -99,6 +172,7 @@ pub async fn download_with(
         resp.content_length().is_none_or(|n| n <= max),
         "the file exceeds the size limit ({max} bytes)"
     );
+    on_length(resp.content_length())?;
     let etag = validator(resp.headers(), ETAG);
     let last_modified = validator(resp.headers(), LAST_MODIFIED);
     let mut tmp = safefs::TmpFile::create(dir, name, 0o600)?;
@@ -119,7 +193,11 @@ pub async fn download_with(
     let got = hex(&h.finalize());
     if let Some(want) = want_sha256 {
         if !got.eq_ignore_ascii_case(want) {
-            bail!("sha256 does not match ({got} ≠ {want})");
+            return Err(ShaMismatch {
+                got,
+                want: want.to_string(),
+            }
+            .into());
         }
     }
     tmp.commit()?;

@@ -125,6 +125,10 @@ fn apt_args_are_private() {
         "Dir::Etc::sourceparts=-",
         "Dir::Etc::trusted=-",
         "Dir::Etc::trustedparts=-",
+        "Dir::Etc::preferences=/w/preferences",
+        "Dir::Etc::preferencesparts=/w/preferences.d",
+        "Dir::Etc::netrc=/w/auth.conf",
+        "Dir::Etc::netrcparts=/w/auth.conf.d",
         "Dir::State::lists=/w/lists",
         "Dir::Cache=/w/cache",
         "Dir::Cache::archives=/w/archives",
@@ -135,6 +139,7 @@ fn apt_args_are_private() {
         "APT::Sandbox::User=root",
         "APT::Architecture=amd64",
         "APT::Architectures=amd64",
+        "APT::Update::Error-Mode=any",
     ];
     for w in want {
         let i = a
@@ -143,7 +148,8 @@ fn apt_args_are_private() {
             .unwrap_or_else(|| panic!("{w} missing from {a:?}"));
         assert_eq!(a[i - 1], "-o", "{w}");
     }
-    // Every value comes after its own -o.
+    // Exactly these, each after its own -o.
+    assert_eq!(a.len(), 2 * want.len(), "{a:?}");
     assert_eq!(a.len() % 2, 0);
     assert!(a.iter().step_by(2).all(|x| x == "-o"), "{a:?}");
 }
@@ -245,6 +251,26 @@ fn simulation_remove_rejected() {
     assert!(e.to_string().contains("remove"), "{e}");
     // An unparsable Inst line is not skipped.
     assert!(parse_simulation("Inst x11-utils\n").is_err());
+}
+
+#[test]
+fn simulation_purge_rejected() {
+    let out = "Inst x11-utils (7.7+6 Ubuntu:26.04/resolute [amd64])\n\
+               Purg libpam-mastersos [1.0-1]\n\
+               Conf x11-utils (7.7+6 Ubuntu:26.04/resolute [amd64])\n";
+    assert_eq!(
+        parse_simulation(out).unwrap_err(),
+        ResolveError::WouldChangeImage {
+            package: "libpam-mastersos".into(),
+            image_version: "1.0-1".into(),
+            wanted: String::new(),
+        }
+    );
+    // Without a version too.
+    assert!(matches!(
+        parse_simulation("Purg foo\n"),
+        Err(ResolveError::WouldChangeImage { .. })
+    ));
 }
 
 #[test]

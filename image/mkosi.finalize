@@ -453,3 +453,28 @@ ln -sfn ../apparmor.service "$R/usr/lib/systemd/system/sysinit.target.wants/appa
 
 echo "finalize: /etc tmpfiles: L=$nL C=$nC d=${nd}（$(wc -l <"$dirs_list") 个 dir、$(wc -l <"$copies_list") 个 copy 由 mastersos-etc-migrate 先去掉旧链接；另有 $nskip 项交给包自己的 tmpfiles）"
 echo "finalize: $(grep -c '^[gum] ' "$R/usr/lib/sysusers.d/00-mastersos-image-users.conf") sysusers lines, $(grep -c '^enable ' "$R/usr/lib/systemd/system-preset/10-mastersos.preset") presets"
+
+# --- deb-apps: everything the image has in /usr (docs/specs/2026-11-10-deb-apps-design.md §4.3 item 4) -------------------
+# mastersos-agent drops every path of a .deb app or its dependencies that the image has. The factory dpkg lists miss what
+# did not come from a package (mkosi.extra, build.sh's extra tree, mkosi.build, this script) — /usr/bin/mastersos-agent,
+# which runs as root after every merge, among them — so the agent also reads this list and refuses to assemble without
+# it. Written last, after every change to /usr above; it lists itself. One "<type> <path>" line per entry (find %y).
+usr_paths=$R/usr/lib/mastersos/usr-paths
+if find "$R/usr" -name $'*\n*' -print -quit | grep -q .; then
+	echo "finalize: a name in /usr contains a newline; usr/lib/mastersos/usr-paths cannot list it" >&2
+	exit 1
+fi
+: >"$usr_paths"
+usr_list=$(mktemp)
+(cd "$R" && find usr -printf '%y %p\n') | LC_ALL=C sort >"$usr_list"
+for want in 'd usr' 'f usr/lib/mastersos/usr-paths' 'f usr/bin/mastersos-agent'; do
+	grep -qxF "$want" "$usr_list" || {
+		rm -f "$usr_list"
+		echo "finalize: usr/lib/mastersos/usr-paths should have the line '$want'" >&2
+		exit 1
+	}
+done
+cat "$usr_list" >"$usr_paths"
+chmod 0644 "$usr_paths"
+rm -f "$usr_list"
+echo "finalize: usr/lib/mastersos/usr-paths: $(wc -l <"$usr_paths") paths of /usr"

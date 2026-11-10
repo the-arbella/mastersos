@@ -2,10 +2,12 @@
 //!
 //! **Flow.** Take the work directory's `flock` (a second round fails at once) → the exam quiet is on: stop here, nothing
 //! downloaded, resolved or merged, results untouched → merge away and delete `app-*.new` / `.old` left by an interrupted
-//! round → fetch every main package ([`fetch`]: a pinned `sha256` downloads once; without one a conditional GET at most
-//! once a day, `apps/<id>/checked-at`) → resolve the dependencies of all apps in **one** apt run when anything they depend
+//! round → fetch every main package ([`fetch`]: a pinned `sha256` downloads once, a mismatch is not retried for a day;
+//! without one a conditional GET at most once a day, `apps/<id>/checked-at`; a download that is not an amd64 package
+//! never replaces the last good one) → resolve the dependencies of all apps in **one** apt run when anything they depend
 //! on changed (main packages, `packages`, `ubuntu_mirror`, the image's `SYSEXT_LEVEL`; with a mirror also once a day;
-//! after an image change the cached packages first, offline) → build the changed trees into `<ext>.new` ([`super::build`])
+//! after an image change the cached packages first, offline) → build the changed trees into `<ext>.new` ([`super::build`];
+//! a changed app whose build failed is not built again from the same inputs for a day)
 //! → check overlaps against `google-chrome`, the installed and the new trees (the later-built one fails) → check the quiet
 //! again → swap in, except what is in use ([`in_use`]; a first install is exempt) → uninstall removed apps → write
 //! `state.json`, `result.json` and the public status.
@@ -19,11 +21,13 @@
 //!
 //! **Work directory** (`/var/lib/mastersos/deb-apps`, 0700): `wanted.json` (from the resident agent), `state.json` (what is
 //! installed and the last resolution), `result.json`, `apps/<id>/` (`app.deb`, `fetched.json` with the validators,
-//! `checked-at`, an `https://` icon), `apt/` (apt's private directory; `apt/archives` is the dependency cache, kept under
+//! `checked-at`, an `https://` icon, `installed.deb` — the package the merged tree was built from, used when it must be
+//! rebuilt for a new image while its source is unreachable — and `pin-failed` after a pinned download did not match),
+//! `apt/` (apt's private directory; `apt/archives` is the dependency cache, kept under
 //! apt's own names and pruned to what the latest resolution uses), `opt-root/` (see [`super::build`]).
 //! `apps/` and `apt/` are separate levels because an app id may be any lowercase word, `apt` or `archives` included.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -32,11 +36,14 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use super::build::{self, app_ext, AppSpec, BuiltApp, DEPS_EXT};
+use super::assemble::ImageOwned;
+pub use super::build::FreeSpace;
+use super::build::{self, app_ext, AppSpec, Build, BuiltApp, DEPS_EXT};
 pub use super::busy::{in_use, in_use_why, Evidence};
 use super::busy::{kiosk_of, sessions_json};
 use super::inputs::{
-    app_key, check_record, dep_label, dependencies, fetch, icon_for, prune_archives, Main,
+    app_key, check_record, dep_label, dependencies, fetch, icon_for, keep_installed,
+    prune_archives, when, Main,
 };
 use super::status::{
     read_saved, write_public, write_saved, AppResult, AppState, PublicApp, Saved, Wanted,
@@ -63,6 +70,8 @@ pub struct RoundPaths {
     pub opt_root: PathBuf,
     /// The image's factory dpkg file lists.
     pub factory_info: PathBuf,
+    /// The image's list of `/usr` ([`super::assemble::USR_PATHS`]).
+    pub usr_paths: PathBuf,
     pub ubuntu_source: PathBuf,
 }
 
@@ -75,6 +84,7 @@ impl Default for RoundPaths {
             proc_root: "/proc".into(),
             opt_root: "/opt".into(),
             factory_info: "/usr/share/factory/var/lib/dpkg/info".into(),
+            usr_paths: super::assemble::USR_PATHS.into(),
             ubuntu_source: UBUNTU_SOURCE.into(),
         }
     }
@@ -90,6 +100,8 @@ pub struct RoundEnv {
     pub wanted: Option<Wanted>,
     /// The image's `SYSEXT_LEVEL` (`/usr/lib/os-release`).
     pub sysext_level: String,
+    /// Free space of a path's file system ([`build::statvfs_free`]).
+    pub free_space: FreeSpace,
 }
 
 impl RoundEnv {
@@ -114,6 +126,7 @@ impl RoundEnv {
             paths,
             now: chrono::Utc::now().timestamp(),
             sysext_level: level,
+            free_space: Arc::new(build::statvfs_free),
         })
     }
 }
@@ -130,6 +143,9 @@ pub(super) struct RoundState {
     /// Extension name → since when (Unix seconds) only a process's arguments have held its change back ([`busy`]).
     #[serde(default)]
     pub(super) argv_since: BTreeMap<String, i64>,
+    /// App id → the last failed build of a changed app: the same inputs ([`app_key`]) are not built again for a day.
+    #[serde(default)]
+    pub(super) build_failed: BTreeMap<String, BuildFailed>,
     /// The extensions [`busy`] held back on arguments alone this round; the others' `argv_since` is dropped at its end.
     #[serde(skip)]
     pub(super) argv_held: BTreeSet<String>,
@@ -149,6 +165,21 @@ pub(super) struct Installed {
     pub(super) level: String,
     pub(super) pruned: usize,
     pub(super) setid: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct BuildFailed {
+    pub(super) key: String,
+    /// Unix seconds.
+    pub(super) at: i64,
+    pub(super) why: String,
+}
+
+impl BuildFailed {
+    /// Still holding back a build of `key` at `now`?
+    fn holds(&self, key: &str, now: i64) -> bool {
+        self.key == key && self.at <= now + DAY && now - self.at < DAY
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -224,21 +255,22 @@ fn has(ext: &OwnedFd, name: &str) -> bool {
 }
 
 /// The image's file list and the root partition's `/opt` skeleton, made once per round before the first build.
-type Prepared = (Arc<HashSet<String>>, PathBuf);
+type Prepared = (Arc<ImageOwned>, PathBuf);
 
 async fn prepare(env: &RoundEnv, cache: &mut Option<Prepared>) -> Result<Prepared> {
     if let Some(x) = cache {
         return Ok(x.clone());
     }
     let p = &env.paths;
-    let (fi, opt, ext_dir, w) = (
+    let (fi, up, opt, ext_dir, w) = (
         p.factory_info.clone(),
+        p.usr_paths.clone(),
         p.opt_root.clone(),
         p.ext_dir.clone(),
         p.work.clone(),
     );
     let x: Prepared = blocking(env, move |_| {
-        let owned = super::assemble::image_owned(&fi)?;
+        let owned = super::assemble::image_owned(&fi, &up)?;
         let mirror = build::mirror_root_opt(&opt, &ext_dir, &w)?;
         Ok((Arc::new(owned), mirror))
     })
@@ -385,7 +417,7 @@ async fn round(
             out.insert(id.clone(), failed(id, st, why));
             continue;
         }
-        match fetch(env, work, id, app).await {
+        match fetch(env, work, id, app, st.apps.get(id)).await {
             Ok(m) => {
                 mains.insert(id.clone(), m);
             }
@@ -444,11 +476,40 @@ async fn round(
                 files: files.clone(),
                 level: level.clone(),
             };
-            let mut deps_ok = true;
-            if !frozen
+            // what each app tree would be built from (IT's icon included)
+            let mut inputs = BTreeMap::new();
+            for (id, m) in &mains {
+                let app = &wanted.apps[id];
+                let (icon, icon_note) = icon_for(env, wanted, id, app).await;
+                let key = app_key(m, app, &icon, &level);
+                inputs.insert(id.clone(), (icon, icon_note, key));
+            }
+            // An installed app whose changed package failed to build within the day stays as it is, so the
+            // dependencies resolved for its new version would only be built to be discarded (step 7): not built
+            let waiting: Vec<String> = mains
+                .iter()
+                .filter(|(id, m)| {
+                    st.apps.get(*id).is_some_and(|i| i.level == level)
+                        && main_changed(st, id, m, &level)
+                        && st
+                            .build_failed
+                            .get(*id)
+                            .is_some_and(|f| f.holds(&inputs[*id].2, env.now))
+                })
+                .map(|(id, _)| id.clone())
+                .collect();
+            let deps_change = !frozen
                 && !files.is_empty()
-                && (st.deps.as_ref() != Some(&want) || !has(&ext, DEPS_EXT))
-            {
+                && (st.deps.as_ref() != Some(&want) || !has(&ext, DEPS_EXT));
+            let deps_skipped = deps_change && !waiting.is_empty();
+            if deps_skipped {
+                notes.push(format!(
+                    "the shared dependencies change together with {}, whose update failed to build; tried again 24 hours later",
+                    waiting.join(", ")
+                ));
+            }
+            let mut deps_ok = true;
+            if deps_change && !deps_skipped {
                 let built = async {
                     let (owned, mirror) = prepare(env, &mut prepared).await?;
                     let debs: Vec<PathBuf> = files
@@ -456,8 +517,18 @@ async fn round(
                         .map(|f| p.work.join("apt/archives").join(f))
                         .collect();
                     let (ext_dir, w, lv) = (p.ext_dir.clone(), p.work.clone(), level.clone());
+                    let free = env.free_space.clone();
                     blocking(env, move |r| {
-                        build::build_deps(r, &ext_dir, &w, &owned, &mirror, &lv, &debs)
+                        let b = Build {
+                            runner: r,
+                            ext_dir: &ext_dir,
+                            work: &w,
+                            owned: &owned,
+                            opt_root: &mirror,
+                            level: &lv,
+                            free: &free,
+                        };
+                        build::build_deps(&b, &debs)
                     })
                     .await
                 }
@@ -478,13 +549,12 @@ async fn round(
             }
             for (id, m) in mains.iter().filter(|_| deps_ok) {
                 let app = &wanted.apps[id];
-                let (icon, icon_note) = icon_for(env, wanted, id, app).await;
+                let (icon, icon_note, key) = inputs.remove(id).expect("every main has its inputs");
                 let note = [m.note.clone(), icon_note]
                     .into_iter()
                     .flatten()
                     .collect::<Vec<_>>();
                 let note = (!note.is_empty()).then(|| note.join("; "));
-                let key = app_key(m, app, &icon, &level);
                 if let Some(i) = st.apps.get(id).filter(|i| i.key == key) {
                     if has(&ext, &app_ext(id)) {
                         out.insert(id.clone(), ready_from(id, i, &labels, note));
@@ -499,6 +569,28 @@ async fn round(
                     out.insert(id.clone(), held_back(st, id, m, &labels, why));
                     continue;
                 }
+                if let Some(f) = st.build_failed.get(id).filter(|f| f.holds(&key, env.now)) {
+                    let why = format!(
+                        "building it failed at {} ({}); tried again 24 hours later, or as soon as the package or its settings change",
+                        when(f.at),
+                        f.why
+                    );
+                    out.insert(id.clone(), failed(id, st, why));
+                    continue;
+                }
+                if deps_skipped && main_changed(st, id, m, &level) {
+                    out.insert(
+                        id.clone(),
+                        held_back(
+                            st,
+                            id,
+                            m,
+                            &labels,
+                            "the update waits for the shared dependencies to change".into(),
+                        ),
+                    );
+                    continue;
+                }
                 let spec = AppSpec {
                     id: id.clone(),
                     name: app.name.clone(),
@@ -511,8 +603,18 @@ async fn round(
                 let built = async {
                     let (owned, mirror) = prepare(env, &mut prepared).await?;
                     let (ext_dir, w, lv) = (p.ext_dir.clone(), p.work.clone(), level.clone());
+                    let free = env.free_space.clone();
                     blocking(env, move |r| {
-                        build::build_app(r, &ext_dir, &w, &owned, &mirror, &lv, &spec)
+                        let b = Build {
+                            runner: r,
+                            ext_dir: &ext_dir,
+                            work: &w,
+                            owned: &owned,
+                            opt_root: &mirror,
+                            level: &lv,
+                            free: &free,
+                        };
+                        build::build_app(&b, &spec)
                     })
                     .await
                 }
@@ -524,12 +626,24 @@ async fn round(
                 r.detail = note;
                 match built {
                     Ok(b) => {
+                        st.build_failed.remove(id);
                         r.pruned = b.pruned;
                         r.setid = b.setid.clone();
                         new_apps.insert(id.clone(), (b, key));
                     }
                     Err(e) => {
                         build::discard(&p.ext_dir, &format!("{}.new", app_ext(id)));
+                        // free space comes back: only a failure of the package itself waits a day
+                        if !e.chain().any(|c| c.is::<build::NoSpace>()) {
+                            st.build_failed.insert(
+                                id.clone(),
+                                BuildFailed {
+                                    key,
+                                    at: env.now,
+                                    why: format!("{e:#}"),
+                                },
+                            );
+                        }
                         r.state = AppState::Failed;
                         r = AppResult {
                             detail: failed(id, st, format!("{e:#}")).detail,
@@ -752,6 +866,7 @@ async fn round(
                     });
                 }
                 for (id, (b, key)) in std::mem::take(&mut new_apps) {
+                    keep_installed(&p.work, &id, &mains[&id]);
                     let r = out.get_mut(&id).expect("built apps have a result");
                     r.state = AppState::Ready;
                     st.apps.insert(
@@ -828,6 +943,7 @@ async fn round(
             continue;
         }
         st.apps.remove(&id);
+        st.build_failed.remove(&id);
         st.argv_since.remove(&name);
         if let Ok(apps) = safefs::open_dir_at(work, Path::new("apps"), true) {
             if let Err(e) = safefs::remove_tree_at(&apps, &id) {
@@ -860,6 +976,8 @@ async fn round(
             }
         }
     }
+    st.build_failed
+        .retain(|id, _| wanted.apps.contains_key(id) || st.apps.contains_key(id));
     if wanted.apps.is_empty() && st.apps.is_empty() {
         prune_archives(&p.work.join("apt/archives"), &[]);
         st.resolved = None;

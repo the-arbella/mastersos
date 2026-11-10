@@ -3468,7 +3468,8 @@ done
 # 78. deb-apps (docs/specs/2026-11-10-deb-apps-design.md §4.2, §4.5, §4.6, §5): os-release carries SYSEXT_LEVEL; mkosi.finalize writes
 #     /usr/lib/mastersos/ubuntu-source with all three keys from the snapshot build.sh passes in; ubuntu-keyring is in the package list;
 #     the work directory is made by tmpfiles; the deb-apps unit has the fixed sandbox and paths; its timer is enabled; both sysext
-#     units may write /run/mastersos (the merge lock lives there) and /run/mastersos exists at boot
+#     units may write /run/mastersos (the merge lock lives there) and /run/mastersos exists at boot (0700); the last step of
+#     mkosi.finalize lists every path of /usr in /usr/lib/mastersos/usr-paths, which the agent requires
 r=0
 # shellcheck disable=SC2016 # literal text on purpose
 grep -qF 'SYSEXT_LEVEL=${IMAGE_VERSION:-dev}' "$rel/mkosi.postinst.chroot" || {
@@ -3499,8 +3500,26 @@ grep -qxE 'd /var/lib/mastersos/deb-apps 0700 root root -' "$tf" || {
 	bad 78 "$tf should have d /var/lib/mastersos/deb-apps 0700 root root -"
 	r=1
 }
-grep -qE '^d /run/mastersos 0[0-7]{3} root root -' "$tf" || {
-	bad 78 "$tf should create /run/mastersos at boot"
+grep -qxE 'd /run/mastersos 0700 root root -' "$tf" || {
+	bad 78 "$tf should create /run/mastersos at boot, mode 0700"
+	r=1
+}
+# The image's list of /usr: without it a vendor package could cover /usr/bin/mastersos-agent (not in any dpkg list);
+# written as the last step of mkosi.finalize, listing itself, and read by the agent at that path
+# shellcheck disable=SC2016 # literal text on purpose
+for k in '(cd "$R" && find usr -printf '"'"'%y %p\n'"'"')' 'usr_paths=$R/usr/lib/mastersos/usr-paths' "'f usr/bin/mastersos-agent'"; do
+	grep -qF -- "$k" "$rel/mkosi.finalize" || {
+		bad 78 "mkosi.finalize should write the list of /usr to usr/lib/mastersos/usr-paths ($k)"
+		r=1
+	}
+done
+# shellcheck disable=SC2016 # literal text on purpose
+[ "$(grep -vE '^[[:space:]]*(#|$)' "$rel/mkosi.finalize" | tail -n 1)" = 'echo "finalize: usr/lib/mastersos/usr-paths: $(wc -l <"$usr_paths") paths of /usr"' ] || {
+	bad 78 "mkosi.finalize should write usr/lib/mastersos/usr-paths as its last step (after every change to /usr)"
+	r=1
+}
+grep -qF 'pub const USR_PATHS: &str = "/usr/lib/mastersos/usr-paths";' core/mastersos-agent/src/deb_apps/assemble.rs || {
+	bad 78 "the agent should read /usr/lib/mastersos/usr-paths (deb_apps::assemble::USR_PATHS)"
 	r=1
 }
 du=$qd/mastersos-deb-apps.service
@@ -3533,7 +3552,7 @@ grep -qE '^ReadWritePaths=.*(^|[ =])/run/mastersos( |$)' "$qd/mastersos-chrome.s
 	bad 78 "mastersos-chrome.service ReadWritePaths= should include /run/mastersos (the sysext merge lock)"
 	r=1
 }
-[ "$r" = 0 ] && ok 78 "deb-apps: SYSEXT_LEVEL, ubuntu-source from the build snapshot, ubuntu-keyring, work dir, unit and timer; Chrome and deb-apps units may write /run/mastersos"
+[ "$r" = 0 ] && ok 78 "deb-apps: SYSEXT_LEVEL, ubuntu-source from the build snapshot, the list of /usr, ubuntu-keyring, work dir, unit and timer; Chrome and deb-apps units may write /run/mastersos (0700)"
 
 # 79. deb-apps dependency resolution (deb-apps Task 4, spec §4.2): tests/deb-apps-apt-test.sh runs the agent's private apt
 #     commands against real apt in CI, as root and required (a missing tool fails instead of skipping); the agent's

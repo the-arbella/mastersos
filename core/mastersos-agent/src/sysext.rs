@@ -24,7 +24,7 @@ use crate::safefs;
 mod download;
 mod swap;
 
-pub use download::{download, download_with, FetchOutcome, Fetched};
+pub use download::{download, download_sized, download_with, FetchOutcome, Fetched, ShaMismatch};
 pub use swap::{recover_leftover, remove_ext, swap_in, swap_in_all};
 
 /// The merge lock; `/run/mastersos` is created 0700 root by tmpfiles (and the initrd) and is writable for

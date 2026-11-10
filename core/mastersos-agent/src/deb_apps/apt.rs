@@ -131,7 +131,7 @@ pub enum Plan {
         image_version: String,
         wanted: String,
     },
-    /// `Remv <pkg> [<image version>]`.
+    /// `Remv <pkg> [<image version>]` or `Purg <pkg> [<image version>]`.
     Remove {
         package: String,
         image_version: String,
@@ -224,6 +224,10 @@ pub fn apt_args(work: &Path) -> Vec<String> {
         "Dir::Etc::trustedparts=-".into(),
         format!("Dir::Etc::preferences={w}/preferences"),
         format!("Dir::Etc::preferencesparts={w}/preferences.d"),
+        // No credentials of the host's apt (/etc/apt/auth.conf, auth.conf.d) go to any source: both point into the
+        // private directory, where nothing writes them.
+        format!("Dir::Etc::netrc={w}/auth.conf"),
+        format!("Dir::Etc::netrcparts={w}/auth.conf.d"),
         format!("Dir::State::lists={w}/lists"),
         format!("Dir::Cache={w}/cache"),
         format!("Dir::Cache::archives={w}/archives"),
@@ -257,12 +261,16 @@ pub(crate) fn apt_cmd(work: &Path, sub: &[&str]) -> Cmd {
     Cmd::new("env", &refs)
 }
 
-/// One line of the simulation; `None` for lines that are not `Inst` / `Remv` (`Conf`, notes).
+/// One line of the simulation; `None` for lines that are not `Inst` / `Remv` / `Purg` (`Conf`, notes).
 pub fn parse_plan_line(line: &str) -> Result<Option<Plan>, ResolveError> {
     let bad = || other(format!("unexpected line in apt's plan: {line:?}"));
     // `pkg:arch` only appears with several architectures; strip it anyway.
     let name = |s: &str| s.split(':').next().unwrap_or(s).to_string();
-    if let Some(rest) = line.strip_prefix("Remv ") {
+    // A purge removes an image package (and its configuration) just like Remv: never part of a plan
+    if let Some(rest) = line
+        .strip_prefix("Remv ")
+        .or_else(|| line.strip_prefix("Purg "))
+    {
         let mut it = rest.split_whitespace();
         let package = name(it.next().ok_or_else(bad)?);
         let image_version = it

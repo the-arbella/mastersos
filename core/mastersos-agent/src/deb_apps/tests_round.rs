@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
@@ -101,18 +101,26 @@ const DEPS: &[(&str, &str, &str, &str)] = &[
     ),
 ];
 
-fn parse_deb(bytes: &[u8]) -> (String, Vec<(u32, String, String)>) {
+/// The entries of a fake package: `(mode, path, content)`; a directory (`D <mode> <path>` line) has `None` content.
+type Entries = Vec<(u32, String, Option<String>)>;
+
+fn parse_deb(bytes: &[u8]) -> (String, Entries) {
     let text = String::from_utf8_lossy(bytes).into_owned();
     let (control, files) = text.split_once("\n\n").unwrap_or((&text, ""));
     let files = files
         .lines()
         .filter_map(|l| {
+            if let Some(d) = l.strip_prefix("D ") {
+                let (mode, p) = d.split_once(' ')?;
+                return Some((u32::from_str_radix(mode, 8).ok()?, p.to_string(), None));
+            }
             let mut it = l.splitn(4, ' ');
             (it.next()? == "F").then_some(())?;
             let mode = u32::from_str_radix(it.next()?, 8).ok()?;
-            let p = it.next()?.to_string();
+            // a space in a path is written %20
+            let p = it.next()?.replace("%20", " ");
             let body = it.next().unwrap_or("").replace("\\n", "\n");
-            Some((mode, p, body))
+            Some((mode, p, Some(body)))
         })
         .collect();
     (format!("{control}\n"), files)
@@ -244,8 +252,13 @@ impl Runner for World {
                 ));
                 for (mode, p, body) in files {
                     let f = root.join(p);
-                    fs::create_dir_all(f.parent().unwrap())?;
-                    fs::write(&f, body)?;
+                    match body {
+                        Some(body) => {
+                            fs::create_dir_all(f.parent().unwrap())?;
+                            fs::write(&f, body)?;
+                        }
+                        None => fs::create_dir_all(&f)?,
+                    }
                     fs::set_permissions(&f, fs::Permissions::from_mode(mode))?;
                 }
                 Ok(Output::ok(""))
@@ -268,7 +281,15 @@ struct Fx {
     world: Arc<World>,
     srv: MockServer,
     level: Mutex<String>,
+    /// What the free-space function answers, and how many times it was asked.
+    free: Arc<(AtomicU64, AtomicUsize)>,
 }
+
+/// The image's list of `/usr` in the fixture (`mkosi.finalize`'s `usr-paths`): a few dpkg paths plus files no dpkg list
+/// has.
+const USR_PATHS: &str = "d usr\nd usr/bin\nf usr/bin/mastersos-agent\nf usr/bin/mastersos-kiosk\nf usr/bin/sh\n\
+d usr/lib\nd usr/lib/mastersos\nf usr/lib/mastersos/usr-paths\nd usr/lib/python3\nd usr/lib/python3/dist-packages\n\
+d usr/share\nd usr/share/doc\n";
 
 impl Fx {
     async fn new() -> Fx {
@@ -290,6 +311,7 @@ impl Fx {
             "/.\n/usr\n/usr/bin\n/usr/bin/sh\n/usr/share\n/usr/share/doc\n",
         )
         .unwrap();
+        fs::write(r.join("usr-paths"), USR_PATHS).unwrap();
         fs::write(
             r.join("ubuntu-source"),
             "SNAPSHOT=20261101T000000Z\nCODENAME=resolute\nCOMPONENTS=main universe\n",
@@ -325,6 +347,7 @@ impl Fx {
             world: Arc::new(World::default()),
             srv,
             level: Mutex::new("1.0".into()),
+            free: Arc::new((AtomicU64::new(u64::MAX), AtomicUsize::new(0))),
         }
     }
 
@@ -345,6 +368,7 @@ impl Fx {
             proc_root: r.join("proc"),
             opt_root: r.join("opt"),
             factory_info: r.join("factory/info"),
+            usr_paths: r.join("usr-paths"),
             ubuntu_source: r.join("ubuntu-source"),
         }
     }
@@ -361,6 +385,13 @@ impl Fx {
             now,
             wanted: Some(wanted.clone()),
             sysext_level: self.level.lock().unwrap().clone(),
+            free_space: {
+                let f = self.free.clone();
+                Arc::new(move |_: &Path| {
+                    f.1.fetch_add(1, Ordering::SeqCst);
+                    Ok(f.0.load(Ordering::SeqCst))
+                })
+            },
         }
     }
 
@@ -1320,4 +1351,331 @@ async fn argument_deferral_clock_restarts_after_a_round_without_one() {
     let t = ready(&fx.round_at(&w2, later + 24 * HOUR).await, "testnav");
     assert!(detail(&t).contains("24 hours"), "{t:?}");
     assert_eq!(version(&fx), "2.0");
+}
+
+// ---- final review fixes ----
+
+/// Serves `body` at `p` (replacing what the fixture serves there).
+async fn serve(fx: &Fx, p: &str, body: Vec<u8>) {
+    Mock::given(method("GET"))
+        .and(path(p))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(body))
+        .mount(&fx.srv)
+        .await;
+}
+
+#[tokio::test]
+async fn vendor_cannot_cover_image_files_outside_dpkg() {
+    let fx = Fx::new().await;
+    let evil = fake_deb(
+        "python3",
+        "1.0",
+        &[
+            ("opt/evil/bin/evil", "#!/bin/sh\n"),
+            ("usr/bin/mastersos-agent", "#!/bin/sh\nrm -rf /\n"),
+            (
+                "usr/bin/mastersos-kiosk/x",
+                "a directory over an image file",
+            ),
+            ("usr/bin/evil", "#!/bin/sh\n"),
+            ("usr/lib/python3/dist-packages/evil.pth", "import os"),
+            (
+                "usr/share/applications/evil.desktop",
+                "[Desktop Entry]\nType=Application\nName=E\nExec=/opt/evil/bin/evil\n",
+            ),
+        ],
+    );
+    serve(&fx, "/evil.deb", evil).await;
+    let a = app(fx.url("evil.deb"), None);
+    let r = fx.round(&wanted(vec![("evil", a)])).await;
+    ready(&r, "evil");
+    assert!(fx.ext("app-evil/opt/evil/bin/evil").is_file());
+    assert!(fx.ext("app-evil/usr/bin/evil").is_file());
+    for gone in [
+        "usr/bin/mastersos-agent",
+        "usr/bin/mastersos-kiosk",
+        "usr/lib/python3",
+    ] {
+        assert!(
+            fs::symlink_metadata(fx.ext("app-evil").join(gone)).is_err(),
+            "{gone} must not be in the tree"
+        );
+    }
+}
+
+#[tokio::test]
+async fn no_list_of_usr_installs_nothing() {
+    let fx = Fx::new().await;
+    fs::remove_file(fx.root().join("usr-paths")).unwrap();
+    let r = fx.round(&wanted(vec![("testnav", pinned(&fx))])).await;
+    let t = &r["testnav"];
+    assert_eq!(t.state, AppState::Failed, "{t:?}");
+    assert!(detail(t).contains("usr-paths"), "{t:?}");
+    assert!(!fx.ext("app-testnav").exists());
+    assert_eq!(fx.world.count(REFRESH), 0);
+}
+
+#[tokio::test]
+async fn trees_owned_by_the_agent_without_group_or_other_write() {
+    let fx = Fx::new().await;
+    // world-writable files and directories, as dpkg-deb -x (as root) would keep them from the archive
+    let wide = String::from_utf8(fake_deb(
+        "wide",
+        "1.0",
+        &[
+            ("opt/wide/bin/wide", "#!/bin/sh\n"),
+            ("opt/wide/data/x", "x"),
+            (
+                "usr/share/applications/wide.desktop",
+                "[Desktop Entry]\nType=Application\nName=W\nExec=/opt/wide/bin/wide\n",
+            ),
+        ],
+    ))
+    .unwrap()
+    .replace("F 755 ", "F 777 ")
+    .replace("F 644 ", "F 666 ")
+        + "D 777 opt/wide/data\nD 2777 opt/wide/shared\n";
+    serve(&fx, "/wide.deb", wide.into_bytes()).await;
+    let mut w = app(fx.url("wide.deb"), None);
+    w.name = "Wide".into();
+    ready(&fx.round(&wanted(vec![("wide", w)])).await, "wide");
+    use std::os::unix::fs::MetadataExt;
+    let me = rustix::process::geteuid().as_raw();
+    for rel in [
+        "",
+        "opt",
+        "opt/wide",
+        "opt/wide/bin/wide",
+        "opt/wide/data",
+        "opt/wide/data/x",
+        "opt/wide/shared",
+    ] {
+        let m = fs::symlink_metadata(fx.ext("app-wide").join(rel)).unwrap();
+        assert_eq!(m.mode() & 0o022, 0, "{rel}: {:o}", m.mode());
+        assert_eq!(m.uid(), me, "{rel}");
+    }
+    let m = fs::metadata(fx.ext("app-wide/opt/wide/bin/wide")).unwrap();
+    assert_eq!(m.mode() & 0o7777, 0o755);
+}
+
+#[tokio::test]
+async fn deps_id_is_refused() {
+    let fx = Fx::new().await;
+    let r = fx.round(&wanted(vec![("deps", pinned(&fx))])).await;
+    let d = &r["deps"];
+    assert_eq!(d.state, AppState::Failed, "{d:?}");
+    assert!(detail(d).contains("reserved"), "{d:?}");
+    assert_eq!(fx.world.count("dpkg-deb -x"), 0);
+    assert!(!fx.ext("app-deps").exists());
+}
+
+#[tokio::test]
+async fn kiosk_program_follows_the_kiosk_rule() {
+    let fx = Fx::new().await;
+    serve(
+        &fx,
+        "/spaced.deb",
+        fake_deb(
+            "spaced",
+            "1.0",
+            &[
+                ("opt/Some%20App/bin/app", "#!/bin/sh\n"),
+                (
+                    "usr/share/applications/spaced.desktop",
+                    "[Desktop Entry]\nType=Application\nName=S\nExec=\"/opt/Some App/bin/app\"\n",
+                ),
+            ],
+        ),
+    )
+    .await;
+    let mut a = app(fx.url("spaced.deb"), None);
+    a.kiosk = true;
+    let r = fx.round(&wanted(vec![("spaced", a.clone())])).await;
+    let s = &r["spaced"];
+    assert_eq!(s.state, AppState::Failed, "{s:?}");
+    assert!(detail(s).contains("locked app"), "{s:?}");
+    assert!(!fx.ext("app-spaced").exists());
+    // the same package is fine as an ordinary app
+    a.kiosk = false;
+    let s = ready(
+        &fx.round_at(&wanted(vec![("spaced", a)]), T0 + 1).await,
+        "spaced",
+    );
+    assert!(fx.ext("app-spaced/opt/Some App/bin/app").is_file(), "{s:?}");
+}
+
+#[tokio::test]
+async fn wrong_pin_is_retried_once_a_day() {
+    let fx = Fx::new().await;
+    let mut a = pinned(&fx);
+    a.sha256 = Some("0".repeat(64));
+    let w = wanted(vec![("testnav", a.clone())]);
+    let r = fx.round(&w).await;
+    assert_eq!(r["testnav"].state, AppState::Failed);
+    assert_eq!(fx.requests("/testnav.deb").await, 1);
+    let r = fx.round_at(&w, T0 + HOUR).await;
+    let t = &r["testnav"];
+    assert_eq!(t.state, AppState::Failed);
+    assert!(detail(t).contains("24 hours later"), "{t:?}");
+    assert!(
+        detail(t).contains(&hex(&testnav("1.0"))),
+        "it says what came: {t:?}"
+    );
+    assert_eq!(fx.requests("/testnav.deb").await, 1, "not downloaded again");
+    fx.round_at(&w, T0 + 25 * HOUR).await;
+    assert_eq!(fx.requests("/testnav.deb").await, 2, "a day later");
+    // a corrected pin is tried at once
+    let w = wanted(vec![("testnav", pinned(&fx))]);
+    ready(&fx.round_at(&w, T0 + 26 * HOUR).await, "testnav");
+    assert_eq!(fx.requests("/testnav.deb").await, 3);
+    assert!(!fx.root().join("work/apps/testnav/pin-failed").exists());
+}
+
+#[tokio::test]
+async fn failed_build_of_a_changed_app_waits_a_day() {
+    let fx = Fx::new().await;
+    let mut a = pinned(&fx);
+    a.packages = vec!["x11-utils".into()];
+    ready(&fx.round(&wanted(vec![("testnav", a)])).await, "testnav");
+    let mut a3 = app(fx.url("broken.deb"), Some(hex(&broken())));
+    a3.packages = vec!["x11-utils".into(), "libfoo1".into()];
+    let w = wanted(vec![("testnav", a3)]);
+    assert_eq!(
+        fx.round_at(&w, T0 + HOUR).await["testnav"].state,
+        AppState::Failed
+    );
+    let extracts = fx.world.count("dpkg-deb -x");
+
+    // an hour later: neither the app nor the dependencies resolved for it are built again
+    let r = fx.round_at(&w, T0 + 2 * HOUR).await;
+    let t = &r["testnav"];
+    assert_eq!(t.state, AppState::Failed, "{t:?}");
+    assert!(detail(t).contains("24 hours later"), "{t:?}");
+    assert!(detail(t).contains("keeping the installed version"), "{t:?}");
+    assert_eq!(fx.world.count("dpkg-deb -x"), extracts, "nothing built");
+    assert!(!fx.ext("app-deps.new").exists());
+    assert_eq!(version(&fx), "1.0");
+    assert_eq!(fx.public()["testnav"].state, AppState::Ready);
+
+    // a day later it is tried again
+    fx.round_at(&w, T0 + 26 * HOUR).await;
+    assert!(fx.world.count("dpkg-deb -x") > extracts);
+}
+
+#[tokio::test]
+async fn no_free_space_refuses_download_and_unpack() {
+    let fx = Fx::new().await;
+    let w = wanted(vec![("testnav", pinned(&fx))]);
+    fx.free.0.store(1024 * 1024 * 1024, Ordering::SeqCst);
+    let r = fx.round(&w).await;
+    let t = &r["testnav"];
+    assert_eq!(t.state, AppState::Failed, "{t:?}");
+    assert!(
+        detail(t).contains("not enough free disk space for downloading"),
+        "{t:?}"
+    );
+    assert!(!fx.root().join("work/apps/testnav/app.deb").exists());
+    assert_eq!(fx.world.count("dpkg-deb -x"), 0);
+
+    // enough for the download (asked for the work directory and the extensions), not for the unpack after it
+    fx.free.0.store(u64::MAX, Ordering::SeqCst);
+    let asked = fx.free.1.load(Ordering::SeqCst);
+    let free = fx.free.clone();
+    let mut env = fx.env(&w, T0 + 1);
+    env.free_space = Arc::new(move |_: &Path| {
+        let n = free.1.fetch_add(1, Ordering::SeqCst);
+        Ok(if n < asked + 2 { u64::MAX } else { 0 })
+    });
+    let r: BTreeMap<String, AppResult> = run_once(&env)
+        .await
+        .into_iter()
+        .map(|r| (r.id.clone(), r))
+        .collect();
+    let t = &r["testnav"];
+    assert_eq!(t.state, AppState::Failed, "{t:?}");
+    assert!(
+        detail(t).contains("not enough free disk space for unpacking"),
+        "{t:?}"
+    );
+    assert!(fx.root().join("work/apps/testnav/app.deb").is_file());
+    assert_eq!(fx.world.count("dpkg-deb -x"), 0);
+    assert!(!fx.ext("app-testnav").exists());
+
+    // space again: built at once (a lack of space is not a failed build that waits a day)
+    ready(&fx.round_at(&w, T0 + 2).await, "testnav");
+}
+
+#[tokio::test]
+async fn bad_download_keeps_the_good_package() {
+    let fx = Fx::new().await;
+    let w = wanted(vec![("testnav", app(fx.url("testnav.deb"), None))]);
+    ready(&fx.round(&w).await, "testnav");
+    let deb = fx.root().join("work/apps/testnav/app.deb");
+    assert_eq!(fs::read(&deb).unwrap(), testnav("1.0"));
+    assert_eq!(
+        fs::read(fx.root().join("work/apps/testnav/installed.deb")).unwrap(),
+        testnav("1.0")
+    );
+
+    // a day later the link serves an HTML error page with 200
+    fx.srv.reset().await;
+    serve(
+        &fx,
+        "/testnav.deb",
+        b"<html><body>Service unavailable</body></html>".to_vec(),
+    )
+    .await;
+    let t = ready(&fx.round_at(&w, T0 + 25 * HOUR).await, "testnav");
+    assert_eq!(t.version.as_deref(), Some("1.0"));
+    assert!(
+        detail(&t).contains("checking for a new version failed"),
+        "{t:?}"
+    );
+    assert_eq!(
+        fs::read(&deb).unwrap(),
+        testnav("1.0"),
+        "the good file stays"
+    );
+    assert!(!fx.root().join("work/apps/testnav/app.deb.new").exists());
+    assert_eq!(version(&fx), "1.0");
+
+    // a package for another architecture is refused the same way
+    fx.srv.reset().await;
+    let arm = String::from_utf8(testnav("2.0"))
+        .unwrap()
+        .replace("Architecture: amd64", "Architecture: arm64");
+    serve(&fx, "/testnav.deb", arm.into_bytes()).await;
+    let t = ready(&fx.round_at(&w, T0 + 50 * HOUR).await, "testnav");
+    assert!(detail(&t).contains("arm64"), "{t:?}");
+    assert_eq!(fs::read(&deb).unwrap(), testnav("1.0"));
+}
+
+#[tokio::test]
+async fn image_change_rebuilds_from_the_installed_package() {
+    let fx = Fx::new().await;
+    let w = wanted(vec![("testnav", app(fx.url("testnav.deb"), None))]);
+    ready(&fx.round(&w).await, "testnav");
+
+    // a new version arrives that cannot be built: the installed one stays
+    fx.srv.reset().await;
+    serve(&fx, "/testnav.deb", broken()).await;
+    let r = fx.round_at(&w, T0 + 25 * HOUR).await;
+    assert_eq!(r["testnav"].state, AppState::Failed);
+    assert_eq!(
+        fs::read(fx.root().join("work/apps/testnav/app.deb")).unwrap(),
+        broken()
+    );
+
+    // a system update while the link cannot be reached: rebuilt from what was installed, not from app.deb
+    fx.srv.reset().await;
+    *fx.level.lock().unwrap() = "2.0".into();
+    let t = ready(&fx.round_at(&w, T0 + 50 * HOUR).await, "testnav");
+    assert_eq!(t.version.as_deref(), Some("1.0"));
+    assert!(detail(&t).contains("installed package"), "{t:?}");
+    let rel = fs::read_to_string(
+        fx.ext("app-testnav/usr/lib/extension-release.d/extension-release.app-testnav"),
+    )
+    .unwrap();
+    assert!(rel.contains("SYSEXT_LEVEL=2.0\n"), "{rel}");
+    assert_eq!(version(&fx), "1.0");
 }

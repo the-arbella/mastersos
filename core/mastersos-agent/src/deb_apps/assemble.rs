@@ -179,6 +179,8 @@ struct Ent {
     ty: FileType,
     mode: RawMode,
     size: u64,
+    uid: u32,
+    gid: u32,
 }
 
 fn join(prefix: &str, name: &str) -> String {
@@ -195,6 +197,8 @@ fn lstat(dir: &OwnedFd, name: &str, path: &str) -> Result<Option<Ent>> {
             ty: FileType::from_raw_mode(st.st_mode),
             mode: st.st_mode,
             size: u64::try_from(st.st_size).unwrap_or(0),
+            uid: st.st_uid,
+            gid: st.st_gid,
         })),
         Err(Errno::NOENT) => Ok(None),
         Err(e) => Err(std::io::Error::from(e)).with_context(|| format!("checking {path}")),
@@ -551,13 +555,61 @@ fn link_target(path: &str, target: &str, roots: &[&str]) -> Result<String> {
     Ok(out.join("/"))
 }
 
-/// The paths the image owns, from the factory dpkg file lists (`<factory_info>/*.list`, e.g.
-/// `/usr/share/factory/var/lib/dpkg/info`), plus the targets of dpkg diversions (`<factory_info>/../diversions`).
-/// Relative to `/`, without the leading `/`; `/bin`, `/sbin` and `/lib*` are mapped below `usr/` (usrmerge).
-pub fn image_owned(factory_info: &Path) -> Result<HashSet<String>> {
+/// Where `mkosi.finalize` lists every path of the image's `/usr` (one `<type> <path>` line each, `find -printf '%y %p'`
+/// from the image root: `d usr`, `f usr/bin/mastersos-agent`, `l usr/bin/sh`, sorted). The factory dpkg lists alone miss
+/// what the image did not get from a package (`mkosi.extra`, `build.sh`'s extra tree, `mkosi.build`, `mkosi.finalize`),
+/// `/usr/bin/mastersos-agent` among them.
+pub const USR_PATHS: &str = "/usr/lib/mastersos/usr-paths";
+
+/// What the image has (spec §4.3 item 4), from [`image_owned`]: paths relative to `/` without the leading `/`.
+#[derive(Debug, Default)]
+pub struct ImageOwned {
+    paths: HashSet<String>,
+    /// The type letter (`find -printf %y`) of every path in [`USR_PATHS`].
+    kinds: HashMap<String, char>,
+    /// Every directory with something of the image below it.
+    parents: HashSet<String>,
+}
+
+impl ImageOwned {
+    /// Is `p` a path of the image (a file, a link or a directory)?
+    pub fn contains(&self, p: &str) -> bool {
+        self.paths.contains(p)
+    }
+
+    /// Is `p` a path of the image or a directory with something of the image below it?
+    pub fn has(&self, p: &str) -> bool {
+        self.paths.contains(p) || self.parents.contains(p)
+    }
+
+    /// Does a directory of a tree at `p` merge with the image's? Only where the image has a real directory: the list of
+    /// `/usr` knows the type; for a path it does not list, a directory the dpkg lists have something below.
+    fn merges(&self, p: &str) -> bool {
+        match self.kinds.get(p) {
+            Some(k) => *k == 'd',
+            None => self.parents.contains(p),
+        }
+    }
+
+    fn add(&mut self, p: String) {
+        for (i, b) in p.bytes().enumerate() {
+            if b == b'/' {
+                self.parents.insert(p[..i].to_string());
+            }
+        }
+        self.paths.insert(p);
+    }
+}
+
+/// The paths the image owns: every path of its `/usr` from `usr_paths` ([`USR_PATHS`], required: without it a package
+/// could cover a file no dpkg list names, so nothing is assembled), plus the factory dpkg file lists
+/// (`<factory_info>/*.list`, e.g. `/usr/share/factory/var/lib/dpkg/info`) and the targets of dpkg diversions
+/// (`<factory_info>/../diversions`). `/bin`, `/sbin` and `/lib*` of the dpkg lists are mapped below `usr/` (usrmerge).
+pub fn image_owned(factory_info: &Path, usr_paths: &Path) -> Result<ImageOwned> {
+    let mut owned = ImageOwned::default();
+    read_usr_paths(usr_paths, &mut owned)?;
     let dir = safefs::open_abs_dir(factory_info, false)
         .with_context(|| format!("opening {}", factory_info.display()))?;
-    let mut owned = HashSet::new();
     let mut lists = 0;
     for n in safefs::list_at(&dir)? {
         if !n.ends_with(".list") {
@@ -565,11 +617,12 @@ pub fn image_owned(factory_info: &Path) -> Result<HashSet<String>> {
         }
         lists += 1;
         let bytes = safefs::read_at(&dir, &n)?.ok_or_else(|| anyhow!("{n} disappeared"))?;
-        owned.extend(
-            String::from_utf8_lossy(&bytes)
-                .lines()
-                .filter_map(owned_path),
-        );
+        for p in String::from_utf8_lossy(&bytes)
+            .lines()
+            .filter_map(owned_path)
+        {
+            owned.add(p);
+        }
     }
     ensure!(
         lists > 0,
@@ -580,16 +633,62 @@ pub fn image_owned(factory_info: &Path) -> Result<HashSet<String>> {
         let pd = safefs::open_abs_dir(parent, false)?;
         if let Some(bytes) = safefs::read_at(&pd, "diversions")? {
             // Triplets: diverted path, where it went, the diverting package
-            owned.extend(
-                String::from_utf8_lossy(&bytes)
-                    .lines()
-                    .skip(1)
-                    .step_by(3)
-                    .filter_map(owned_path),
-            );
+            for p in String::from_utf8_lossy(&bytes)
+                .lines()
+                .skip(1)
+                .step_by(3)
+                .filter_map(owned_path)
+            {
+                owned.add(p);
+            }
         }
     }
     Ok(owned)
+}
+
+/// Reads [`USR_PATHS`] into `owned`. Missing, unreadable or malformed refuses (fail closed).
+fn read_usr_paths(usr_paths: &Path, owned: &mut ImageOwned) -> Result<()> {
+    let refuse = |why: String| {
+        anyhow!(
+            "{} {why}: without the image's list of /usr a package could cover a system file, so no .deb app is \
+             assembled (the system needs an update)",
+            usr_paths.display()
+        )
+    };
+    let (Some(parent), Some(name)) = (
+        usr_paths.parent(),
+        usr_paths.file_name().and_then(|n| n.to_str()),
+    ) else {
+        return Err(refuse("is not a file path".into()));
+    };
+    let dir = safefs::open_abs_dir(parent, false)
+        .map_err(|e| refuse(format!("cannot be read ({e:#})")))?;
+    let bytes = safefs::read_at(&dir, name)
+        .map_err(|e| refuse(format!("cannot be read ({e:#})")))?
+        .ok_or_else(|| refuse("is missing".into()))?;
+    let text = String::from_utf8(bytes).map_err(|_| refuse("is not UTF-8".into()))?;
+    for (i, line) in text.lines().enumerate() {
+        let bad = || refuse(format!("has a malformed line {}: {line:?}", i + 1));
+        let (kind, path) = line.split_once(' ').ok_or_else(bad)?;
+        let mut k = kind.chars();
+        let (Some(kind), None) = (k.next(), k.next()) else {
+            return Err(bad());
+        };
+        let clean = (path == "usr" || path.starts_with("usr/"))
+            && path
+                .split('/')
+                .all(|c| !c.is_empty() && c != "." && c != "..");
+        if !clean || !"fdlbcps".contains(kind) {
+            return Err(bad());
+        }
+        owned.kinds.insert(path.to_string(), kind);
+        owned.add(path.to_string());
+    }
+    ensure!(
+        owned.kinds.get("usr") == Some(&'d'),
+        refuse("does not list the directory usr".into())
+    );
+    Ok(())
 }
 
 fn owned_path(line: &str) -> Option<String> {
@@ -610,28 +709,42 @@ fn owned_path(line: &str) -> Option<String> {
     Some(parts.join("/"))
 }
 
-/// Drops every entry that would cover something of the system (spec §4.3 item 4): below `usr/` a path the image owns
+/// A vendor package's `usr/lib/<package>` (the one directory it may have in `usr/lib`, [`prune`]) is dropped whole when
+/// the image has that path: the vendor picks its `Package:` name, and a name like `python3` or `perl5` would add code to a
+/// directory system programs load from. Returns the dropped path.
+pub fn drop_image_lib_dir(
+    root: &OwnedFd,
+    package: &str,
+    owned: &ImageOwned,
+) -> Result<Option<String>> {
+    ensure!(package_ok(package), "malformed package name {package:?}");
+    let path = format!("usr/lib/{package}");
+    if !owned.has(&path) {
+        return Ok(None);
+    }
+    let Some(lib) = open_level(root, "usr/lib")? else {
+        return Ok(None);
+    };
+    let Some(e) = lstat(&lib, package, &path)? else {
+        return Ok(None);
+    };
+    remove_entry(&lib, package, &e, &path)?;
+    Ok(Some(path))
+}
+
+/// Drops every entry that would cover something of the system (spec §4.3 item 4): below `usr/` a path the image has
 /// (`owned`, from [`image_owned`]), below `opt/` anything already in `opt_root` (the root partition's `/opt`, not
-/// covered by an extension: `/opt` is not in the signed image). A directory present on both sides is merged (walked
-/// into); a directory where the system has a file, a link or (in `/usr`) an empty directory is dropped whole, since it
-/// would hide what is there. Returns the dropped paths.
+/// covered by an extension: `/opt` is not in the signed image). A directory merges (is walked into) only where the system
+/// has a directory too; where it has a file or a link the tree's directory is dropped whole, since it would hide what is
+/// there. Returns the dropped paths.
 pub fn drop_image_files(
     root: &OwnedFd,
-    owned: &HashSet<String>,
+    owned: &ImageOwned,
     opt_root: &Path,
 ) -> Result<Vec<String>> {
-    // Every directory that has something of the image below it
-    let mut parents: HashSet<&str> = HashSet::new();
-    for p in owned {
-        for (i, b) in p.bytes().enumerate() {
-            if b == b'/' {
-                parents.insert(&p[..i]);
-            }
-        }
-    }
     let mut dropped = vec![];
     if let Some(usr) = open_level(root, "usr")? {
-        drop_usr(&usr, "usr", owned, &parents, &mut dropped, 0)?;
+        drop_usr(&usr, "usr", owned, &mut dropped, 0)?;
     }
     if let Some(opt) = open_level(root, "opt")? {
         let real = match std::fs::symlink_metadata(opt_root) {
@@ -651,8 +764,7 @@ pub fn drop_image_files(
 fn drop_usr(
     dir: &OwnedFd,
     prefix: &str,
-    owned: &HashSet<String>,
-    parents: &HashSet<&str>,
+    owned: &ImageOwned,
     dropped: &mut Vec<String>,
     depth: usize,
 ) -> Result<()> {
@@ -662,12 +774,11 @@ fn drop_usr(
         let Some(e) = lstat(dir, &n, &path)? else {
             continue;
         };
-        let merge = e.ty == FileType::Directory && parents.contains(path.as_str());
-        if merge {
+        if e.ty == FileType::Directory && owned.merges(&path) {
             let sub =
                 safefs::open_child_dir(dir, &n)?.ok_or_else(|| anyhow!("{path} disappeared"))?;
-            drop_usr(&sub, &path, owned, parents, dropped, depth + 1)?;
-        } else if owned.contains(&path) || parents.contains(path.as_str()) {
+            drop_usr(&sub, &path, owned, dropped, depth + 1)?;
+        } else if owned.has(&path) {
             remove_entry(dir, &n, &e, &path)?;
             dropped.push(path);
         }
@@ -728,6 +839,82 @@ pub fn strip_setid(root: &OwnedFd) -> Result<Vec<String>> {
         Ok(true)
     })?;
     Ok(out)
+}
+
+/// Gives every entry of the tree (the root included) the owner `uid:gid`, links themselves (never followed), and clears the
+/// group and other write bits of files and directories. `dpkg-deb -x` run as root keeps the archive's owners and modes: a
+/// vendor file owned by uid 1000, or a 0777 directory, would be writable by a local user once merged. Run after
+/// [`strip_setid`] (changing the owner of a file also clears its setuid bits, and those are reported). Returns how many
+/// entries changed.
+pub fn normalize_owners(root: &OwnedFd, uid: u32, gid: u32) -> Result<usize> {
+    let mut changed = 0;
+    let fix_fd = |fd: &OwnedFd, path: &str, want_dir: bool| -> Result<bool> {
+        let st = rustix::fs::fstat(fd).map_err(std::io::Error::from)?;
+        let ty = FileType::from_raw_mode(st.st_mode);
+        ensure!(
+            ty == if want_dir {
+                FileType::Directory
+            } else {
+                FileType::RegularFile
+            },
+            "{} changed while setting its owner",
+            shown(path)
+        );
+        let mut did = false;
+        if st.st_uid != uid || st.st_gid != gid {
+            safefs::set_owner(fd, uid, gid).with_context(|| format!("owning {}", shown(path)))?;
+            did = true;
+        }
+        // the owner change may have cleared setuid bits: read the mode again
+        let mode = rustix::fs::fstat(fd).map_err(std::io::Error::from)?.st_mode & 0o7777;
+        if mode & 0o022 != 0 {
+            rustix::fs::fchmod(fd, Mode::from_raw_mode(mode & !0o022))
+                .map_err(std::io::Error::from)
+                .with_context(|| format!("clearing group/other write of {}", shown(path)))?;
+            did = true;
+        }
+        Ok(did)
+    };
+    if fix_fd(root, "", true)? {
+        changed += 1;
+    }
+    walk(root, "", 0, &mut |dir, name, path, e| {
+        match e.ty {
+            FileType::Directory => {
+                let d = safefs::open_child_dir(dir, name)?
+                    .ok_or_else(|| anyhow!("{path} disappeared"))?;
+                if fix_fd(&d, path, true)? {
+                    changed += 1;
+                }
+            }
+            FileType::RegularFile => {
+                let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+                let fd = rustix::fs::openat(dir, name, flags, Mode::empty())
+                    .map_err(std::io::Error::from)
+                    .with_context(|| format!("opening {path}"))?;
+                if fix_fd(&fd, path, false)? {
+                    changed += 1;
+                }
+            }
+            _ => {
+                // links (and nothing else: check_entries refused the rest): the owner of the link itself
+                if e.uid != uid || e.gid != gid {
+                    rustix::fs::chownat(
+                        dir,
+                        name,
+                        Some(rustix::fs::Uid::from_raw(uid)),
+                        Some(rustix::fs::Gid::from_raw(gid)),
+                        AtFlags::SYMLINK_NOFOLLOW,
+                    )
+                    .map_err(std::io::Error::from)
+                    .with_context(|| format!("owning the link {path}"))?;
+                    changed += 1;
+                }
+            }
+        }
+        Ok(true)
+    })?;
+    Ok(changed)
 }
 
 /// A usable `[Desktop Entry]`.
