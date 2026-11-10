@@ -912,11 +912,17 @@ pub struct DropApps {
     /// Keys (app ids) of inherited kiosk apps to leave out.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub kiosk: Vec<String>,
+    /// Keys (app ids) of inherited .deb apps to leave out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deb: Vec<String>,
 }
 
 impl DropApps {
     pub fn is_empty(&self) -> bool {
-        self.web.is_empty() && self.flatpak.is_empty() && self.kiosk.is_empty()
+        self.web.is_empty()
+            && self.flatpak.is_empty()
+            && self.kiosk.is_empty()
+            && self.deb.is_empty()
     }
 }
 
@@ -1358,6 +1364,12 @@ pub fn effective_config(m: &Manifest, c: &ConfigLayer) -> Config {
                 id.as_str()
             }),
             kiosk: merge_map(&d.apps.kiosk, &c.apps.kiosk, &drop.apps.kiosk),
+            deb: merge_map(&d.apps.deb, &c.apps.deb, &drop.apps.deb),
+            ubuntu_mirror: c
+                .apps
+                .ubuntu_mirror
+                .clone()
+                .or_else(|| d.apps.ubuntu_mirror.clone()),
         },
         printers: merge_list(&d.printers, &c.printers, &drop.printers, by_name),
         scanners: merge_list(&d.scanners, &c.scanners, &drop.scanners, by_name),
@@ -1408,12 +1420,65 @@ pub struct Apps {
         )
     )]
     pub kiosk: BTreeMap<String, KioskApp>,
+    /// Third-party .deb apps (`[config.apps.deb.<id>]`), keyed by app id; rules are in [`crate::deb`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            description = "Third-party .deb apps keyed by app id: the id follows the kiosk app id rules (lowercase letter first, lowercase letters, digits and -, at most 24 characters)."
+        )
+    )]
+    pub deb: BTreeMap<String, DebApp>,
+    /// The Ubuntu archive root the .deb apps' dependencies come from (`http://` or `https://`);
+    /// absent: the snapshot the image was built from ([`FEATURE_DEB_APPS`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ubuntu_mirror: Option<String>,
 }
 
 impl Apps {
     pub fn is_empty(&self) -> bool {
-        self.web.is_empty() && self.flatpak.is_empty() && self.kiosk.is_empty()
+        self.web.is_empty()
+            && self.flatpak.is_empty()
+            && self.kiosk.is_empty()
+            && self.deb.is_empty()
+            && self.ubuntu_mirror.is_none()
     }
+}
+
+/// `[config.apps.deb.<id>]`: a third-party .deb installed from an https link, with its
+/// dependencies resolved from Ubuntu (design docs/specs/2026-11-10-deb-apps-design.md §4.1).
+/// Only parsing here; the rules are in [`crate::deb::check`] (shared by lint and agent).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(
+    feature = "schema",
+    schemars(
+        description = "`[config.apps.deb.<id>]`: a third-party .deb app installed from an https link. With `kiosk = true` it also runs alone in a kiosk session."
+    )
+)]
+#[serde(deny_unknown_fields)]
+pub struct DebApp {
+    /// The name shown in the Dock and on the login screen; same rules as a kiosk app's `name`.
+    pub name: String,
+    /// `https://` link to the .deb file, at most 2048 bytes.
+    pub url: String,
+    /// 64 lowercase hex digits. Written: only that exact file is installed, the version never
+    /// changes by itself. Absent: the app follows the link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    /// Also run it as a kiosk app (account `kiosk-<id>`, shares the id space with `apps.kiosk`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub kiosk: bool,
+    /// Extra Ubuntu packages the program needs but the .deb does not declare, at most 32.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub packages: Vec<String>,
+    /// The program to start: an absolute path under `/opt/` or `/usr/`, no `..`, no arguments.
+    /// Absent: read from the package's `.desktop` file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exec: Option<String>,
+    /// Like a kiosk app's `icon`: a `files/...` file in the bundle or an `https://` link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
 /// `[config.apps.kiosk.<id>]`: an app IT defines that runs in an isolated, disposable kiosk
@@ -1720,6 +1785,9 @@ pub const FEATURE_FORMAT_2: &str = "format_2";
 pub const FEATURE_KIOSK_PLATFORM: &str = "kiosk_platform";
 /// See [`FEATURE_UPDATE_MIRROR`]: `inject` in a kiosk app (same design).
 pub const FEATURE_KIOSK_INJECT: &str = "kiosk_inject";
+/// See [`FEATURE_UPDATE_MIRROR`]: `[config.apps.deb]` and `ubuntu_mirror` (design
+/// docs/specs/2026-11-10-deb-apps-design.md §4.1).
+pub const FEATURE_DEB_APPS: &str = "deb_apps";
 
 /// Whether `s` is a school id as written in manifests and seeds: a UUID in its canonical text
 /// form, lowercase hex in 8-4-4-4-12 groups (36 characters). One spelling only, so the machine's
@@ -1839,6 +1907,10 @@ pub fn features_used(m: &Manifest) -> Vec<&'static str> {
     }
     if kiosk_apps().any(|a| a.inject.is_some()) {
         out.push(FEATURE_KIOSK_INJECT);
+    }
+    let deb_used = |a: &Apps| !a.deb.is_empty() || a.ubuntu_mirror.is_some();
+    if defaults.is_some_and(|d| deb_used(&d.apps)) || m.configs.iter().any(|c| deb_used(&c.apps)) {
+        out.push(FEATURE_DEB_APPS);
     }
     out
 }
@@ -3912,6 +3984,54 @@ apps.kiosk.k2 = { name = "K2", url = "https://k2.example" }
 chrome_policy.PolA = true
 chrome_policy.PolB = 1
 "#;
+
+    #[test]
+    fn deb_merges_like_kiosk() {
+        let app = |id: &str| {
+            format!("apps.deb.{id} = {{ name = \"{id}\", url = \"https://x.example/{id}.deb\" }}\n")
+        };
+        let m = layered_with(&app("a"), &format!("{}drop.apps.deb = [\"a\"]\n", app("b")));
+        assert_eq!(eff(&m).apps.deb.keys().collect::<Vec<_>>(), ["b"]);
+        let m = layered_with(&app("a"), &app("b"));
+        assert_eq!(eff(&m).apps.deb.keys().collect::<Vec<_>>(), ["a", "b"]);
+        // An own entry replaces the inherited one with the same id.
+        let m = layered_with(
+            &app("a"),
+            "apps.deb.a = { name = \"Mine\", url = \"https://y.example/a.deb\", kiosk = true }",
+        );
+        let a = &eff(&m).apps.deb["a"];
+        assert_eq!((a.name.as_str(), a.kiosk), ("Mine", true));
+        let dropped = layered_with(&app("a"), "drop.apps.deb = [\"a\"]");
+        assert!(!dropped.configs[0].drop.is_empty());
+    }
+
+    #[test]
+    fn ubuntu_mirror_inherits() {
+        let url = "http://th.archive.ubuntu.com/ubuntu";
+        let m = layered_with(&format!("apps.ubuntu_mirror = \"{url}\""), "");
+        assert_eq!(eff(&m).apps.ubuntu_mirror.as_deref(), Some(url));
+        let own = "http://mirror.school.ac.th/ubuntu";
+        let m = layered_with(
+            &format!("apps.ubuntu_mirror = \"{url}\""),
+            &format!("apps.ubuntu_mirror = \"{own}\""),
+        );
+        assert_eq!(eff(&m).apps.ubuntu_mirror.as_deref(), Some(own));
+        assert_eq!(eff(&layered_with("", "")).apps.ubuntu_mirror, None);
+    }
+
+    #[test]
+    fn features_used_reports_deb_apps() {
+        let used = |d: &str, c: &str| features_used(&layered_with(d, c));
+        assert!(!used("", "").contains(&FEATURE_DEB_APPS));
+        let app = "apps.deb.a = { name = \"A\", url = \"https://x.example/a.deb\" }";
+        assert!(used(app, "").contains(&FEATURE_DEB_APPS));
+        assert!(used("", app).contains(&FEATURE_DEB_APPS));
+        // `ubuntu_mirror` alone counts too.
+        let mirror = "apps.ubuntu_mirror = \"http://m.example/ubuntu\"";
+        assert!(used(mirror, "").contains(&FEATURE_DEB_APPS));
+        assert!(used("", mirror).contains(&FEATURE_DEB_APPS));
+        assert_eq!(FEATURE_DEB_APPS, "deb_apps");
+    }
 
     #[test]
     fn drop_removes_by_key_in_every_collection() {

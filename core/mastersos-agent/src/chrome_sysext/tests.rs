@@ -329,6 +329,7 @@ impl Lab {
             reapply: Default::default(),
             identity: None,
             fetch_error: tokio::sync::watch::channel(None).1,
+            quiet: tokio::sync::watch::channel(None).1,
         };
         Lab {
             _dir: dir,

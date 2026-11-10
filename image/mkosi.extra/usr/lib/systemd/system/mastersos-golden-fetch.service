@@ -13,6 +13,9 @@ ConditionVirtualization=!container
 
 [Service]
 Type=oneshot
+# Not started while a locked app session is running. ExecCondition= and not Conflicts= on purpose: systemd conflicts are two-way,
+# so a timer starting this unit would stop mastersos-quiet.target instead of being refused.
+ExecCondition=/bin/sh -c '! systemctl is-active --quiet mastersos-quiet.target'
 ExecStart=/usr/lib/mastersos/golden-fetch --booted
 TimeoutStartSec=3h
 Nice=19

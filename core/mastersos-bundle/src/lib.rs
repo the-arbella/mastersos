@@ -4,6 +4,7 @@
 pub mod archive;
 pub mod check;
 pub mod checks;
+pub mod deb;
 pub mod diag;
 pub mod escrow;
 pub mod heartbeat;

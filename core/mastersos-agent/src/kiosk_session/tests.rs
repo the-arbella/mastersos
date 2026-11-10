@@ -153,6 +153,11 @@ fn exec_argv_flatpak_vs_path() {
         s(&["flatpak", "run", "org.example.Calc"])
     );
     assert_eq!(exec_argv("/usr/bin/foo"), s(&["/usr/bin/foo"]));
+    // a .deb app's vendor program under /opt/ (deb-apps design §4.7) runs directly too
+    assert_eq!(
+        exec_argv("/opt/testnav/bin/testnav"),
+        s(&["/opt/testnav/bin/testnav"])
+    );
     // Exec 的启动描述不经 Chrome
     let l = Launch {
         id: "calc".into(),

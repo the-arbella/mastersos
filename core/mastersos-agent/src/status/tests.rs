@@ -593,6 +593,7 @@ mod job {
                 current: current_rx,
                 reapply: Default::default(),
                 fetch_error: fetch_error_rx,
+                quiet: watch::channel(None).1,
             };
             Lab {
                 d,

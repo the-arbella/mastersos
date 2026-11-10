@@ -1,0 +1,4 @@
+# Marker unit: active while a locked app (kiosk) session is running. mastersos-agent and pam-session start and stop it as root.
+# mastersos-update, mastersos-chrome and mastersos-golden-fetch check it with ExecCondition=. It has no [Install] section and no dependencies.
+[Unit]
+Description=MastersOS: a locked app session is running (no downloads or system changes)

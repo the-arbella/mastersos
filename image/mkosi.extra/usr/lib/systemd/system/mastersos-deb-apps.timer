@@ -1,0 +1,13 @@
+# Third-party .deb apps (docs/specs/2026-11-10-deb-apps-design.md): five minutes after boot, then hourly with up to 30 minutes of
+# random delay so a whole school does not download at the same moment. Rounds with nothing to do exit without touching the network.
+# Enabled by the symlink in /usr/lib/systemd/system/timers.target.wants (not by preset: installed machines must pick it up on update).
+[Unit]
+Description=MastersOS .deb apps timer
+
+[Timer]
+OnBootSec=5min
+OnCalendar=hourly
+RandomizedDelaySec=30min
+
+[Install]
+WantedBy=timers.target

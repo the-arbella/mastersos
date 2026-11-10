@@ -22,6 +22,9 @@ ConditionKernelCommandLine=!systemd.unit=mastersos-installer.target
 
 [Service]
 Type=oneshot
+# Not started while a locked app session is running. ExecCondition= and not Conflicts= on purpose: systemd conflicts are two-way,
+# so a timer starting this unit would stop mastersos-quiet.target instead of being refused.
+ExecCondition=/bin/sh -c '! systemctl is-active --quiet mastersos-quiet.target'
 # /run/mastersos-slots.lock is shared with mastersos-integrity.service (its restore-inactive writes the inactive slot too)
 ExecStart=/usr/bin/flock /run/mastersos-slots.lock /usr/lib/mastersos/update-run
 # 一次 1.46 GB，慢网上要很久；超时就等下一轮（sysupdate 下载到一半不会动现有的版本）

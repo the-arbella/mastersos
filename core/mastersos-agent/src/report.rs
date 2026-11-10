@@ -25,6 +25,7 @@ const MAX_RESULTS: usize = 200;
 /// `config_update_channel`: `update_channel` of the Device's Config or the Defaults picks its update channel.
 /// `kiosk_platform`, `kiosk_inject`: the kiosk step builds the app's platform extension (start page, ChromeOS disguise,
 /// inject script) and the exam extension takes its exit (design docs/specs/2026-11-06-kiosk-platform-inject-design.md).
+/// `deb_apps`: `[config.apps.deb]` and `ubuntu_mirror` (docs/specs/2026-11-10-deb-apps-design.md; the device side is built in later tasks).
 /// `oidc_idp_hint`: the `login` step hands `[school.oidc] idp_hint` to the sign-in card (`login-browser/card.json`).
 pub const SUPPORTED_FEATURES: &[&str] = &[
     mastersos_bundle::FEATURE_UPDATE_MIRROR,
@@ -40,6 +41,7 @@ pub const SUPPORTED_FEATURES: &[&str] = &[
     mastersos_bundle::FEATURE_OIDC_IDP_HINT,
     mastersos_bundle::FEATURE_KIOSK_PLATFORM,
     mastersos_bundle::FEATURE_KIOSK_INJECT,
+    mastersos_bundle::FEATURE_DEB_APPS,
 ];
 
 /// 机器的硬件与系统身份。
@@ -161,6 +163,7 @@ pub fn build(
         imported_from_seed_at: None,
         manifest_features: SUPPORTED_FEATURES.iter().map(|f| (*f).to_owned()).collect(),
         os_pending_version: None,
+        quiet_since: None,
     }
 }
 
@@ -361,7 +364,8 @@ mod tests {
                 "config_update_channel",
                 "oidc_idp_hint",
                 "kiosk_platform",
-                "kiosk_inject"
+                "kiosk_inject",
+                "deb_apps"
             ]
         );
         assert_eq!(r.manifest_features, SUPPORTED_FEATURES);
@@ -381,6 +385,7 @@ mod tests {
             mastersos_bundle::FEATURE_OIDC_IDP_HINT,
             mastersos_bundle::FEATURE_KIOSK_PLATFORM,
             mastersos_bundle::FEATURE_KIOSK_INJECT,
+            mastersos_bundle::FEATURE_DEB_APPS,
         ];
         assert!(SUPPORTED_FEATURES.iter().all(|f| all.contains(f)));
     }

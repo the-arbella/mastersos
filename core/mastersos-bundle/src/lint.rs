@@ -10,8 +10,8 @@ use serde::Serialize;
 #[cfg(test)]
 use crate::ResetRequest;
 use crate::{
-    checks, effective_config, kiosk, Apps, ChromeUpdate, Config, ConfigLayer, Defaults, ItAccount,
-    LoginMethod, Manifest, NetDevice, Shape, Wifi,
+    checks, deb, effective_config, kiosk, Apps, ChromeUpdate, Config, ConfigLayer, Defaults,
+    ItAccount, LoginMethod, Manifest, NetDevice, Shape, Wifi,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -161,8 +161,10 @@ pub fn lint_at(m: &Manifest, present: &BTreeSet<String>, today: chrono::NaiveDat
     for v in &views {
         lint_web_apps(v, present, &mut out);
         lint_kiosk(v, present, &mut out);
+        lint_deb(v, present, &mut out);
     }
     lint_kiosk_semantics(m, &configs, &mut out);
+    lint_deb_semantics(m, &configs, &mut out);
     let channels = std::iter::once((
         "school.update_channel".to_owned(),
         Some(&m.school.update_channel),
@@ -534,6 +536,24 @@ pub fn feature_path(m: &Manifest, feature: &str) -> String {
                         .map(|(id, _)| format!("{base}.apps.kiosk.{id}.{key}"))
                 })
         }
+        FEATURE_DEB_APPS => m
+            .defaults
+            .iter()
+            .map(|d| ("defaults".to_owned(), &d.apps))
+            .chain(
+                m.configs
+                    .iter()
+                    .map(|c| (format!("config.{}", c.id), &c.apps)),
+            )
+            .find_map(|(base, a)| {
+                if !a.deb.is_empty() {
+                    Some(format!("{base}.apps.deb"))
+                } else {
+                    a.ubuntu_mirror
+                        .as_ref()
+                        .map(|_| format!("{base}.apps.ubuntu_mirror"))
+                }
+            }),
         FEATURE_WIFI_EXT if !m.school.wifi.is_empty() => Some("school.wifi".to_owned()),
         FEATURE_WIFI_EXT => layers().find_map(|(base, _, wifi)| {
             wifi.iter()
@@ -647,7 +667,7 @@ pub fn school_id_mismatch(m: &Manifest, expected: &str) -> Option<Lint> {
 
 /// An icon is a `files/...` entry present in the bundle or an `https://` link (same rule for web apps and kiosk apps).
 fn icon_ok(icon: &str, present: &BTreeSet<String>) -> bool {
-    icon.starts_with("https://") || (icon.starts_with("files/") && present.contains(icon))
+    kiosk::icon_shape_ok(icon) && (icon.starts_with("https://") || present.contains(icon))
 }
 
 /// Web apps of one layer: icon and https rules (their format rule, `web_app_invalid`, is in
@@ -789,6 +809,86 @@ fn lint_kiosk(v: &View, present: &BTreeSet<String>, out: &mut Vec<Lint>) {
     }
 }
 
+/// `[config.apps.deb]` and `ubuntu_mirror`, one layer: [`deb::check`] errors, the icon file, and
+/// the mirror address. The id space shared with kiosk apps is in [`lint_deb_semantics`].
+fn lint_deb(v: &View, present: &BTreeSet<String>, out: &mut Vec<Lint>) {
+    let base = format!("{}.apps.deb", v.base);
+    for (id, app) in &v.apps.deb {
+        let at = format!("{base}.{id}");
+        if let Err(e) = deb::check(id, app) {
+            out.push(
+                v.tag(
+                    err(e.code, e.message, format!("{at}.{}", e.field))
+                        .param("app_id", id)
+                        .param("field", e.field),
+                ),
+            );
+        } else if let Some(icon) = app.icon.as_deref().filter(|i| !icon_ok(i, present)) {
+            out.push(
+                v.tag(
+                    err(
+                        "deb_icon_invalid",
+                        format!(
+                            "Deb app {:?} has icon {icon:?}, which is neither a files/... file present in the bundle nor an https:// link: use one of those.",
+                            app.name
+                        ),
+                        format!("{at}.icon"),
+                    )
+                    .param("app_id", id)
+                    .param("field", "icon")
+                    .param("icon", icon),
+                ),
+            );
+        }
+    }
+    if let Some(Err(why)) = v.apps.ubuntu_mirror.as_deref().map(deb::check_mirror) {
+        out.push(v.tag(err(
+            "ubuntu_mirror_invalid",
+            why,
+            format!("{}.apps.ubuntu_mirror", v.base),
+        )));
+    }
+}
+
+/// A `kiosk = true` .deb app shares its id with the kiosk apps (the account is `kiosk-<id>`), and
+/// counts toward their cap. Both look at the effective Config.
+fn lint_deb_semantics(m: &Manifest, configs: &[(&ConfigLayer, Config)], out: &mut Vec<Lint>) {
+    let mut conflicts = Vec::new();
+    let mut ids = BTreeMap::new();
+    for (g, e) in configs {
+        for (id, app) in e.apps.deb.iter().filter(|(_, a)| a.kiosk) {
+            if !e.apps.kiosk.contains_key(id) {
+                continue;
+            }
+            let path = pick(
+                m,
+                g.apps.deb.contains_key(id),
+                g,
+                &format!("apps.deb.{id}.kiosk"),
+            );
+            ids.insert(path.clone(), (id.clone(), app.name.clone()));
+            conflicts.push((path, *g));
+        }
+    }
+    for (path, cs) in group_hits(conflicts) {
+        let (id, name) = &ids[&path];
+        out.push(many(
+            err(
+                "deb_kiosk_id_conflict",
+                format!(
+                    "Deb app {name:?} has kiosk = true and the id {id:?}, which {} already uses for a kiosk app: both would be the account kiosk-{id}; rename one of them.",
+                    used_by(&path, &cs)
+                ),
+                path.clone(),
+            )
+            .param("app_id", id)
+            .param("field", "kiosk"),
+            &path,
+            &cs,
+        ));
+    }
+}
+
 /// The contents of every kiosk `inject` script that is in the bundle ([`kiosk::check_inject_source`]:
 /// size, UTF-8, NUL), for callers that hold the files: `mastersos check` and the server's upload
 /// check. `file` gives a bundle member's bytes, `None` when it is not there (that is already a
@@ -821,20 +921,25 @@ pub fn lint_inject_sources<'a>(m: &Manifest, file: impl Fn(&str) -> Option<&'a [
     out
 }
 
+/// Kiosk apps of a Config, counting the .deb apps with `kiosk = true` (they get a kiosk account too).
+fn kiosk_total(e: &Config) -> usize {
+    e.apps.kiosk.len() + e.apps.deb.values().filter(|a| a.kiosk).count()
+}
+
 /// Kiosk rules about what a Config ends up with: more apps than the cap, and an app that
 /// launches a Flatpak the Config does not install. Both look at the effective Config, so a
 /// Flatpak the Defaults install counts.
 fn lint_kiosk_semantics(m: &Manifest, configs: &[(&ConfigLayer, Config)], out: &mut Vec<Lint>) {
     let too_many = configs
         .iter()
-        .filter(|(_, e)| e.apps.kiosk.len() > kiosk::MAX_KIOSK_APPS)
+        .filter(|(_, e)| kiosk_total(e) > kiosk::MAX_KIOSK_APPS)
         .map(|(g, _)| (pick(m, !g.apps.kiosk.is_empty(), g, "apps.kiosk"), *g))
         .collect();
     for (path, cs) in group_hits(too_many) {
         let n = configs
             .iter()
             .find(|(g, _)| g.id == cs[0].id)
-            .map_or(0, |(_, e)| e.apps.kiosk.len());
+            .map_or(0, |(_, e)| kiosk_total(e));
         out.push(many(
             err(
                 "kiosk_too_many",
@@ -1190,6 +1295,12 @@ fn lint_drop(m: &Manifest, g: &ConfigLayer, out: &mut Vec<Lint>) {
             &dr.apps.kiosk,
             d.apps.kiosk.keys().cloned().collect(),
             g.apps.kiosk.keys().cloned().collect(),
+        ),
+        (
+            "apps.deb",
+            &dr.apps.deb,
+            d.apps.deb.keys().cloned().collect(),
+            g.apps.deb.keys().cloned().collect(),
         ),
         (
             "printers",
@@ -2165,6 +2276,24 @@ scanners = [{ name = "s", uri = "http://x" }, { name = "s", uri = "http://y" }]"
             ("kiosk_policy_locked", &["field"]),
             ("kiosk_platform_invalid", &["field"]),
             ("kiosk_inject_invalid", &["field"]),
+            ("deb_id_invalid", &["config", "group", "app_id", "field"]),
+            ("deb_name_invalid", &["config", "group", "app_id", "field"]),
+            ("deb_url_invalid", &["config", "group", "app_id", "field"]),
+            (
+                "deb_sha256_invalid",
+                &["config", "group", "app_id", "field"],
+            ),
+            (
+                "deb_packages_invalid",
+                &["config", "group", "app_id", "field"],
+            ),
+            ("deb_exec_invalid", &["config", "group", "app_id", "field"]),
+            ("deb_icon_invalid", &["config", "group", "app_id", "field"]),
+            (
+                "deb_kiosk_id_conflict",
+                &["config", "group", "app_id", "field"],
+            ),
+            ("ubuntu_mirror_invalid", &["config", "group"]),
             ("drop_unknown", &["config", "group", "collection", "name"]),
             ("drop_conflict", &["config", "group", "collection", "name"]),
             ("it_account_invalid", &["layer"]),
@@ -2230,7 +2359,7 @@ flatpak = ["libreoffice"]"#,
             ("x", "name = \"n\"\nurl = \"http://a.org/\"".to_string()),
             ("x", format!("{NWEA}\nallow = [\"org\"]")),
             ("x", format!("{NWEA}\nallow = [\"*.org\"]")),
-            ("x", "name = \"n\"\nexec = \"/opt/x\"".to_string()),
+            ("x", "name = \"n\"\nexec = \"/etc/x\"".to_string()),
             ("x", format!("{NWEA}\n{ext}")),
             ("x", format!("{NWEA}\nuser_agent = \"a\\nb\"")),
             ("x", "name = \"\"\nurl = \"https://a.org/\"".to_string()),
@@ -2251,6 +2380,20 @@ flatpak = ["libreoffice"]"#,
         ] {
             run("", &kiosk(id, &fields), "\"local\"");
         }
+        let debs = [
+            deb("Bad", TESTNAV),
+            deb("n", "name = \"\"\nurl = \"https://a.org/x.deb\""),
+            deb("u", "name = \"u\"\nurl = \"http://a.org/x.deb\""),
+            deb("s", &format!("{TESTNAV}\nsha256 = \"ABC\"")),
+            deb("p", &format!("{TESTNAV}\npackages = [\"X\"]")),
+            deb("e", &format!("{TESTNAV}\nexec = \"/etc/x\"")),
+            deb("i", &format!("{TESTNAV}\nicon = \"files/missing.png\"")),
+            kiosk("c", NWEA),
+            deb("c", &format!("{TESTNAV}\nkiosk = true")),
+            "[group.apps]\nubuntu_mirror = \"file:///x\"\n".to_string(),
+        ]
+        .concat();
+        run("", &debs, "\"local\"");
         let admins: Vec<String> = (0..=checks::MAX_ADMIN_USERS)
             .map(|i| format!("\"a{i}@x.th\""))
             .collect();
@@ -2984,7 +3127,7 @@ reset = { id = "r-2", requested_at = "2026-10-15T00:00:00Z" }
             ),
             (
                 "x",
-                "name = \"n\"\nexec = \"/opt/x\"".into(),
+                "name = \"n\"\nexec = \"/etc/x\"".into(),
                 "kiosk_exec_invalid",
                 "exec",
             ),
@@ -3048,6 +3191,164 @@ reset = { id = "r-2", requested_at = "2026-10-15T00:00:00Z" }
         assert_eq!(l[0].path.as_deref(), Some("config.teacher.apps.kiosk"));
     }
     const MAX: usize = crate::kiosk::MAX_KIOSK_APPS;
+
+    fn deb(id: &str, fields: &str) -> String {
+        format!("[group.apps.deb.{id}]\n{fields}\n")
+    }
+
+    const TESTNAV: &str = "name = \"TestNav\"\nurl = \"https://download.testnav.com/testnav.deb\"";
+
+    #[test]
+    fn deb_kiosk_id_conflicts_with_kiosk_app() {
+        let g = format!(
+            "{}{}",
+            kiosk("testnav", NWEA),
+            deb("testnav", &format!("{TESTNAV}\nkiosk = true"))
+        );
+        let l = lint(&manifest("", &g, "\"local\""), &present());
+        assert_eq!(codes(&l), ["deb_kiosk_id_conflict"], "{l:?}");
+        assert_eq!(l[0].level, LintLevel::Error);
+        assert_eq!(
+            l[0].path.as_deref(),
+            Some("config.teacher.apps.deb.testnav.kiosk")
+        );
+        // Without kiosk = true the two names do not meet.
+        let g = format!("{}{}", kiosk("testnav", NWEA), deb("testnav", TESTNAV));
+        let l = lint(&manifest("", &g, "\"local\""), &present());
+        assert!(l.is_empty(), "{l:?}");
+    }
+
+    #[test]
+    fn kiosk_too_many_counts_deb_kiosk() {
+        let kiosks: String = (0..MAX).map(|i| kiosk(&format!("a{i}"), NWEA)).collect();
+        let debs = |a: bool, b: bool| {
+            format!(
+                "{}{}",
+                deb("d1", &format!("{TESTNAV}\nkiosk = {a}")),
+                deb("d2", &format!("{TESTNAV}\nkiosk = {b}"))
+            )
+        };
+        let l = lint(
+            &manifest("", &format!("{kiosks}{}", debs(true, true)), "\"local\""),
+            &present(),
+        );
+        assert_eq!(codes(&l), ["kiosk_too_many"], "{l:?}");
+        // kiosk = false does not count.
+        let l = lint(
+            &manifest("", &format!("{kiosks}{}", debs(false, false)), "\"local\""),
+            &present(),
+        );
+        assert!(l.is_empty(), "{l:?}");
+        // MAX in total is still fine.
+        let few: String = (0..MAX - 1)
+            .map(|i| kiosk(&format!("a{i}"), NWEA))
+            .collect();
+        let l = lint(
+            &manifest(
+                "",
+                &format!("{few}{}", deb("d1", &format!("{TESTNAV}\nkiosk = true"))),
+                "\"local\"",
+            ),
+            &present(),
+        );
+        assert!(l.is_empty(), "{l:?}");
+    }
+
+    #[test]
+    fn lint_deb_check_errors() {
+        for (id, fields, code, field) in [
+            ("Bad", TESTNAV.to_string(), "deb_id_invalid", "id"),
+            (
+                "x",
+                "name = \"\"\nurl = \"https://a.org/x.deb\"".into(),
+                "deb_name_invalid",
+                "name",
+            ),
+            (
+                "x",
+                "name = \"n\"\nurl = \"http://a.org/x.deb\"".into(),
+                "deb_url_invalid",
+                "url",
+            ),
+            (
+                "x",
+                format!("{TESTNAV}\nsha256 = \"ABC\""),
+                "deb_sha256_invalid",
+                "sha256",
+            ),
+            (
+                "x",
+                format!("{TESTNAV}\npackages = [\"X\"]"),
+                "deb_packages_invalid",
+                "packages",
+            ),
+            (
+                "x",
+                format!("{TESTNAV}\nexec = \"/opt/../x\""),
+                "deb_exec_invalid",
+                "exec",
+            ),
+            (
+                "x",
+                format!("{TESTNAV}\nicon = \"nope.png\""),
+                "deb_icon_invalid",
+                "icon",
+            ),
+            (
+                "x",
+                format!("{TESTNAV}\nicon = \"files/missing.png\""),
+                "deb_icon_invalid",
+                "icon",
+            ),
+        ] {
+            let l = lint(&manifest("", &deb(id, &fields), "\"local\""), &present());
+            assert_eq!(codes(&l), [code], "{code}: {l:?}");
+            assert_eq!(
+                l[0].path.as_deref(),
+                Some(format!("config.teacher.apps.deb.{id}.{field}").as_str())
+            );
+            assert_eq!(l[0].params["app_id"], id);
+            assert_eq!(l[0].params["field"], field);
+        }
+        let l = lint(
+            &manifest(
+                "",
+                &deb(
+                    "x",
+                    &format!("{TESTNAV}\nkiosk = true\nexec = \"/opt/x/y\""),
+                ),
+                "\"local\"",
+            ),
+            &present(),
+        );
+        assert!(l.is_empty(), "{l:?}");
+    }
+
+    #[test]
+    fn lint_ubuntu_mirror() {
+        let l = lint(
+            &manifest(
+                "",
+                "[group.apps]\nubuntu_mirror = \"file:///x\"",
+                "\"local\"",
+            ),
+            &present(),
+        );
+        assert_eq!(codes(&l), ["ubuntu_mirror_invalid"], "{l:?}");
+        assert_eq!(
+            l[0].path.as_deref(),
+            Some("config.teacher.apps.ubuntu_mirror")
+        );
+        let l = lint(
+            &manifest(
+                "",
+                "[group.apps]\nubuntu_mirror = \"http://th.archive.ubuntu.com/ubuntu\"",
+                "\"local\"",
+            ),
+            &present(),
+        );
+        assert!(l.is_empty(), "{l:?}");
+    }
 
     #[test]
     fn lint_kiosk_no_entry() {

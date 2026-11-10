@@ -192,6 +192,7 @@ mod tests {
             bundle_dir: bundle.path(),
             phase: Phase::Full,
             superseded: &flag,
+            quiet: &std::sync::atomic::AtomicBool::new(false),
         };
         let p = paths(root);
         let r = FakeRunner::new();

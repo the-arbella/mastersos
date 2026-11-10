@@ -315,6 +315,7 @@ mod tests {
                 bundle_dir: dir.path(),
                 phase: Phase::Boot,
                 superseded: &flag,
+                quiet: &std::sync::atomic::AtomicBool::new(false),
             };
             let r = run(
                 &ctx,

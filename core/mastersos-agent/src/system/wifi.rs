@@ -1450,6 +1450,7 @@ mod tests {
             bundle_dir: dir.path(),
             phase: crate::apply::Phase::Full,
             superseded: &flag,
+            quiet: &std::sync::atomic::AtomicBool::new(false),
         })
     }
 

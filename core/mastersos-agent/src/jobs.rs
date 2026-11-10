@@ -59,6 +59,8 @@ pub struct JobCtx {
     /// The latest settings fetch: `Some(error)` when it failed, `None` when it succeeded (new bundle or nothing new)
     /// or none has finished yet. The status job shows it.
     pub fetch_error: watch::Receiver<Option<String>>,
+    /// Since when the exam quiet is on (`None` when it is not); jobs that could disturb a kiosk session wait on it.
+    pub quiet: crate::quiet::QuietRx,
 }
 
 pub trait Job: Send + Sync {
@@ -80,6 +82,10 @@ pub trait Job: Send + Sync {
     /// 家目录清理（Task 19）不该在登录者自己的 PAM 会话阶段里跑（复审 T19 N1）。
     fn wake_on_signal(&self) -> bool {
         true
+    }
+    /// For true the job also starts rounds during the exam quiet (status reports must go on); others wait for it to end.
+    fn runs_in_quiet(&self) -> bool {
+        false
     }
     /// 给出前缀时：每一轮的结果替换掉 `SideResults` 里以它开头的全部旧项。
     fn replaces_items(&self) -> Option<&'static str> {
@@ -132,8 +138,23 @@ pub fn spawn_all(
             // 每个任务自己的接收端（`changed()` 要 &mut）；不关心新包的任务不看它。
             let mut current = job.wake_on_new_bundle().then(|| cx.current.clone());
             let signal = job.wake_on_signal();
+            let mut quiet = cx.quiet.clone();
             tokio::spawn(async move {
                 loop {
+                    // Do not start a round during the exam quiet (a running round is never dropped).
+                    if !job.runs_in_quiet() {
+                        // Held by the quiet: open the first-report gate now, the round may be far away
+                        if quiet.borrow().is_some() {
+                            if let Some(tx) = first.take() {
+                                let _ = tx.send(());
+                            }
+                        }
+                        tokio::select! {
+                            biased;
+                            _ = shutdown.cancelled() => return,
+                            _ = crate::quiet::wait_until_loud(&mut quiet) => {}
+                        }
+                    }
                     let started = Instant::now();
                     // 这一轮之前发布的都算看过了；跑的过程中再发布的，跑完立即再跑。
                     if let Some(rx) = current.as_mut() {
@@ -270,6 +291,7 @@ mod tests {
             current: watch::channel(None).1,
             reapply: Default::default(),
             fetch_error: watch::channel(None).1,
+            quiet: watch::channel(None).1,
         })
     }
 
@@ -347,6 +369,124 @@ mod tests {
         // 不叫醒：一小时后照常再跑
         tokio::time::sleep(Duration::from_secs(3600)).await;
         assert_eq!(runs.load(Ordering::SeqCst), 4);
+        shutdown.cancel();
+        for h in s.handles {
+            h.await.unwrap();
+        }
+    }
+
+    fn cx_quiet(rx: crate::quiet::QuietRx) -> Arc<JobCtx> {
+        let mut c = Arc::try_unwrap(cx()).ok().unwrap();
+        c.quiet = rx;
+        Arc::new(c)
+    }
+
+    struct QuietCounting(Arc<AtomicUsize>, bool);
+
+    impl Job for QuietCounting {
+        fn name(&self) -> &'static str {
+            "quiet-counting"
+        }
+        fn every(&self) -> Duration {
+            Duration::from_secs(10)
+        }
+        fn runs_in_quiet(&self) -> bool {
+            self.1
+        }
+        fn run<'a>(
+            &'a self,
+            _cx: &'a JobCtx,
+        ) -> Pin<Box<dyn Future<Output = Vec<ItemResult>> + Send + 'a>> {
+            Box::pin(async move {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                vec![]
+            })
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn quiet_holds_job_until_loud() {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let (tx, rx) = watch::channel(Some(chrono::Utc::now()));
+        let shutdown = CancellationToken::new();
+        let s = spawn_all(
+            vec![Arc::new(QuietCounting(runs.clone(), false))],
+            cx_quiet(rx),
+            Default::default(),
+            shutdown.clone(),
+            Default::default(),
+        );
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert_eq!(runs.load(Ordering::SeqCst), 0);
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert_eq!(runs.load(Ordering::SeqCst), 0);
+        tx.send(None).unwrap();
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+        shutdown.cancel();
+        for h in s.handles {
+            h.await.unwrap();
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn runs_in_quiet_job_keeps_running() {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let (_tx, rx) = watch::channel(Some(chrono::Utc::now()));
+        let shutdown = CancellationToken::new();
+        let s = spawn_all(
+            vec![Arc::new(QuietCounting(runs.clone(), true))],
+            cx_quiet(rx),
+            Default::default(),
+            shutdown.clone(),
+            Default::default(),
+        );
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        assert_eq!(runs.load(Ordering::SeqCst), 2);
+        shutdown.cancel();
+        for h in s.handles {
+            h.await.unwrap();
+        }
+    }
+
+    struct Gating;
+
+    impl Job for Gating {
+        fn name(&self) -> &'static str {
+            "gating"
+        }
+        fn every(&self) -> Duration {
+            Duration::from_secs(10)
+        }
+        fn gates_first_report(&self) -> bool {
+            true
+        }
+        fn run<'a>(
+            &'a self,
+            _cx: &'a JobCtx,
+        ) -> Pin<Box<dyn Future<Output = Vec<ItemResult>> + Send + 'a>> {
+            Box::pin(async move { panic!("must not run in quiet") })
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn held_job_opens_first_report_gate() {
+        let (_tx, rx) = watch::channel(Some(chrono::Utc::now()));
+        let shutdown = CancellationToken::new();
+        let mut s = spawn_all(
+            vec![Arc::new(Gating)],
+            cx_quiet(rx),
+            Default::default(),
+            shutdown.clone(),
+            Default::default(),
+        );
+        let first = s.first_rounds.pop().unwrap();
+        tokio::time::timeout(Duration::from_secs(1), first)
+            .await
+            .unwrap()
+            .unwrap();
         shutdown.cancel();
         for h in s.handles {
             h.await.unwrap();

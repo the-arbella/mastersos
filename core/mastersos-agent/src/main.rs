@@ -46,6 +46,8 @@ enum Cmd {
         #[arg(long)]
         scheduled: bool,
     },
+    /// Builds and merges the .deb app extensions once, then exits (mastersos-deb-apps.service). Exit code 1 when an app failed.
+    DebApps,
     /// Remote diagnostics.
     Diag {
         #[command(subcommand)]
@@ -307,6 +309,15 @@ async fn agent_main() -> anyhow::Result<()> {
             }
             Ok(())
         }
+        Cmd::DebApps => {
+            use mastersos_agent::deb_apps::{round, status::AppState};
+            let env = round::RoundEnv::production(Arc::new(RealRunner))?;
+            let results = round::run_once(&env).await;
+            if results.iter().any(|r| r.state == AppState::Failed) {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
         Cmd::Run => {
             let shutdown = CancellationToken::new();
             let mut term = signal(SignalKind::terminate())?;
@@ -343,6 +354,10 @@ async fn agent_main() -> anyhow::Result<()> {
                 Arc::new(mastersos_agent::homes::HomeCleanupJob::new(Arc::new(
                     RealRunner,
                 ))),
+                // .deb apps: hands new settings to mastersos-deb-apps.service and starts it, reports its results
+                Arc::new(mastersos_agent::deb_apps::status::DebAppsStatus::new(
+                    Arc::new(RealRunner),
+                )),
             ];
             mastersos_agent::run(cfg, applier, jobs, shutdown).await
         }
