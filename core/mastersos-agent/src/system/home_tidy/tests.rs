@@ -1,0 +1,298 @@
+use super::*;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{symlink, PermissionsExt};
+use std::path::{Path, PathBuf};
+
+use crate::homes::trash;
+
+fn me() -> u32 {
+    rustix::process::geteuid().as_raw()
+}
+
+/// A tempdir standing in for `/home`, with one home directory `me` owned by this process.
+struct Fx {
+    d: tempfile::TempDir,
+    root: PathBuf,
+    home: PathBuf,
+}
+
+fn fx() -> Fx {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("home");
+    let home = root.join("me");
+    std::fs::create_dir_all(&home).unwrap();
+    Fx { d, root, home }
+}
+
+impl Fx {
+    fn put(&self, rel: &str, body: &str) {
+        let p = self.home.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, body).unwrap();
+    }
+
+    fn read(&self, rel: &str) -> Option<String> {
+        std::fs::read_to_string(self.home.join(rel)).ok()
+    }
+
+    fn there(&self, rel: &str) -> bool {
+        std::fs::symlink_metadata(self.home.join(rel)).is_ok()
+    }
+
+    fn run(&self, uid: u32) -> Tidy {
+        let r = crate::safefs::open_dir(&self.root, Path::new(""), false).unwrap();
+        let h = crate::safefs::open_child_dir(&r, "me").unwrap().unwrap();
+        let t = trash::open_trash(&r, true).unwrap().unwrap();
+        tidy_home(&h, &t, uid)
+    }
+
+    fn trash_len(&self) -> usize {
+        std::fs::read_dir(self.root.join(trash::TRASH))
+            .map(|rd| rd.count())
+            .unwrap_or(0)
+    }
+
+    fn no_temps(&self) {
+        for e in std::fs::read_dir(&self.home).unwrap() {
+            let n = e.unwrap().file_name();
+            assert!(
+                !n.as_bytes().starts_with(b".mastersos-tidy"),
+                "a temporary directory was left: {n:?}"
+            );
+        }
+    }
+}
+
+const KEPT: &[&str] = &[
+    "Documents/a.txt",
+    ".config/google-chrome/Default/Bookmarks",
+    ".config/gtk-3.0/bookmarks",
+    ".local/share/keyrings/login.keyring",
+    ".var/app/org.x/data",
+    ".pki/nssdb/cert9.db",
+];
+
+const GONE: &[&str] = &[
+    ".profile",
+    ".bashrc",
+    ".config/autostart/x.desktop",
+    ".config/systemd/user/x.service",
+    ".config/environment.d/x.conf",
+    ".config/gtk-3.0/settings.ini",
+    ".local/share/applications/x.desktop",
+    ".local/share/dbus-1/services/x.service",
+    ".local/share/gnome-shell/extensions/x/metadata.json",
+    ".local/share/flatpak/exports/share/x",
+];
+
+fn populated() -> Fx {
+    let f = fx();
+    for p in KEPT.iter().chain(GONE) {
+        f.put(p, &format!("body of {p}"));
+    }
+    f
+}
+
+fn assert_kept(f: &Fx) {
+    for p in KEPT {
+        assert_eq!(f.read(p), Some(format!("body of {p}")), "{p}");
+    }
+}
+
+#[test]
+fn keeps_only_the_keep_list() {
+    let f = populated();
+    let t = f.run(me());
+    assert_kept(&f);
+    for p in GONE {
+        assert!(!f.there(p), "{p} should have been moved");
+    }
+    assert!(f.trash_len() > 0);
+    assert!(t.moved > 0);
+    assert!(t.skipped.is_empty(), "{:?}", t.skipped);
+    f.no_temps();
+}
+
+#[test]
+fn recovers_interrupted_swap() {
+    let f = fx();
+    f.put(
+        ".mastersos-tidy.config/google-chrome/Default/Bookmarks",
+        "B",
+    );
+    f.put(".config/autostart/x.desktop", "x");
+    let t = f.run(me());
+    assert_eq!(
+        f.read(".config/google-chrome/Default/Bookmarks").as_deref(),
+        Some("B")
+    );
+    assert!(!f.there(".config/autostart"));
+    assert!(!f.there(".mastersos-tidy.config"));
+    assert!(t.skipped.is_empty(), "{:?}", t.skipped);
+}
+
+/// Interrupted after the exchange: the temporary name holds the old content, the container holds only the keep items.
+#[test]
+fn recovers_after_the_exchange() {
+    let f = fx();
+    f.put(".config/google-chrome/Default/Bookmarks", "B");
+    f.put(".config/dconf/user", "D");
+    f.put(".mastersos-tidy.config/autostart/x.desktop", "x");
+    f.put(".mastersos-tidy.config/gtk-3.0/settings.ini", "s");
+    let t = f.run(me());
+    assert_eq!(
+        f.read(".config/google-chrome/Default/Bookmarks").as_deref(),
+        Some("B")
+    );
+    assert_eq!(f.read(".config/dconf/user").as_deref(), Some("D"));
+    assert!(!f.there(".config/autostart"));
+    assert!(!f.there(".config/gtk-3.0"));
+    f.no_temps();
+    assert!(t.skipped.is_empty(), "{:?}", t.skipped);
+}
+
+/// A temporary directory the student planted only gives back keep items; nothing else in it reaches the container.
+#[test]
+fn planted_temporary_directory_gives_back_only_keep_items() {
+    let f = fx();
+    f.put(".config/google-chrome/Default/Bookmarks", "old");
+    f.put(
+        ".mastersos-tidy.config/google-chrome/Default/Bookmarks",
+        "B",
+    );
+    f.put(".mastersos-tidy.config/autostart/evil.desktop", "x");
+    f.put(".mastersos-tidy.local/share/applications/evil.desktop", "x");
+    // A link as the temporary directory is moved, not followed.
+    let outside = f.d.path().join("outside");
+    std::fs::create_dir_all(outside.join("google-chrome")).unwrap();
+    symlink(&outside, f.home.join(".mastersos-tidy.cache")).unwrap();
+    let t = f.run(me());
+    assert_eq!(
+        f.read(".config/google-chrome/Default/Bookmarks").as_deref(),
+        Some("B")
+    );
+    assert!(!f.there(".config/autostart"));
+    assert!(!f.there(".local/share/applications"));
+    assert!(!f.there(".cache/google-chrome"));
+    assert!(outside.join("google-chrome").is_dir());
+    f.no_temps();
+    assert!(t.skipped.is_empty(), "{:?}", t.skipped);
+}
+
+#[test]
+fn symlinked_container_is_moved_not_followed() {
+    let f = fx();
+    let outside = f.d.path().join("outside");
+    std::fs::create_dir_all(outside.join("autostart")).unwrap();
+    std::fs::write(outside.join("keep.txt"), "K").unwrap();
+    std::fs::set_permissions(&outside, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(
+        outside.join("keep.txt"),
+        std::fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+    symlink(&outside, f.home.join(".config")).unwrap();
+    symlink(outside.join("keep.txt"), f.home.join(".profile")).unwrap();
+    // Intermediate and keep-list paths that are links are not followed either.
+    std::fs::create_dir_all(f.home.join(".local")).unwrap();
+    symlink(&outside, f.home.join(".local/share")).unwrap();
+    let t = f.run(me());
+    assert_eq!(
+        std::fs::read_to_string(outside.join("keep.txt")).unwrap(),
+        "K"
+    );
+    assert!(outside.join("autostart").is_dir());
+    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o7777;
+    assert_eq!(mode(&outside), 0o755);
+    assert_eq!(mode(&outside.join("keep.txt")), 0o644);
+    assert!(!f.there(".config"));
+    assert!(!f.there(".profile"));
+    assert!(!f.there(".local/share"));
+    assert!(t.skipped.is_empty(), "{:?}", t.skipped);
+}
+
+#[test]
+fn foreign_container_is_skipped() {
+    let f = populated();
+    let t = f.run(me() + 1);
+    assert!(t.skipped.contains(&SkipReason::ForeignContainer));
+    assert_eq!(
+        f.read(".config/autostart/x.desktop").as_deref(),
+        Some("body of .config/autostart/x.desktop")
+    );
+    assert_kept(&f);
+    assert_eq!(t.moved, 0);
+}
+
+#[test]
+fn too_many_top_entries_stops() {
+    let f = fx();
+    for n in 0..MAX_TOP_ENTRIES + 5 {
+        std::fs::write(f.home.join(format!(".f{n}")), "").unwrap();
+    }
+    let t = f.run(me());
+    assert!(t.skipped.contains(&SkipReason::TooManyEntries));
+    assert!(t.moved <= MAX_TOP_ENTRIES + CONTAINERS.len());
+    assert!(t.moved > 0, "the first batch is still moved");
+}
+
+#[test]
+fn non_utf8_dotfile_is_moved() {
+    let f = fx();
+    let name = std::ffi::OsStr::from_bytes(b".prof\xffile");
+    std::fs::write(f.home.join(name), "x").unwrap();
+    f.put(".bashrc", "x");
+    let t = f.run(me());
+    assert!(std::fs::symlink_metadata(f.home.join(name)).is_err());
+    assert!(!f.there(".bashrc"));
+    assert_eq!(t.moved, 2);
+    assert!(t.skipped.is_empty(), "{:?}", t.skipped);
+}
+
+#[test]
+fn idempotent() {
+    let f = populated();
+    let first = f.run(me());
+    assert!(first.moved > 0);
+    let second = f.run(me());
+    assert_eq!(second.moved, 0);
+    assert!(second.skipped.is_empty(), "{:?}", second.skipped);
+    assert_kept(&f);
+    f.no_temps();
+}
+
+/// Containers come back owned by the user with their original permissions.
+#[test]
+fn container_keeps_owner_and_mode() {
+    let f = populated();
+    std::fs::set_permissions(
+        f.home.join(".config"),
+        std::fs::Permissions::from_mode(0o750),
+    )
+    .unwrap();
+    f.run(me());
+    use std::os::unix::fs::MetadataExt;
+    let m = std::fs::symlink_metadata(f.home.join(".config")).unwrap();
+    assert!(m.is_dir());
+    assert_eq!(m.uid(), me());
+    assert_eq!(m.mode() & 0o777, 0o750);
+}
+
+#[test]
+fn keep_list_follows_the_rule() {
+    // Nothing that is run, loaded or read as environment or configuration of other programs.
+    for (_, keep) in CONTAINERS {
+        for k in *keep {
+            for bad in [
+                "autostart",
+                "applications",
+                "systemd",
+                "environment.d",
+                "mimeapps",
+            ] {
+                assert!(!k.contains(bad), "{k}");
+            }
+            assert!(!k.starts_with('/') && !k.split('/').any(|p| p.is_empty() || p == ".."));
+        }
+    }
+}

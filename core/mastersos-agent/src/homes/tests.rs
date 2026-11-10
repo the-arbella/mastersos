@@ -1098,3 +1098,71 @@ fn failed_record_keeps_the_queue_marker() {
     assert_eq!(drain_and_record(&q, &good, Utc::now()), vec![10001]);
     assert!(queued(&paths).unwrap().is_empty());
 }
+
+/// `to_trash_entry` moves a file, a directory and a symlink alike (the link itself, never its target), seals the
+/// moved directory and file to 0700, and leaves a hard-linked file's permissions alone (the other link is still the
+/// student's).
+#[test]
+fn to_trash_entry_moves_file_dir_and_link() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let (d, home, _fs) = real_home();
+    let me_dir = home.join("me@school.ac.th");
+    let outside = d.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("keep"), b"k").unwrap();
+    std::fs::set_permissions(outside.join("keep"), std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::fs::write(me_dir.join(".profile"), b"p").unwrap();
+    std::fs::create_dir_all(me_dir.join(".mozilla/x")).unwrap();
+    symlink(outside.join("keep"), me_dir.join(".link")).unwrap();
+    std::fs::write(me_dir.join("shared"), b"s").unwrap();
+    std::fs::set_permissions(
+        me_dir.join("shared"),
+        std::fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+    std::fs::hard_link(me_dir.join("shared"), me_dir.join(".hard")).unwrap();
+
+    let root = crate::safefs::open_dir(&home, Path::new(""), false).unwrap();
+    let dir = crate::safefs::open_child_dir(&root, "me@school.ac.th")
+        .unwrap()
+        .unwrap();
+    let t = trash::open_trash(&root, true).unwrap().unwrap();
+    assert!(trash::to_trash_entry(&dir, &t, ".profile").unwrap());
+    assert!(trash::to_trash_entry(&dir, &t, ".mozilla").unwrap());
+    assert!(trash::to_trash_entry(&dir, &t, ".link").unwrap());
+    assert!(
+        !trash::to_trash_entry(&dir, &t, ".hard").unwrap(),
+        "a hard-linked file is moved but not sealed"
+    );
+    for n in [".profile", ".mozilla", ".link", ".hard"] {
+        assert!(std::fs::symlink_metadata(me_dir.join(n)).is_err(), "{n}");
+    }
+    assert_eq!(trash_entries(&home).len(), 4);
+    for p in trash_entries(&home) {
+        let m = std::fs::symlink_metadata(&p).unwrap();
+        if m.is_dir() || (m.is_file() && m.len() == 1 && std::fs::read(&p).unwrap() == b"p") {
+            assert_eq!(m.permissions().mode() & 0o777, 0o700);
+        }
+    }
+    assert_eq!(std::fs::read(outside.join("keep")).unwrap(), b"k");
+    let keep_mode = std::fs::metadata(outside.join("keep"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(keep_mode & 0o777, 0o644, "the link target is untouched");
+    let shared = std::fs::metadata(me_dir.join("shared"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(
+        shared & 0o777,
+        0o644,
+        "the other hard link keeps its permissions"
+    );
+    // Missing and malformed names are errors; nothing else moves.
+    assert!(trash::to_trash_entry(&dir, &t, ".gone").is_err());
+    for bad in ["", ".", "..", "a/b"] {
+        assert!(trash::to_trash_entry(&dir, &t, bad).is_err(), "{bad:?}");
+    }
+    assert!(me_dir.join("shared").exists());
+}
