@@ -846,7 +846,8 @@ config = "standard"
 
 A third-party .deb app: a program a vendor ships as a `.deb` file at an https link, installed on the
 Devices with its dependencies taken from Ubuntu. `<id>` is the app id: it starts with a lowercase
-letter, has only lowercase letters, digits and `-`, and is at most 24 characters. With
+letter, has only lowercase letters, digits and `-`, and is at most 24 characters; `deps` is reserved
+(the Device keeps the apps' shared dependencies under that name). With
 `kiosk = true` the app also runs alone in a kiosk session; its id then shares one name space with
 `apps.kiosk` (the account is `kiosk-<id>`, `deb_kiosk_id_conflict`) and the apps of both count toward
 the cap of 32 (`kiosk_too_many`).
@@ -858,7 +859,7 @@ the cap of 32 (`kiosk_too_many`).
 | `sha256` | string | optional; follow the link | 64 lowercase hexadecimal digits | `sha256 = "2e06d735c1a4f0b8d9e3a7b65c4f1e28a9d0b3c7e5f64a18b2c9d0e7f3a51b46"` | Written: only a file with this hash is installed and the version never changes by itself. Absent: the app follows whatever the link serves. |
 | `kiosk` | boolean | `false` | `true` or `false` | `kiosk = true` | Also run it as a kiosk app. |
 | `packages` | list of strings | `[]` | at most 32 Debian package names (lowercase letters, digits, `+`, `.`, `-`; at least two characters, starting with a letter or digit) | `packages = ["x11-utils"]` | Ubuntu packages the program needs but the `.deb` does not declare; resolved together with the app's dependencies. |
-| `exec` | string | optional; read from the package's `.desktop` file | an absolute path under `/opt/` or `/usr/`; no `..`, no arguments | `exec = "/opt/testnav/bin/testnav"` | Required when the package has no usable `.desktop` file or several. Only the shape is checked here; after installing, the Device checks that the path is really provided by this app. |
+| `exec` | string | optional; read from the package's `.desktop` file | an absolute path under `/opt/` or `/usr/`; no `..`, no arguments | `exec = "/opt/testnav/bin/testnav"` | Required when the package has no usable `.desktop` file or several. Only the shape is checked here; after installing, the Device checks that the path is really provided by this app. With `kiosk = true` the program (written here or read from the `.desktop` file) must also follow the kiosk `exec` rule: each part of the path only letters, digits, `.`, `_`, `-`, `+` (no spaces); otherwise the app fails to install with a message saying so, and `exec` can name another path the package provides. |
 | `icon` | string | optional; the `.desktop` file's icon | a `files/…` file in the bundle, or an `https://` link | `icon = "files/testnav.png"` | Same rule as a kiosk app's `icon`. |
 
 ```toml check=ok
@@ -882,6 +883,27 @@ name = "Unassigned"
 config = "standard"
 ```
 
+What IT should know about how Devices handle `.deb` apps:
+
+- **Size.** The `.deb` file may be at most 2 GiB. A Device does not download or unpack a package
+  when that would leave less than 1 GiB free (it needs about three times the file's size); the app
+  then reports the lack of space and is tried again on the next run.
+- **Updates.** Without `sha256` the Device checks the link at most once a day and installs what it
+  serves. A file that is not an amd64 (or `all`) `.deb` package, such as an error page, is ignored and
+  the version already there stays. With `sha256` a file that does not match is reported and
+  downloaded again only a day later, or as soon as `url` or `sha256` changes. A new version that
+  fails to install is tried again a day later, or as soon as the package or the app's settings change;
+  the installed version stays meanwhile. Pin `sha256` for exam apps, so that the version students
+  sit an exam with only changes when IT changes it.
+- **After a system update.** Each app is rebuilt for the new system version, so it may be
+  unavailable for a while after a Device updates. The rebuild uses the files the Device already has
+  (the installed package and its cached dependencies) when the network or the link is not available.
+- **Legacy browser mode.** A Device in legacy browser mode installs and shows no `.deb` app (apps
+  already installed are removed).
+- **Learning mode.** Only the app itself gets a menu entry. Programs its dependencies bring along
+  have none, so students cannot start them from the menu; they are not blocked one by one either,
+  only by the rules learning mode already has (for example the one against terminals).
+
 ### `[config.apps.kiosk.<id>]`
 
 A kiosk app: an app IT defines that runs alone in an isolated, disposable session (for example an
@@ -904,7 +926,7 @@ Write exactly one of `url` (a web page or PWA) and `exec` (a local program).
 | `inject` | string | none | a `files/….js` file in the bundle, UTF-8, at most 64 KiB; only with `url`, not with `pwa = true` | `inject = "files/testnav.js"` | Runs in the pages of the app's sites (`allow` and the host of `url`), in the page's own JavaScript world, before any of the page's scripts, inside a function: declare globals as `window.name = …`. To end the kiosk session from the script: `mastersos.exit()` (top frame; the page's own scripts cannot do this). **No secrets:** the script is stored on each Device as a world-readable file (mode 0644) that every account on the Device can read; never put passwords, keys or tokens in it. |
 | `extensions` | list of tables | `[]` | see [`[[config.apps.kiosk.<id>.extensions]]`](#configappskioskidextensions) | — | Extensions force-installed in the session. |
 | `chrome_policy` | table | `{}` | Chrome policy names and values, except the locked keys | `chrome_policy = { PrintingEnabled = true }` | Laid over the kiosk session's default locks. The Config's `chrome_policy` is not inherited. Policies that are off by default and may be turned on here: `PrintingEnabled`, `TranslateEnabled`, `SpellcheckEnabled`, `LensOverlaySettings`, `GenAiDefaultSettings`, `UserFeedbackAllowed`. Locked keys (`kiosk_policy_locked`) cannot be set. |
-| `exec` | string | one of `url` / `exec` | a Flatpak app id, or an absolute path under `/usr/` (no arguments, no `..`) | `exec = "org.geogebra.GeoGebra"` | A Flatpak app must also be in `apps.flatpak`. |
+| `exec` | string | one of `url` / `exec` | a Flatpak app id, or an absolute path under `/usr/` or `/opt/` (no arguments, no `..`; each part only letters, digits, `.`, `_`, `-`, `+`) | `exec = "org.geogebra.GeoGebra"` | A Flatpak app must also be in `apps.flatpak`. A path under `/opt/` is a program a `.deb` app provides (`[config.apps.deb.<id>]`). |
 | `android` | any | reserved | — | — | Android apps are not supported; writing it is `kiosk_launch_invalid`. |
 | `login_screen` | boolean | `true` | `true`, `false` | `login_screen = true` | Listed on the login screen, where the app is started. |
 | `in_session` | boolean | `false` | `true` (needs `login_screen = true`), `false` | `in_session = true` | Also listed in the Dock of normal sessions; choosing it ends the session and returns to the login screen. |
@@ -1725,7 +1747,7 @@ config = "standard"
 
 ### `deb_id_invalid`
 
-**Level:** error. **Meaning:** a `.deb` app's id (the table name) does not start with a lowercase letter, has characters other than lowercase letters, digits and `-`, or is longer than 24 characters.
+**Level:** error. **Meaning:** a `.deb` app's id (the table name) does not start with a lowercase letter, has characters other than lowercase letters, digits and `-`, is longer than 24 characters, or is `deps` (reserved for the apps' shared dependencies).
 
 <!-- prompt:omit -->
 **Why:** with `kiosk = true` the id becomes part of the account name `kiosk-<id>`.
