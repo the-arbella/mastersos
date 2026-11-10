@@ -801,6 +801,7 @@ mod tests {
     fn learning_runs_scripts_every_login() {
         let mut g = config_any(&[("scripts/hello.sh", None)]);
         g.interface = mastersos_bundle::Interface::Learning;
+        g.legacy_browser = false;
         let ex = exported(&[("scripts/hello.sh", "#!/bin/sh\n")]);
         let r = FakeRunner::new();
         let mut st = State::default();
