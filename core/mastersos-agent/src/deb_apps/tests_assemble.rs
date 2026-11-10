@@ -293,7 +293,7 @@ fn absolute_symlink_outside_rejected() {
         fs::create_dir_all(t.path().join("usr/bin")).unwrap();
         fs::create_dir_all(t.path().join("opt/foo/lib")).unwrap();
         link(t.path(), at, target);
-        let e = err(prune(&open(t.path()), &Policy::UbuntuDeny));
+        let e = err(prune(&open(t.path()), &vendor("foo")));
         assert!(e.contains(at), "{at} -> {target}: {e}");
     }
 }
@@ -583,6 +583,13 @@ fn desktop_written_and_original_removed() {
     );
     link(r, "usr/share/applications/alias.desktop", "testnav.desktop");
     put(r, "usr/share/applications/mimeinfo.cache", "x", 0o644);
+    put(r, "usr/share/applications/mimeapps.list", "x", 0o644);
+    put(
+        r,
+        "usr/share/applications/sub/x.desktop",
+        TESTNAV_DESKTOP,
+        0o644,
+    );
     let fd = open(r);
     let l = pick_launcher(&fd, None).unwrap();
     write_desktop(&fd, "testnav", "TestNav", &l, None, true).unwrap();
@@ -593,7 +600,13 @@ Icon=/opt/testnav/lib/testnav.png\nMimeType=x-scheme-handler/tnav;\nTerminal=fal
     );
     assert!(!exists(r, "usr/share/applications/testnav.desktop"));
     assert!(!exists(r, "usr/share/applications/alias.desktop"));
-    assert!(exists(r, "usr/share/applications/mimeinfo.cache"));
+    // Only ours is left: no cache, no defaults list, no subdirectory GLib would turn into launchers
+    assert_eq!(
+        fs::read_dir(r.join("usr/share/applications"))
+            .unwrap()
+            .count(),
+        1
+    );
     // The vendor's own copy outside usr/share/applications is not shown by anyone: left alone
     assert!(exists(r, "opt/testnav/lib/testnav-testnav.desktop"));
     // IT's icon wins; not kiosk → no NoDisplay; no MimeType → no field code
@@ -747,4 +760,207 @@ fn overlap_between_app_and_deps_rejected() {
         ("app-other".into(), &o),
     ]));
     assert!(e.contains("opt/testnav"), "{e}");
+}
+
+#[test]
+fn deps_link_into_etc_accepted_vendor_refused() {
+    let mk = || {
+        let t = tempfile::tempdir().unwrap();
+        link(t.path(), "usr/lib/ssl/openssl.cnf", "/etc/ssl/openssl.cnf");
+        link(t.path(), "usr/lib/ssl/certs", "../../../etc/ssl/certs");
+        t
+    };
+    let t = mk();
+    assert_eq!(
+        prune(&open(t.path()), &Policy::UbuntuDeny).unwrap(),
+        Vec::<String>::new()
+    );
+    assert!(exists(t.path(), "usr/lib/ssl/openssl.cnf"));
+    assert!(exists(t.path(), "usr/lib/ssl/certs"));
+    // The same link from a vendor package (here one whose usr/lib/<package> is usr/lib/ssl) refuses the package
+    let t = mk();
+    let e = err(prune(&open(t.path()), &vendor("ssl")));
+    assert!(e.contains("usr/lib/ssl/"), "{e}");
+}
+
+#[test]
+fn deps_link_outside_dropped() {
+    let t = tempfile::tempdir().unwrap();
+    let r = t.path();
+    link(r, "usr/lib/foo/tmp", "/tmp/x");
+    link(r, "usr/lib/foo/home", "/home/student/evil.so");
+    link(r, "usr/lib/foo/up", "../../../../etc");
+    link(r, "usr/lib/foo/mid", "a/../../../../etc");
+    link(r, "usr/lib/foo/ok", "/usr/lib/x86_64-linux-gnu/libfoo.so.1");
+    put(r, "usr/lib/foo/data", "x", 0o644);
+    let mut removed = prune(&open(r), &Policy::UbuntuDeny).unwrap();
+    removed.sort();
+    assert_eq!(
+        removed,
+        vec![
+            "usr/lib/foo/home",
+            "usr/lib/foo/mid",
+            "usr/lib/foo/tmp",
+            "usr/lib/foo/up"
+        ]
+    );
+    assert!(exists(r, "usr/lib/foo/ok"));
+    assert!(exists(r, "usr/lib/foo/data"));
+    // Special files still refuse a dependency tree (special_files_rejected), links do not
+}
+
+#[test]
+fn applications_dir_holds_only_launchers() {
+    let fill = |r: &Path| {
+        put(
+            r,
+            "usr/share/applications/foo.desktop",
+            &desktop("/opt/foo/bin/foo"),
+            0o644,
+        );
+        put(
+            r,
+            "usr/share/applications/sub/x.desktop",
+            &desktop("/opt/foo/bin/foo"),
+            0o644,
+        );
+        put(r, "usr/share/applications/mimeapps.list", "x", 0o644);
+        put(r, "usr/share/applications/defaults.list", "x", 0o644);
+        put(r, "opt/foo/bin/foo", "x", 0o755);
+    };
+    let t = tempfile::tempdir().unwrap();
+    let r = t.path();
+    fill(r);
+    let fd = open(r);
+    let mut removed = prune(&fd, &vendor("foo")).unwrap();
+    removed.sort();
+    assert_eq!(
+        removed,
+        vec![
+            "usr/share/applications/defaults.list",
+            "usr/share/applications/mimeapps.list",
+            "usr/share/applications/sub",
+        ]
+    );
+    assert!(exists(r, "usr/share/applications/foo.desktop"));
+    // Whatever is there by the time we write ours goes too
+    put(r, "usr/share/applications/late/y.desktop", "x", 0o644);
+    put(r, "usr/share/applications/mimeapps.list", "x", 0o644);
+    let l = pick_launcher(&fd, None).unwrap();
+    write_desktop(&fd, "foo", "Foo", &l, None, true).unwrap();
+    let left: Vec<String> = fs::read_dir(r.join("usr/share/applications"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(left, vec!["mastersos-app-foo.desktop"]);
+    // Dependencies bring no launchers, lists or subdirectories at all
+    let t = tempfile::tempdir().unwrap();
+    fill(t.path());
+    let removed = prune(&open(t.path()), &Policy::UbuntuDeny).unwrap();
+    assert!(
+        removed.contains(&"usr/share/applications".to_string()),
+        "{removed:?}"
+    );
+    assert!(!exists(t.path(), "usr/share/applications"));
+}
+
+#[test]
+fn generated_caches_dropped() {
+    let fill = |r: &Path| {
+        put(
+            r,
+            "usr/share/glib-2.0/schemas/gschemas.compiled",
+            "x",
+            0o644,
+        );
+        put(r, "usr/share/icons/hicolor/icon-theme.cache", "x", 0o644);
+        put(r, "usr/share/icons/hicolor/48x48/apps/foo.png", "x", 0o644);
+        put(r, "usr/share/icons/Adwaita/icon-theme.cache", "x", 0o644);
+        put(r, "usr/share/mime/mime.cache", "x", 0o644);
+        put(r, "usr/share/mime/globs2", "x", 0o644);
+        put(r, "usr/share/mime/text/x-foo.xml", "x", 0o644);
+        put(r, "usr/share/mime/packages/foo.xml", "x", 0o644);
+        put(r, "usr/share/mime/packages/README", "x", 0o644);
+        put(r, "usr/share/doc/foo/copyright", "x", 0o644);
+    };
+    // Dependencies
+    let t = tempfile::tempdir().unwrap();
+    let r = t.path();
+    fill(r);
+    put(r, "usr/lib/locale/locale-archive", "x", 0o644);
+    put(r, "usr/lib/x86_64-linux-gnu/libfoo.so.1", "x", 0o644);
+    put(r, "usr/share/fonts/truetype/foo/foo.ttf", "x", 0o644);
+    put(r, "usr/share/fonts/truetype/foo/.uuid", "x", 0o644);
+    put(r, "usr/share/fonts/truetype/fonts.cache-9", "x", 0o644);
+    let mut removed = prune(&open(r), &Policy::UbuntuDeny).unwrap();
+    removed.sort();
+    assert_eq!(
+        removed,
+        vec![
+            "usr/lib/locale/locale-archive",
+            "usr/share/fonts/truetype/fonts.cache-9",
+            "usr/share/fonts/truetype/foo/.uuid",
+            "usr/share/glib-2.0/schemas",
+            "usr/share/icons/Adwaita/icon-theme.cache",
+            "usr/share/icons/hicolor/icon-theme.cache",
+            "usr/share/mime/globs2",
+            "usr/share/mime/mime.cache",
+            "usr/share/mime/packages/README",
+            "usr/share/mime/text",
+        ]
+    );
+    for kept in [
+        "usr/share/icons/hicolor/48x48/apps/foo.png",
+        "usr/share/mime/packages/foo.xml",
+        "usr/share/fonts/truetype/foo/foo.ttf",
+        "usr/lib/x86_64-linux-gnu/libfoo.so.1",
+        "usr/share/doc/foo/copyright",
+    ] {
+        assert!(exists(r, kept), "{kept}");
+    }
+    // Vendor package: glib-2.0 and the generated mime files are outside the allowlist, the icon caches go by name
+    let t = tempfile::tempdir().unwrap();
+    let r = t.path();
+    fill(r);
+    let mut removed = prune(&open(r), &vendor("foo")).unwrap();
+    removed.sort();
+    assert_eq!(
+        removed,
+        vec![
+            "usr/share/glib-2.0",
+            "usr/share/icons/Adwaita/icon-theme.cache",
+            "usr/share/icons/hicolor/icon-theme.cache",
+            "usr/share/mime/globs2",
+            "usr/share/mime/mime.cache",
+            "usr/share/mime/packages/README",
+            "usr/share/mime/text",
+        ]
+    );
+    assert!(!exists(r, "usr/share/glib-2.0/schemas/gschemas.compiled"));
+    assert!(exists(r, "usr/share/mime/packages/foo.xml"));
+    assert!(exists(r, "usr/share/icons/hicolor/48x48/apps/foo.png"));
+}
+
+#[test]
+fn deny_list_has_the_review_additions() {
+    for d in [
+        "usr/share/thumbnailers",
+        "usr/share/gvfs/mounts",
+        "usr/share/ibus/component",
+        "usr/share/gnome/applications",
+        "usr/share/factory",
+    ] {
+        assert!(UBUNTU_DENY.contains(&d), "{d}");
+    }
+    let t = tempfile::tempdir().unwrap();
+    put(
+        t.path(),
+        "usr/share/thumbnailers/foo.thumbnailer",
+        "x",
+        0o644,
+    );
+    put(t.path(), "usr/share/factory/etc/passwd", "x", 0o644);
+    let mut removed = prune(&open(t.path()), &Policy::UbuntuDeny).unwrap();
+    removed.sort();
+    assert_eq!(removed, vec!["usr/share/factory", "usr/share/thumbnailers"]);
 }

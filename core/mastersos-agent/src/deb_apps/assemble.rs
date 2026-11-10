@@ -7,16 +7,19 @@
 //!
 //! **Symbolic links** ([`prune`] checks every link left after pruning). The tree is `/` once merged, and systemd-sysext
 //! only merges `/usr` and `/opt`, both root-controlled (`/usr` is the signed image, `/opt` the root partition plus
-//! extensions). So a link is accepted only when it resolves *below* `/usr/` or `/opt/`:
-//! - absolute targets must start with `/usr/` or `/opt/` and contain no `..` (`usr/bin/foo -> /opt/foo/bin/foo`, how
+//! extensions). So a link is accepted only when it resolves *below* one of the allowed roots — `/usr/` and `/opt/` for
+//! the vendor package, also `/etc/` (root-only) for Ubuntu dependencies, which routinely ship links such as
+//! `usr/lib/ssl/openssl.cnf -> /etc/ssl/openssl.cnf`:
+//! - absolute targets must start with an allowed root and contain no `..` (`usr/bin/foo -> /opt/foo/bin/foo`, how
 //!   vendors expose binaries, is accepted; so is a link to an image file such as `/usr/bin/sh`);
 //! - relative targets are resolved from the link's own directory; `..` may only appear as leading components (they pop
-//!   real directories of the tree, never a link), must not climb above the tree, and the result must again be below
-//!   `usr/` or `opt/` (`usr/bin/x -> ../../etc/passwd` is refused although it stays "inside the tree").
+//!   real directories of the tree, never a link), must not climb above the tree, and the result must again be below an
+//!   allowed root (`usr/bin/x -> ../../etc/passwd` is refused for a vendor although it stays "inside the tree").
 //!
 //! Without a `..` after the first name, resolution only descends from a checked place, so a chain of accepted links
-//! cannot end outside `/usr` and `/opt`. Anything else refuses the whole tree with an error naming the link, as do
-//! device nodes, FIFOs and sockets.
+//! cannot end outside the allowed roots. Any other link refuses a vendor tree (the error names it) and is dropped and
+//! recorded in a dependency tree (a bad link in one Ubuntu package must not cost every app its dependencies). Device
+//! nodes, FIFOs and sockets refuse either tree.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::os::fd::OwnedFd;
@@ -78,6 +81,11 @@ pub const UBUNTU_DENY: &[&str] = &[
     "usr/share/gnome/autostart",
     "usr/share/glib-2.0/schemas",
     "usr/share/xdg-desktop-portal",
+    "usr/share/thumbnailers",
+    "usr/share/gvfs/mounts",
+    "usr/share/ibus/component",
+    "usr/share/gnome/applications",
+    "usr/share/factory",
     // dependencies bring no launchers (spec §4.3 item 6)
     "usr/share/applications",
     // plugins loaded into the login screen, GNOME Shell and session processes
@@ -126,6 +134,19 @@ const VENDOR_ALLOW: &[(&str, &[&str])] = &[
 
 /// Entries of [`UBUNTU_DENY`] a vendor package keeps: its own launchers, which [`write_desktop`] replaces.
 const VENDOR_KEEPS: &[&str] = &["usr/share/applications"];
+
+/// Caches the image builds by trigger (the same `*` rules as [`UBUNTU_DENY`], plus `*` as a whole middle component for
+/// any directory there). A package's copy would shadow the image's: a `gschemas.compiled` replaces its dconf defaults,
+/// an `icon-theme.cache` or `mime.cache` hides what the image has. Dropped from every tree; `usr/share/mime` keeps only
+/// `packages/*.xml`, and font directories lose their `.uuid` and `fonts.cache-*` files ([`drop_generated`]).
+const GENERATED: &[&str] = &[
+    "usr/share/glib-2.0/schemas/gschemas.compiled",
+    "usr/share/applications/mimeinfo.cache",
+    "usr/share/icons/*/icon-theme.cache",
+    "usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/*/loaders.cache",
+    "usr/lib/x86_64-linux-gnu/gio/modules/giomodule.cache",
+    "usr/lib/locale/locale-archive",
+];
 
 /// How much of an unpacked package survives [`prune`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -286,27 +307,116 @@ pub fn prune(root: &OwnedFd, policy: &Policy) -> Result<Vec<String>> {
         if vendor && VENDOR_KEEPS.contains(d) {
             continue;
         }
-        let (parent, last) = d.rsplit_once('/').unwrap_or(("", d));
-        let Some(dir) = open_level(root, parent)? else {
+        remove_pattern(root, d, &mut removed)?;
+    }
+    drop_generated(root, &mut removed)?;
+    check_entries(root, policy, &mut removed)?;
+    Ok(removed)
+}
+
+/// Removes what `pattern` names (`a/b/c`; a middle component `*` means every real directory there, a last component
+/// `x*` every entry starting with `x`). A missing level is fine; a named level that is not a real directory refuses the
+/// tree (it would hide the system's directory once merged).
+fn remove_pattern(root: &OwnedFd, pattern: &str, removed: &mut Vec<String>) -> Result<()> {
+    let parts: Vec<&str> = pattern.split('/').collect();
+    let dir = safefs::open_dir_at(root, Path::new(""), false)?;
+    remove_parts(&dir, "", &parts, removed)
+}
+
+fn remove_parts(
+    dir: &OwnedFd,
+    prefix: &str,
+    parts: &[&str],
+    removed: &mut Vec<String>,
+) -> Result<()> {
+    let (first, rest) = parts
+        .split_first()
+        .ok_or_else(|| anyhow!("empty pattern"))?;
+    if rest.is_empty() {
+        let names = match first.strip_suffix('*') {
+            Some(p) => safefs::list_at(dir)?
+                .into_iter()
+                .filter(|n| n.starts_with(p))
+                .collect(),
+            None => vec![first.to_string()],
+        };
+        for n in names {
+            let path = join(prefix, &n);
+            if let Some(e) = lstat(dir, &n, &path)? {
+                remove_entry(dir, &n, &e, &path)?;
+                removed.push(path);
+            }
+        }
+        return Ok(());
+    }
+    let names = if *first == "*" {
+        safefs::list_at(dir)?
+    } else {
+        vec![first.to_string()]
+    };
+    for n in names {
+        let path = join(prefix, &n);
+        let Some(e) = lstat(dir, &n, &path)? else {
             continue;
         };
-        if let Some(prefix) = last.strip_suffix('*') {
-            for n in safefs::list_at(&dir)? {
-                if n.starts_with(prefix) {
-                    let path = join(parent, &n);
-                    if let Some(e) = lstat(&dir, &n, &path)? {
-                        remove_entry(&dir, &n, &e, &path)?;
-                        removed.push(path);
+        if e.ty != FileType::Directory {
+            if *first == "*" {
+                continue;
+            }
+            bail!(
+                "{path} in the unpacked package is not a directory ({:?}); refusing the package",
+                e.ty
+            );
+        }
+        let sub = safefs::open_child_dir(dir, &n)?.ok_or_else(|| anyhow!("{path} disappeared"))?;
+        remove_parts(&sub, &path, rest, removed)?;
+    }
+    Ok(())
+}
+
+/// Drops [`GENERATED`], everything in `usr/share/mime` but `packages/*.xml` (regular files), and the fontconfig files
+/// below `usr/share/fonts`.
+fn drop_generated(root: &OwnedFd, removed: &mut Vec<String>) -> Result<()> {
+    for g in GENERATED {
+        remove_pattern(root, g, removed)?;
+    }
+    if let Some(mime) = open_level(root, "usr/share/mime")? {
+        for n in safefs::list_at(&mime)? {
+            let path = join("usr/share/mime", &n);
+            let Some(e) = lstat(&mime, &n, &path)? else {
+                continue;
+            };
+            if n == "packages" && e.ty == FileType::Directory {
+                let pk = safefs::open_child_dir(&mime, &n)?
+                    .ok_or_else(|| anyhow!("{path} disappeared"))?;
+                for x in safefs::list_at(&pk)? {
+                    let xp = join(&path, &x);
+                    if let Some(xe) = lstat(&pk, &x, &xp)? {
+                        if !(xe.ty == FileType::RegularFile && x.ends_with(".xml")) {
+                            remove_entry(&pk, &x, &xe, &xp)?;
+                            removed.push(xp);
+                        }
                     }
                 }
+            } else {
+                remove_entry(&mime, &n, &e, &path)?;
+                removed.push(path);
             }
-        } else if let Some(e) = lstat(&dir, last, d)? {
-            remove_entry(&dir, last, &e, d)?;
-            removed.push(d.to_string());
         }
     }
-    check_entries(root)?;
-    Ok(removed)
+    if let Some(fonts) = open_level(root, "usr/share/fonts")? {
+        let mut drop = vec![];
+        walk(&fonts, "usr/share/fonts", 1, &mut |dir, name, path, e| {
+            if e.ty != FileType::Directory && (name == ".uuid" || name.starts_with("fonts.cache-"))
+            {
+                remove_entry(dir, name, e, path)?;
+                drop.push(path.to_string());
+            }
+            Ok(true)
+        })?;
+        removed.extend(drop);
+    }
+    Ok(())
 }
 
 fn prune_vendor(root: &OwnedFd, package: &str, removed: &mut Vec<String>) -> Result<()> {
@@ -336,6 +446,19 @@ fn prune_vendor(root: &OwnedFd, package: &str, removed: &mut Vec<String>) -> Res
             }
         }
     }
+    // usr/share/applications: launchers only (regular *.desktop files; write_desktop then leaves just ours). Anything
+    // else there would still reach GLib: subdirectories become launchers, mimeapps.list/defaults.list set defaults.
+    if let Some(d) = open_level(root, "usr/share/applications")? {
+        for n in safefs::list_at(&d)? {
+            let path = join("usr/share/applications", &n);
+            if let Some(e) = lstat(&d, &n, &path)? {
+                if !(e.ty == FileType::RegularFile && n.ends_with(".desktop")) {
+                    remove_entry(&d, &n, &e, &path)?;
+                    removed.push(path);
+                }
+            }
+        }
+    }
     // usr/bin/*: programs (files or links), not directories
     if let Some(d) = open_level(root, "usr/bin")? {
         for n in safefs::list_at(&d)? {
@@ -351,17 +474,33 @@ fn prune_vendor(root: &OwnedFd, package: &str, removed: &mut Vec<String>) -> Res
     Ok(())
 }
 
-/// Refuses links that leave `/usr` and `/opt` and anything that is not a file, directory or link.
-fn check_entries(root: &OwnedFd) -> Result<()> {
+/// Checks every link (see the module documentation) and refuses anything that is not a file, directory or link. A
+/// vendor link outside `/usr` and `/opt` refuses the tree; an Ubuntu dependency may also point into `/etc` (OpenJDK,
+/// OpenSSL and Python ship such links) and any other bad link is dropped and recorded in `removed`.
+fn check_entries(root: &OwnedFd, policy: &Policy, removed: &mut Vec<String>) -> Result<()> {
+    let roots: &[&str] = match policy {
+        Policy::VendorAllow { .. } => &["usr", "opt"],
+        Policy::UbuntuDeny => &["usr", "opt", "etc"],
+    };
+    let mut dropped = vec![];
     walk(root, "", 0, &mut |dir, name, path, e| match e.ty {
         FileType::Directory | FileType::RegularFile => Ok(true),
         FileType::Symlink => {
             let target = read_link(dir, name, path)?;
-            link_target(path, &target)?;
+            if let Err(err) = link_target(path, &target, roots) {
+                if matches!(policy, Policy::VendorAllow { .. }) {
+                    return Err(err.context("refusing the package"));
+                }
+                log::warn!("deb-apps: dropping {err:#}");
+                remove_entry(dir, name, e, path)?;
+                dropped.push(path.to_string());
+            }
             Ok(false)
         }
         t => bail!("{path} in the unpacked package is a {t:?}; refusing the package"),
-    })
+    })?;
+    removed.extend(dropped);
+    Ok(())
 }
 
 fn read_link(dir: &OwnedFd, name: &str, path: &str) -> Result<String> {
@@ -372,10 +511,9 @@ fn read_link(dir: &OwnedFd, name: &str, path: &str) -> Result<String> {
         .map_err(|_| anyhow!("the link {path} has a non-UTF-8 target; refusing the package"))
 }
 
-/// Where the link at `path` points once merged, as a relative path below `usr/` or `opt/` (see the module documentation).
-fn link_target(path: &str, target: &str) -> Result<String> {
-    let refuse =
-        |why: &str| anyhow!("{path} is a link to {target:?}, which {why}; refusing the package");
+/// Where the link at `path` points once merged, as a relative path below one of `roots` (see the module documentation).
+fn link_target(path: &str, target: &str, roots: &[&str]) -> Result<String> {
+    let refuse = |why: &str| anyhow!("{path} is a link to {target:?}, which {why}");
     let mut out: Vec<&str> = vec![];
     if let Some(abs) = target.strip_prefix('/') {
         for c in abs.split('/') {
@@ -406,8 +544,9 @@ fn link_target(path: &str, target: &str) -> Result<String> {
             }
         }
     }
-    if out.len() < 2 || !matches!(out[0], "usr" | "opt") {
-        return Err(refuse("is not below /usr or /opt"));
+    if out.len() < 2 || !roots.contains(&out[0]) {
+        let allowed: Vec<String> = roots.iter().map(|r| format!("/{r}")).collect();
+        return Err(refuse(&format!("is not below {}", allowed.join(", "))));
     }
     Ok(out.join("/"))
 }
@@ -912,8 +1051,8 @@ fn exec_value(p: &str) -> Result<String> {
     Ok(arg.replace('\\', "\\\\"))
 }
 
-/// Replaces the package's launchers in `usr/share/applications/` with ours, `mastersos-app-<id>.desktop` (spec §4.3
-/// item 6): `Name` is IT's `name`, `Exec` the program (plus `%U` when it handles MIME types, so links like `tnav:` reach
+/// Replaces everything in `usr/share/applications/` (the package's launchers, subdirectories, `mimeapps.list` and the
+/// like) with ours alone, `mastersos-app-<id>.desktop` (spec §4.3 item 6): `Name` is IT's `name`, `Exec` the program (plus `%U` when it handles MIME types, so links like `tnav:` reach
 /// it), `Icon` IT's icon or the package's, `NoDisplay=true` for kiosk apps (§4.7). Every value is checked first, so a
 /// refused value leaves the tree as it was.
 pub fn write_desktop(
@@ -964,7 +1103,7 @@ pub fn write_desktop(
     let apps = safefs::open_dir_at(root, Path::new("usr/share/applications"), true)?;
     let ours = format!("{OUR_DESKTOP_PREFIX}{id}.desktop");
     for n in safefs::list_at(&apps)? {
-        if n.ends_with(".desktop") && n != ours {
+        if n != ours {
             let path = join("usr/share/applications", &n);
             if let Some(e) = lstat(&apps, &n, &path)? {
                 remove_entry(&apps, &n, &e, &path)?;
