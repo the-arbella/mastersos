@@ -135,7 +135,8 @@ pub(super) fn when(at: i64) -> String {
 /// Downloads `url` into `apps/<id>/app.deb.new` and checks it is a package ([`control_of`]) before it replaces `app.deb`:
 /// a bad download never replaces the last good file. Refused before anything is written when the work directory or
 /// `/var/lib/extensions` would be left without the free space for it ([`build::check_space`], with the response's
-/// `Content-Length`). `None`: not modified (`cond` given and the server answered 304).
+/// `Content-Length`; without one, the largest package allowed, [`MAX_DEB_BYTES`]). `None`: not modified (`cond` given
+/// and the server answered 304).
 async fn download_main(
     env: &RoundEnv,
     dir: &OwnedFd,
@@ -150,7 +151,7 @@ async fn download_main(
         build::check_space(
             &free,
             &[&work, &ext_dir],
-            len.unwrap_or(0),
+            len.unwrap_or(MAX_DEB_BYTES),
             "downloading the package",
         )
     };
@@ -184,8 +185,9 @@ async fn download_main(
 }
 
 /// The main package of `id` (see the module docs of [`super::round`]): `apps/<id>/app.deb`, or `apps/<id>/installed.deb`
-/// (the package the installed tree was built from, [`keep_installed`]) when the app must be rebuilt for a new image and
-/// its source cannot be reached, or when `app.deb` is not at hand. `installed` is the app's entry in the round state.
+/// (the package the installed tree was built from, [`keep_installed`]) when the app must be rebuilt for a new image (an
+/// unpinned app always, a newer `app.deb` waits for the next round; a pinned one when its source cannot be reached), or
+/// when `app.deb` is not at hand. `installed` is the app's entry in the round state.
 pub(super) async fn fetch(
     env: &RoundEnv,
     work: &OwnedFd,
@@ -250,7 +252,7 @@ pub(super) async fn fetch(
         None => {
             let fresh =
                 read_secs(&dir, CHECKED).is_some_and(|c| c <= env.now + DAY && env.now - c < DAY);
-            match have {
+            let picked: Picked = match have {
                 Some(m) if fresh => (DEB, m.fetched.sha256, None, None),
                 have => {
                     let cond = have.as_ref().map(|m| m.fetched.clone());
@@ -287,6 +289,23 @@ pub(super) async fn fetch(
                         },
                     }
                 }
+            };
+            // A rebuild for a new image is made from what was running: a different app.deb (cached, or new this
+            // round) was never built and swapped in, it may be one that failed to build. It stays as a pending
+            // update, tried like any other from the next round on.
+            match (&kept, picked) {
+                (Some((sha, true)), (DEB, got, _, note)) if got != *sha => {
+                    let why = "rebuilt from the installed package for the new system version; the newer package is \
+                               tried next round";
+                    from_installed(
+                        sha,
+                        match note {
+                            Some(n) => format!("{n}; {why}"),
+                            None => why.to_string(),
+                        },
+                    )
+                }
+                (_, p) => p,
             }
         }
     };
@@ -527,7 +546,13 @@ pub(super) async fn dependencies(
     let order = apt::source_order(wanted.ubuntu_mirror.as_deref(), u, cache_first);
     let inputs: Vec<PathBuf> = mains.values().map(|m| m.path.clone()).collect();
     let extra: Vec<String> = extra.into_iter().collect();
-    match apt::resolve_in_order(&env.runner, &apt_dir, u, &order, &inputs, &extra).await {
+    // apt's download goes into the work directory: 2 × what apt would fetch (the files and apt's partial copies) plus
+    // 1 GiB kept free; the unpack checks again (build::build_deps)
+    let (free, work) = (env.free_space.clone(), env.paths.work.clone());
+    let space = move |size: u64| {
+        build::check_space_times(&free, &[&work], size, 2, "downloading the dependencies")
+    };
+    match apt::resolve_in_order(&env.runner, &apt_dir, u, &order, &inputs, &extra, &space).await {
         Ok((src, files)) => {
             let mut names: Vec<String> = files
                 .iter()

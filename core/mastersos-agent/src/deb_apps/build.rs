@@ -66,12 +66,23 @@ impl std::error::Error for NoSpace {}
 /// Refuses `what` (a download or an unpack of `size` bytes of packages) unless every one of `dirs` has at least
 /// 3 × `size` plus [`RESERVE_BYTES`] free (the package, its unpacked tree and the tree being replaced).
 pub(crate) fn check_space(free: &FreeSpace, dirs: &[&Path], size: u64, what: &str) -> Result<()> {
-    let need = size.saturating_mul(3).saturating_add(RESERVE_BYTES);
+    check_space_times(free, dirs, size, 3, what)
+}
+
+/// [`check_space`] with `times` × `size` plus [`RESERVE_BYTES`].
+pub(crate) fn check_space_times(
+    free: &FreeSpace,
+    dirs: &[&Path],
+    size: u64,
+    times: u64,
+    what: &str,
+) -> Result<()> {
+    let need = size.saturating_mul(times).saturating_add(RESERVE_BYTES);
     for d in dirs {
         let have = free(d)?;
         if have < need {
             return Err(NoSpace(format!(
-                "not enough free disk space for {what}: {} has {} MiB free, {} MiB needed (3 × the package size plus 1 GiB kept free)",
+                "not enough free disk space for {what}: {} has {} MiB free, {} MiB needed ({times} × the size plus 1 GiB kept free)",
                 d.display(),
                 have / (1024 * 1024),
                 need.div_ceil(1024 * 1024)

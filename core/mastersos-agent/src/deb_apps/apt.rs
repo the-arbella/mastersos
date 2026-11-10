@@ -39,6 +39,33 @@ const PATH_ENV: &str = "PATH=/usr/sbin:/usr/bin:/sbin:/bin";
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const SIMULATE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+/// What [`resolve`] runs before the download to learn its size: the same install, printing the files apt would fetch
+/// (`'<uri>' <file> <size> <hash>`, one per line; files already in `archives/` are not listed) instead of fetching them.
+pub const PRINT_URIS: &[&str] = &["install", "--print-uris", "-qq", "-y", "--no-remove"];
+
+/// The bytes the download of `out` ([`PRINT_URIS`]) would write. A `file:` URI (a main package given by path, the
+/// offline cache) is used in place and counts nothing; lines that are not URI lines (apt's notes) are skipped.
+pub fn download_size(out: &str) -> Result<u64> {
+    let mut total = 0u64;
+    for line in out.lines().filter(|l| l.starts_with('\'')) {
+        let bad = || anyhow!("unexpected line in apt's download list: {line:?}");
+        let (uri, rest) = line[1..].split_once("' ").ok_or_else(bad)?;
+        let mut it = rest.split_whitespace();
+        let size: u64 = match (it.next(), it.next()) {
+            (Some(_file), Some(n)) => n.parse().map_err(|_| bad())?,
+            _ => return Err(bad()),
+        };
+        if !uri.starts_with("file:") {
+            total = total.saturating_add(size);
+        }
+    }
+    Ok(total)
+}
+
+/// Refuses a download of the given size (bytes) when the work directory lacks the space for it; [`resolve`] calls it
+/// before `apt-get install --download-only`.
+pub type SpaceCheck<'a> = dyn Fn(u64) -> Result<()> + Send + Sync + 'a;
+
 /// Lines of apt's stderr kept in an error.
 const ERR_LINES: usize = 10;
 
@@ -517,8 +544,8 @@ fn prepare(work: &Path, src: &Source, u: &UbuntuSource) -> Result<()> {
 }
 
 /// Resolves the dependencies of the main packages `inputs` (absolute paths of .deb files) and the Ubuntu packages `extra`
-/// from `src`, all in one apt run: writes `sources.list`, `apt-get update`, checks `apt-get -s install`, then
-/// `apt-get install --download-only`. Returns the downloaded .deb files in `<work>/archives` (not the main packages).
+/// from `src`, all in one apt run: writes `sources.list`, `apt-get update`, checks `apt-get -s install`, checks the
+/// free space for the download ([`PRINT_URIS`], `space`), then `apt-get install --download-only`. Returns the downloaded .deb files in `<work>/archives` (not the main packages).
 pub async fn resolve(
     runner: &Arc<dyn Runner>,
     work: &Path,
@@ -526,6 +553,7 @@ pub async fn resolve(
     src: &Source,
     inputs: &[PathBuf],
     extra: &[String],
+    space: &SpaceCheck<'_>,
 ) -> Result<Vec<PathBuf>, ResolveError> {
     let mut pkgs = vec![];
     for p in inputs {
@@ -581,6 +609,25 @@ pub async fn resolve(
         return Err(other("apt's plan is too long to check"));
     }
     let plan = parse_simulation(&out.stdout)?;
+
+    // the free space for what apt would fetch
+    let out = exec(runner, with_pkgs(PRINT_URIS).timeout(SIMULATE_TIMEOUT))
+        .await
+        .map_err(other)?;
+    if out.code != 0 {
+        return Err(other(format!(
+            "apt could not list the dependency downloads from {src}: {}",
+            last_lines(&out.stderr, ERR_LINES)
+        )));
+    }
+    if was_cut(&out.stdout) {
+        return Err(other("apt's download list is too long to check"));
+    }
+    let size = download_size(&out.stdout).map_err(|e| other(format!("{e:#}")))?;
+    // nothing to fetch (all cached, or no dependency): nothing written, nothing to check
+    if size > 0 {
+        space(size).map_err(|e| other(format!("{e:#}")))?;
+    }
 
     // --no-remove: belt and braces, the plan was checked above with the same state.
     let out = exec(
@@ -646,9 +693,10 @@ pub async fn resolve_in_order(
     order: &[Source],
     inputs: &[PathBuf],
     extra: &[String],
+    space: &SpaceCheck<'_>,
 ) -> Result<(Source, Vec<PathBuf>), ResolveError> {
     for (i, src) in order.iter().enumerate() {
-        let e = match resolve(runner, work, u, src, inputs, extra).await {
+        let e = match resolve(runner, work, u, src, inputs, extra, space).await {
             Ok(files) => return Ok((src.clone(), files)),
             Err(e) => e,
         };

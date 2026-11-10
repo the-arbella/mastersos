@@ -210,6 +210,19 @@ impl World {
             }
             return Ok(Output::ok(&out));
         }
+        if a.contains(&"--print-uris") {
+            // the files still to fetch, 100 MiB each
+            let mut out = String::new();
+            for (_, _, file, _) in &deps {
+                if !archives.join(file).exists() {
+                    out.push_str(&format!(
+                        "'http://archive.example/pool/{file}' {file} {} SHA512:00\n",
+                        100 * 1024 * 1024
+                    ));
+                }
+            }
+            return Ok(Output::ok(&out));
+        }
         if a.contains(&"--download-only") && !deps.is_empty() {
             fs::create_dir_all(&archives).unwrap();
             for (n, v, file, content) in deps {
@@ -1678,4 +1691,119 @@ async fn image_change_rebuilds_from_the_installed_package() {
     .unwrap();
     assert!(rel.contains("SYSEXT_LEVEL=2.0\n"), "{rel}");
     assert_eq!(version(&fx), "1.0");
+}
+
+/// Serves `body` once per connection over plain HTTP/1.1 without a `Content-Length` (the body ends when the connection
+/// closes); returns the URL.
+async fn serve_without_length(body: Vec<u8>) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = l.accept().await {
+            let body = body.clone();
+            tokio::spawn(async move {
+                let mut req = vec![0u8; 4096];
+                let _ = s.read(&mut req).await;
+                let _ = s
+                    .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/octet-stream\r\n\r\n")
+                    .await;
+                let _ = s.write_all(&body).await;
+                let _ = s.shutdown().await;
+            });
+        }
+    });
+    format!("http://{addr}/testnav.deb")
+}
+
+#[tokio::test]
+async fn download_without_length_needs_space_for_the_largest_package() {
+    // No Content-Length: the size is not known before the download, so the check assumes the largest allowed package
+    // (2 GiB): 3 × 2 GiB + 1 GiB kept free. 2 GiB free is not enough.
+    let fx = Fx::new().await;
+    let url = serve_without_length(testnav("1.0")).await;
+    let w = wanted(vec![("testnav", app(url, None))]);
+    fx.free.0.store(2 * 1024 * 1024 * 1024, Ordering::SeqCst);
+    let r = fx.round(&w).await;
+    let t = &r["testnav"];
+    assert_eq!(t.state, AppState::Failed, "{t:?}");
+    assert!(
+        detail(t).contains("not enough free disk space for downloading"),
+        "{t:?}"
+    );
+    assert!(!fx.root().join("work/apps/testnav/app.deb").exists());
+
+    // with the space for it the same server works
+    fx.free.0.store(u64::MAX, Ordering::SeqCst);
+    let t = ready(&fx.round_at(&w, T0 + 1).await, "testnav");
+    assert_eq!(t.version.as_deref(), Some("1.0"));
+}
+
+#[tokio::test]
+async fn image_change_within_the_day_rebuilds_from_the_installed_package() {
+    let fx = Fx::new().await;
+    let w = wanted(vec![("testnav", app(fx.url("testnav.deb"), None))]);
+    ready(&fx.round(&w).await, "testnav");
+
+    // a new version arrives that cannot be built: the installed one stays
+    fx.srv.reset().await;
+    serve(&fx, "/testnav.deb", broken()).await;
+    let r = fx.round_at(&w, T0 + 25 * HOUR).await;
+    assert_eq!(r["testnav"].state, AppState::Failed);
+
+    // an hour later (the link was checked less than a day ago) a system update while the link cannot be reached: the
+    // tree is rebuilt from what was installed, not from the cached app.deb that failed to build
+    fx.srv.reset().await;
+    *fx.level.lock().unwrap() = "2.0".into();
+    let t = ready(&fx.round_at(&w, T0 + 26 * HOUR).await, "testnav");
+    assert_eq!(t.version.as_deref(), Some("1.0"));
+    assert!(detail(&t).contains("installed package"), "{t:?}");
+    let rel = fs::read_to_string(
+        fx.ext("app-testnav/usr/lib/extension-release.d/extension-release.app-testnav"),
+    )
+    .unwrap();
+    assert!(rel.contains("SYSEXT_LEVEL=2.0\n"), "{rel}");
+    assert_eq!(version(&fx), "1.0");
+    assert_eq!(
+        fs::read(fx.root().join("work/apps/testnav/app.deb")).unwrap(),
+        broken(),
+        "the newer package stays as a pending update"
+    );
+
+    // afterwards the newer package is an ordinary pending update: tried at the new level, the installed tree stays
+    let r = fx.round_at(&w, T0 + 27 * HOUR).await;
+    assert_eq!(r["testnav"].state, AppState::Failed, "{:?}", r["testnav"]);
+    assert_eq!(version(&fx), "1.0");
+    assert_eq!(fx.public()["testnav"].state, AppState::Ready);
+}
+
+#[tokio::test]
+async fn no_free_space_refuses_the_dependency_download() {
+    // Enough for the main package and its unpack, not for 2 × the dependencies apt would fetch plus 1 GiB kept free
+    let fx = Fx::new().await;
+    let mut a = pinned(&fx);
+    a.packages = vec!["x11-utils".into()];
+    let w = wanted(vec![("testnav", a)]);
+    fx.free
+        .0
+        .store(1024 * 1024 * 1024 + 1024 * 1024, Ordering::SeqCst);
+    let r = fx.round(&w).await;
+    let t = &r["testnav"];
+    assert_eq!(t.state, AppState::Failed, "{t:?}");
+    assert!(
+        detail(t).contains("not enough free disk space for downloading the dependencies"),
+        "{t:?}"
+    );
+    assert_eq!(
+        fx.world.count("--download-only"),
+        0,
+        "{:?}",
+        fx.world.calls()
+    );
+    assert!(fx.root().join("work/apps/testnav/app.deb").is_file());
+
+    // space again: resolved, downloaded and built at once
+    fx.free.0.store(u64::MAX, Ordering::SeqCst);
+    ready(&fx.round_at(&w, T0 + 1).await, "testnav");
+    assert_eq!(fx.world.count("--download-only"), 1);
 }

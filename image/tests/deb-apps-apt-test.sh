@@ -9,6 +9,7 @@
 #   3. A .deb that conflicts with an installed package: the plan shows "Remv <pkg> [<version>]", which the agent rejects.
 #   4. The offline cache: a Packages index in the format of write_cache_index over the downloaded files, a [trusted=yes] file:
 #      source, and the same resolution again finds everything in place.
+#   Test 1 and 4 also check the download list the agent sizes its free-space check by (--print-uris).
 #
 # Needs root (as the agent) and the network. On a Mac run it in an ubuntu:24.04 amd64 container:
 #   docker run --rm -v "$PWD":/src -w /src ubuntu:24.04 bash image/tests/deb-apps-apt-test.sh
@@ -147,6 +148,23 @@ if grep -qE '^(Inst [^ ]+ \[|Remv )' "$T/sim1"; then
 	fail "simulation 1 should not upgrade, downgrade or remove anything"
 fi
 echo "deb-apps-apt-test: the main package's plan line: $(grep -E '^Inst mastersos-apt-probe ' "$T/sim1" || echo none)"
+# The agent's download size (apt.rs PRINT_URIS, download_size): one '<uri>' <file> <size> <hash> line per file to fetch,
+# nothing else; the main package given by path is a file: URI (used in place), every dependency an http one.
+apt install --print-uris -qq -y --no-remove "$T/mastersos-apt-probe.deb" >"$T/uris1" 2>&1 || {
+	cat "$T/uris1"
+	fail "print-uris 1"
+}
+grep -qE "^'http://[^']+/x11-utils_[^']+_amd64\.deb' x11-utils_[^ ]+_amd64\.deb [0-9]+ [A-Za-z0-9]+:" "$T/uris1" || {
+	cat "$T/uris1"
+	fail "print-uris 1 should list x11-utils with its size"
+}
+if grep -vqE "^'[a-z]+:[^']+' [^ ]+ [0-9]+ " "$T/uris1"; then
+	cat "$T/uris1"
+	fail "print-uris 1 printed a line that is not a URI line"
+fi
+uri_bytes=$(grep -vE "^'file:" "$T/uris1" | awk '{s += $3} END {print s + 0}')
+[ "$uri_bytes" -gt 0 ] || fail "print-uris 1 reported no bytes to fetch"
+echo "deb-apps-apt-test: print-uris lists $(grep -c . "$T/uris1") files, $uri_bytes bytes to fetch"
 apt install --download-only -y --no-remove "$T/mastersos-apt-probe.deb" >"$T/dl1" 2>&1 || {
 	cat "$T/dl1"
 	fail "download 1"
@@ -205,6 +223,14 @@ grep -qE '^Inst x11-utils \(' "$T/sim4" || {
 	cat "$T/sim4"
 	fail "simulation 4 should install x11-utils from the cache"
 }
+apt install --print-uris -qq -y --no-remove "$T/mastersos-apt-probe.deb" >"$T/uris4" 2>&1 || {
+	cat "$T/uris4"
+	fail "print-uris 4 (cache)"
+}
+if grep -vqE "^'file:" "$T/uris4"; then
+	cat "$T/uris4"
+	fail "print-uris 4 should fetch nothing but file: URIs from the cache"
+fi
 apt install --download-only -y --no-remove "$T/mastersos-apt-probe.deb" >"$T/dl4" 2>&1 || {
 	cat "$T/dl4"
 	fail "download 4 (cache)"

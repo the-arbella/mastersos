@@ -22,7 +22,7 @@
 //! **Work directory** (`/var/lib/mastersos/deb-apps`, 0700): `wanted.json` (from the resident agent), `state.json` (what is
 //! installed and the last resolution), `result.json`, `apps/<id>/` (`app.deb`, `fetched.json` with the validators,
 //! `checked-at`, an `https://` icon, `installed.deb` — the package the merged tree was built from, used when it must be
-//! rebuilt for a new image while its source is unreachable — and `pin-failed` after a pinned download did not match),
+//! rebuilt for a new image (always for an unpinned app; a pinned one while its source is unreachable) — and `pin-failed` after a pinned download did not match),
 //! `apt/` (apt's private directory; `apt/archives` is the dependency cache, kept under
 //! apt's own names and pruned to what the latest resolution uses), `opt-root/` (see [`super::build`]).
 //! `apps/` and `apt/` are separate levels because an app id may be any lowercase word, `apt` or `archives` included.

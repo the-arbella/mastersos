@@ -369,6 +369,11 @@ fn source_order_follows_the_spec() {
     );
 }
 
+/// A free-space check that always passes.
+fn no_check(_: u64) -> anyhow::Result<()> {
+    Ok(())
+}
+
 /// A private work directory with one main package; returns (work, the main package's path).
 fn setup() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
@@ -406,6 +411,7 @@ async fn resolve_runs_update_simulate_download() {
         &Source::Archive,
         std::slice::from_ref(&main),
         &["x11-utils".to_string()],
+        &no_check,
     )
     .await
     .unwrap();
@@ -422,6 +428,7 @@ async fn resolve_runs_update_simulate_download() {
         vec![
             apt_line(&work, &["update"]),
             format!("{} {pkgs}", apt_line(&work, &["-s", "install"])),
+            format!("{} {pkgs}", apt_line(&work, PRINT_URIS)),
             format!(
                 "{} {pkgs}",
                 apt_line(&work, &["install", "--download-only", "-y", "--no-remove"])
@@ -455,9 +462,17 @@ async fn resolve_rejects_an_image_change_before_downloading() {
         Output::ok("Inst libc6 [2.41-1] (2.42-1 Ubuntu:26.04/resolute-updates [amd64])\n"),
     );
     let r: Arc<dyn Runner> = fake.clone();
-    let e = resolve(&r, &work, &ubuntu(), &Source::Archive, &[main], &[])
-        .await
-        .unwrap_err();
+    let e = resolve(
+        &r,
+        &work,
+        &ubuntu(),
+        &Source::Archive,
+        &[main],
+        &[],
+        &no_check,
+    )
+    .await
+    .unwrap_err();
     assert!(matches!(e, ResolveError::WouldChangeImage { .. }), "{e}");
     assert!(
         !fake.calls().iter().any(|c| c.contains("--download-only")),
@@ -481,9 +496,17 @@ async fn resolve_refuses_odd_arguments() {
         (vec![main.clone()], vec!["libc6-".to_string()]),
     ] {
         assert!(
-            resolve(&r, &work, &ubuntu(), &Source::Archive, &inputs, &extra)
-                .await
-                .is_err(),
+            resolve(
+                &r,
+                &work,
+                &ubuntu(),
+                &Source::Archive,
+                &inputs,
+                &extra,
+                &no_check
+            )
+            .await
+            .is_err(),
             "{inputs:?} {extra:?}"
         );
     }
@@ -508,7 +531,7 @@ async fn snapshot_failure_falls_back_to_archive() {
     fs::create_dir_all(&work).unwrap();
     fake_downloads(&work);
     let order = source_order(None, &ubuntu(), false);
-    let (used, got) = resolve_in_order(&r, &work, &ubuntu(), &order, &[main], &[])
+    let (used, got) = resolve_in_order(&r, &work, &ubuntu(), &order, &[main], &[], &no_check)
         .await
         .unwrap();
     assert_eq!(used, Source::Archive);
@@ -538,7 +561,7 @@ async fn snapshot_rejection_does_not_fall_back() {
     );
     let r: Arc<dyn Runner> = fake.clone();
     let order = source_order(None, &ubuntu(), false);
-    let e = resolve_in_order(&r, &work, &ubuntu(), &order, &[main], &[])
+    let e = resolve_in_order(&r, &work, &ubuntu(), &order, &[main], &[], &no_check)
         .await
         .unwrap_err();
     assert!(matches!(e, ResolveError::WouldChangeImage { .. }), "{e}");
@@ -557,7 +580,7 @@ async fn mirror_never_falls_back() {
     );
     let r: Arc<dyn Runner> = fake.clone();
     let order = source_order(Some("https://m.example.org/ubuntu"), &ubuntu(), false);
-    let e = resolve_in_order(&r, &work, &ubuntu(), &order, &[main], &[])
+    let e = resolve_in_order(&r, &work, &ubuntu(), &order, &[main], &[], &no_check)
         .await
         .unwrap_err();
     assert!(matches!(e, ResolveError::Update(_)), "{e}");
@@ -590,7 +613,7 @@ async fn cache_failure_goes_online() {
     fs::create_dir_all(&work).unwrap();
     fake_downloads(&work);
     let order = source_order(None, &ubuntu(), true);
-    let (used, _) = resolve_in_order(&r, &work, &ubuntu(), &order, &[main], &[])
+    let (used, _) = resolve_in_order(&r, &work, &ubuntu(), &order, &[main], &[], &no_check)
         .await
         .unwrap();
     assert_eq!(
@@ -609,11 +632,67 @@ async fn missing_download_is_an_error() {
     fake.respond("dpkg-deb -f", Output::ok("testnav\n"));
     fake.respond(&apt_line(&work, &["-s", "install"]), Output::ok(SIM_OK));
     let r: Arc<dyn Runner> = fake.clone();
-    let e = resolve(&r, &work, &ubuntu(), &Source::Archive, &[main], &[])
-        .await
-        .unwrap_err();
+    let e = resolve(
+        &r,
+        &work,
+        &ubuntu(),
+        &Source::Archive,
+        &[main],
+        &[],
+        &no_check,
+    )
+    .await
+    .unwrap_err();
     assert!(
         e.to_string().contains("x11-utils") || e.to_string().contains("libxxf86dga1"),
         "{e}"
+    );
+}
+
+/// What `apt-get install --print-uris -qq` prints: the files apt would fetch, with their sizes. A `file:` URI (the main
+/// package given by path, the offline cache) is used in place and needs no space.
+const URIS: &str = "'http://archive.ubuntu.com/ubuntu/pool/main/libx/libxxf86dga/libxxf86dga1_1.1.5-1build1_amd64.deb' \
+libxxf86dga1_2%3a1.1.5-1build1_amd64.deb 17000 SHA512:00\n\
+'http://archive.ubuntu.com/ubuntu/pool/main/x/x11-utils/x11-utils_7.7+6_amd64.deb' x11-utils_7.7+6_amd64.deb 3000 SHA512:00\n\
+'file:/w/testnav.deb' testnav_1.0_amd64.deb 900000000 SHA256:00\n";
+
+#[test]
+fn download_size_sums_the_fetched_files() {
+    assert_eq!(download_size(URIS).unwrap(), 20000);
+    assert_eq!(download_size("").unwrap(), 0);
+    // apt's notes are not URI lines
+    assert_eq!(download_size("N: a note\n").unwrap(), 0);
+    for bad in [
+        "'http://x/a.deb' a.deb\n",
+        "'http://x/a.deb' a.deb twelve SHA512:00\n",
+        "'http://x/a.deb a.deb 12 SHA512:00\n",
+    ] {
+        assert!(download_size(bad).is_err(), "{bad:?}");
+    }
+}
+
+#[tokio::test]
+async fn resolve_checks_free_space_before_downloading() {
+    let (dir, main) = setup();
+    let work = dir.path().join("apt");
+    let fake = Arc::new(FakeRunner::new());
+    fake.respond("dpkg-deb -f", Output::ok("testnav\n"));
+    fake.respond(&apt_line(&work, &["-s", "install"]), Output::ok(SIM_OK));
+    fake.respond(&apt_line(&work, PRINT_URIS), Output::ok(URIS));
+    let r: Arc<dyn Runner> = fake.clone();
+    let asked = std::sync::Mutex::new(vec![]);
+    let full = |n: u64| -> anyhow::Result<()> {
+        asked.lock().unwrap().push(n);
+        anyhow::bail!("not enough free disk space for downloading the dependencies")
+    };
+    let e = resolve(&r, &work, &ubuntu(), &Source::Archive, &[main], &[], &full)
+        .await
+        .unwrap_err();
+    assert!(e.to_string().contains("not enough free disk space"), "{e}");
+    assert_eq!(*asked.lock().unwrap(), vec![20000]);
+    assert!(
+        !fake.calls().iter().any(|c| c.contains("--download-only")),
+        "{:?}",
+        fake.calls()
     );
 }
