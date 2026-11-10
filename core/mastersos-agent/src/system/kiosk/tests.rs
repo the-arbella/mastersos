@@ -1220,3 +1220,251 @@ fn plain_web_app_has_no_start_page() {
     let l = launch_of("x", &grp(&web_app("x", "X")).apps.kiosk["x"]).unwrap();
     assert_eq!(l.start, None);
 }
+
+// ---------------------------------------------------------------------------
+// .deb apps with `kiosk = true` (deb-apps design §4.7, §4.8)
+// ---------------------------------------------------------------------------
+
+/// `[group.apps.deb.<id>]` with `kiosk = true`; `extra` is more TOML lines for it.
+fn deb_kiosk(id: &str, name: &str, extra: &str) -> String {
+    format!(
+        "[group.apps.deb.{id}]\nname = {}\nurl = \"https://download.example.org/{id}.deb\"\nkiosk = true\n{extra}",
+        q(name)
+    )
+}
+
+/// A program the merged extension provides.
+fn merged_exec(root: &Path, exec: &str) {
+    let p = root.join(exec.trim_start_matches('/'));
+    fs::create_dir_all(p.parent().unwrap()).unwrap();
+    fs::write(p, "#!/bin/sh\n").unwrap();
+}
+
+/// The public status the deb-apps round writes: `(id, state, exec)`.
+fn write_deb_public(root: &Path, apps: &[(&str, &str, Option<&str>)]) {
+    let mut m = serde_json::Map::new();
+    for (id, state, exec) in apps {
+        let mut a = serde_json::json!({
+            "state": state,
+            "kiosk": true,
+            "desktop": format!("mastersos-app-{id}.desktop"),
+        });
+        if let Some(e) = exec {
+            a["exec"] = serde_json::json!(e);
+        }
+        m.insert(id.to_string(), a);
+    }
+    let p = root.join("var/lib/mastersos-public/deb-apps.json");
+    fs::create_dir_all(p.parent().unwrap()).unwrap();
+    fs::write(p, serde_json::json!({"v": 1, "apps": m}).to_string()).unwrap();
+}
+
+fn read_launch_of(root: &Path, id: &str) -> Launch {
+    serde_json::from_slice(&fs::read(root.join(PUBLIC_DIR).join(id).join(LAUNCH_FILE)).unwrap())
+        .unwrap()
+}
+
+#[test]
+fn ready_deb_kiosk_app_gets_account() {
+    let root = root();
+    merged_exec(root.path(), "/opt/testnav/bin/testnav");
+    write_deb_public(
+        root.path(),
+        &[("testnav", "ready", Some("/opt/testnav/bin/testnav"))],
+    );
+    let r = FakeRunner::new();
+    absent(&r, "kiosk-testnav");
+    absent(&r, "1900");
+    let mut sys = SysState::default();
+    let g = grp(&deb_kiosk("testnav", "TestNav", ""));
+    let out = run_step(&r, root.path(), &mut sys, &g, Phase::Full);
+    assert_eq!(out, vec![ok_item("testnav")]);
+    idx(
+        &r.calls(),
+        "useradd --uid 1900 --user-group --no-create-home --home-dir /home/kiosk-testnav --shell /bin/bash --comment TestNav kiosk-testnav",
+    );
+    assert_eq!(
+        read_launch_of(root.path(), "testnav"),
+        Launch {
+            id: "testnav".into(),
+            name: "TestNav".into(),
+            kind: LaunchKind::Exec {
+                target: "/opt/testnav/bin/testnav".into()
+            },
+            user_agent: None,
+            start: None,
+        }
+    );
+    let a = fs::read_to_string(root.path().join(ACCOUNTS_DIR).join("kiosk-testnav")).unwrap();
+    assert_eq!(
+        a,
+        "[User]\nRealName=TestNav\nSession=mastersos-kiosk\nSystemAccount=false\n"
+    );
+    // like a local program: the deny-everything Chrome policy, in namespace.conf
+    assert!(root
+        .path()
+        .join(PUBLIC_DIR)
+        .join("testnav")
+        .join(POLICIES_DIR)
+        .join(POLICY_FILE)
+        .exists());
+    let ns = fs::read_to_string(root.path().join(NAMESPACE_CONF)).unwrap();
+    assert!(ns.contains("~kiosk-testnav\n"), "{ns}");
+    assert_eq!(sys.kiosk_accounts["testnav"], st(1900, "TestNav"));
+}
+
+/// Not merged yet (installing, failed, after an image upgrade): the account is made (or kept) but stays off the login
+/// screen, and launch.json never takes a program from the settings, only a placeholder that ends the session.
+#[test]
+fn not_ready_deb_kiosk_app_hidden() {
+    for public in [
+        vec![("testnav", "installing", None)],
+        vec![("testnav", "failed", Some("/opt/testnav/bin/testnav"))],
+        vec![],
+        // ready by the status, but the program is not merged (after an image upgrade, before the next round)
+        vec![("testnav", "ready", Some("/opt/testnav/bin/testnav"))],
+    ] {
+        let root = root();
+        write_deb_public(root.path(), &public);
+        let r = FakeRunner::new();
+        absent(&r, "kiosk-testnav");
+        absent(&r, "1900");
+        let mut sys = SysState::default();
+        let g = grp(&deb_kiosk(
+            "testnav",
+            "TestNav",
+            "exec = \"/opt/testnav/bin/testnav\"\n",
+        ));
+        let out = run_step(&r, root.path(), &mut sys, &g, Phase::Full);
+        assert_eq!(out, vec![ok_item("testnav")], "{public:?}");
+        let a = fs::read_to_string(root.path().join(ACCOUNTS_DIR).join("kiosk-testnav")).unwrap();
+        assert!(a.ends_with("SystemAccount=true\n"), "{public:?}: {a}");
+        assert_eq!(
+            read_launch_of(root.path(), "testnav").kind,
+            LaunchKind::Exec {
+                target: DEB_NOT_READY_EXEC.into()
+            },
+            "{public:?}"
+        );
+        assert_eq!(sys.kiosk_accounts["testnav"], st(1900, "TestNav"));
+    }
+}
+
+/// Ready again: the same account comes back onto the login screen with the vendor program.
+#[test]
+fn deb_kiosk_app_turns_ready() {
+    let root = root();
+    write_deb_public(root.path(), &[("testnav", "installing", None)]);
+    let g = grp(&deb_kiosk("testnav", "TestNav", ""));
+    let r = FakeRunner::new();
+    absent(&r, "kiosk-testnav");
+    absent(&r, "1900");
+    let mut sys = SysState::default();
+    run_step(&r, root.path(), &mut sys, &g, Phase::Full);
+    write_deb_public(
+        root.path(),
+        &[("testnav", "ready", Some("/opt/testnav/bin/testnav"))],
+    );
+    merged_exec(root.path(), "/opt/testnav/bin/testnav");
+    let r = FakeRunner::new();
+    present(&r, "kiosk-testnav", 1900, "TestNav");
+    let out = run_step(&r, root.path(), &mut sys, &g, Phase::Full);
+    assert_eq!(out, vec![ok_item("testnav")]);
+    assert_eq!(count(&r.calls(), "useradd"), 0, "{:?}", r.calls());
+    let a = fs::read_to_string(root.path().join(ACCOUNTS_DIR).join("kiosk-testnav")).unwrap();
+    assert!(a.ends_with("SystemAccount=false\n"), "{a}");
+    assert_eq!(
+        read_launch_of(root.path(), "testnav").kind,
+        LaunchKind::Exec {
+            target: "/opt/testnav/bin/testnav".into()
+        }
+    );
+}
+
+/// §4.8: the record removed from the settings → the account goes the way of a removed locked app (session ended,
+/// userdel, cleanup, files removed), even while the public status still says ready (the tree is not gone yet).
+#[test]
+fn removed_deb_kiosk_app_loses_account() {
+    let root = root();
+    let p = root.path();
+    write_deb_public(p, &[("testnav", "ready", Some("/opt/testnav/bin/testnav"))]);
+    merged_exec(p, "/opt/testnav/bin/testnav");
+    let r = FakeRunner::new();
+    absent(&r, "kiosk-testnav");
+    absent(&r, "1900");
+    let mut sys = SysState::default();
+    run_step(
+        &r,
+        p,
+        &mut sys,
+        &grp(&deb_kiosk("testnav", "TestNav", "")),
+        Phase::Full,
+    );
+    assert!(sys.kiosk_accounts.contains_key("testnav"));
+
+    let r = FakeRunner::new();
+    removal_answers(&r, "kiosk-testnav", 1900);
+    let out = run_step(&r, p, &mut sys, &grp(""), Phase::Full);
+    assert!(out.iter().all(|i| i.ok), "{out:?}");
+    let calls = r.calls();
+    let term = idx(&calls, "loginctl terminate-user kiosk-testnav");
+    let del = idx(&calls, "userdel kiosk-testnav");
+    assert!(term < del, "{calls:?}");
+    assert!(sys.kiosk_accounts.is_empty());
+    assert!(!p.join(ACCOUNTS_DIR).join("kiosk-testnav").exists());
+    assert!(!p.join(PUBLIC_DIR).join("testnav").exists());
+    assert!(!p.join(NAMESPACE_CONF).exists());
+}
+
+/// A `kiosk = false` .deb app gets no account; a locked app of the same id wins over a .deb app (lint forbids the
+/// clash); the icon comes from the .deb app's `icon` like a locked app's.
+#[test]
+fn deb_kiosk_apps_from_config_and_public() {
+    let g = grp(&format!(
+        "{}{}{}{}{}",
+        deb_kiosk("testnav", "TestNav", "icon = \"files/tn.png\"\n"),
+        deb_kiosk("waiting", "Waiting", ""),
+        "[group.apps.deb.calc]\nname = \"Calc\"\nurl = \"https://download.example.org/calc.deb\"\n",
+        deb_kiosk("clash", "Clash", ""),
+        web_app("clash", "NWEA"),
+    ));
+    let ready = |exec: &str| deb_apps::status::PublicApp {
+        state: deb_apps::status::AppState::Ready,
+        exec: Some(exec.into()),
+        kiosk: true,
+        desktop: String::new(),
+    };
+    let public = BTreeMap::from([
+        ("testnav".to_string(), ready("/opt/testnav/bin/testnav")),
+        ("calc".to_string(), ready("/opt/calc/calc")),
+        ("clash".to_string(), ready("/opt/clash/clash")),
+        (
+            "waiting".to_string(),
+            deb_apps::status::PublicApp {
+                state: deb_apps::status::AppState::WaitingForClose,
+                exec: None,
+                kiosk: true,
+                desktop: String::new(),
+            },
+        ),
+    ]);
+    let got = deb_kiosk_apps(&g, &public);
+    assert_eq!(got.keys().collect::<Vec<_>>(), vec!["testnav", "waiting"]);
+    let tn = &got["testnav"];
+    assert_eq!(tn.name, "TestNav");
+    assert_eq!(tn.icon.as_deref(), Some("files/tn.png"));
+    assert_eq!(tn.exec.as_deref(), Some("/opt/testnav/bin/testnav"));
+    assert!(tn.login_screen && !tn.in_session);
+    kiosk::check("testnav", tn).unwrap();
+    let w = &got["waiting"];
+    assert_eq!(w.exec.as_deref(), Some(DEB_NOT_READY_EXEC));
+    assert!(!w.login_screen);
+    kiosk::check("waiting", w).unwrap();
+    // the step reads the file the round writes
+    assert_eq!(
+        Path::new(deb_apps::status::PUBLIC_FILE),
+        crate::system::SysPaths::default()
+            .public_dir
+            .join(deb_apps::status::PUBLIC_NAME)
+    );
+}

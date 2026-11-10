@@ -436,7 +436,7 @@ fn method_name(m: LoginMethod) -> &'static str {
 /// 包里的设置 → 策略。域名与管理员名转 ASCII 小写（与 `checks` 一致）。
 /// 不合规的管理员名跳过（只会少放行；回报由 Task 12 的 `admins` 步骤做）；不合规的域名**保留**：
 /// 跳过它可能让列表变空、变成不限域名，保留下来它只是匹配不到任何账号。
-/// 锁定应用的账号名单来自配置的 `apps.kiosk`（`kiosk-<id>` 与应用的 `name`，按账号名排序）；id 不合规的跳过
+/// 锁定应用的账号名单来自配置的 `apps.kiosk` 与 `kiosk = true` 的 `apps.deb`（`kiosk-<id>` 与应用的 `name`，按账号名排序）；id 不合规的跳过
 /// （清单的校验本该挡住；跳过只会少放行）。锁定时名单照写（`decide` 照样拒）。
 pub fn policy_from_bundle(school: &School, config: &Config, lock: Option<&Lock>) -> LoginPolicy {
     // Guest sign-in is always on; `decide` still denies it on a locked device.
@@ -474,10 +474,21 @@ fn kiosk_users(config: &Config) -> Vec<KioskUser> {
         .apps
         .kiosk
         .iter()
+        .map(|(id, app)| (id, &app.name))
+        // `kiosk = true` .deb apps have a kiosk account too, ready or not (deb-apps design §4.7); a clash with a locked
+        // app (refused by the lint) lists the account once
+        .chain(
+            config
+                .apps
+                .deb
+                .iter()
+                .filter(|(id, a)| a.kiosk && !config.apps.kiosk.contains_key(*id))
+                .map(|(id, a)| (id, &a.name)),
+        )
         .filter(|(id, _)| kiosk::check_id(id).is_ok())
-        .map(|(id, app)| KioskUser {
+        .map(|(id, name)| KioskUser {
             user: kiosk::account_name(id),
-            name: app.name.clone(),
+            name: name.clone(),
         })
         .collect();
     out.sort_by(|a, b| a.user.cmp(&b.user));
@@ -2756,6 +2767,29 @@ client_id = "laptops"
             .kiosk_users
             .is_empty());
         assert!(policy_from_seed(&seed(SEED_OIDC)).kiosk_users.is_empty());
+    }
+
+    /// deb-apps design §4.7: a `kiosk = true` .deb app has a `kiosk-<id>` account like a locked app, whatever its install
+    /// state (the kiosk step keeps the account and only takes it off the login screen); `kiosk = false` ones have none.
+    #[test]
+    fn policy_lists_deb_kiosk_accounts() {
+        let g = mastersos_bundle::Manifest::parse(
+            "version = 1\n[[group]]\nid = \"a\"\nname = \"a\"\n\
+             [group.apps.kiosk.nwea]\nname = \"NWEA\"\nurl = \"https://nwea.example.org/\"\n\
+             [group.apps.deb.testnav]\nname = \"TestNav\"\nurl = \"https://download.example.org/t.deb\"\nkiosk = true\n\
+             [group.apps.deb.calc]\nname = \"Calc\"\nurl = \"https://download.example.org/c.deb\"\n",
+        )
+        .unwrap()
+        .effective_of_group("a")
+        .unwrap();
+        let p = policy_from_bundle(&School::default(), &g, None);
+        assert_eq!(
+            p.kiosk_users,
+            vec![
+                kiosk_user("kiosk-nwea", "NWEA"),
+                kiosk_user("kiosk-testnav", "TestNav"),
+            ]
+        );
     }
 
     /// 兼容约定：旧文件（没有 kiosk_users）新代码读得了；新文件旧的 pam-check（没有 deny_unknown_fields）也读得了。

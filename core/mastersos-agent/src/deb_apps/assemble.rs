@@ -169,7 +169,7 @@ pub struct Launcher {
 const MAX_DEPTH: usize = 64;
 const MAX_LINK_HOPS: usize = 40;
 const MAX_DESKTOP_BYTES: u64 = 1024 * 1024;
-const OUR_DESKTOP_PREFIX: &str = "mastersos-app-";
+pub const OUR_DESKTOP_PREFIX: &str = "mastersos-app-";
 const FIELD_CODES: &[&str] = &[
     "%u", "%U", "%f", "%F", "%i", "%c", "%k", "%d", "%D", "%n", "%N", "%v", "%m",
 ];

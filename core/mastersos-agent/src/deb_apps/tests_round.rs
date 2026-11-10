@@ -922,6 +922,38 @@ async fn status_reports_items_and_starts_the_unit_on_new_settings() {
     assert_eq!(fake.calls().iter().filter(|c| *c == start).count(), 1);
 }
 
+/// The kiosk and desktop steps read the public status: a round that changes it asks for another apply (Task 7), the
+/// same status seen again does not.
+#[test]
+fn changed_public_status_asks_for_an_apply() {
+    let dir = tempfile::tempdir().unwrap();
+    let public = dir.path().join("deb-apps.json");
+    let st = DebAppsStatus::with_paths(Arc::new(FakeRunner::new()), dir.path().join("work"))
+        .with_public(public.clone());
+    // nothing yet: no app to show
+    assert!(!st.public_changed());
+    assert!(!st.public_changed());
+    let write = |state: &str| {
+        fs::write(
+            &public,
+            format!(
+                r#"{{"v":1,"apps":{{"testnav":{{"state":"{state}","kiosk":true,"desktop":"mastersos-app-testnav.desktop"}}}}}}"#
+            ),
+        )
+        .unwrap()
+    };
+    write("installing");
+    assert!(st.public_changed());
+    assert!(!st.public_changed());
+    write("ready");
+    assert!(st.public_changed());
+    assert!(!st.public_changed());
+    // a fresh job (agent restart) that finds apps listed applies once more
+    let again = DebAppsStatus::with_paths(Arc::new(FakeRunner::new()), dir.path().join("work"))
+        .with_public(public);
+    assert!(again.public_changed());
+}
+
 impl Fx {
     /// The quiet target becomes active from the `k`th `is-active` call on, counting from the next one.
     fn quiet_from_next(&self, k: usize) {

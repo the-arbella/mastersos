@@ -30,6 +30,8 @@ use crate::safefs;
 
 /// The public status file.
 pub const PUBLIC_FILE: &str = "/var/lib/mastersos-public/deb-apps.json";
+/// Its name in the public directory (the system steps read it under `SysPaths::public_dir`).
+pub const PUBLIC_NAME: &str = "deb-apps.json";
 /// The unit that runs a round.
 pub const UNIT: &str = "mastersos-deb-apps.service";
 pub(crate) const WANTED_FILE: &str = "wanted.json";
@@ -230,6 +232,10 @@ pub struct DebAppsStatus {
     work: PathBuf,
     /// The settings changed while the unit could not be started (exam quiet, systemctl failed): start it later.
     start_pending: AtomicBool,
+    /// The public status file ([`PUBLIC_FILE`]) and what it said when this job last looked: the kiosk and desktop
+    /// steps read it, so a change asks the main loop to apply again ([`Self::public_changed`]).
+    public: PathBuf,
+    seen_public: std::sync::Mutex<Option<BTreeMap<String, PublicApp>>>,
 }
 
 impl DebAppsStatus {
@@ -243,7 +249,31 @@ impl DebAppsStatus {
             runner,
             work,
             start_pending: AtomicBool::new(false),
+            public: PUBLIC_FILE.into(),
+            seen_public: std::sync::Mutex::new(None),
         }
+    }
+
+    /// Tests: another public status file.
+    pub fn with_public(mut self, public: PathBuf) -> Self {
+        self.public = public;
+        self
+    }
+
+    /// Whether the public status differs from the last look (the first look: whether it lists any app), so that the
+    /// kiosk step (login screen entries) and the desktop step (Dash) catch up as soon as a round finishes instead of
+    /// at the next apply.
+    pub fn public_changed(&self) -> bool {
+        let now = read_public(&self.public);
+        let Ok(mut seen) = self.seen_public.lock() else {
+            return false;
+        };
+        let changed = match seen.as_ref() {
+            Some(old) => *old != now,
+            None => !now.is_empty(),
+        };
+        *seen = Some(now);
+        changed
     }
 
     /// Records `wanted` for the unit when it differs from what it has, and starts the unit unless `quiet` (then later).
@@ -369,6 +399,9 @@ impl Job for DebAppsStatus {
                 let quiet = cx.quiet.borrow().is_some();
                 self.offer(wanted_from(&cur, &cx.paths.state_dir), quiet)
                     .await;
+            }
+            if self.public_changed() {
+                cx.reapply.notify_one();
             }
             self.report()
         })

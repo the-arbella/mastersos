@@ -25,9 +25,11 @@
 //!   图标用 kiosk 步骤缓存的那份。锁住的会话的 `Hidden=true` 覆盖不盖它、切模式删覆盖时也不碰它。
 //! - **Flatpak**（`learning` 与 `full`；旧的浏览器模式没有）：Dash 里加上配置里已由
 //!   [`super::flatpak::FlatpakJob`] 装好的应用；装卸由那个后台任务做，它改了状态会叫主循环再应用一次。
+//! - **.deb 应用**（deb-apps design §4.7；`learning` 与 `full`，旧的浏览器模式没有）：`kiosk = false`、在 deb-apps 的
+//!   公开状态里 `ready` 的，它的扩展带的 `mastersos-app-<id>.desktop` 排进 Dash（Flatpak 之前），锁住的会话也不盖它。
 //! - 回报项 `desktop`（dconf、覆盖、执行层堵法的错误汇总在这一项）与每个网页应用的 `webapp:<name>`。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::os::fd::OwnedFd;
 use std::path::Path;
@@ -39,6 +41,8 @@ use mastersos_bundle::{checks, kiosk, Config, Interface, ItemResult, WebApp};
 use super::text::{desktop_exec_arg, keyfile_escape, slug};
 use super::{exec_block, failed, ok, public_dir, Env, IconFailures, Step, SysPaths, SysState};
 use crate::apply::{is_not_found, ApplyContext, Phase};
+use crate::deb_apps;
+use crate::deb_apps::status::{AppState, PublicApp};
 use crate::runner::{run_ok, Cmd, Runner};
 use crate::safefs;
 
@@ -66,6 +70,8 @@ pub const GENERIC_ICON: &str = "web-browser";
 pub const KIOSK_PREFIX: &str = "mastersos-kiosk-";
 pub const KIOSK_BIN: &str = "/usr/bin/mastersos-kiosk";
 pub const KIOSK_GENERIC_ICON: &str = "application-x-executable";
+/// The launcher of a .deb app that its extension brings (`mastersos-app-<id>.desktop`, deb-apps design §4.3).
+pub const DEB_PREFIX: &str = deb_apps::assemble::OUR_DESKTOP_PREFIX;
 /// https 图标的大小上限。
 pub const MAX_ICON_BYTES: usize = 512 * 1024;
 /// 下载图标时的 User-Agent。
@@ -227,11 +233,13 @@ fn gv_str(s: &str) -> String {
 }
 
 /// dconf 的 keyfile 与 locks。`webapps` 是网页应用的 desktop 文件名（按清单顺序），`kiosk` 是锁定应用的启动器
-/// （每种模式都进 Dash），`flatpaks` 是已装好的受管 Flatpak id（[`Profile::flatpaks`] 的模式才进 Dash）。
+/// （每种模式都进 Dash），`debs` 是就绪的 `kiosk = false` .deb 应用的 desktop 文件名（[`deb_dock_apps`]），`flatpaks`
+/// 是已装好的受管 Flatpak id；后两样只在 [`Profile::flatpaks`] 的模式进 Dash，.deb 应用在 Flatpak 之前。
 pub fn render_dconf(
     config: &Config,
     webapps: &[String],
     kiosk: &[String],
+    debs: &[String],
     flatpaks: &[String],
 ) -> (String, String) {
     let p = profile(config);
@@ -242,6 +250,7 @@ pub fn render_dconf(
         fav.push(NAUTILUS_DESKTOP.to_string());
     }
     if p.flatpaks {
+        fav.extend(debs.iter().cloned());
         fav.extend(flatpaks.iter().map(|id| format!("{id}.desktop")));
     }
     let fav: Vec<String> = fav.iter().map(|f| gv_str(f)).collect();
@@ -370,6 +379,23 @@ pub fn hidden_overrides(
     set.into_iter().cloned().collect()
 }
 
+/// The launchers of the `kiosk = false` .deb apps of `config` that the public status `public` has as `ready`
+/// (`mastersos-app-<id>.desktop`, by id; deb-apps design §4.7). Not ready, `kiosk = true` (no place in a normal
+/// session) or no longer in the settings (still merged until it is removed): left out.
+pub fn deb_dock_apps(config: &Config, public: &BTreeMap<String, PublicApp>) -> Vec<String> {
+    config
+        .apps
+        .deb
+        .iter()
+        .filter(|(id, app)| {
+            !app.kiosk
+                && kiosk::check_id(id).is_ok()
+                && public.get(*id).is_some_and(|p| p.state == AppState::Ready)
+        })
+        .map(|(id, _)| format!("{DEB_PREFIX}{id}.desktop"))
+        .collect()
+}
+
 /// Whether the Flatpak `app` exports the launcher `desktop_id`: Flatpak only exports files named
 /// after the app id, `<app>.desktop` or `<app>.<more>.desktop` (LibreOffice exports one per
 /// component).
@@ -404,13 +430,21 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
             Vec::new()
         }
     };
-    let (keyfile, locks) = render_dconf(ctx.config, &ids, &kiosk, &flatpaks);
+    // the .deb apps the deb-apps round has ready (its public status; unreadable: none)
+    let public =
+        deb_apps::status::read_public(&env.paths.public_dir.join(deb_apps::status::PUBLIC_NAME));
+    let debs = deb_dock_apps(ctx.config, &public);
+    let (keyfile, locks) = render_dconf(ctx.config, &ids, &kiosk, &debs, &flatpaks);
     if let Err(e) = apply_dconf(&env.paths.root, env.runner, env.sys, &keyfile, &locks) {
         errs.push(format!("dconf: {e:#}"));
     }
     let r = if p.locked() {
         let mut keep = vec![CHROME_DESKTOP.to_string()];
         keep.extend(ids.iter().cloned());
+        // learning lets the ready .deb apps through like the Flatpaks; the legacy browser mode shows neither (§4.1)
+        if p.flatpaks {
+            keep.extend(debs.iter().cloned());
+        }
         let apps: &[String] = if p.flatpaks { &flatpaks } else { &[] };
         write_overrides(env.paths, &keep, apps)
     } else {

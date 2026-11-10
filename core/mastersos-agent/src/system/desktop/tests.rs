@@ -148,7 +148,7 @@ fn icon_line(text: &str) -> &str {
 fn browser_mode_locks_and_favorites() {
     let g = grp(Kind::LegacyBrowser, vec![]);
     let web = vec!["mastersos-web-aaaaaaaaaaaa.desktop".to_string()];
-    let (k, locks) = render_dconf(&g, &web, &[], &["org.example.Flat".into()]);
+    let (k, locks) = render_dconf(&g, &web, &[], &[], &["org.example.Flat".into()]);
     assert!(
         k.contains(
             "[org/gnome/shell]\nfavorite-apps=['google-chrome.desktop', 'mastersos-web-aaaaaaaaaaaa.desktop']\n"
@@ -198,7 +198,7 @@ fn browser_mode_locks_and_favorites() {
 fn desktop_mode_has_no_locks() {
     let g = grp(Kind::Full, vec![]);
     let web = vec!["mastersos-web-aaaaaaaaaaaa.desktop".to_string()];
-    let (k, locks) = render_dconf(&g, &web, &[], &["org.example.Flat".into()]);
+    let (k, locks) = render_dconf(&g, &web, &[], &[], &["org.example.Flat".into()]);
     assert_eq!(locks, "");
     assert!(
         k.contains(
@@ -1328,7 +1328,7 @@ fn learning_lists_flatpak_in_favorites() {
     let kiosk = vec!["mastersos-kiosk-nwea.desktop".to_string()];
     let mut learning = grp(Kind::Learning, vec![]);
     learning.apps.flatpak = vec![lo.clone()];
-    let (k, locks) = render_dconf(&learning, &web, &kiosk, std::slice::from_ref(&lo));
+    let (k, locks) = render_dconf(&learning, &web, &kiosk, &[], std::slice::from_ref(&lo));
     assert!(
         k.contains(
             "favorite-apps=['google-chrome.desktop', 'mastersos-web-aaaaaaaaaaaa.desktop', \
@@ -1343,7 +1343,7 @@ fn learning_lists_flatpak_in_favorites() {
     );
     let mut legacy = grp(Kind::LegacyBrowser, vec![]);
     legacy.apps.flatpak = vec![lo.clone()];
-    let (lk, llocks) = render_dconf(&legacy, &web, &kiosk, std::slice::from_ref(&lo));
+    let (lk, llocks) = render_dconf(&legacy, &web, &kiosk, &[], std::slice::from_ref(&lo));
     assert_eq!(locks, llocks, "the same locks as the browser mode");
     let fav = |s: &str| {
         s.lines()
@@ -1598,10 +1598,157 @@ fn switching_from_learning_changes_overrides_and_dock() {
 #[test]
 fn locked_profile_enables_managed_extension() {
     let g = grp(Kind::Learning, vec![]);
-    let (k, _) = render_dconf(&g, &[], &[], &[]);
+    let (k, _) = render_dconf(&g, &[], &[], &[], &[]);
     let line = k
         .lines()
         .find(|l| l.starts_with("enabled-extensions="))
         .unwrap_or_else(|| panic!("no enabled-extensions line:\n{k}"));
     assert!(line.contains("'mastersos-managed@mastersos.org'"), "{line}");
+}
+
+// ---------------------------------------------------------------------------
+// .deb apps (deb-apps design §4.7, §4.1 legacy_browser)
+// ---------------------------------------------------------------------------
+
+/// `kind` with the .deb apps `(id, kiosk)` and LibreOffice (installed) as its Flatpak.
+fn deb_cfg(kind: Kind, debs: &[(&str, bool)]) -> Config {
+    let mut g = config_of(kind);
+    g.apps.flatpak = vec!["org.libreoffice.LibreOffice".into()];
+    for (id, kiosk) in debs {
+        g.apps.deb.insert(
+            id.to_string(),
+            mastersos_bundle::DebApp {
+                name: id.to_uppercase(),
+                url: format!("https://download.example.org/{id}.deb"),
+                sha256: None,
+                kiosk: *kiosk,
+                packages: vec![],
+                exec: None,
+                icon: None,
+            },
+        );
+    }
+    g
+}
+
+/// The public status of the deb-apps round, `(id, state, kiosk)`; a ready app's launcher is merged into
+/// `/usr/share/applications` (with `NoDisplay=true` for kiosk apps).
+fn deb_public(root: &Path, apps: &[(&str, &str, bool)]) {
+    let mut m = serde_json::Map::new();
+    for (id, state, kiosk) in apps {
+        let desktop = format!("mastersos-app-{id}.desktop");
+        let mut a = serde_json::json!({ "state": state, "kiosk": kiosk, "desktop": desktop });
+        if *state == "ready" {
+            a["exec"] = serde_json::json!(format!("/opt/{id}/{id}"));
+            let extra = if *kiosk { "NoDisplay=true\n" } else { "" };
+            fs::write(
+                root.join("usr/share/applications").join(&desktop),
+                format!(
+                    "[Desktop Entry]\nType=Application\nName={id}\nExec=/opt/{id}/{id}\n{extra}"
+                ),
+            )
+            .unwrap();
+        }
+        m.insert(id.to_string(), a);
+    }
+    let p = root.join("var/lib/mastersos-public/deb-apps.json");
+    fs::create_dir_all(p.parent().unwrap()).unwrap();
+    fs::write(p, serde_json::json!({ "v": 1, "apps": m }).to_string()).unwrap();
+}
+
+fn favorites(root: &Path) -> String {
+    let k = fs::read_to_string(root.join(DCONF_DIR).join(DCONF_FILE)).unwrap();
+    k.lines()
+        .find(|l| l.starts_with("favorite-apps="))
+        .unwrap()
+        .to_string()
+}
+
+/// §4.7 `kiosk = false`: a ready app sits in the Dash before the Flatpaks, in `learning` and `full` alike. Not yet
+/// ready, `kiosk = true`, or removed from the settings (still merged until it is gone): not there.
+#[test]
+fn deb_app_in_dock_learning_and_full() {
+    let root = root();
+    installed(root.path(), &["org.libreoffice.LibreOffice"]);
+    deb_public(
+        root.path(),
+        &[
+            ("calc", "ready", false),
+            ("geo", "installing", false),
+            ("testnav", "ready", true),
+            ("gone", "ready", false),
+        ],
+    );
+    let mut g = deb_cfg(
+        Kind::Learning,
+        &[("calc", false), ("geo", false), ("testnav", true)],
+    );
+    let r = MountSim::new(root.path());
+    let bundle = tempfile::tempdir().unwrap();
+    let mut sys = SysState::default();
+    let out = run_step(root.path(), &r, &mut sys, &g, bundle.path(), Phase::Full).out;
+    assert_eq!(item(&out, ITEM), &ok(ITEM));
+    assert_eq!(
+        favorites(root.path()),
+        "favorite-apps=['google-chrome.desktop', 'mastersos-app-calc.desktop', \
+         'org.libreoffice.LibreOffice.desktop']"
+    );
+    set_kind(&mut g, Kind::Full);
+    let out = run_step(root.path(), &r, &mut sys, &g, bundle.path(), Phase::Full).out;
+    assert_eq!(item(&out, ITEM), &ok(ITEM));
+    assert_eq!(
+        favorites(root.path()),
+        "favorite-apps=['google-chrome.desktop', 'org.gnome.Nautilus.desktop', \
+         'mastersos-app-calc.desktop', 'org.libreoffice.LibreOffice.desktop']"
+    );
+}
+
+/// §4.1: the legacy browser mode shows no .deb app (like the Flatpaks): not in the Dash, and hidden if merged.
+#[test]
+fn deb_app_not_in_dock_legacy_browser() {
+    let root = root();
+    installed(root.path(), &["org.libreoffice.LibreOffice"]);
+    deb_public(root.path(), &[("calc", "ready", false)]);
+    let g = deb_cfg(Kind::LegacyBrowser, &[("calc", false)]);
+    let r = MountSim::new(root.path());
+    let bundle = tempfile::tempdir().unwrap();
+    let mut sys = SysState::default();
+    let out = run_step(root.path(), &r, &mut sys, &g, bundle.path(), Phase::Full).out;
+    assert_eq!(item(&out, ITEM), &ok(ITEM));
+    assert_eq!(
+        favorites(root.path()),
+        "favorite-apps=['google-chrome.desktop']"
+    );
+    let apps = names(&xdg(root.path()).join("applications"));
+    assert!(
+        apps.contains(&"mastersos-app-calc.desktop".to_string()),
+        "{apps:?}"
+    );
+}
+
+/// §4.7: `learning` lets a ready `kiosk = false` app through — no `Hidden=true` override over its launcher (a stale
+/// one goes), while the image's other launchers stay hidden.
+#[test]
+fn deb_desktop_not_hidden_in_learning() {
+    let root = root();
+    installed(root.path(), &[]);
+    deb_public(root.path(), &[("calc", "ready", false)]);
+    let over = xdg(root.path()).join("applications");
+    fs::create_dir_all(&over).unwrap();
+    fs::write(over.join("mastersos-app-calc.desktop"), HIDDEN_ENTRY).unwrap();
+    let g = deb_cfg(Kind::Learning, &[("calc", false)]);
+    let r = MountSim::new(root.path());
+    let bundle = tempfile::tempdir().unwrap();
+    let mut sys = SysState::default();
+    let out = run_step(root.path(), &r, &mut sys, &g, bundle.path(), Phase::Full).out;
+    assert_eq!(item(&out, ITEM), &ok(ITEM));
+    let apps = names(&over);
+    assert!(
+        !apps.contains(&"mastersos-app-calc.desktop".to_string()),
+        "{apps:?}"
+    );
+    assert!(
+        apps.contains(&"org.gnome.Terminal.desktop".to_string()),
+        "{apps:?}"
+    );
 }
