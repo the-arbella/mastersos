@@ -85,11 +85,10 @@ B 是保留清单（白名单），新软件读新路径时不用改它；C 解�
 | 家目录顶层所有**不以 `.` 开头**的条目 | 学生自己的文件（Downloads、Documents、Desktop 等） |
 | `.config/google-chrome` | Chrome 资料：书签、登录状态、扩展（Chrome 由企业策略管着） |
 | `.cache/google-chrome` | 只为不每次重下缓存 |
-| `.pki` | Chrome 的证书库 |
+| `.pki/nssdb/cert9.db`、`.pki/nssdb/key4.db` | Chrome 的证书库与私钥（不留 `pkcs11.txt`：它让 Chrome 加载模块） |
 | `.config/dconf` | 用户的 dconf 库（壁纸、语言、输入法等个人设置；该锁的键由系统锁住） |
 | `.local/share/keyrings` | 密钥环（保存的密码） |
 | `.var/app` | 学校装的 Flatpak 应用的数据 |
-| `.config/user-dirs.dirs`、`.config/user-dirs.locale` | 免得每次登录都问要不要改文件夹名 |
 | `.config/monitors.xml` | 外接屏幕的排布与缩放 |
 | `.local/state/wireplumber` | 音量与默认输出设备 |
 | `.config/gtk-3.0/bookmarks` | 文件选择框侧栏的书签 |

@@ -46,6 +46,13 @@ impl Fx {
         tidy_home(&h, &t, uid)
     }
 
+    fn run_limited(&self, limits: Limits) -> Tidy {
+        let r = crate::safefs::open_dir(&self.root, Path::new(""), false).unwrap();
+        let h = crate::safefs::open_child_dir(&r, "me").unwrap().unwrap();
+        let t = trash::open_trash(&r, true).unwrap().unwrap();
+        tidy_home_limited(&h, &t, me(), limits)
+    }
+
     fn trash_len(&self) -> usize {
         std::fs::read_dir(self.root.join(trash::TRASH))
             .map(|rd| rd.count())
@@ -70,6 +77,7 @@ const KEPT: &[&str] = &[
     ".local/share/keyrings/login.keyring",
     ".var/app/org.x/data",
     ".pki/nssdb/cert9.db",
+    ".pki/nssdb/key4.db",
 ];
 
 const GONE: &[&str] = &[
@@ -83,6 +91,9 @@ const GONE: &[&str] = &[
     ".local/share/dbus-1/services/x.service",
     ".local/share/gnome-shell/extensions/x/metadata.json",
     ".local/share/flatpak/exports/share/x",
+    ".pki/nssdb/pkcs11.txt",
+    ".config/user-dirs.dirs",
+    ".config/user-dirs.locale",
 ];
 
 fn populated() -> Fx {
@@ -236,6 +247,71 @@ fn too_many_top_entries_stops() {
     assert!(t.moved > 0, "the first batch is still moved");
 }
 
+/// Every entry read counts toward the scan bound, not only dot entries: a home with very many ordinary files is not
+/// read in full on every login.
+#[test]
+fn scan_bound_counts_every_entry() {
+    let f = fx();
+    for n in 0..50 {
+        std::fs::write(f.home.join(format!("f{n}")), "").unwrap();
+    }
+    let t = f.run_limited(Limits {
+        max_top: 1_000,
+        max_scan: 20,
+    });
+    assert!(t.skipped.contains(&SkipReason::TooManyEntries));
+    // Ordinary files are never touched.
+    assert_eq!(std::fs::read_dir(&f.home).unwrap().count(), 50);
+}
+
+/// Filling the home with junk dot entries beyond the cap does not keep the files that matter alive: they are moved
+/// by name before the scan.
+#[test]
+fn known_dangerous_names_go_before_the_cap() {
+    let f = fx();
+    for n in 0..30 {
+        std::fs::write(f.home.join(format!(".a{n}")), "").unwrap();
+    }
+    for n in [
+        ".profile",
+        ".bash_profile",
+        ".bashrc",
+        ".pam_environment",
+        ".xsessionrc",
+        ".zshenv",
+    ] {
+        f.put(n, "x");
+    }
+    let t = f.run_limited(Limits {
+        max_top: 5,
+        max_scan: 1_000,
+    });
+    assert!(t.skipped.contains(&SkipReason::TooManyEntries));
+    for n in [
+        ".profile",
+        ".bash_profile",
+        ".bashrc",
+        ".pam_environment",
+        ".xsessionrc",
+        ".zshenv",
+    ] {
+        assert!(!f.there(n), "{n}");
+    }
+}
+
+/// The same with the real cap: more than [`MAX_TOP_ENTRIES`] junk dot entries and `.profile` is still gone.
+#[test]
+fn profile_is_gone_despite_many_dotfiles() {
+    let f = fx();
+    for n in 0..MAX_TOP_ENTRIES + 5 {
+        std::fs::write(f.home.join(format!(".a{n}")), "").unwrap();
+    }
+    f.put(".profile", "x");
+    let t = f.run(me());
+    assert!(t.skipped.contains(&SkipReason::TooManyEntries));
+    assert!(!f.there(".profile"));
+}
+
 #[test]
 fn non_utf8_dotfile_is_moved() {
     let f = fx();
@@ -289,6 +365,8 @@ fn keep_list_follows_the_rule() {
                 "systemd",
                 "environment.d",
                 "mimeapps",
+                "user-dirs",
+                "pkcs11",
             ] {
                 assert!(!k.contains(bad), "{k}");
             }

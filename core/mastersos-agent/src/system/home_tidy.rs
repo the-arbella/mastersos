@@ -9,7 +9,9 @@
 //! - Interruption: whatever state a temporary directory was left in, [`restore`] puts its keep items back into the
 //!   container and trashes the rest; it runs before every swap, after a failed swap and after a successful one (where
 //!   the temporary name holds the old container, which has no keep items left).
-//! - Top level: every other entry whose name starts with `.` goes to the trash, at most [`MAX_TOP_ENTRIES`] per run.
+//! - Top level: every other entry whose name starts with `.` goes to the trash, at most [`MAX_TOP_ENTRIES`] per run
+//!   out of at most [`MAX_SCAN_ENTRIES`] entries read. Names that shells, PAM or the X session read at login
+//!   ([`LOGIN_READ_TOP`]) are moved by name first, so junk entries beyond the caps cannot keep them alive.
 //!   Entries not starting with `.` are the student's own files and are never touched.
 //! - Every step goes through `*at` calls on directory fds with `O_NOFOLLOW`; links are moved as entries, never
 //!   followed. Errors become a [`SkipReason`] and the next item is tried; they never carry names, paths or uids.
@@ -24,11 +26,8 @@ use rustix::io::Errno;
 use crate::homes::trash::to_trash_entry_os;
 use crate::safefs::bounded::dir_flags;
 
-/// Top-level dot entries that are kept as they are.
-pub const KEEP_TOP: &[&str] = &[
-    // Chrome's certificate store (NSS database).
-    ".pki",
-];
+/// Top-level dot entries that are kept as they are (none: `.pki` is a container, see [`CONTAINERS`]).
+pub const KEEP_TOP: &[&str] = &[];
 
 /// Containers that are swapped for a fresh directory holding only these items (paths relative to the container).
 pub const CONTAINERS: &[(&str, &[&str])] = &[
@@ -39,10 +38,6 @@ pub const CONTAINERS: &[(&str, &[&str])] = &[
             "google-chrome",
             // The user's dconf database (wallpaper, language, input methods); keys that must be fixed are locked by the system.
             "dconf",
-            // Folder names, so the user is not asked to rename folders on every login.
-            "user-dirs.dirs",
-            // Locale the folder names were created for (same reason as user-dirs.dirs).
-            "user-dirs.locale",
             // External monitor layout and scaling.
             "monitors.xml",
             // Bookmarks in the file chooser sidebar.
@@ -72,10 +67,54 @@ pub const CONTAINERS: &[(&str, &[&str])] = &[
             "app",
         ],
     ),
+    (
+        ".pki",
+        &[
+            // Chrome's certificate store (NSS database); pkcs11.txt is not kept: it loads modules into Chrome.
+            "nssdb/cert9.db",
+            // Chrome's private keys for client certificates (NSS database).
+            "nssdb/key4.db",
+        ],
+    ),
 ];
 
 /// At most this many top-level dot entries are moved per run.
 pub const MAX_TOP_ENTRIES: usize = 10_000;
+
+/// At most this many top-level entries are read per run, every entry counting (dot or not), so a home with very
+/// many files is not read in full on every login. A normal home has a few dozen.
+pub const MAX_SCAN_ENTRIES: usize = 100_000;
+
+/// Top-level names that shells, PAM or the X session read at login (they run code or set the environment). They are
+/// moved by name before the scan, so the caps cannot be gamed to keep them.
+const LOGIN_READ_TOP: &[&str] = &[
+    ".profile",
+    ".bash_profile",
+    ".bash_login",
+    ".bashrc",
+    ".bash_logout",
+    ".pam_environment",
+    ".xprofile",
+    ".xsession",
+    ".xsessionrc",
+    ".xinitrc",
+    ".xinputrc",
+    ".Xresources",
+    ".Xdefaults",
+    ".gnomerc",
+    ".zshenv",
+    ".zprofile",
+    ".zshrc",
+    ".zlogin",
+    ".zlogout",
+    ".login",
+    ".logout",
+    ".cshrc",
+    ".tcshrc",
+    ".kshrc",
+    ".mkshrc",
+    ".inputrc",
+];
 
 /// Prefix of a container's temporary directory (`.mastersos-tidy.config` for `.config`).
 const TEMP_PREFIX: &str = ".mastersos-tidy";
@@ -95,7 +134,8 @@ pub enum SkipReason {
     ForeignContainer,
     /// The container is a mount point (or on another file system).
     ContainerBusy,
-    /// More than [`MAX_TOP_ENTRIES`] top-level dot entries; the rest wait for the next login.
+    /// More than [`MAX_TOP_ENTRIES`] top-level dot entries, or more than [`MAX_SCAN_ENTRIES`] entries in all; the
+    /// rest wait for the next login.
     TooManyEntries,
     /// Any other error.
     Io,
@@ -106,6 +146,25 @@ use SkipReason::*;
 /// Tidy the home directory `home` of `uid`, moving what is not kept into `trash`. Never fails as a whole: every
 /// error is recorded as a [`SkipReason`] and the next item is tried.
 pub fn tidy_home(home: &OwnedFd, trash: &OwnedFd, uid: u32) -> Tidy {
+    tidy_home_limited(
+        home,
+        trash,
+        uid,
+        Limits {
+            max_top: MAX_TOP_ENTRIES,
+            max_scan: MAX_SCAN_ENTRIES,
+        },
+    )
+}
+
+/// The bounds of the top-level step (tests use small ones).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Limits {
+    pub max_top: usize,
+    pub max_scan: usize,
+}
+
+pub(crate) fn tidy_home_limited(home: &OwnedFd, trash: &OwnedFd, uid: u32, limits: Limits) -> Tidy {
     let mut out = Tidy::default();
     let st = match rustix::fs::fstat(home) {
         Ok(st) => st,
@@ -123,7 +182,7 @@ pub fn tidy_home(home: &OwnedFd, trash: &OwnedFd, uid: u32) -> Tidy {
             out.skipped.push(r);
         }
     }
-    tidy_top(home, trash, &mut out);
+    tidy_top(home, trash, limits, &mut out);
     out
 }
 
@@ -391,13 +450,18 @@ fn fill(
     Ok(())
 }
 
-/// Whether a top-level name is moved: it starts with `.`, and is not kept, a container or a temporary directory
-/// (those are handled, and on failure deliberately left, by the container step).
+/// Whether a top-level name is moved by the scan: it starts with `.`, and is not kept, already tried by name
+/// ([`LOGIN_READ_TOP`]), a container or a temporary directory (those are handled, and on failure deliberately left,
+/// by the container step).
 fn is_candidate(name: &[u8]) -> bool {
     if !name.starts_with(b".") || name == b"." || name == b".." {
         return false;
     }
-    if KEEP_TOP.iter().any(|k| k.as_bytes() == name) {
+    if KEEP_TOP
+        .iter()
+        .chain(LOGIN_READ_TOP)
+        .any(|k| k.as_bytes() == name)
+    {
         return false;
     }
     !CONTAINERS
@@ -405,8 +469,9 @@ fn is_candidate(name: &[u8]) -> bool {
         .any(|(c, _)| c.as_bytes() == name || temp_name(c).as_bytes() == name)
 }
 
-/// Read the candidates (raw bytes: a non-UTF-8 name must not stop the step), at most [`MAX_TOP_ENTRIES`].
-fn top_candidates(home: &OwnedFd, out: &mut Tidy) -> Vec<OsString> {
+/// Read the candidates (raw bytes: a non-UTF-8 name must not stop the step): at most `max_top` of them out of at
+/// most `max_scan` entries read.
+fn top_candidates(home: &OwnedFd, limits: Limits, out: &mut Tidy) -> Vec<OsString> {
     let mut names = Vec::new();
     let dir = match rustix::fs::Dir::read_from(home) {
         Ok(d) => d,
@@ -415,7 +480,11 @@ fn top_candidates(home: &OwnedFd, out: &mut Tidy) -> Vec<OsString> {
             return names;
         }
     };
-    for e in dir {
+    for (read, e) in dir.enumerate() {
+        if read == limits.max_scan {
+            out.skipped.push(TooManyEntries);
+            break;
+        }
         let Ok(e) = e else {
             out.skipped.push(Io);
             break;
@@ -424,7 +493,7 @@ fn top_candidates(home: &OwnedFd, out: &mut Tidy) -> Vec<OsString> {
         if !is_candidate(name) {
             continue;
         }
-        if names.len() == MAX_TOP_ENTRIES {
+        if names.len() == limits.max_top {
             out.skipped.push(TooManyEntries);
             break;
         }
@@ -433,9 +502,19 @@ fn top_candidates(home: &OwnedFd, out: &mut Tidy) -> Vec<OsString> {
     names
 }
 
-fn tidy_top(home: &OwnedFd, trash: &OwnedFd, out: &mut Tidy) {
+fn tidy_top(home: &OwnedFd, trash: &OwnedFd, limits: Limits, out: &mut Tidy) {
+    for name in LOGIN_READ_TOP {
+        match lstat(home, OsStr::new(name)) {
+            Ok(None) => {}
+            Ok(Some(_)) => match to_trash_entry_os(home, trash, OsStr::new(name)) {
+                Ok(_) => out.moved += 1,
+                Err(_) => out.skipped.push(Io),
+            },
+            Err(r) => out.skipped.push(r),
+        }
+    }
     // Names are collected first and moved afterwards, so renaming does not disturb the directory read.
-    for name in top_candidates(home, out) {
+    for name in top_candidates(home, limits, out) {
         match to_trash_entry_os(home, trash, &name) {
             Ok(_) => out.moved += 1,
             Err(_) => out.skipped.push(Io),
