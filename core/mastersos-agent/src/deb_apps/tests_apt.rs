@@ -428,12 +428,12 @@ async fn resolve_runs_update_simulate_download() {
         vec![
             apt_line(&work, &["update"]),
             format!("{} {pkgs}", apt_line(&work, &["-s", "install"])),
+            format!("dpkg-deb -f {} Package", main.display()),
             format!("{} {pkgs}", apt_line(&work, PRINT_URIS)),
             format!(
                 "{} {pkgs}",
                 apt_line(&work, &["install", "--download-only", "-y", "--no-remove"])
             ),
-            format!("dpkg-deb -f {} Package", main.display()),
         ]
     );
     let sl = fs::read_to_string(work.join("sources.list")).unwrap();
@@ -631,6 +631,7 @@ async fn missing_download_is_an_error() {
     let fake = Arc::new(FakeRunner::new());
     fake.respond("dpkg-deb -f", Output::ok("testnav\n"));
     fake.respond(&apt_line(&work, &["-s", "install"]), Output::ok(SIM_OK));
+    fake.respond(&apt_line(&work, PRINT_URIS), Output::ok(URIS));
     let r: Arc<dyn Runner> = fake.clone();
     let e = resolve(
         &r,
@@ -658,16 +659,16 @@ libxxf86dga1_2%3a1.1.5-1build1_amd64.deb 17000 SHA512:00\n\
 
 #[test]
 fn download_size_sums_the_fetched_files() {
-    assert_eq!(download_size(URIS).unwrap(), 20000);
-    assert_eq!(download_size("").unwrap(), 0);
+    assert_eq!(download_size(URIS, &[]).unwrap(), 20000);
+    assert_eq!(download_size("", &[]).unwrap(), 0);
     // apt's notes are not URI lines
-    assert_eq!(download_size("N: a note\n").unwrap(), 0);
+    assert_eq!(download_size("N: a note\n", &[]).unwrap(), 0);
     for bad in [
         "'http://x/a.deb' a.deb\n",
         "'http://x/a.deb' a.deb twelve SHA512:00\n",
         "'http://x/a.deb a.deb 12 SHA512:00\n",
     ] {
-        assert!(download_size(bad).is_err(), "{bad:?}");
+        assert!(download_size(bad, &[]).is_err(), "{bad:?}");
     }
 }
 
@@ -690,6 +691,48 @@ async fn resolve_checks_free_space_before_downloading() {
         .unwrap_err();
     assert!(e.to_string().contains("not enough free disk space"), "{e}");
     assert_eq!(*asked.lock().unwrap(), vec![20000]);
+    assert!(
+        !fake.calls().iter().any(|c| c.contains("--download-only")),
+        "{:?}",
+        fake.calls()
+    );
+}
+
+#[test]
+fn download_size_fails_closed_without_uri_lines() {
+    // packages to fetch, but nothing apt printed is a URI line: the size is unknown, not 0
+    let missing = vec!["x11-utils 7.7+6".to_string()];
+    for out in ["", "N: a note\n", "x11-utils_7.7+6_amd64.deb 3000\n"] {
+        let e = format!("{:#}", download_size(out, &missing).unwrap_err());
+        assert!(e.contains("x11-utils 7.7+6"), "{e}");
+    }
+    // URI lines present, or nothing to fetch: fine
+    assert_eq!(download_size(URIS, &missing).unwrap(), 20000);
+    assert_eq!(download_size("", &[]).unwrap(), 0);
+}
+
+#[tokio::test]
+async fn resolve_refuses_a_download_list_without_uris() {
+    // the dependencies are not cached and apt lists nothing: refused before downloading, whatever the free space
+    let (dir, main) = setup();
+    let work = dir.path().join("apt");
+    let fake = Arc::new(FakeRunner::new());
+    fake.respond("dpkg-deb -f", Output::ok("testnav\n"));
+    fake.respond(&apt_line(&work, &["-s", "install"]), Output::ok(SIM_OK));
+    fake.respond(&apt_line(&work, PRINT_URIS), Output::ok(""));
+    let r: Arc<dyn Runner> = fake.clone();
+    let e = resolve(
+        &r,
+        &work,
+        &ubuntu(),
+        &Source::Archive,
+        &[main],
+        &[],
+        &no_check,
+    )
+    .await
+    .unwrap_err();
+    assert!(e.to_string().contains("libxxf86dga1"), "{e}");
     assert!(
         !fake.calls().iter().any(|c| c.contains("--download-only")),
         "{:?}",

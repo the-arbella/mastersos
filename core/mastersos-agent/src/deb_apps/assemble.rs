@@ -151,6 +151,13 @@ const RESERVED_LIB: &[&str] = &[
     "os-release",
     "extension-release.d",
     "locale",
+    // whatever the image's list of /usr says: TLS, package management, keys, the login screen, ssh
+    "ssl",
+    "apt",
+    "dpkg",
+    "gnupg",
+    "gdm3",
+    "openssh",
 ];
 
 /// Is `usr/lib/<name>` closed to a vendor package called `name` ([`prune`] removes it, the rest of the package stays)?

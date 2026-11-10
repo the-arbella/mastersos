@@ -941,10 +941,21 @@ fn deps_link_into_etc_accepted_vendor_refused() {
     );
     assert!(exists(t.path(), "usr/lib/ssl/openssl.cnf"));
     assert!(exists(t.path(), "usr/lib/ssl/certs"));
-    // The same link from a vendor package (here one whose usr/lib/<package> is usr/lib/ssl) refuses the package
+    // The same link from a vendor package (in its own usr/lib/<package>) refuses the package
+    let t = tempfile::tempdir().unwrap();
+    link(
+        t.path(),
+        "usr/lib/sslapp/openssl.cnf",
+        "/etc/ssl/openssl.cnf",
+    );
+    let e = err(prune(&open(t.path()), &vendor("sslapp")));
+    assert!(e.contains("usr/lib/sslapp/"), "{e}");
+    // a vendor package called ssl gets no usr/lib/ssl at all (a reserved name)
     let t = mk();
-    let e = err(prune(&open(t.path()), &vendor("ssl")));
-    assert!(e.contains("usr/lib/ssl/"), "{e}");
+    assert_eq!(
+        prune(&open(t.path()), &vendor("ssl")).unwrap(),
+        vec!["usr/lib/ssl"]
+    );
 }
 
 #[test]
@@ -1169,6 +1180,12 @@ fn reserved_package_names_get_no_lib_dir() {
         "kernel",
         "os-release",
         "pam.d",
+        "ssl",
+        "apt",
+        "dpkg",
+        "gnupg",
+        "gdm3",
+        "openssh",
     ] {
         let t = tempfile::tempdir().unwrap();
         put(t.path(), &format!("usr/lib/{pkg}/x"), "x", 0o644);
@@ -1214,6 +1231,12 @@ fn every_usr_lib_name_of_the_deny_list_is_reserved() {
         "userdb",
         "credstore",
         "sysupdate.d",
+        "ssl",
+        "apt",
+        "dpkg",
+        "gnupg",
+        "gdm3",
+        "openssh",
     ] {
         assert!(reserved_lib_name(name), "{name}");
     }

@@ -45,9 +45,17 @@ pub const PRINT_URIS: &[&str] = &["install", "--print-uris", "-qq", "-y", "--no-
 
 /// The bytes the download of `out` ([`PRINT_URIS`]) would write. A `file:` URI (a main package given by path, the
 /// offline cache) is used in place and counts nothing; lines that are not URI lines (apt's notes) are skipped.
-pub fn download_size(out: &str) -> Result<u64> {
+/// `missing` (`name version`) are the planned packages not yet in `archives/`: when there are any but `out` has no URI
+/// line at all, the size is unknown and this fails rather than reporting 0.
+pub fn download_size(out: &str, missing: &[String]) -> Result<u64> {
+    let uris: Vec<&str> = out.lines().filter(|l| l.starts_with('\'')).collect();
+    ensure!(
+        !uris.is_empty() || missing.is_empty(),
+        "apt listed no download for {}, which are not cached; refusing to download without knowing the size",
+        missing.join(", ")
+    );
     let mut total = 0u64;
-    for line in out.lines().filter(|l| l.starts_with('\'')) {
+    for line in uris {
         let bad = || anyhow!("unexpected line in apt's download list: {line:?}");
         let (uri, rest) = line[1..].split_once("' ").ok_or_else(bad)?;
         let mut it = rest.split_whitespace();
@@ -610,39 +618,6 @@ pub async fn resolve(
     }
     let plan = parse_simulation(&out.stdout)?;
 
-    // the free space for what apt would fetch
-    let out = exec(runner, with_pkgs(PRINT_URIS).timeout(SIMULATE_TIMEOUT))
-        .await
-        .map_err(other)?;
-    if out.code != 0 {
-        return Err(other(format!(
-            "apt could not list the dependency downloads from {src}: {}",
-            last_lines(&out.stderr, ERR_LINES)
-        )));
-    }
-    if was_cut(&out.stdout) {
-        return Err(other("apt's download list is too long to check"));
-    }
-    let size = download_size(&out.stdout).map_err(|e| other(format!("{e:#}")))?;
-    // nothing to fetch (all cached, or no dependency): nothing written, nothing to check
-    if size > 0 {
-        space(size).map_err(|e| other(format!("{e:#}")))?;
-    }
-
-    // --no-remove: belt and braces, the plan was checked above with the same state.
-    let out = exec(
-        runner,
-        with_pkgs(&["install", "--download-only", "-y", "--no-remove"]).timeout(DOWNLOAD_TIMEOUT),
-    )
-    .await
-    .map_err(other)?;
-    if out.code != 0 {
-        return Err(other(format!(
-            "downloading the dependencies from {src} failed: {}",
-            last_lines(&out.stderr, ERR_LINES)
-        )));
-    }
-
     let mut mains = vec![];
     for p in inputs {
         let s = p.to_string_lossy();
@@ -666,19 +641,61 @@ pub async fn resolve(
         mains.push(name);
     }
 
+    // the planned dependencies and where apt puts them (`archives/<name>_<version>_<arch>.deb`)
     let archives = work.join("archives");
-    let mut files = vec![];
-    for (pkg, ver) in plan.iter().filter(|(p, _)| !mains.contains(p)) {
-        let found = ["amd64", "all"]
+    let cached = |pkg: &str, ver: &str| {
+        ["amd64", "all"]
             .iter()
             .map(|arch| archives.join(format!("{}_{}_{arch}.deb", quote(pkg), quote(ver))))
             .find(|f| f.is_file())
-            .ok_or_else(|| {
-                other(format!(
-                    "apt reported success but {pkg} {ver} is not in {}",
-                    archives.display()
-                ))
-            })?;
+    };
+    let missing: Vec<String> = plan
+        .iter()
+        .filter(|(p, v)| !mains.contains(p) && cached(p, v).is_none())
+        .map(|(p, v)| format!("{p} {v}"))
+        .collect();
+
+    // the free space for what apt would fetch
+    let out = exec(runner, with_pkgs(PRINT_URIS).timeout(SIMULATE_TIMEOUT))
+        .await
+        .map_err(other)?;
+    if out.code != 0 {
+        return Err(other(format!(
+            "apt could not list the dependency downloads from {src}: {}",
+            last_lines(&out.stderr, ERR_LINES)
+        )));
+    }
+    if was_cut(&out.stdout) {
+        return Err(other("apt's download list is too long to check"));
+    }
+    let size = download_size(&out.stdout, &missing).map_err(|e| other(format!("{e:#}")))?;
+    // nothing to fetch (all cached, or no dependency): nothing written, nothing to check
+    if size > 0 {
+        space(size).map_err(|e| other(format!("{e:#}")))?;
+    }
+
+    // --no-remove: belt and braces, the plan was checked above with the same state.
+    let out = exec(
+        runner,
+        with_pkgs(&["install", "--download-only", "-y", "--no-remove"]).timeout(DOWNLOAD_TIMEOUT),
+    )
+    .await
+    .map_err(other)?;
+    if out.code != 0 {
+        return Err(other(format!(
+            "downloading the dependencies from {src} failed: {}",
+            last_lines(&out.stderr, ERR_LINES)
+        )));
+    }
+
+    let mut files = vec![];
+    for (pkg, ver) in plan.iter().filter(|(p, _)| !mains.contains(p)) {
+        let found = cached(pkg, ver).ok_or_else(|| {
+            other(format!(
+                "apt reported success but {pkg} {ver} is not in {}",
+                archives.display()
+            ))
+        })?;
         files.push(found);
     }
     Ok(files)
