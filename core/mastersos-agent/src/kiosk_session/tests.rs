@@ -328,10 +328,11 @@ fn run_refuses_outside_kiosk_session() {
     )])));
     for env in [
         vars(&[]),
+        vars(&[("XDG_SESSION_DESKTOP", "mastersos")]),
         vars(&[("XDG_SESSION_DESKTOP", "ubuntu")]),
         vars(&[("XDG_SESSION_DESKTOP", "")]),
         vars(&[
-            ("XDG_SESSION_DESKTOP", "ubuntu"),
+            ("XDG_SESSION_DESKTOP", "mastersos"),
             ("XDG_CURRENT_DESKTOP", "mastersos-kiosk"),
         ]),
         vars(&[("XDG_CURRENT_DESKTOP", "mastersos-kiosk")]),
@@ -346,7 +347,7 @@ fn run_refuses_outside_kiosk_session() {
     let env = vars(&[
         ("USER", "kiosk-nwea"),
         ("XDG_SESSION_ID", "c3"),
-        ("XDG_SESSION_DESKTOP", "ubuntu"),
+        ("XDG_SESSION_DESKTOP", "mastersos"),
     ]);
     let spawned = RefCell::new(Vec::<Vec<String>>::new());
     let ok = run(
@@ -1033,7 +1034,7 @@ fn run_falls_back_to_logind_desktop() {
     for (sessions, desktops) in [
         (
             Output::ok("c9 c10\n"),
-            vec![("c9", kiosk()), ("c10", Output::ok("ubuntu\n"))],
+            vec![("c9", kiosk()), ("c10", Output::ok("mastersos\n"))],
         ),
         (Output::ok("\n"), vec![]),
         (Output::fail(1, "no such user"), vec![]),
@@ -1102,7 +1103,7 @@ fn guard_ends_kiosk_accounts_outside_the_kiosk_session() {
         vec![("USER", "kiosk-nwea"), ("XDG_SESSION_DESKTOP", d)]
     }
     assert_eq!(go(1901, &kiosk("mastersos-kiosk")), (true, vec![]));
-    for d in ["ubuntu", "gnome", "", "mastersos-kiosk2"] {
+    for d in ["mastersos", "ubuntu", "gnome", "", "mastersos-kiosk2"] {
         let (ok, lines) = go(1901, &kiosk(d));
         assert!(!ok, "{d:?}");
         assert_eq!(
@@ -1118,11 +1119,16 @@ fn guard_ends_kiosk_accounts_outside_the_kiosk_session() {
         [("exttest".to_string(), MSG_WRONG_SESSION.to_string())]
     );
     // The uid decides, not the name: a kiosk uid with an odd USER still fails
-    let (ok, _) = go(1989, &[("USER", "x"), ("XDG_SESSION_DESKTOP", "ubuntu")]);
+    let (ok, _) = go(1989, &[("USER", "x"), ("XDG_SESSION_DESKTOP", "mastersos")]);
     assert!(!ok);
     // Everyone else passes, journal untouched
     for uid in [0, 1000, 1899, 1990, 60578] {
-        for d in [Some("ubuntu"), Some("mastersos-kiosk"), None] {
+        for d in [
+            Some("mastersos"),
+            Some("ubuntu"),
+            Some("mastersos-kiosk"),
+            None,
+        ] {
             let mut env = vec![("USER", "kiosk-nwea")];
             if let Some(d) = d {
                 env.push(("XDG_SESSION_DESKTOP", d));

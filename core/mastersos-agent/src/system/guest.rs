@@ -1700,6 +1700,7 @@ mod tests {
         for d in [
             None,
             Some(""),
+            Some("mastersos"),
             Some("ubuntu"),
             Some("ubuntu-xorg"),
             Some("gnome"),
@@ -1724,7 +1725,7 @@ mod tests {
                 "open_session",
                 "gdm-password",
                 "kiosk-nwea",
-                Some("ubuntu"),
+                Some("mastersos"),
                 true,
                 Some(&kpol()),
                 || {
@@ -1741,7 +1742,7 @@ mod tests {
                 "close_session",
                 "gdm-authd",
                 "kiosk-nwea",
-                Some("ubuntu"),
+                Some("mastersos"),
                 true,
                 Some(&kpol()),
                 || Some(1900),
@@ -1761,7 +1762,12 @@ mod tests {
             SessionAction::DenyEphemeral(login::DENY_KIOSK)
         );
         // 访客、普通用户、SSO 账号不受这个变量影响
-        for d in [None, Some("ubuntu"), Some("mastersos-kiosk")] {
+        for d in [
+            None,
+            Some("mastersos"),
+            Some("ubuntu"),
+            Some("mastersos-kiosk"),
+        ] {
             assert_eq!(
                 open(d, "guest"),
                 SessionAction::EphemeralOpen(ephemeral::guest()),
@@ -2040,12 +2046,14 @@ mod tests {
             (d, r.calls())
         };
         // The variable wins when the display manager sets it; nothing asked
-        let (d, calls) = go(Some("ubuntu"), "kiosk-nwea", Some(1901), None);
-        assert_eq!(d.as_deref(), Some("ubuntu"));
+        let (d, calls) = go(Some("mastersos"), "kiosk-nwea", Some(1901), None);
+        assert_eq!(d.as_deref(), Some("mastersos"));
         assert!(calls.is_empty());
         // GDM 50: no variable, AccountsService has the session GDM is about to start
         for (data, want) in [
             ("mastersos-kiosk", Some("mastersos-kiosk")),
+            ("mastersos", Some("mastersos")),
+            // a record left from before the mastersos session (design 2026-11-10)
             ("ubuntu", Some("ubuntu")),
             ("", None),
         ] {
