@@ -19,6 +19,7 @@ pub mod ephemeral;
 pub mod exec_block;
 pub mod flatpak;
 pub mod guest;
+pub mod home_tidy;
 pub mod it_account;
 pub mod kiosk;
 pub mod locale;

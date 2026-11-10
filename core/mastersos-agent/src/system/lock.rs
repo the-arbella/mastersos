@@ -40,15 +40,17 @@ pub fn step() -> Step {
     }
 }
 
-/// `loginctl list-users --json=short` 的一行（只取用到的两列）。
+/// One row of `loginctl list-users --json=short` (only the columns used; a column older versions lack defaults).
 #[derive(Deserialize)]
-struct LoginUser {
-    uid: u32,
-    user: String,
+pub(crate) struct LoginUser {
+    pub(crate) uid: u32,
+    pub(crate) user: String,
+    #[serde(default)]
+    pub(crate) linger: bool,
 }
 
 /// 解析 `loginctl list-users --no-legend --json=short`；空输出是没有用户。
-fn parse_users(json: &str) -> Result<Vec<LoginUser>> {
+pub(crate) fn parse_users(json: &str) -> Result<Vec<LoginUser>> {
     if json.trim().is_empty() {
         return Ok(Vec::new());
     }
@@ -58,7 +60,7 @@ fn parse_users(json: &str) -> Result<Vec<LoginUser>> {
 /// 是不是要结束的人：名字里有 `@`（SSO 账号）的不论 uid（与 `login::decide` 一致：authd 的 uid 范围哪天配到 60000 以上，
 /// 学校账号也不能因此躲过锁定）；没有 `@` 的看 uid 在不在 1000–59999（`!login::is_system_uid`；访客 1999 在内）。
 /// root（uid 0）无论名字一律不结束。
-fn is_person(u: &LoginUser) -> bool {
+pub(crate) fn is_person(u: &LoginUser) -> bool {
     u.uid != 0 && (u.user.contains('@') || !login::is_system_uid(u.uid))
 }
 

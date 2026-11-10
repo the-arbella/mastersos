@@ -416,6 +416,18 @@ fn dbus_override(file: &str) -> String {
 fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
     let p = profile(ctx.config);
     let mut errs: Vec<String> = Vec::new();
+    // Invariant 1: tightening is published before anything else can fail.
+    if p.locked() {
+        if let Err(e) = exec_block::write_session_mode(env.paths, true) {
+            errs.push(format!("session mode: {e:#}"));
+        }
+        // Students get no standing user manager in learning mode (spec invariant 2).
+        let admins = super::login::bundle_policy(ctx, env).admin_users;
+        if let Err(e) = super::home_tidy::linger_off_for_students(env.runner, &admins) {
+            errs.push(format!("linger: {e:#}"));
+        }
+    }
+    let mut lock_steps_ok = true;
     let (ids, mut out) = match webapps(ctx, env.paths, env.sys) {
         Ok(r) => r,
         Err(e) => {
@@ -438,6 +450,7 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
     let debs = deb_dock_apps(ctx.config, &public);
     let (keyfile, locks) = render_dconf(ctx.config, &ids, &kiosk, &debs, &flatpaks);
     if let Err(e) = apply_dconf(&env.paths.root, env.runner, env.sys, &keyfile, &locks) {
+        lock_steps_ok = false;
         errs.push(format!("dconf: {e:#}"));
     }
     let r = if p.locked() {
@@ -453,10 +466,21 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
         remove_overrides(env.paths)
     };
     if let Err(e) = r {
+        lock_steps_ok = false;
         errs.push(format!("overrides: {e:#}"));
     }
     if let Err(e) = exec_block::apply(env.paths, env.runner, p.locked()) {
+        lock_steps_ok = false;
         errs.push(format!("terminal, file manager and settings: {e:#}"));
+    }
+    // Loosening is published last, and only when every lock-related step succeeded.
+    if !p.locked() && lock_steps_ok {
+        if let Err(e) = exec_block::write_session_mode(env.paths, false) {
+            errs.push(format!("session mode: {e:#}"));
+        }
+    }
+    if p.locked() {
+        out.extend(home_tidy_item(env.paths));
     }
     out.push(if errs.is_empty() {
         ok(ITEM)
@@ -464,6 +488,35 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
         failed(ITEM, errs.join("; "))
     });
     out
+}
+
+/// The `home-tidy` report item from the latest login's result; none when no login has written one. The detail
+/// holds counts and reason names only.
+fn home_tidy_item(paths: &SysPaths) -> Option<ItemResult> {
+    const NAME: &str = "home-tidy";
+    let dir = safefs::open_abs_dir(&paths.var_dir, false).ok()?;
+    let bytes = safefs::read_at(&dir, super::home_tidy::RESULT_FILE).ok()??;
+    let Ok(t) = serde_json::from_slice::<super::home_tidy::LastTidy>(&bytes) else {
+        return Some(failed(NAME, "result unreadable".into()));
+    };
+    let reasons = t.skipped.join(",");
+    let detail = format!(
+        "{}: moved {}, skipped {} [{}]",
+        t.outcome,
+        t.moved,
+        t.skipped.len(),
+        reasons
+    );
+    let clean = t.skipped.is_empty() && matches!(t.outcome.as_str(), "tidied" | "skipped-active");
+    Some(if clean {
+        ItemResult {
+            item: NAME.into(),
+            ok: true,
+            detail: Some(detail),
+        }
+    } else {
+        failed(NAME, detail)
+    })
 }
 
 /// 打开（必要时建出）`dir` 里的子目录 `rel`，强制 0755。

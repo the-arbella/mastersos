@@ -1,7 +1,7 @@
 #!/bin/bash
 # Started with every regular desktop session (mastersos-browser-wait.service, offline status design §3) while the web browser
 # is not installed yet. Chrome there, or no status.json (only a managed mastersos-agent writes it: an unmanaged machine or one
-# not enrolled yet has nothing to say): exits at once, silently. A session that is not locked (session-mode is not `learning`, or there is
+# not enrolled yet has nothing to say): exits at once, silently. A session that is not locked (session-mode is `full`, or there is
 # no session-mode yet because the machine has no settings bundle): one notification, exit. A locked session: a progress window
 # with no buttons whose text follows status.json (written by mastersos-agent every 30 s) until Chrome appears; if the user
 # closes the window it is not shown again, a notification is sent instead. Locked-app (kiosk-*) accounts get nothing.
@@ -64,7 +64,13 @@ notify() {
 	notify-send --app-name=MastersOS --icon=dialog-information --expire-time=10000 "$title" ${body:+"$body"} >/dev/null 2>&1 || :
 }
 
-if [ "$(cat "$public/session-mode" 2>/dev/null || :)" != learning ]; then
+# Locked unless the file is missing or reads `full` (whitespace trimmed, any case): the one rule every reader of session-mode uses
+mode=
+if [ -e "$public/session-mode" ]; then
+	mode=$(tr -d '[:space:]' <"$public/session-mode" | tr '[:upper:]' '[:lower:]') || mode=learning
+	[ -n "$mode" ] || mode=learning
+fi
+if [ "$mode" = full ] || [ -z "$mode" ]; then
 	notify
 	exit 0
 fi

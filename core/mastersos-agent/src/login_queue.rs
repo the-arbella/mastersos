@@ -15,6 +15,8 @@
 //!   systemd 终止。`--machine=` 用**数字 uid**：SSO 用户名里有 `@`，写名字有歧义（VM 实测 systemd 259 接受数字 uid）。
 //!   按 `"<uid>:<路径>"` 记执行前读出的内容哈希（`State::login_script_hashes`，只在本机），退出码 0 才记，同一内容每人只
 //!   成功跑一次；访客（uid 1999）的家目录每次会话都是新的，每次都跑、不记。
+//!   On learning-mode devices (locked session) they also run at every login without recording a hash, because the
+//!   home is put back to a known state at every login; full mode runs each content once as above.
 //! - 超时的判断：`systemd-run --wait` 在单元被 `RuntimeMaxSec` 终止时退出码是 [`SYSTEMD_RUN_TIMEOUT_CODE`]，与脚本自己
 //!   `exit 1` 相同（systemd 255 与 259 实测），所以不加 `--quiet`，再认它结尾的状态行 `Finished with result: timeout`。
 //! - 回报项 `login-script:<路径>`，同一脚本多个用户时只留最近一次真的跑了的结果（跳过的不出结果）；`detail` 只有
@@ -398,7 +400,9 @@ fn run_login_scripts_with(
     runner: &dyn Runner,
     wait: Duration,
 ) -> Vec<ItemResult> {
-    let guest = uid == GUEST_UID;
+    // The guest's home is new every session and a learning-mode home is put back to a known state every login, so
+    // the scripts run every time and no hash is recorded.
+    let every_login = uid == GUEST_UID || crate::system::desktop::profile(config).locked();
     let mut out = vec![];
     // 先读出导出的内容：没导出的直接失败，这个人已经成功跑过同一内容的跳过（不出结果，也就不会因为会话没就绪而回报失败，复审 N1）
     let mut todo = vec![];
@@ -410,7 +414,7 @@ fn run_login_scripts_with(
         };
         let hash = sha256_hex(&bytes);
         let key = format!("{uid}:{}", s.path);
-        if !guest && state.login_script_hashes.get(&key) == Some(&hash) {
+        if !every_login && state.login_script_hashes.get(&key) == Some(&hash) {
             continue;
         }
         todo.push((s, file, key, hash));
@@ -451,7 +455,7 @@ fn run_login_scripts_with(
         };
         // 跑的过程中下一轮应用可能换掉了导出的文件（复审 M1）：跑完再读一次，内容没变才记，变了就不记、下次登录照新内容再跑
         let unchanged = || std::fs::read(&file).is_ok_and(|b| sha256_hex(&b) == hash);
-        if ok && !guest && unchanged() {
+        if ok && !every_login && unchanged() {
             state.login_script_hashes.insert(key, hash);
         }
         out.push(ItemResult {
@@ -662,8 +666,14 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
-    /// 每个 (path, timeout) 生成一条 `when = "login"` 的脚本。
+    /// One `when = "login"` script per (path, timeout), in full mode (each content runs once per person).
     fn config(scripts: &[(&str, Option<u64>)]) -> Config {
+        let mut c = config_any(scripts);
+        c.interface = mastersos_bundle::Interface::Full;
+        c
+    }
+
+    fn config_any(scripts: &[(&str, Option<u64>)]) -> Config {
         let mut s = String::from("version = 1\n[[group]]\nid = \"default\"\nname = \"d\"\n");
         for (p, t) in scripts {
             s += &format!("[[group.scripts]]\npath = \"{p}\"\nwhen = \"login\"\n");
@@ -783,6 +793,50 @@ mod tests {
         assert!(st2.login_script_hashes.is_empty());
         run_login_scripts(1003, &g, ex.path(), &mut st2, &r);
         assert_eq!(runs(&r).len(), 6);
+    }
+
+    /// Learning mode: the home is put back to a known state at every login, so scripts run every login and no
+    /// hash is recorded.
+    #[test]
+    fn learning_runs_scripts_every_login() {
+        let mut g = config_any(&[("scripts/hello.sh", None)]);
+        g.interface = mastersos_bundle::Interface::Learning;
+        g.legacy_browser = false;
+        let ex = exported(&[("scripts/hello.sh", "#!/bin/sh\n")]);
+        let r = FakeRunner::new();
+        let mut st = State::default();
+        run_login_scripts(1001, &g, ex.path(), &mut st, &r);
+        run_login_scripts(1001, &g, ex.path(), &mut st, &r);
+        assert_eq!(runs(&r).len(), 2);
+        assert!(st.login_script_hashes.is_empty());
+    }
+
+    /// A legacy browser-mode Group (`legacy_browser = true`) is locked too: scripts run every login.
+    #[test]
+    fn legacy_browser_runs_scripts_every_login() {
+        let mut g = config_any(&[("scripts/hello.sh", None)]);
+        g.interface = mastersos_bundle::Interface::Learning;
+        g.legacy_browser = true;
+        let ex = exported(&[("scripts/hello.sh", "#!/bin/sh\n")]);
+        let r = FakeRunner::new();
+        let mut st = State::default();
+        run_login_scripts(1001, &g, ex.path(), &mut st, &r);
+        run_login_scripts(1001, &g, ex.path(), &mut st, &r);
+        assert_eq!(runs(&r).len(), 2);
+        assert!(st.login_script_hashes.is_empty());
+    }
+
+    /// Full mode: the same content runs once per person.
+    #[test]
+    fn full_runs_scripts_once() {
+        let g = config(&[("scripts/hello.sh", None)]);
+        let ex = exported(&[("scripts/hello.sh", "#!/bin/sh\n")]);
+        let r = FakeRunner::new();
+        let mut st = State::default();
+        run_login_scripts(1001, &g, ex.path(), &mut st, &r);
+        run_login_scripts(1001, &g, ex.path(), &mut st, &r);
+        assert_eq!(runs(&r).len(), 1);
+        assert_eq!(st.login_script_hashes.len(), 1);
     }
 
     /// 访客的家目录每次会话都是新的：每次都跑、不记哈希。

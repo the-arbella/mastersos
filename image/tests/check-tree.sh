@@ -3383,6 +3383,10 @@ for l in "30-systemd-environment-d-generator|*) XDG_CONFIG_HOME=/nonexistent exe
 		bad 76 "$f should be executable, read mode_file=/var/lib/mastersos-public/session-mode and have the learning line: ${l#*|}"
 		r=1
 	fi
+	if grep -q 'dconf/db' "$f"; then
+		bad 76 "$f should not look at the dconf locks (the agent orders session-mode and the locks, invariant 1)"
+		r=1
+	fi
 	grep -qE "^ +image/mkosi\.extra/usr/local/lib/systemd/user-environment-generators/${l%%|*}$" .github/workflows/mastersos.yml || {
 		bad 76 ".github/workflows/mastersos.yml's image-lint should shellcheck $f"
 		r=1

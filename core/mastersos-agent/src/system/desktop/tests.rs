@@ -70,7 +70,7 @@ struct Run {
 /// 跑一次 `desktop` 步骤。`bundle` 是包目录（图标的 `files/…` 从这里读）。
 fn run_step(
     root: &Path,
-    r: &MountSim,
+    r: &dyn crate::runner::Runner,
     sys: &mut SysState,
     g: &Config,
     bundle: &Path,
@@ -82,7 +82,7 @@ fn run_step(
 /// 同 [`run_step`]，`superseded` 一开始就是给定的值（有更新的应用请求）。
 fn run_step_with(
     root: &Path,
-    r: &MountSim,
+    r: &dyn crate::runner::Runner,
     sys: &mut SysState,
     g: &Config,
     bundle: &Path,
@@ -1273,7 +1273,10 @@ fn dump_desktop_output(root: &Path, calls: &[String]) -> String {
     for (rel, body) in files {
         s.push_str(&format!("== {rel} {body}\n"));
     }
-    for c in calls {
+    // The linger step (learning mode, added after the snapshot was captured) is not part of the legacy output.
+    for c in calls.iter().filter(|c| {
+        !c.starts_with("loginctl list-users") && !c.starts_with("loginctl disable-linger")
+    }) {
         s.push_str(&format!(
             "$ {}\n",
             c.replace(super::super::exec_block::STUB, "<stub>")
@@ -1604,6 +1607,190 @@ fn locked_profile_enables_managed_extension() {
         .find(|l| l.starts_with("enabled-extensions="))
         .unwrap_or_else(|| panic!("no enabled-extensions line:\n{k}"));
     assert!(line.contains("'mastersos-managed@mastersos.org'"), "{line}");
+}
+
+fn session_mode(root: &Path) -> String {
+    let f = root
+        .join("var/lib/mastersos-public")
+        .join(exec_block::SESSION_MODE_FILE);
+    fs::read_to_string(f).unwrap_or_default()
+}
+
+/// Invariant 1: tightening publishes `learning` first, so a failing later step cannot leave the
+/// session believing it is `full`.
+#[test]
+fn tightening_publishes_learning_first() {
+    let root = root();
+    let r = MountSim::new(root.path());
+    let bundle = tempfile::tempdir().unwrap();
+    let mut sys = SysState::default();
+    run_step(
+        root.path(),
+        &r,
+        &mut sys,
+        &grp(Kind::Full, vec![]),
+        bundle.path(),
+        Phase::Full,
+    );
+    assert_eq!(session_mode(root.path()), "full\n");
+    r.fake.respond("dconf update", Output::fail(1, "boom"));
+    // Reads the session mode at the step's first command: `learning` must already be published by then.
+    struct FirstCall<'a> {
+        inner: &'a MountSim,
+        root: &'a Path,
+        seen: std::sync::Mutex<Option<String>>,
+    }
+    impl crate::runner::Runner for FirstCall<'_> {
+        fn run(&self, cmd: &crate::runner::Cmd) -> anyhow::Result<Output> {
+            let mut g = self.seen.lock().unwrap();
+            if g.is_none() {
+                *g = Some(session_mode(self.root));
+            }
+            drop(g);
+            crate::runner::Runner::run(self.inner, cmd)
+        }
+    }
+    let probe = FirstCall {
+        inner: &r,
+        root: root.path(),
+        seen: std::sync::Mutex::new(None),
+    };
+    let out = run_step(
+        root.path(),
+        &probe,
+        &mut sys,
+        &grp(Kind::LegacyBrowser, vec![]),
+        bundle.path(),
+        Phase::Full,
+    )
+    .out;
+    assert!(!item(&out, ITEM).ok);
+    assert_eq!(
+        probe.seen.lock().unwrap().as_deref(),
+        Some("learning\n"),
+        "learning was not published before the first command"
+    );
+    assert_eq!(session_mode(root.path()), "learning\n");
+}
+
+/// Invariant 1: loosening publishes `full` only after the lock-related steps all succeeded.
+#[test]
+fn loosening_publishes_full_last() {
+    let root = root();
+    let r = MountSim::new(root.path());
+    let bundle = tempfile::tempdir().unwrap();
+    let mut sys = SysState::default();
+    run_step(
+        root.path(),
+        &r,
+        &mut sys,
+        &grp(Kind::LegacyBrowser, vec![]),
+        bundle.path(),
+        Phase::Full,
+    );
+    assert_eq!(session_mode(root.path()), "learning\n");
+    r.fake.respond("dconf update", Output::fail(1, "boom"));
+    let full = grp(Kind::Full, vec![]);
+    let out = run_step(root.path(), &r, &mut sys, &full, bundle.path(), Phase::Full).out;
+    assert!(!item(&out, ITEM).ok);
+    assert_eq!(session_mode(root.path()), "learning\n");
+    let out = run_step(root.path(), &r, &mut sys, &full, bundle.path(), Phase::Full).out;
+    assert_eq!(item(&out, ITEM), &ok(ITEM));
+    assert_eq!(session_mode(root.path()), "full\n");
+}
+
+/// A failure outside the lock-related steps (web apps) is still reported but does not hold
+/// `full` back.
+#[test]
+fn unrelated_failure_does_not_block_full() {
+    let root = root();
+    let r = MountSim::new(root.path());
+    let bundle = tempfile::tempdir().unwrap();
+    let mut sys = SysState::default();
+    run_step(
+        root.path(),
+        &r,
+        &mut sys,
+        &grp(Kind::LegacyBrowser, vec![]),
+        bundle.path(),
+        Phase::Full,
+    );
+    assert_eq!(session_mode(root.path()), "learning\n");
+    // `xdg/icons` is a file, so the web app step fails; overrides and dconf do not touch it.
+    fs::remove_dir_all(xdg(root.path()).join("icons")).unwrap();
+    fs::write(xdg(root.path()).join("icons"), "x").unwrap();
+    let g = grp(Kind::Full, vec![app("A", "https://a.th/", None)]);
+    let out = run_step(root.path(), &r, &mut sys, &g, bundle.path(), Phase::Full).out;
+    let d = item(&out, ITEM);
+    assert!(!d.ok, "{d:?}");
+    assert!(d.detail.as_deref().unwrap().contains("web apps"), "{d:?}");
+    assert_eq!(session_mode(root.path()), "full\n");
+}
+
+#[test]
+fn locked_run_switches_off_student_linger_and_full_does_not() {
+    for (kind, locked) in [(Kind::Learning, true), (Kind::Full, false)] {
+        let root = root();
+        let r = MountSim::new(root.path());
+        let bundle = tempfile::tempdir().unwrap();
+        let mut sys = SysState::default();
+        let g = grp(kind, vec![app("LMS", "https://lms.th/", None)]);
+        run_step(root.path(), &r, &mut sys, &g, bundle.path(), Phase::Full);
+        let listed = r
+            .calls()
+            .iter()
+            .any(|c| c.starts_with("loginctl list-users"));
+        assert_eq!(listed, locked, "{:?}", r.calls());
+    }
+}
+
+fn learning_run_with_result(json: Option<&str>) -> Vec<ItemResult> {
+    let root = root();
+    let r = MountSim::new(root.path());
+    let bundle = tempfile::tempdir().unwrap();
+    let mut sys = SysState::default();
+    let p = paths(root.path());
+    if let Some(j) = json {
+        fs::create_dir_all(&p.var_dir).unwrap();
+        fs::write(p.var_dir.join(super::super::home_tidy::RESULT_FILE), j).unwrap();
+    }
+    let g = grp(Kind::Learning, vec![app("LMS", "https://lms.th/", None)]);
+    run_step(root.path(), &r, &mut sys, &g, bundle.path(), Phase::Full).out
+}
+
+#[test]
+fn home_tidy_report_item() {
+    let tidied = r#"{"at":1,"moved":3,"skipped":[],"outcome":"tidied"}"#;
+    let out = learning_run_with_result(Some(tidied));
+    let i = item(&out, "home-tidy");
+    assert!(i.ok, "{i:?}");
+
+    for json in [
+        r#"{"at":1,"moved":3,"skipped":["io","container-busy"],"outcome":"tidied"}"#,
+        r#"{"at":1,"moved":0,"skipped":[],"outcome":"prepare-failed"}"#,
+        r#"{"at":1,"moved":0,"skipped":[],"outcome":"not-a-home"}"#,
+        "garbage",
+    ] {
+        let out = learning_run_with_result(Some(json));
+        let i = item(&out, "home-tidy");
+        assert!(!i.ok, "{json}");
+        let d = i.detail.as_deref().unwrap();
+        assert!(!d.contains('/'), "{d}");
+    }
+    let out = learning_run_with_result(Some(
+        r#"{"at":1,"moved":3,"skipped":["io","io","container-busy"],"outcome":"tidied"}"#,
+    ));
+    let d = item(&out, "home-tidy").detail.clone().unwrap();
+    assert!(
+        d.contains("moved 3") && d.contains("io") && d.contains("container-busy"),
+        "{d}"
+    );
+
+    let active = r#"{"at":1,"moved":0,"skipped":[],"outcome":"skipped-active"}"#;
+    assert!(item(&learning_run_with_result(Some(active)), "home-tidy").ok);
+
+    let out = learning_run_with_result(None);
+    assert!(out.iter().all(|r| r.item != "home-tidy"));
 }
 
 // ---------------------------------------------------------------------------
