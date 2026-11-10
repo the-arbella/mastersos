@@ -187,3 +187,10 @@
 4. 完全模式 VM：上面这些全部照常生效。
 5. 模式 full → learning → full 来回切：`session-mode` 与 dconf 锁始终一致，切到 full 时网页应用图标下载失败也能切过去。
 6. 学生把 `~/.config` 换成 FUSE 挂载点或指向 `/etc` 的链接后再登录：登录成功，`/etc` 无变化，回报有原因类别。
+7. 根目录权限矩阵（Task 3–5）：root 用 chown/封存跑一遍，含被硬链接的点文件；容器目录属主是别人（`chown root .config`）时只跳过那一项。
+8. `EBUSY` 的几种情形：同一文件系统的 bind mount 盖在 `.config` 上、`.cache` 上挂 tmpfs、保留清单叶子 `.config/google-chrome` 上有挂载点：都跳过并回报原因，登录成功。
+9. 容器目录里面有挂载点，且 `empty_trash` 清空回收目录时不得越过它进到挂载的文件系统。
+10. 收拾的每个阶段 `kill -9` 后重跑：profile、dconf、钥匙环完好，没有留下临时目录。
+11. 耗时：约 1 万个点文件加约 100 万个非点条目，对照 `PAM_CMD_TIMEOUT`。
+12. 最坏的登录延迟：getent 与 loginctl 各命令叠加最多约 25 秒，确认在可接受范围。
+13. tty 上保持一个会话，再到 GDM 登录：应回报 `skipped-active`（已知缺口，确认行为与回报一致）。
