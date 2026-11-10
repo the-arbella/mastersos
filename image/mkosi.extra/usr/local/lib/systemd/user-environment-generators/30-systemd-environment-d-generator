@@ -1,0 +1,10 @@
+#!/bin/bash
+# The user manager's environment comes from the system's environment.d only (locked-session hardening, 2026-11-10).
+# systemd's own generator of the same name (/usr/lib/systemd/user-environment-generators, which this file masks: the
+# /usr/local directory comes first) also reads $XDG_CONFIG_HOME/environment.d, ~/.config/environment.d by default. A
+# student can save a file there from the browser, and a DCONF_PROFILE or GSETTINGS_BACKEND line in it switches every dconf
+# lock of the locked sessions off. Run the same generator with a configuration home that does not exist: it still reads
+# /etc, /run, /usr/local/lib and /usr/lib environment.d, and prints only what those files set.
+# Tested by image/tests/user-env-test.sh.
+set -euo pipefail
+XDG_CONFIG_HOME=/nonexistent exec /usr/lib/systemd/user-environment-generators/30-systemd-environment-d-generator "$@"
