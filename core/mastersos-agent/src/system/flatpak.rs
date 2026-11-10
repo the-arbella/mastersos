@@ -45,6 +45,8 @@ pub const REMOTE: &str = "flathub";
 pub const INSTALL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 /// `flatpak update` 的限时（可能一次更新好几个运行时）。
 pub const UPDATE_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+/// Name of the transient unit long Flatpak commands run in; `quiet::STOP_UNITS` stops `<name>.service`.
+pub const FLATPAK_UNIT: &str = "mastersos-flatpak";
 pub const EVERY: Duration = Duration::from_secs(3600);
 /// 每日更新任务多久看一次是否到期（到期 = 距上次成功满 [`UPDATE_INTERVAL`]）。
 pub const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(3600);
@@ -196,6 +198,16 @@ fn parse_installed(stdout: &str) -> BTreeSet<String> {
         .collect()
 }
 
+/// `flatpak <args>` in the transient unit [`FLATPAK_UNIT`], so entering the exam quiet can stop it. systemd limits the
+/// run to `timeout` (`RuntimeMaxSec`); the `Cmd` waits 30 s longer so systemd's own kill is reported first.
+fn flatpak_cmd(args: &[&str], timeout: Duration) -> Cmd {
+    let max = format!("--property=RuntimeMaxSec={}", timeout.as_secs());
+    let unit = format!("--unit={FLATPAK_UNIT}");
+    let mut full: Vec<&str> = vec!["--wait", "--collect", "--quiet", &unit, &max, "flatpak"];
+    full.extend_from_slice(args);
+    Cmd::new("systemd-run", &full).timeout(timeout + Duration::from_secs(30))
+}
+
 /// 对账一次。返回逐项回报与 `managed` 是否变了（变了要再应用一次，Dock 跟着变）。`still_current()` 在每次安装之前看：
 /// 返回 false（这一轮开始之后来了新包）就提前结束这一轮，由唤醒立即按新清单再跑（复审 M5）。
 pub fn reconcile(
@@ -203,6 +215,7 @@ pub fn reconcile(
     paths: &SysPaths,
     cur: Option<&CurrentGroup>,
     still_current: &dyn Fn() -> bool,
+    quiet: &dyn Fn() -> bool,
 ) -> (Vec<ItemResult>, bool) {
     let Some(cur) = cur else {
         // 还没有包：不知道清单，什么都不做
@@ -294,6 +307,7 @@ pub fn reconcile(
     }
     let (install, uninstall) = plan(&wanted, &installed, &st.managed);
     let mut superseded = false;
+    let mut postponed = false;
     for id in &wanted {
         let it = item(id);
         if !install_mode {
@@ -325,6 +339,16 @@ pub fn reconcile(
             superseded = true;
             continue;
         }
+        if quiet() {
+            // Exam quiet started: install nothing more (not recorded as pending); uninstalls wait too
+            postponed = true;
+            out.push(ItemResult {
+                item: it,
+                ok: true,
+                detail: Some("postponed: a locked app session is running".into()),
+            });
+            continue;
+        }
         // 先记意图：落不了盘就不装（装上了却记不下来，就成了分不清是谁装的孤儿）
         st.pending.insert(id.clone());
         if let Err(e) = save_state(paths, &st) {
@@ -335,11 +359,10 @@ pub fn reconcile(
             ));
             continue;
         }
-        let cmd = Cmd::new(
-            "flatpak",
+        let cmd = flatpak_cmd(
             &["install", "--system", "--noninteractive", "-y", REMOTE, id],
-        )
-        .timeout(INSTALL_TIMEOUT);
+            INSTALL_TIMEOUT,
+        );
         match run_ok(runner, cmd) {
             Ok(_) => {
                 st.pending.remove(id);
@@ -353,19 +376,31 @@ pub fn reconcile(
                     ),
                 });
             }
+            // Stopped by entering the quiet (it stops the transient unit): postponed, not a failure; pending stays
+            Err(_) if quiet() => {
+                postponed = true;
+                out.push(ItemResult {
+                    item: it,
+                    ok: true,
+                    detail: Some("postponed: a locked app session is running".into()),
+                });
+            }
             // pending 里留着：其实装上了（超时在最后一步）下一轮收下；没装上下一轮再装
             Err(e) => out.push(failed(&it, format!("install failed: {e:#}"))),
         }
     }
     let mut removed_any = false;
-    if !superseded {
+    // Quiet may have begun after the install loop: start no uninstall then
+    if !superseded && !postponed && quiet() {
+        postponed = true;
+    }
+    if !superseded && !postponed {
         for id in &uninstall {
             let it = item(id);
-            let cmd = Cmd::new(
-                "flatpak",
+            let cmd = flatpak_cmd(
                 &["uninstall", "--system", "--noninteractive", "-y", id],
-            )
-            .timeout(INSTALL_TIMEOUT);
+                INSTALL_TIMEOUT,
+            );
             match run_ok(runner, cmd) {
                 Ok(_) => {
                     removed_any = true;
@@ -385,8 +420,7 @@ pub fn reconcile(
         }
     }
     if removed_any {
-        let cmd = Cmd::new(
-            "flatpak",
+        let cmd = flatpak_cmd(
             &[
                 "uninstall",
                 "--system",
@@ -394,8 +428,8 @@ pub fn reconcile(
                 "-y",
                 "--unused",
             ],
-        )
-        .timeout(INSTALL_TIMEOUT);
+            INSTALL_TIMEOUT,
+        );
         out.push(match run_ok(runner, cmd) {
             Ok(_) => ItemResult {
                 item: RUNTIMES_ITEM.into(),
@@ -426,11 +460,13 @@ pub fn update_due(
 }
 
 /// 到期就 `flatpak update` 一次，成功后记下时刻。对账正在跑（拿着锁）时这一轮跳过、不等它。没到期、跳过时返回 None
-/// （回报里保留上一次的结果）。
+/// （回报里保留上一次的结果）。`quiet()` true right before the update: skipped too (None), the next hourly check
+/// runs it once the quiet is over.
 pub fn update(
     runner: &dyn Runner,
     paths: &SysPaths,
     now: chrono::DateTime<chrono::Utc>,
+    quiet: &dyn Fn() -> bool,
 ) -> Option<ItemResult> {
     let _g = match FLATPAK_LOCK.try_lock() {
         Ok(g) => g,
@@ -442,11 +478,13 @@ pub fn update(
         // 坏了的状态由对账处理（改名、当作空），这里不写它
         Err(e) => return Some(failed(UPDATE_ITEM, format!("{e:#}"))),
     };
-    if !update_due(st.last_update, now) {
+    if !update_due(st.last_update, now) || quiet() {
         return None;
     }
-    let cmd = Cmd::new("flatpak", &["update", "--system", "--noninteractive", "-y"])
-        .timeout(UPDATE_TIMEOUT);
+    let cmd = flatpak_cmd(
+        &["update", "--system", "--noninteractive", "-y"],
+        UPDATE_TIMEOUT,
+    );
     Some(match run_ok(runner, cmd) {
         Ok(_) => {
             st.last_update = Some(now);
@@ -491,11 +529,13 @@ impl Job for FlatpakJob {
         Box::pin(async move {
             let cur = cx.current.borrow().clone();
             let rx = cx.current.clone();
+            let quiet_rx = cx.quiet.clone();
             let (runner, paths) = (self.runner.clone(), cx.paths.clone());
             // 命令是同步的、可能跑十几分钟：放到阻塞线程上，不占运行时
             match tokio::task::spawn_blocking(move || {
                 let still = || *rx.borrow() == cur;
-                reconcile(runner.as_ref(), &paths, cur.as_deref(), &still)
+                let quiet = || quiet_rx.borrow().is_some();
+                reconcile(runner.as_ref(), &paths, cur.as_deref(), &still, &quiet)
             })
             .await
             {
@@ -570,10 +610,14 @@ impl Job for FlatpakUpdateJob {
         Box::pin(async move {
             if self.first.swap(false, Ordering::SeqCst) {
                 tokio::time::sleep(self.jitter).await;
+                // The round started loud; the quiet may have begun during the jitter.
+                crate::quiet::wait_until_loud(&mut cx.quiet.clone()).await;
             }
-            let (runner, paths) = (self.runner.clone(), cx.paths.clone());
+            let (runner, paths, quiet_rx) =
+                (self.runner.clone(), cx.paths.clone(), cx.quiet.clone());
             match tokio::task::spawn_blocking(move || {
-                update(runner.as_ref(), &paths, chrono::Utc::now())
+                let quiet = || quiet_rx.borrow().is_some();
+                update(runner.as_ref(), &paths, chrono::Utc::now(), &quiet)
             })
             .await
             {

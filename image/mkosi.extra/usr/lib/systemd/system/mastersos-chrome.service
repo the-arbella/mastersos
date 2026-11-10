@@ -17,6 +17,9 @@ ConditionKernelCommandLine=!systemd.unit=mastersos-installer.target
 
 [Service]
 Type=oneshot
+# Not started while a locked app session is running. ExecCondition= and not Conflicts= on purpose: systemd conflicts are two-way,
+# so a timer starting this unit would stop mastersos-quiet.target instead of being refused.
+ExecCondition=/bin/sh -c '! systemctl is-active --quiet mastersos-quiet.target'
 # --scheduled：定时器（与 NetworkManager 钩子）触发的轮次。没设更新时段的机器上一次查源不到 6 小时就不联网（每小时一轮只为
 # 时段而设，4b Task 23）；还没装 Chrome 时不受限制。IT 要立刻查一次，在 shell 里跑 mastersos-agent chrome（不带这个参数）。
 ExecStart=/usr/bin/mastersos-agent chrome --scheduled
@@ -33,7 +36,8 @@ ProtectSystem=strict
 # /var/lib/extensions 由 tmpfiles（mastersos.conf）开机建好
 StateDirectory=mastersos/chrome
 StateDirectoryMode=0700
-ReadWritePaths=/var/lib/extensions
+# /run/mastersos: the sysext merge lock (sysext.lock) shared with mastersos-deb-apps.service
+ReadWritePaths=/var/lib/extensions /run/mastersos
 ProtectHome=yes
 PrivateDevices=yes
 NoNewPrivileges=yes

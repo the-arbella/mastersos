@@ -219,6 +219,13 @@ async fn run_resident(
     agent.take_logins();
     // 后台任务的第一轮就看得到本地包选中的分组（Flatpak 对账）
     agent.publish_current();
+    // The quiet monitor runs only in the resident agent (`apply-local` has no kiosk session to protect).
+    // The apply worker already listens on `agent.quiet` (it was spawned in `Agent::start`).
+    let quiet_tx = agent
+        .quiet_tx
+        .take()
+        .context("the quiet sender was already taken")?;
+    let quiet_rx = agent.quiet.clone();
     let cx = Arc::new(JobCtx {
         fetcher: agent.fetcher.clone(),
         ident: agent.machine.ident.clone(),
@@ -228,6 +235,7 @@ async fn run_resident(
         current: agent.current.subscribe(),
         reapply: agent.reapply.clone(),
         fetch_error: agent.fetch_error.subscribe(),
+        quiet: quiet_rx,
     });
     let spawned = jobs::spawn_all(
         jobs,
@@ -237,6 +245,14 @@ async fn run_resident(
         agent.job_wake.clone(),
     );
     agent.side_changed = Some(spawned.changed.clone());
+    // Spawned after the jobs: it reports a failing `loginctl` among their results.
+    tokio::spawn(crate::quiet::monitor(
+        Arc::new(RealRunner),
+        quiet_tx,
+        agent.side.clone(),
+        spawned.changed.clone(),
+        shutdown.clone(),
+    ));
     // 导入的缓存包被接受时已经交过请求了。应用与拉取都不等托管，只有回报等。
     if !agent.apply_pending() {
         agent.request_apply();
@@ -474,6 +490,8 @@ enum Wake {
     Heartbeat,
     /// A failed inbox sync may be retried.
     InboxRetry,
+    /// The exam quiet started or ended (`Agent::quiet` changed).
+    QuietChanged,
 }
 
 /// 登录钩子在主循环里的状态（见模块文档）。
@@ -583,6 +601,10 @@ struct Agent {
     reapply: Arc<Notify>,
     /// The latest settings fetch's error, `None` after a good one (`JobCtx::fetch_error`, the status job).
     fetch_error: tokio::sync::watch::Sender<Option<String>>,
+    /// Since when the exam quiet is on (`StatusReport::quiet_since`); constantly `None` outside the resident loop.
+    quiet: crate::quiet::QuietRx,
+    /// The sender of `quiet`, until `run_resident` hands it to the quiet monitor.
+    quiet_tx: Option<tokio::sync::watch::Sender<Option<DateTime<Utc>>>>,
     login: Login,
 }
 
@@ -705,6 +727,17 @@ impl Agent {
         });
         let cfg_root = cfg.root.clone();
         let heartbeat_due = later(cfg.heartbeat_every);
+        // The quiet monitor publishes here (`run_resident` takes the sender); without it the quiet never starts.
+        // Resident: start from the target's state, so a restart during a kiosk session applies nothing held before
+        // the monitor's first round.
+        let initial_quiet = if mode == Mode::Resident {
+            tokio::task::spawn_blocking(|| crate::quiet::initial(&RealRunner))
+                .await
+                .unwrap_or(None)
+        } else {
+            None
+        };
+        let (quiet_tx, quiet) = tokio::sync::watch::channel(initial_quiet);
         let worker = (mode == Mode::Resident).then(|| {
             apply_worker::spawn(
                 applier.clone(),
@@ -712,6 +745,7 @@ impl Agent {
                 seed.clone(),
                 machine.ident.clone(),
                 http.clone(),
+                quiet.clone(),
             )
         });
         let mut agent = Agent {
@@ -761,6 +795,8 @@ impl Agent {
             current: tokio::sync::watch::channel(None).0,
             reapply: Arc::new(Notify::new()),
             fetch_error: tokio::sync::watch::channel(None).0,
+            quiet,
+            quiet_tx: Some(quiet_tx),
             login: Login {
                 queue: cfg_root_join(&cfg_root, login_queue::QUEUE_DIR),
                 export: cfg_root_join(&cfg_root, login_queue::EXPORT_DIR),
@@ -1079,6 +1115,7 @@ impl Agent {
                 bundle_dir: &dir,
                 phase,
                 superseded: &superseded,
+                quiet: &AtomicBool::new(false),
             })
         })
         .await
@@ -1170,15 +1207,18 @@ impl Agent {
 
     /// When a pending inbox retry is due (none without one).
     fn inbox_retry_due(&self) -> Option<Instant> {
+        // Not during the exam quiet: `maybe_sync_inbox` would skip it and the due timer would spin the loop.
         self.inbox_retry
-            .filter(|_| self.sync_inbox && !self.resetting)
+            .filter(|_| self.sync_inbox && !self.resetting && self.quiet.borrow().is_none())
     }
 
     /// Syncs the inbox when due ([`inbox::sync`]); first reports a finished factory reset `done`.
     /// A failure keeps `sync_inbox` set and retries after the backoff (ruling 59) until one sync
     /// succeeds; a 401 on the fetch token also syncs settings, which switches tokens.
     async fn maybe_sync_inbox(&mut self) {
-        if !self.inbox_due() {
+        // Exam quiet: no fetch, and `sync_inbox` stays set so the sync happens once the quiet ends
+        // (the `reset_done` ack below is skipped as well).
+        if !self.inbox_due() || self.quiet.borrow().is_some() {
             return;
         }
         self.sync_inbox = false;
@@ -1375,6 +1415,7 @@ impl Agent {
         }
         // read for every report: update-run writes it whenever a round installs a newer version
         r.os_pending_version = report::os_pending_version(&self.cfg.root, r.os_version.as_deref());
+        r.quiet_since = self.quiet.borrow().map(|t| t.to_rfc3339());
         r
     }
 
@@ -1535,10 +1576,21 @@ impl Agent {
                 e = next_push(&mut self.push_rx) => Wake::Push(e),
                 _ = sleep_until(self.heartbeat_due) => Wake::Heartbeat,
                 _ = until_due(inbox_retry) => Wake::InboxRetry,
+                _ = quiet_changed(&mut self.quiet) => Wake::QuietChanged,
                 _ = until_due(until) => Wake::Elapsed,
                 _ = sleep_until(next_report) => Wake::Report,
             };
             match w {
+                Wake::QuietChanged => {
+                    if self.quiet.borrow_and_update().is_none() {
+                        // Quiet ended: fetch the inbox now (the loop's top) and let the jobs run.
+                        self.sync_inbox = true;
+                        self.inbox_retry = None;
+                        self.job_wake.notify_waiters();
+                    }
+                    // IT sees the start and the end of the quiet now, not at the next periodic report.
+                    self.report_then_renew().await;
+                }
                 Wake::Report => self.report_then_renew().await,
                 Wake::GateOpen => self.open_reports().await,
                 Wake::SideChanged => self.report_then_renew().await,
@@ -1911,6 +1963,13 @@ fn seed_writable(cfg: &AgentConfig) -> Result<()> {
     Ok(())
 }
 
+/// The quiet value changed; never completes once its sender is gone (so `select!` does not spin).
+async fn quiet_changed(rx: &mut crate::quiet::QuietRx) {
+    if rx.changed().await.is_err() {
+        std::future::pending::<()>().await;
+    }
+}
+
 /// 这个通知到了（没有时永远等着）。
 async fn gate_opened(g: &Option<Arc<Notify>>) {
     match g {
@@ -2031,8 +2090,204 @@ fn seed_placement(seed: &Seed) -> Placement {
 
 #[cfg(test)]
 mod tests {
-    use super::rejected_reason;
+    use super::*;
+    use crate::apply::NullApplier;
+    use mastersos_bundle::push::InboxPage;
     use mastersos_bundle::BundleError as E;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// A local-mode agent whose seed points at `server`, with a device credential.
+    async fn inbox_agent(dir: &Path, server: &MockServer) -> Agent {
+        let (state, seed) = (dir.join("state"), dir.join("seed"));
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::create_dir_all(&seed).unwrap();
+        let signer = mastersos_bundle::Ed25519Signer::from_pkcs8(
+            "k1",
+            &mastersos_bundle::Ed25519Signer::generate_pkcs8(),
+        )
+        .unwrap();
+        let s = mastersos_bundle::Seed {
+            server_url: server.uri(),
+            trust: vec![signer.trust_key()],
+            fetch_token: Some("ft".into()),
+            group: None,
+            oidc: None,
+            min_version: None,
+            school_id: None,
+            wifi: vec![],
+            school_name: None,
+            it_account: None,
+        };
+        std::fs::write(state.join("seed.toml"), s.to_toml()).unwrap();
+        // A lab image may use http for the device secret (the mock server is plain http).
+        let profile = dir
+            .join("root")
+            .join(crate::luks::IMAGE_PROFILE.trim_start_matches('/'));
+        std::fs::create_dir_all(profile.parent().unwrap()).unwrap();
+        std::fs::write(profile, "lab\n").unwrap();
+        let cfg = AgentConfig {
+            state_dir: state,
+            seed_dir: seed,
+            seed_requires_mount: false,
+            dmi_dir: dir.join("dmi"),
+            os_release: dir.join("os-release"),
+            root: dir.join("root"),
+            ..AgentConfig::default()
+        };
+        let agent = Agent::start(cfg, Arc::new(NullApplier), Mode::Local, false)
+            .await
+            .unwrap();
+        assert!(agent.cred.is_some());
+        agent
+    }
+
+    async fn inbox_server() -> MockServer {
+        let srv = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/inbox"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(InboxPage {
+                messages: vec![],
+                last_seq: 0,
+            }))
+            .mount(&srv)
+            .await;
+        srv
+    }
+
+    async fn inbox_gets(srv: &MockServer) -> usize {
+        srv.received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.url.path() == "/v1/inbox")
+            .count()
+    }
+
+    #[tokio::test]
+    async fn inbox_not_synced_while_quiet() {
+        let (dir, srv) = (tempfile::tempdir().unwrap(), inbox_server().await);
+        let mut agent = inbox_agent(dir.path(), &srv).await;
+        agent
+            .quiet_tx
+            .as_ref()
+            .unwrap()
+            .send(Some(Utc::now()))
+            .unwrap();
+        agent.sync_inbox = true;
+        agent.maybe_sync_inbox().await;
+        assert_eq!(inbox_gets(&srv).await, 0);
+        assert!(agent.sync_inbox, "the request must survive the quiet");
+        // Control: once loud, the same call syncs.
+        agent.quiet_tx.as_ref().unwrap().send(None).unwrap();
+        agent.maybe_sync_inbox().await;
+        assert_eq!(inbox_gets(&srv).await, 1);
+        assert!(!agent.sync_inbox);
+    }
+
+    #[tokio::test]
+    async fn inbox_synced_on_quiet_exit() {
+        let (dir, srv) = (tempfile::tempdir().unwrap(), inbox_server().await);
+        let mut agent = inbox_agent(dir.path(), &srv).await;
+        agent
+            .quiet_tx
+            .as_ref()
+            .unwrap()
+            .send(Some(Utc::now()))
+            .unwrap();
+        agent.quiet.borrow_and_update();
+        // A backoff pending from before the quiet must not delay the sync after it.
+        agent.inbox_retry = Some(Instant::now() + Duration::from_secs(3600));
+        agent.sync_inbox = false;
+        let (shutdown, wake) = (CancellationToken::new(), Notify::new());
+        let jobs = agent.job_wake.clone();
+        let mut jobs_woken = std::pin::pin!(jobs.notified());
+        jobs_woken.as_mut().enable();
+        // Quiet ends while the loop waits.
+        agent.quiet_tx.as_ref().unwrap().send(None).unwrap();
+        let w = agent
+            .wait(Some(later(Duration::from_millis(300))), &shutdown, &wake)
+            .await;
+        assert!(matches!(w, Wake::Elapsed));
+        assert_eq!(inbox_gets(&srv).await, 1, "one sync right after the quiet");
+        assert!(!agent.sync_inbox);
+        assert!(futures_now_or_never(jobs_woken).is_some(), "jobs woken");
+    }
+
+    #[tokio::test]
+    async fn inbox_retry_timer_idle_while_quiet() {
+        let (dir, srv) = (tempfile::tempdir().unwrap(), inbox_server().await);
+        let mut agent = inbox_agent(dir.path(), &srv).await;
+        agent
+            .quiet_tx
+            .as_ref()
+            .unwrap()
+            .send(Some(Utc::now()))
+            .unwrap();
+        agent.quiet.borrow_and_update();
+        agent.sync_inbox = true;
+        agent.inbox_retry = Some(Instant::now() - Duration::from_secs(1));
+        // Due retry, but quiet: no timer armed (it would complete at once and spin the loop).
+        assert!(agent.inbox_retry_due().is_none());
+        let (shutdown, wake) = (CancellationToken::new(), Notify::new());
+        let w = agent
+            .wait(Some(later(Duration::from_millis(200))), &shutdown, &wake)
+            .await;
+        assert!(matches!(w, Wake::Elapsed));
+        assert_eq!(inbox_gets(&srv).await, 0);
+        assert!(agent.sync_inbox);
+        // Loud again: the retry is armed.
+        agent.quiet_tx.as_ref().unwrap().send(None).unwrap();
+        assert!(agent.inbox_retry_due().is_some());
+    }
+
+    /// Entering the quiet is reported at once (IT sees the exam), not at the next periodic report.
+    #[tokio::test]
+    async fn quiet_change_reports_at_once() {
+        let (dir, srv) = (tempfile::tempdir().unwrap(), inbox_server().await);
+        Mock::given(method("POST"))
+            .and(path("/v1/status"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&srv)
+            .await;
+        let mut agent = inbox_agent(dir.path(), &srv).await;
+        agent.mode = Mode::Resident;
+        agent.reports_held = false;
+        agent.cfg.report_every = Duration::from_secs(3600);
+        agent.last_report = Instant::now();
+        agent.heartbeat_due = later(Duration::from_secs(3600));
+        agent.sync_inbox = false;
+        let (shutdown, wake) = (CancellationToken::new(), Notify::new());
+        agent
+            .quiet_tx
+            .as_ref()
+            .unwrap()
+            .send(Some(Utc::now()))
+            .unwrap();
+        let w = agent
+            .wait(Some(later(Duration::from_millis(300))), &shutdown, &wake)
+            .await;
+        assert!(matches!(w, Wake::Elapsed));
+        let reports: Vec<serde_json::Value> = srv
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.url.path() == "/v1/status")
+            .map(|r| serde_json::from_slice(&r.body).unwrap())
+            .collect();
+        assert_eq!(reports.len(), 1, "{reports:?}");
+        assert!(reports[0]["quiet_since"].is_string(), "{:?}", reports[0]);
+    }
+
+    fn futures_now_or_never<F: std::future::Future>(f: F) -> Option<F::Output> {
+        let mut f = std::pin::pin!(f);
+        let waker = std::task::Waker::noop();
+        match std::future::Future::poll(f.as_mut(), &mut std::task::Context::from_waker(waker)) {
+            std::task::Poll::Ready(v) => Some(v),
+            std::task::Poll::Pending => None,
+        }
+    }
 
     /// Strings from an unverified bundle never reach the login-screen status.
     #[test]

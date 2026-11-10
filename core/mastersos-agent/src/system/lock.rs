@@ -252,6 +252,7 @@ mod tests {
             bundle_dir: dir.path(),
             phase: Phase::Full,
             superseded: &flag,
+            quiet: &std::sync::atomic::AtomicBool::new(false),
         };
         run(
             &ctx,
@@ -560,6 +561,7 @@ mod tests {
             bundle_dir: dir.path(),
             phase: Phase::Full,
             superseded: &flag,
+            quiet: &std::sync::atomic::AtomicBool::new(false),
         };
         let out = run(
             &ctx,

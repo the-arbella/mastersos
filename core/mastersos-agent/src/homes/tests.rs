@@ -356,6 +356,7 @@ fn cx(runner: Arc<FakeRunner>, paths: SysPaths) -> JobCtx {
         current: watch::channel(None).1,
         reapply: Default::default(),
         fetch_error: watch::channel(None).1,
+        quiet: watch::channel(None).1,
     }
 }
 

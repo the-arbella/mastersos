@@ -12,8 +12,9 @@ use tokio_util::sync::CancellationToken;
 const LO: &str = "org.libreoffice.LibreOffice";
 const TOOL: &str = "org.example.Tool";
 const LIST: &str = "flatpak list --system --app --columns=application";
-const INSTALL: &str = "flatpak install --system --noninteractive -y flathub";
-const UNINSTALL: &str = "flatpak uninstall --system --noninteractive -y";
+const UNIT: &str = "systemd-run --wait --collect --quiet --unit=mastersos-flatpak";
+const INSTALL: &str = "systemd-run --wait --collect --quiet --unit=mastersos-flatpak --property=RuntimeMaxSec=900 flatpak install --system --noninteractive -y flathub";
+const UNINSTALL: &str = "systemd-run --wait --collect --quiet --unit=mastersos-flatpak --property=RuntimeMaxSec=900 flatpak uninstall --system --noninteractive -y";
 
 fn s(ids: &[&str]) -> Vec<String> {
     ids.iter().map(|i| i.to_string()).collect()
@@ -45,7 +46,7 @@ fn write_state(p: &SysPaths, managed: &[&str]) {
 
 /// 对账一次，这一轮里一直没有新包。
 fn rec(r: &FakeRunner, p: &SysPaths, c: Option<&CurrentGroup>) -> (Vec<ItemResult>, bool) {
-    reconcile(r, p, c, &|| true)
+    reconcile(r, p, c, &|| true, &|| false)
 }
 
 fn find<'a>(out: &'a [ItemResult], id: &str) -> &'a ItemResult {
@@ -425,10 +426,7 @@ fn unused_runtimes_removed_after_uninstall() {
     write_state(&p, &[LO]);
     let r = FakeRunner::new();
     r.respond(LIST, Output::ok(&format!("{LO}\n")));
-    r.respond(
-        "flatpak uninstall --system --noninteractive -y --unused",
-        Output::fail(1, "x"),
-    );
+    r.respond(&format!("{UNINSTALL} --unused"), Output::fail(1, "x"));
     let (out, _) = rec(&r, &p, Some(&cur(Kind::Full, &[])));
     let calls = r.calls();
     let app = calls
@@ -437,7 +435,7 @@ fn unused_runtimes_removed_after_uninstall() {
         .unwrap();
     let unused = calls
         .iter()
-        .position(|c| c == "flatpak uninstall --system --noninteractive -y --unused")
+        .position(|c| c == &format!("{UNINSTALL} --unused"))
         .expect("没清运行时");
     assert!(app < unused);
     assert!(find(&out, LO).ok);
@@ -461,7 +459,9 @@ fn new_bundle_stops_install_queue() {
         calls.set(calls.get() + 1);
         calls.get() == 1
     };
-    let (out, _) = reconcile(&r, &p, Some(&cur(Kind::Full, &[LO, TOOL])), &still);
+    let (out, _) = reconcile(&r, &p, Some(&cur(Kind::Full, &[LO, TOOL])), &still, &|| {
+        false
+    });
     let installs: Vec<String> = r
         .calls()
         .into_iter()
@@ -511,6 +511,7 @@ fn ctx(p: SysPaths, rx: watch::Receiver<Option<Arc<CurrentGroup>>>) -> Arc<JobCt
         current: rx,
         reapply: Arc::new(Notify::new()),
         fetch_error: tokio::sync::watch::channel(None).1,
+        quiet: tokio::sync::watch::channel(None).1,
     })
 }
 
@@ -569,7 +570,7 @@ async fn new_bundle_wakes_flatpak_job() {
 /// The wait must outlast apply_worker's slow_install test, which holds the lock through a 15 s fake install.
 fn upd(r: &FakeRunner, p: &SysPaths, now: chrono::DateTime<chrono::Utc>) -> ItemResult {
     for _ in 0..12000 {
-        if let Some(i) = update(r, p, now) {
+        if let Some(i) = update(r, p, now, &|| false) {
             return i;
         }
         std::thread::sleep(Duration::from_millis(5));
@@ -595,16 +596,18 @@ fn update_runs_once_a_day() {
     assert!(upd(&r, &p, now).ok);
     assert_eq!(
         r.calls(),
-        vec!["flatpak update --system --noninteractive -y"]
+        vec![format!(
+            "{UNIT} --property=RuntimeMaxSec=3600 flatpak update --system --noninteractive -y"
+        )]
     );
     let st = load_state(&p).unwrap();
     assert_eq!(st.last_update, Some(now));
     assert_eq!(st.managed, set(&[LO]), "不动对账的记录");
     // 重启后同一天：不跑
-    assert_eq!(update(&r, &p, now + TimeDelta::hours(2)), None);
+    assert_eq!(update(&r, &p, now + TimeDelta::hours(2), &|| false), None);
     assert_eq!(r.calls().len(), 1);
     // 失败：报失败、不记时刻，下一小时再试
-    r.respond("flatpak update", Output::fail(1, "x"));
+    r.respond("systemd-run", Output::fail(1, "x"));
     let later = now + TimeDelta::hours(25);
     let it = upd(&r, &p, later);
     assert_eq!(it.item, "flatpak-update");
@@ -612,7 +615,7 @@ fn update_runs_once_a_day() {
     assert_eq!(load_state(&p).unwrap().last_update, Some(now));
     // 对账正拿着锁：跳过，不等
     let g = FLATPAK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    assert_eq!(update(&r, &p, later), None);
+    assert_eq!(update(&r, &p, later, &|| false), None);
     drop(g);
 }
 
@@ -643,11 +646,179 @@ fn pending_is_on_disk_when_install_starts() {
         state: p.var_dir.join(STATE_FILE),
         seen: Default::default(),
     };
-    reconcile(&r, &p, Some(&cur(Kind::Full, &[LO, TOOL])), &|| true);
+    reconcile(
+        &r,
+        &p,
+        Some(&cur(Kind::Full, &[LO, TOOL])),
+        &|| true,
+        &|| false,
+    );
     let seen = r.seen.lock().unwrap();
     assert_eq!(seen.len(), 2);
     assert_eq!(seen[0].pending, set(&[LO]));
     assert!(seen[0].managed.is_empty());
     assert_eq!(seen[1].pending, set(&[TOOL]));
     assert_eq!(seen[1].managed, set(&[LO]));
+}
+
+#[test]
+fn install_runs_in_transient_unit() {
+    let (calls, _) = install_lo(Kind::Full);
+    assert!(
+        calls.iter().any(|c| c.starts_with(
+            "systemd-run --wait --collect --quiet --unit=mastersos-flatpak --property=RuntimeMaxSec=900 flatpak install --system --noninteractive -y flathub "
+        )),
+        "{calls:?}"
+    );
+}
+
+#[test]
+fn update_runs_in_transient_unit() {
+    let root = tmp_root();
+    let p = paths(root.path());
+    let r = FakeRunner::new();
+    let now = chrono::Utc::now();
+    assert!(upd(&r, &p, now).ok);
+    assert!(
+        r.calls().iter().any(|c| c
+            == "systemd-run --wait --collect --quiet --unit=mastersos-flatpak --property=RuntimeMaxSec=3600 flatpak update --system --noninteractive -y"),
+        "{:?}",
+        r.calls()
+    );
+}
+
+#[test]
+fn flatpak_unit_matches_quiet_stop_list() {
+    assert!(crate::quiet::STOP_UNITS.contains(&format!("{FLATPAK_UNIT}.service").as_str()));
+}
+
+/// Quiet starts after the first app: the second is postponed (ok, not a failure, in neither pending nor managed).
+#[test]
+fn reconcile_stops_between_apps_when_quiet() {
+    let root = tmp_root();
+    let p = paths(root.path());
+    let r = FakeRunner::new();
+    let asked = std::cell::Cell::new(0);
+    let quiet = || {
+        asked.set(asked.get() + 1);
+        asked.get() > 1
+    };
+    let (out, _) = reconcile(
+        &r,
+        &p,
+        Some(&cur(Kind::Full, &[LO, TOOL])),
+        &|| true,
+        &quiet,
+    );
+    let installs: Vec<String> = r
+        .calls()
+        .into_iter()
+        .filter(|c| c.starts_with(INSTALL))
+        .collect();
+    assert_eq!(installs, vec![format!("{INSTALL} {LO}")]);
+    let it = find(&out, TOOL);
+    assert!(it.ok, "{it:?}");
+    assert_eq!(
+        it.detail.as_deref(),
+        Some("postponed: a locked app session is running")
+    );
+    let st = load_state(&p).unwrap();
+    assert_eq!((st.pending, st.managed), (set(&[]), set(&[LO])));
+}
+
+/// Quiet begins after the install loop (nothing to install, one app to uninstall): no uninstall is issued.
+#[test]
+fn quiet_after_installs_skips_uninstalls() {
+    let root = tmp_root();
+    let p = paths(root.path());
+    write_state(&p, &[LO]);
+    let r = FakeRunner::new();
+    r.respond(LIST, Output::ok(&format!("{LO}\n")));
+    // Loud for the install of TOOL, quiet from the check before the uninstalls on.
+    let asked = std::cell::Cell::new(0);
+    let quiet = || {
+        asked.set(asked.get() + 1);
+        asked.get() > 1
+    };
+    let (_, _) = reconcile(&r, &p, Some(&cur(Kind::Full, &[TOOL])), &|| true, &quiet);
+    assert!(
+        r.calls().contains(&format!("{INSTALL} {TOOL}")),
+        "{:?}",
+        r.calls()
+    );
+    assert!(
+        !r.calls().iter().any(|c| c.contains("flatpak uninstall")),
+        "{:?}",
+        r.calls()
+    );
+}
+
+/// An install killed by entering the quiet (systemd-run fails while quiet) is postponed, not a failure.
+#[test]
+fn install_killed_by_quiet_is_postponed() {
+    let root = tmp_root();
+    let p = paths(root.path());
+    let r = FakeRunner::new();
+    r.respond(INSTALL, Output::fail(1, "Job was stopped"));
+    let asked = std::cell::Cell::new(0);
+    let quiet = || {
+        asked.set(asked.get() + 1);
+        asked.get() > 1
+    };
+    let (out, _) = reconcile(&r, &p, Some(&cur(Kind::Full, &[LO])), &|| true, &quiet);
+    let it = find(&out, LO);
+    assert!(it.ok, "{it:?}");
+    assert_eq!(
+        it.detail.as_deref(),
+        Some("postponed: a locked app session is running")
+    );
+}
+
+/// Quiet just before `flatpak update`: nothing is started.
+#[test]
+fn update_not_started_while_quiet() {
+    let root = tmp_root();
+    let p = paths(root.path());
+    let r = FakeRunner::new();
+    // A parallel reconcile may hold the lock (None for that reason): try long enough to get it at least once.
+    for _ in 0..400 {
+        assert_eq!(update(&r, &p, chrono::Utc::now(), &|| true), None);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(r.calls().is_empty(), "{:?}", r.calls());
+}
+
+/// The quiet starts during the first round's jitter: no `flatpak update` until it ends.
+#[tokio::test(start_paused = true)]
+async fn quiet_during_jitter_holds_update() {
+    let root = tmp_root();
+    let r = Arc::new(FakeRunner::new());
+    let (qtx, qrx) = watch::channel(None);
+    let mut c = Arc::try_unwrap(ctx(paths(root.path()), watch::channel(None).1))
+        .ok()
+        .unwrap();
+    c.quiet = qrx;
+    let cx = Arc::new(c);
+    let job = Arc::new(FlatpakUpdateJob::with_jitter(
+        r.clone(),
+        Duration::from_secs(600),
+    ));
+    let h = {
+        let (job, cx) = (job.clone(), cx.clone());
+        tokio::spawn(async move { job.run(&cx).await })
+    };
+    tokio::time::sleep(Duration::from_secs(300)).await;
+    qtx.send_replace(Some(chrono::Utc::now()));
+    tokio::time::sleep(Duration::from_secs(3600)).await;
+    assert!(!h.is_finished(), "the round ended during the quiet");
+    assert!(
+        !r.calls().iter().any(|c| c.starts_with("systemd-run")),
+        "{:?}",
+        r.calls()
+    );
+    qtx.send_replace(None);
+    tokio::time::timeout(Duration::from_secs(120), h)
+        .await
+        .expect("the round did not end after the quiet")
+        .unwrap();
 }

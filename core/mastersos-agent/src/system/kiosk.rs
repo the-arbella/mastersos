@@ -1,5 +1,8 @@
 //! 步骤 `kiosk`（计划 9 设计 §4.1、§4.3）：按分组的 `apps.kiosk` 收敛这台机器上的锁定应用。
 //!
+//! `kiosk = true` 的 .deb 应用（deb-apps design §4.7, §4.8）合成锁定应用一起处理（[`deb_kiosk_apps`]）：账号、
+//! AccountsService、删除都走同一条路；只有公开状态里 `ready` 的才上登录界面，启动的程序只取公开状态的 `exec`。
+//!
 //! 每个应用 `<id>` 对应：
 //! - 账号 `kiosk-<id>`（uid 取自 [`KIOSK_UIDS`]，1900–1989；无口令、shell `/bin/bash`、GECOS = `name`）。家目录、
 //!   清理与开会话的机制与访客共用（[`super::ephemeral`]）；
@@ -34,7 +37,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use mastersos_bundle::kiosk::{self, ExamExtension, KioskError, KioskLaunch};
-use mastersos_bundle::{ItemResult, KioskApp};
+use mastersos_bundle::{Config, ItemResult, KioskApp};
 use serde::{Deserialize, Serialize};
 
 use super::desktop::{self, Definitive};
@@ -45,6 +48,8 @@ use super::ephemeral::{
 use super::text::keyfile_escape;
 use super::{failed, public_dir, Env, Step};
 use crate::apply::{is_not_found, ApplyContext, Phase};
+use crate::deb_apps;
+use crate::deb_apps::status::{AppState, PublicApp};
 use crate::runner::{run_ok, Cmd, Runner};
 use crate::safefs;
 
@@ -103,7 +108,7 @@ pub enum LaunchKind {
     Pwa {
         url: String,
     },
-    /// Flatpak id，或 `/usr/` 下的绝对路径。
+    /// Flatpak id，或 `/usr/`、`/opt/` 下的绝对路径（`/opt/` 的是 .deb 应用的扩展提供的程序）。
     Exec {
         target: String,
     },
@@ -118,6 +123,89 @@ pub struct KioskAccountState {
     /// 锁着的、也没有 tmpfs：false 时每轮重做，两样都成功才记 true。旧的状态文件里没有它，按 false 读（再做一次无害）。
     #[serde(default)]
     pub initialized: bool,
+}
+
+/// The program in `launch.json` of a `kiosk = true` .deb app that is not ready (deb-apps design §4.7): such an app is
+/// off the login screen, and should anyone still reach its session, the program exits at once and the session ends
+/// (a local program that exits ends the session). The settings' `exec` is never used: only the program the deb-apps
+/// round verified as provided by the app's extension.
+pub const DEB_NOT_READY_EXEC: &str = "/usr/bin/false";
+
+/// The `kiosk = true` .deb apps of `config` as locked apps (deb-apps design §4.7), so that their accounts go through the
+/// same lifecycle as `apps.kiosk`: a local program (`exec`) that is the `exec` of the public status `public` when the
+/// app is `ready` there, listed on the login screen only then (otherwise [`DEB_NOT_READY_EXEC`], off the login screen,
+/// the account kept). `name` and `icon` come from the settings; without an `icon` the account has the generic avatar
+/// (the package's own icon is a theme name or a path inside the extension, not resolved here). Ids already in
+/// `apps.kiosk` are left out (the lint refuses the clash; the locked app wins). None in a mode without the Config's
+/// apps ([`desktop::Profile::flatpaks`]: the legacy browser mode, §4.1), so existing accounts are removed.
+pub fn deb_kiosk_apps(
+    config: &Config,
+    public: &BTreeMap<String, PublicApp>,
+) -> BTreeMap<String, KioskApp> {
+    if !desktop::profile(config).flatpaks {
+        return BTreeMap::new();
+    }
+    config
+        .apps
+        .deb
+        .iter()
+        .filter(|(id, app)| app.kiosk && !config.apps.kiosk.contains_key(*id))
+        .map(|(id, app)| {
+            let ready = public
+                .get(id)
+                .filter(|p| p.state == AppState::Ready)
+                .and_then(|p| p.exec.clone());
+            let k = KioskApp {
+                name: app.name.clone(),
+                icon: app.icon.clone(),
+                url: None,
+                pwa: false,
+                allow: vec![],
+                user_agent: None,
+                platform: None,
+                inject: None,
+                extensions: vec![],
+                chrome_policy: toml::Table::new(),
+                login_screen: ready.is_some(),
+                exec: Some(ready.unwrap_or_else(|| DEB_NOT_READY_EXEC.into())),
+                android: None,
+                in_session: false,
+            };
+            (id.clone(), k)
+        })
+        .collect()
+}
+
+/// `apps.kiosk` and the `kiosk = true` .deb apps ([`deb_kiosk_apps`]) of `config`, with the public status the deb-apps
+/// round left under `paths.public_dir` (unreadable: no .deb app is ready). A `ready` app whose program is not there
+/// counts as not ready: after an image upgrade the old extension is no longer merged (`SYSEXT_LEVEL`) while the status
+/// still says ready until the next round, and the login screen must not offer a session that ends at once. So does one
+/// whose program is not a regular file owned by the owner of the system root (root on a device) or is writable by its
+/// group or others: the session would run whatever someone put there.
+fn wanted_apps(config: &Config, paths: &super::SysPaths) -> BTreeMap<String, KioskApp> {
+    let mut public =
+        deb_apps::status::read_public(&paths.public_dir.join(deb_apps::status::PUBLIC_NAME));
+    for p in public.values_mut() {
+        let present = p.exec.as_deref().is_some_and(|e| {
+            e.starts_with('/')
+                && trusted_program(&paths.root, &paths.root.join(e.trim_start_matches('/')))
+        });
+        if !present {
+            p.exec = None;
+        }
+    }
+    let mut apps = config.apps.kiosk.clone();
+    apps.extend(deb_kiosk_apps(config, &public));
+    apps
+}
+
+/// `path` (links followed) is a regular file owned by `root`'s owner and not writable by group or others.
+fn trusted_program(root: &Path, path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let (Ok(owner), Ok(m)) = (std::fs::metadata(root), std::fs::metadata(path)) else {
+        return false;
+    };
+    m.is_file() && m.uid() == owner.uid() && m.mode() & 0o022 == 0
 }
 
 pub fn step() -> Step {
@@ -307,7 +395,7 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
         Ok(b) => b,
         Err(e) => return vec![failed(ITEM, format!("open /{PUBLIC_DIR}: {e:#}"))],
     };
-    let apps = &ctx.config.apps.kiosk;
+    let apps = &wanted_apps(ctx.config, env.paths);
     let mut icon_failed = std::mem::take(&mut env.sys.kiosk_icon_failures);
     let mut round = Round {
         base,

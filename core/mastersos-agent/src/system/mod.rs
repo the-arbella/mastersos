@@ -4,7 +4,7 @@
 //!   （`panic = "abort"`）：步骤自己不得 panic，进程因 bug 退出由 `Restart=on-failure` 拉起。
 //! - `Phase::Boot`（`apply-local`，在 GDM 之前）只跑 `fast` 的步骤。
 //! - 每一步之前看 `superseded`：应用任务收到了更新的请求就停下，由应用任务从第一步重来
-//!   （Ruling 17；4b 的 `lock` 永远排第一，挂失锁定最多等一个步骤）。
+//!   （Ruling 17；4b 的 `lock` 永远排第一，挂失锁定最多等一个步骤）。`quiet` (the exam quiet started) stops it the same way.
 //! - 步骤之间共享的持久状态是 [`SysState`]，每次应用读写各一次；后台任务的状态各存各的文件。
 //!
 //! 写系统文件一律经 [`crate::safefs`]；每个写入的目录都列在 [`WRITE_ROOTS`] 里，
@@ -357,9 +357,11 @@ impl SystemApplier {
 
 impl Applier for SystemApplier {
     fn apply(&self, ctx: &ApplyContext) -> Vec<ItemResult> {
+        // Checked between steps only. Known limit: a step already running when the quiet starts (printers, desktop
+        // downloads, kiosk) checks only `superseded` inside and finishes.
         self.run_steps(
             ctx.phase,
-            &|| ctx.superseded.load(Ordering::SeqCst),
+            &|| ctx.superseded.load(Ordering::SeqCst) || ctx.quiet.load(Ordering::SeqCst),
             |step, env| Some((step.run)(ctx, env)),
         )
     }
@@ -479,6 +481,7 @@ pub(crate) mod tests {
             bundle_dir: dir.path(),
             phase,
             superseded,
+            quiet: &std::sync::atomic::AtomicBool::new(false),
         })
     }
 

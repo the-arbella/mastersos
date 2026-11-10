@@ -52,6 +52,10 @@ pub struct StatusReport {
     /// restart, and from agents that predate the field.
     #[serde(default)]
     pub os_pending_version: Option<String>,
+    /// Since when the exam quiet is on (RFC 3339): a kiosk session is on the seat and background jobs are held.
+    /// None when it is not, and from agents that predate the field.
+    #[serde(default)]
+    pub quiet_since: Option<String>,
 }
 
 /// `StatusReport::manifest_features` has at most this many entries.
@@ -110,6 +114,7 @@ mod tests {
             imported_from_seed_at: Some("2026-10-13T08:09:47Z".into()),
             manifest_features: vec!["update_mirror".into()],
             os_pending_version: Some("20261106.1".into()),
+            quiet_since: Some("2026-11-10T08:00:00Z".into()),
         }
     }
 
@@ -128,6 +133,21 @@ mod tests {
             .insert("a_field_from_the_future".into(), serde_json::json!(1));
         let back: StatusReport = serde_json::from_value(v).unwrap();
         assert_eq!(back.os_pending_version, None);
+    }
+
+    /// Same both-ways rule for `quiet_since`.
+    #[test]
+    fn quiet_since_is_optional_both_ways() {
+        let mut v = serde_json::to_value(report()).unwrap();
+        assert_eq!(v["quiet_since"], "2026-11-10T08:00:00Z");
+        v.as_object_mut().unwrap().remove("quiet_since");
+        let back: StatusReport = serde_json::from_value(v.clone()).unwrap();
+        assert_eq!(back.quiet_since, None);
+        v.as_object_mut()
+            .unwrap()
+            .insert("a_field_from_the_future".into(), serde_json::json!(1));
+        let back: StatusReport = serde_json::from_value(v).unwrap();
+        assert_eq!(back.quiet_since, None);
     }
 
     #[test]

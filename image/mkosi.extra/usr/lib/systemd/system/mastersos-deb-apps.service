@@ -1,0 +1,45 @@
+# Builds the systemd-sysext extensions for the .deb apps the school chose: fetches the packages (and their dependencies, resolved
+# against the image's Ubuntu snapshot, /usr/lib/mastersos/ubuntu-source), assembles them and asks PID 1 to merge. One round, then
+# it exits; mastersos-deb-apps.timer starts it. It runs with the same sandbox as mastersos-chrome.service.
+[Unit]
+Description=MastersOS: build and merge the .deb app extensions (sysext)
+Documentation=file:/usr/bin/mastersos-agent
+After=NetworkManager.service NetworkManager-wait-online.service systemd-sysext.service
+# Not in the installer: see mastersos-chrome.service.
+ConditionKernelCommandLine=!systemd.unit=mastersos-installer.target
+
+[Service]
+Type=oneshot
+# Not started while a locked app session is running (ExecCondition= and not Conflicts=, see mastersos-chrome.service).
+ExecCondition=/bin/sh -c '! systemctl is-active --quiet mastersos-quiet.target'
+ExecStart=/usr/bin/mastersos-agent deb-apps
+# Wake the resident agent so it reports the result at once (ignored when it is not running).
+ExecStopPost=-/usr/bin/systemctl kill -s USR1 --kill-whom=main mastersos-agent.service
+TimeoutStartSec=3h
+Nice=10
+IOSchedulingClass=idle
+
+# Hardening, as mastersos-chrome.service: it fetches from the network and parses package files, and writes only these paths.
+# The merge itself is done by PID 1's systemd-sysext.service. /var/lib/mastersos/deb-apps is made by tmpfiles (mastersos.conf, 0700);
+# /run/mastersos holds the sysext merge lock shared with the Chrome unit.
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/extensions /var/lib/mastersos/deb-apps /var/lib/mastersos-public /run/mastersos
+ProtectHome=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+# No RestrictSUIDSGID: dpkg-deb -x unpacks setuid files; the agent strips the setuid bits itself afterwards.
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+# dpkg-deb -x runs as root: it changes owners, keeps modes and writes into a 0700 directory.
+CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_FSETID

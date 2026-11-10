@@ -343,9 +343,20 @@ pub fn allowed_domain(d: &str) -> Result<(), String> {
 /// The cache itself is not trusted (updates are signed); this only keeps the spelling of the address from
 /// changing the structure of the transfer file.
 pub fn update_mirror(url: &str) -> Result<(), String> {
+    archive_url(
+        url,
+        "update_mirror",
+        "https://cache.school.ac.th/mastersos",
+        MAX_ENTRY_LEN,
+    )
+}
+
+/// The spelling rules of [`update_mirror`], parameterized: `name` and `example` go into the error,
+/// `max` is the length cap in bytes. Shared with `ubuntu_mirror` ([`crate::deb::check_mirror`]).
+pub(crate) fn archive_url(url: &str, name: &str, example: &str, max: usize) -> Result<(), String> {
     let bad = |why: &str| {
         Err(format!(
-            "update_mirror {url:?} {why} (expected http:// or https:// plus host and directory, e.g. https://cache.school.ac.th/mastersos)"
+            "{name} {url:?} {why} (expected http:// or https:// plus host and directory, e.g. {example})"
         ))
     };
     let Some(rest) = url
@@ -354,7 +365,7 @@ pub fn update_mirror(url: &str) -> Result<(), String> {
     else {
         return bad("is not http:// or https://");
     };
-    if url.len() > MAX_ENTRY_LEN {
+    if url.len() > max {
         return bad("is too long");
     }
     if !url.bytes().all(|b| b.is_ascii_graphic()) {
@@ -1219,6 +1230,11 @@ mod tests {
         ] {
             assert!(update_mirror(ok).is_ok(), "{ok}");
         }
+        // The 254-byte cap of update_mirror is unchanged (ubuntu_mirror has its own, 2048).
+        let of_len = |n: usize| format!("https://c.example/{}", "a".repeat(n - 18));
+        assert!(update_mirror(&of_len(254)).is_ok());
+        let e = update_mirror(&of_len(255)).unwrap_err();
+        assert!(e.contains("update_mirror") && e.contains("too long"), "{e}");
         for bad in [
             "",
             "file:///srv/os",
