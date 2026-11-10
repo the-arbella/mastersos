@@ -175,7 +175,11 @@ agent 在学习模式下每次应用与开机时，把非管理员账号的 ling
 - 每次学习模式登录都会清空 `~/.local/share/Trash`。
 - `~/.config/user-dirs.dirs`、`user-dirs.locale` 与 `.pki/nssdb/pkcs11.txt` 不保留：user-dirs 在登录时重新生成，文件夹名可能回到默认值。
 - `.config/google-chrome/NativeMessagingHosts` 保留；它需要已安装的扩展才有用，而扩展安装受企业策略限制（待办，未决）。
-- 顶层扫描上限 `MAX_SCAN_ENTRIES=100_000`：点文件特别多时，超出的部分要到以后某次登录才列出，本次回报 `too-many-entries`。
+- 顶层扫描上限：每次最多读 `MAX_SCAN_ENTRIES=100_000` 个点条目（不以 `.` 开头的不计），所有条目合计最多读 `MAX_READ_ENTRIES=1_000_000` 个；超出时本次回报 `too-many-entries`。目录的读出顺序是稳定的，所以只要那批条目还在，排在上限之后的点文件以后的登录也读不到（每次最多挪走 `MAX_TOP_ENTRIES` 个，点条目会逐次减少，但非点条目超过总上限时后面的一直读不到）。登录时会读的名字（`LOGIN_READ_TOP`）按名字先挪，不受上限影响。
+- 保留清单里的某一项路上有挂载（另一个文件系统的挂载点，或挂载给的 `EACCES`/`ENOTCONN`/`EBUSY`/`EXDEV`）：这一项不保留（随旧容器进回收目录），容器照样对调，回报 `container-busy`。其他错误一律不对调（保护 Chrome 数据），这一次那个容器不收拾。
+- 临时目录名本身（`.mastersos-tidy.<容器>`）若被挂上 FUSE：恢复步骤读不了它，回报 `container-busy`，这个容器在挂载消失前不收拾（root 不卸载学生的挂载）。
+- `prepare_user_manager` 对管理员也会关 linger（上面说只关非管理员的，是指配置步骤 `linger_off_for_students`）：管理员登录时有残留会话或 linger 也照样结束、关掉；无害，学习模式下他们的用户单元本来也会被挪进回收目录。
+- 登录钩子的耗时上限：从开始起 `LOGIN_DEADLINE`（10 秒）后不再起命令、不再开始收拾（回报 `deadline`），每条命令限时不超过剩余时间；最坏约 10 秒，最后一条命令忽略 SIGTERM 时再加 runner 的 5 秒宽限，另加收拾本身（按条目数有界）。
 - 登录钩子只装在 `gdm-password` 与 `gdm-authd`；tty 与 SSH 登录不跑它（见「留给实施者」的核对结论）；tty 上有在线会话时 GDM 登录会 `skipped-active`。
 - 可选加固未做：学习模式设备上用 polkit 规则禁止非管理员的人对自己或他人调用 `set-self-linger` / `set-user-linger`。
 

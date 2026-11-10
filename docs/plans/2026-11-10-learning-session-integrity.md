@@ -118,16 +118,17 @@
 
 **Interfaces:**
 - Produces:
-  - `pub enum Prep { Proceed, SkipActive, Failed }`
-  - `pub fn prepare_user_manager(runner: &dyn Runner, uid: u32) -> Prep`：`loginctl show-user <uid> -p State --value`（限时 5 秒）。`active`/`online` → `SkipActive`；`closing`/`lingering` → 依次 `loginctl disable-linger <uid>`、`loginctl terminate-user <uid>`、`systemctl stop user@<uid>.service`，任一失败 → `Failed`，都成功 → `Proceed`；命令以"没有这个用户"失败（退出码非 0 且 stderr 含 `not logged in` 或 `No such`）或输出 `offline` → `Proceed`；其他失败 → `Failed`。
+  - `pub enum Prep { Proceed, SkipActive, Failed, OutOfTime }`
+  - `pub(crate) fn prepare_user_manager(runner: &dyn Runner, uid: u32, dl: &Deadline) -> Prep`：`loginctl show-user <uid> -p State --value`。`active`/`online`/`opening` → `SkipActive`；`closing`/`lingering` → 依次 `loginctl disable-linger <uid>`、`loginctl kill-user --signal=SIGKILL <uid>`、`loginctl terminate-user <uid>`、`systemctl stop user@<uid>.service`（退出码不作数），然后每 200 毫秒看一次、最多约 3 秒：`loginctl list-users --no-legend --json=short` 里没有这个 uid（读不出或解析不了时退回 `show-user`：以 `not logged in`/`No such` 失败或输出 `offline`）→ `Proceed`，到时仍在 → `Failed`；命令以"没有这个用户"失败或输出 `offline` → `Proceed`；其他失败 → `Failed`。每条命令限时取 `PAM_CMD_TIMEOUT` 与登录钩子剩余时间（`LOGIN_DEADLINE` 10 秒）的较小者，过了期限不再起命令 → `OutOfTime`（回报 `deadline`）。
+  - 终审修订：只靠 `terminate-user` 与 `systemctl stop` 时，学生的用户单元（`ExecStop=sleep 300`、忽略 SIGTERM 的进程）能把 stop 拖到 90–120 秒，5 秒限时一到就 `Failed`、本次不收拾，而且每次会话都能重新布置；所以先 SIGKILL，再以"看到用户已不在"为准。
   - `pub fn linger_off_for_students(runner: &dyn Runner, admins: &[String]) -> Result<()>`：解析 `loginctl list-users --no-legend --json=short`，对 `linger == true`、`lock::is_person`、不在 `admins`（不区分大小写）的逐个 `loginctl disable-linger <uid>`。
 - Consumes: `lock::list_users(runner)`、`lock::is_person`（改为 `pub(crate)`）。
 
 - [ ] **Step 1: 写失败的测试**（FakeRunner）
   - `prepare_skips_active`：State 输出 `active\n` → `SkipActive`，之后没有别的调用；`online\n` 同。
-  - `prepare_stops_leftovers`：`closing\n` → 调用序列恰为 `loginctl show-user 10001 -p State --value`、`loginctl disable-linger 10001`、`loginctl terminate-user 10001`、`systemctl stop user@10001.service`，返回 `Proceed`；`lingering\n` 同。
+  - `prepare_stops_leftovers`：`closing\n` → 调用序列恰为 `loginctl show-user 10001 -p State --value`、`loginctl disable-linger 10001`、`loginctl kill-user --signal=SIGKILL 10001`、`loginctl terminate-user 10001`、`systemctl stop user@10001.service`、`loginctl list-users --no-legend --json=short`，返回 `Proceed`；`lingering\n` 同。
   - `prepare_offline_proceeds`：命令失败、stderr `Failed to get user: User ID 10001 is not logged in or lingering` → `Proceed`，无后续调用。
-  - `prepare_failure`：`closing\n` 且 `terminate-user` 失败 → `Failed`。
+  - `prepare_failure`：`closing\n`、`terminate-user` 失败且之后用户一直在 → `Failed`。
   - `linger_off_skips_admins_and_system`：list-users 有学生（linger true）、管理员（linger true）、root、gdm、学生（linger false）→ 只对第一个学生 `disable-linger`。
   - desktop tests：learning 设备的 `run` 调到 `loginctl list-users`；full 设备不调。
 - [ ] **Step 2: 测试机 确认失败** — [ ] **Step 3: 实现** — [ ] **Step 4: 测试机 完整 `core` 通过**
@@ -192,5 +193,5 @@
 9. 容器目录里面有挂载点，且 `empty_trash` 清空回收目录时不得越过它进到挂载的文件系统。
 10. 收拾的每个阶段 `kill -9` 后重跑：profile、dconf、钥匙环完好，没有留下临时目录。
 11. 耗时：约 1 万个点文件加约 100 万个非点条目，对照 `PAM_CMD_TIMEOUT`。
-12. 最坏的登录延迟：getent 与 loginctl 各命令叠加最多约 25 秒，确认在可接受范围。
+12. 最坏的登录延迟：登录钩子从开始起 `LOGIN_DEADLINE`（10 秒）后不再起命令、不再开始收拾，每条命令的限时不超过剩余时间；最坏约 10 秒，加上最后一条命令忽略 SIGTERM 时 runner 的 5 秒宽限（约 15 秒），再加收拾本身（按条目数有界）。确认在可接受范围。
 13. tty 上保持一个会话，再到 GDM 登录：应回报 `skipped-active`（已知缺口，确认行为与回报一致）。

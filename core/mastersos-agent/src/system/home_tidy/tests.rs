@@ -9,6 +9,40 @@ fn me() -> u32 {
     rustix::process::geteuid().as_raw()
 }
 
+/// A clock that only moves when told to (or when something sleeps on it).
+pub(super) struct FakeClock(std::sync::Mutex<std::time::Instant>);
+
+impl FakeClock {
+    pub(super) fn new() -> Self {
+        FakeClock(std::sync::Mutex::new(std::time::Instant::now()))
+    }
+    pub(super) fn advance(&self, d: std::time::Duration) {
+        let mut g = self.0.lock().unwrap();
+        *g += d;
+    }
+}
+
+impl Clock for FakeClock {
+    fn now(&self) -> std::time::Instant {
+        *self.0.lock().unwrap()
+    }
+    fn sleep(&self, d: std::time::Duration) {
+        self.advance(d);
+    }
+}
+
+/// Give every directory under `dir` back its permissions (a test made one unreadable), so the tempdir can go.
+fn unlock_all(dir: &Path) {
+    let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            if e.file_type().is_ok_and(|t| t.is_dir()) {
+                unlock_all(&e.path());
+            }
+        }
+    }
+}
+
 /// A tempdir standing in for `/home`, with one home directory `me` owned by this process.
 struct Fx {
     d: tempfile::TempDir,
@@ -94,6 +128,14 @@ const GONE: &[&str] = &[
     ".pki/nssdb/pkcs11.txt",
     ".config/user-dirs.dirs",
     ".config/user-dirs.locale",
+    ".bash_aliases",
+    ".asoundrc",
+    ".gtkrc-2.0",
+    ".gtkrc",
+    ".mailcap",
+    ".dmrc",
+    ".Xmodmap",
+    ".gnupg/gpg-agent.conf",
 ];
 
 fn populated() -> Fx {
@@ -247,21 +289,60 @@ fn too_many_top_entries_stops() {
     assert!(t.moved > 0, "the first batch is still moved");
 }
 
-/// Every entry read counts toward the scan bound, not only dot entries: a home with very many ordinary files is not
-/// read in full on every login.
+/// Every entry read counts toward the absolute read cap: a home with a huge number of ordinary files is not read in
+/// full on every login.
 #[test]
-fn scan_bound_counts_every_entry() {
+fn absolute_read_cap_stops_the_scan() {
     let f = fx();
     for n in 0..50 {
         std::fs::write(f.home.join(format!("f{n}")), "").unwrap();
     }
     let t = f.run_limited(Limits {
         max_top: 1_000,
-        max_scan: 20,
+        max_scan: 1_000,
+        max_read: 20,
     });
     assert!(t.skipped.contains(&SkipReason::TooManyEntries));
     // Ordinary files are never touched.
     assert_eq!(std::fs::read_dir(&f.home).unwrap().count(), 50);
+}
+
+/// Entries not starting with `.` do not count toward the dot-entry budget, so ordinary files cannot hide a dot file.
+#[test]
+fn ordinary_files_do_not_hide_dot_files() {
+    let f = fx();
+    for n in 0..1_000 {
+        std::fs::write(f.home.join(format!("f{n}")), "").unwrap();
+    }
+    f.put(".zz", "x");
+    let t = f.run_limited(Limits {
+        max_top: 1_000,
+        max_scan: 10,
+        max_read: 1_000_000,
+    });
+    assert!(!f.there(".zz"));
+    assert!(
+        !t.skipped.contains(&SkipReason::TooManyEntries),
+        "{:?}",
+        t.skipped
+    );
+}
+
+/// The same with the real limits: more than [`MAX_SCAN_ENTRIES`] ordinary files and a dot file is still tidied.
+#[test]
+fn ordinary_files_beyond_the_scan_budget_do_not_hide_dot_files() {
+    let f = fx();
+    for n in 0..MAX_SCAN_ENTRIES + 1 {
+        std::fs::File::create(f.home.join(format!("f{n}"))).unwrap();
+    }
+    f.put(".zz", "x");
+    let t = f.run(me());
+    assert!(!f.there(".zz"));
+    assert!(
+        !t.skipped.contains(&SkipReason::TooManyEntries),
+        "{:?}",
+        t.skipped
+    );
 }
 
 /// Filling the home with junk dot entries beyond the cap does not keep the files that matter alive: they are moved
@@ -279,12 +360,21 @@ fn known_dangerous_names_go_before_the_cap() {
         ".pam_environment",
         ".xsessionrc",
         ".zshenv",
+        ".bash_aliases",
+        ".asoundrc",
+        ".gtkrc-2.0",
+        ".gtkrc",
+        ".mailcap",
+        ".dmrc",
+        ".Xmodmap",
     ] {
         f.put(n, "x");
     }
+    f.put(".gnupg/gpg-agent.conf", "pinentry-program /tmp/x\n");
     let t = f.run_limited(Limits {
         max_top: 5,
         max_scan: 1_000,
+        max_read: 1_000_000,
     });
     assert!(t.skipped.contains(&SkipReason::TooManyEntries));
     for n in [
@@ -294,6 +384,14 @@ fn known_dangerous_names_go_before_the_cap() {
         ".pam_environment",
         ".xsessionrc",
         ".zshenv",
+        ".bash_aliases",
+        ".asoundrc",
+        ".gtkrc-2.0",
+        ".gtkrc",
+        ".mailcap",
+        ".dmrc",
+        ".Xmodmap",
+        ".gnupg",
     ] {
         assert!(!f.there(n), "{n}");
     }
@@ -354,6 +452,104 @@ fn container_keeps_owner_and_mode() {
     assert_eq!(m.mode() & 0o777, 0o750);
 }
 
+/// A mount in the way of a keep item (simulated: the rename of that item fails with what a mount gives) only costs
+/// that item: the container is still swapped, the other keep items are intact.
+#[test]
+fn mount_in_the_way_of_a_keep_item_does_not_block_the_swap() {
+    for e in [Errno::BUSY, Errno::ACCESS, Errno::NOTCONN, Errno::XDEV] {
+        let f = populated();
+        f.put(".config/dconf/user", "D");
+        fail_leaf(Some(("dconf", e)));
+        let t = f.run(me());
+        fail_leaf(None);
+        assert!(!f.there(".config/autostart"), "{e:?}");
+        assert!(!f.there(".config/dconf"), "{e:?}: not kept");
+        assert_kept(&f);
+        assert!(t.skipped.contains(&SkipReason::ContainerBusy), "{e:?}");
+        assert!(
+            !t.skipped.contains(&SkipReason::Io),
+            "{e:?} {:?}",
+            t.skipped
+        );
+        f.no_temps();
+    }
+}
+
+/// Any other error partway through filling: the items already moved go back, the container is not swapped
+/// (fail closed, Chrome data stays where it was), and the other containers are still tidied.
+#[test]
+fn unexpected_error_partway_through_fill_restores_and_does_not_swap() {
+    let f = populated();
+    f.put(".config/dconf/user", "D");
+    fail_leaf(Some(("dconf", Errno::NOSPC)));
+    let t = f.run(me());
+    fail_leaf(None);
+    assert_kept(&f);
+    assert_eq!(f.read(".config/dconf/user").as_deref(), Some("D"));
+    assert!(f.there(".config/autostart/x.desktop"));
+    assert!(t.skipped.contains(&SkipReason::Io));
+    assert!(!f.there(".local/share/applications"));
+    f.no_temps();
+}
+
+/// A mount planted in a temporary directory does not make the restore fail at every login.
+#[test]
+fn mount_in_a_planted_temporary_directory_does_not_fail_restore() {
+    let f = populated();
+    f.put(".mastersos-tidy.config/monitors.xml", "M");
+    fail_leaf(Some(("monitors.xml", Errno::NOTCONN)));
+    let t = f.run(me());
+    fail_leaf(None);
+    assert!(!f.there(".config/autostart"));
+    assert!(!f.there(".config/monitors.xml"));
+    assert_kept(&f);
+    assert!(t.skipped.contains(&SkipReason::ContainerBusy));
+    assert!(!t.skipped.contains(&SkipReason::Io), "{:?}", t.skipped);
+    f.no_temps();
+}
+
+/// A keep item that cannot be entered (EACCES, as a FUSE mount gives root) is not kept; the swap happens. Root
+/// ignores permissions, so this only runs as an ordinary user.
+#[test]
+fn unreadable_keep_parent_is_not_kept_and_the_swap_happens() {
+    if rustix::process::geteuid().is_root() {
+        eprintln!("running as root, skipping");
+        return;
+    }
+    let f = populated();
+    std::fs::set_permissions(
+        f.home.join(".config/gtk-3.0"),
+        std::fs::Permissions::from_mode(0o000),
+    )
+    .unwrap();
+    let t = f.run(me());
+    unlock_all(f.d.path());
+    assert!(!f.there(".config/autostart"));
+    assert!(!f.there(".config/gtk-3.0"));
+    assert_eq!(
+        f.read(".config/google-chrome/Default/Bookmarks").as_deref(),
+        Some("body of .config/google-chrome/Default/Bookmarks")
+    );
+    assert!(t.skipped.contains(&SkipReason::ContainerBusy));
+    f.no_temps();
+}
+
+/// Keep items of an unexpected type: a directory where a file is expected is still moved as it is; a file where a
+/// directory is expected is not a keep item and goes with the old container.
+#[test]
+fn keep_items_of_another_type() {
+    let f = fx();
+    f.put(".config/monitors.xml/inner", "x");
+    f.put(".config/gtk-3.0", "x");
+    f.put(".config/autostart/x.desktop", "x");
+    let t = f.run(me());
+    assert_eq!(f.read(".config/monitors.xml/inner").as_deref(), Some("x"));
+    assert!(!f.there(".config/gtk-3.0"));
+    assert!(!f.there(".config/autostart"));
+    assert!(t.skipped.is_empty(), "{:?}", t.skipped);
+    f.no_temps();
+}
+
 #[test]
 fn keep_list_follows_the_rule() {
     // Nothing that is run, loaded or read as environment or configuration of other programs.
@@ -376,37 +572,108 @@ fn keep_list_follows_the_rule() {
 }
 
 mod prepare {
-    use super::super::{linger_off_for_students, prepare_user_manager, Prep};
-    use crate::runner::{FakeRunner, Output};
+    use super::super::{
+        linger_off_for_students, prepare_user_manager, Deadline, Prep, LOGIN_DEADLINE,
+    };
+    use super::FakeClock;
+    use crate::runner::{Cmd, FakeRunner, Output, Runner};
+    use crate::system::ephemeral::PAM_CMD_TIMEOUT;
+    use std::time::Duration;
 
     const SHOW: &str = "loginctl show-user 10001 -p State --value";
+    const LIST: &str = "loginctl list-users --no-legend --json=short";
+    const STILL_THERE: &str = r#"[{"uid":10001,"user":"s@x.th","linger":false,"state":"closing"}]"#;
+
+    fn prep(r: &dyn Runner) -> Prep {
+        let c = FakeClock::new();
+        let dl = Deadline::new(&c, LOGIN_DEADLINE);
+        prepare_user_manager(r, 10001, &dl)
+    }
+
+    fn count(r: &FakeRunner, prefix: &str) -> usize {
+        r.calls().iter().filter(|c| c.starts_with(prefix)).count()
+    }
 
     #[test]
     fn prepare_skips_active() {
-        for state in ["active\n", "online\n"] {
+        for state in ["active\n", "online\n", "opening\n"] {
             let r = FakeRunner::new();
             r.respond(SHOW, Output::ok(state));
-            assert_eq!(prepare_user_manager(&r, 10001), Prep::SkipActive);
+            assert_eq!(prep(&r), Prep::SkipActive);
             assert_eq!(r.calls(), vec![SHOW]);
         }
     }
 
+    /// Leftovers: linger off, every process killed (SIGKILL: stop jobs and SIGTERM-ignoring processes cannot hold
+    /// things up), the session ended, the user manager stopped, and then the user is checked to be gone.
     #[test]
     fn prepare_stops_leftovers() {
         for state in ["closing\n", "lingering\n"] {
             let r = FakeRunner::new();
             r.respond(SHOW, Output::ok(state));
-            assert_eq!(prepare_user_manager(&r, 10001), Prep::Proceed);
+            r.respond(LIST, Output::ok("[]"));
+            assert_eq!(prep(&r), Prep::Proceed);
             assert_eq!(
                 r.calls(),
                 vec![
                     SHOW,
                     "loginctl disable-linger 10001",
+                    "loginctl kill-user --signal=SIGKILL 10001",
                     "loginctl terminate-user 10001",
                     "systemctl stop user@10001.service",
+                    LIST,
                 ]
             );
         }
+    }
+
+    /// The user is looked at again until gone.
+    #[test]
+    fn prepare_waits_until_gone() {
+        let r = FakeRunner::new();
+        r.respond(SHOW, Output::ok("closing\n"));
+        r.respond(LIST, Output::ok(STILL_THERE));
+        r.respond(LIST, Output::ok(STILL_THERE));
+        r.respond(LIST, Output::ok(""));
+        assert_eq!(prep(&r), Prep::Proceed);
+        assert_eq!(count(&r, LIST), 3);
+    }
+
+    /// Still there after the wait: no tidy.
+    #[test]
+    fn prepare_still_closing_after_the_wait_fails() {
+        let r = FakeRunner::new();
+        r.respond(SHOW, Output::ok("closing\n"));
+        for _ in 0..100 {
+            r.respond(LIST, Output::ok(STILL_THERE));
+        }
+        assert_eq!(prep(&r), Prep::Failed);
+        let n = count(&r, LIST);
+        assert!((2..=20).contains(&n), "{n}");
+    }
+
+    /// When the list cannot be read, `show-user` decides (its "not logged in" failure means gone).
+    #[test]
+    fn prepare_falls_back_to_show_user() {
+        let r = FakeRunner::new();
+        r.respond(SHOW, Output::ok("closing\n"));
+        r.respond(LIST, Output::fail(1, "x"));
+        r.respond(
+            SHOW,
+            Output::fail(
+                1,
+                "Failed to get user: User ID 10001 is not logged in or lingering",
+            ),
+        );
+        assert_eq!(prep(&r), Prep::Proceed);
+        // Output that does not parse is not "no users".
+        let r = FakeRunner::new();
+        r.respond(SHOW, Output::ok("closing\n"));
+        for _ in 0..100 {
+            r.respond(LIST, Output::ok("garbage"));
+            r.respond(SHOW, Output::ok("closing\n"));
+        }
+        assert_eq!(prep(&r), Prep::Failed);
     }
 
     #[test]
@@ -419,47 +686,70 @@ mod prepare {
                 "Failed to get user: User ID 10001 is not logged in or lingering",
             ),
         );
-        assert_eq!(prepare_user_manager(&r, 10001), Prep::Proceed);
+        assert_eq!(prep(&r), Prep::Proceed);
         assert_eq!(r.calls(), vec![SHOW]);
         let r = FakeRunner::new();
         r.respond(SHOW, Output::ok("offline\n"));
-        assert_eq!(prepare_user_manager(&r, 10001), Prep::Proceed);
+        assert_eq!(prep(&r), Prep::Proceed);
         assert_eq!(r.calls(), vec![SHOW]);
     }
 
     #[test]
     fn prepare_failure() {
+        // A failing step does not decide; the user still being there does.
         let r = FakeRunner::new();
         r.respond(SHOW, Output::ok("closing\n"));
         r.respond("loginctl terminate-user", Output::fail(1, "boom"));
-        assert_eq!(prepare_user_manager(&r, 10001), Prep::Failed);
+        for _ in 0..100 {
+            r.respond(LIST, Output::ok(STILL_THERE));
+        }
+        assert_eq!(prep(&r), Prep::Failed);
         // Other failures of the state query, and unknown states, are failures too.
         let r = FakeRunner::new();
         r.respond(SHOW, Output::fail(1, "Connection timed out"));
-        assert_eq!(prepare_user_manager(&r, 10001), Prep::Failed);
+        assert_eq!(prep(&r), Prep::Failed);
         let r = FakeRunner::new();
         r.respond(SHOW, Output::ok("strange\n"));
-        assert_eq!(prepare_user_manager(&r, 10001), Prep::Failed);
+        assert_eq!(prep(&r), Prep::Failed);
+    }
+
+    /// Records each command's time limit; `show-user` says `closing`, the list is empty.
+    struct Spy(std::sync::Mutex<Vec<Duration>>);
+    impl Runner for Spy {
+        fn run(&self, cmd: &Cmd) -> anyhow::Result<Output> {
+            self.0.lock().unwrap().push(cmd.timeout);
+            Ok(if cmd.line().starts_with("loginctl show-user") {
+                Output::ok("closing\n")
+            } else {
+                Output::ok("[]")
+            })
+        }
     }
 
     #[test]
     fn prepare_commands_are_bounded() {
-        use crate::runner::{Cmd, Runner};
-        use std::sync::Mutex;
-        struct Spy(Mutex<Vec<std::time::Duration>>);
-        impl Runner for Spy {
-            fn run(&self, cmd: &Cmd) -> anyhow::Result<Output> {
-                self.0.lock().unwrap().push(cmd.timeout);
-                Ok(Output::ok("closing\n"))
-            }
-        }
-        let s = Spy(Mutex::new(Vec::new()));
-        assert_eq!(prepare_user_manager(&s, 10001), Prep::Proceed);
+        let s = Spy(std::sync::Mutex::new(Vec::new()));
+        assert_eq!(prep(&s), Prep::Proceed);
         let t = s.0.lock().unwrap();
-        assert_eq!(t.len(), 4);
-        assert!(t
-            .iter()
-            .all(|d| *d == crate::system::ephemeral::PAM_CMD_TIMEOUT));
+        assert_eq!(t.len(), 6);
+        assert!(t.iter().all(|d| *d == PAM_CMD_TIMEOUT), "{t:?}");
+    }
+
+    /// Near the deadline every command gets only the time left; past it nothing runs.
+    #[test]
+    fn prepare_commands_end_by_the_deadline() {
+        let s = Spy(std::sync::Mutex::new(Vec::new()));
+        let c = FakeClock::new();
+        let dl = Deadline::new(&c, LOGIN_DEADLINE);
+        c.advance(LOGIN_DEADLINE - Duration::from_secs(2));
+        assert_eq!(prepare_user_manager(&s, 10001, &dl), Prep::Proceed);
+        let t = s.0.lock().unwrap();
+        assert!(t.iter().all(|d| *d == Duration::from_secs(2)), "{t:?}");
+        drop(t);
+        c.advance(Duration::from_secs(3));
+        let r = FakeRunner::new();
+        assert_eq!(prepare_user_manager(&r, 10001, &dl), Prep::OutOfTime);
+        assert!(r.calls().is_empty());
     }
 
     #[test]
@@ -494,10 +784,12 @@ mod prepare {
 }
 
 mod login {
-    use super::super::{on_login, tidy_decision, LastTidy, RESULT_FILE};
-    use crate::runner::{FakeRunner, Output};
+    use super::super::{on_login, on_login_with, tidy_decision, LastTidy, RESULT_FILE};
+    use super::FakeClock;
+    use crate::runner::{Cmd, FakeRunner, Output, Runner};
     use crate::system::exec_block;
     use crate::system::tests::paths;
+    use std::time::Duration;
 
     const SHOW: &str = "loginctl show-user";
 
@@ -683,6 +975,58 @@ mod login {
         assert_eq!(t.outcome, "tidied");
         assert_eq!(t.skipped, vec!["io"]);
         assert_eq!(t.moved, 0);
+    }
+
+    /// Every command takes `step` on the fake clock.
+    struct Ticking<'a> {
+        inner: &'a FakeRunner,
+        clock: &'a FakeClock,
+        step: Duration,
+    }
+    impl Runner for Ticking<'_> {
+        fn run(&self, cmd: &Cmd) -> anyhow::Result<Output> {
+            self.clock.advance(self.step);
+            self.inner.run(cmd)
+        }
+    }
+
+    /// Commands that take long: once the hook's deadline has passed nothing more runs, the home is not tidied and
+    /// the result says `deadline`.
+    #[test]
+    fn on_login_deadline_stops_the_leftover_cleanup() {
+        let (d, r) = setup(Some("learning\n"), "/home/me");
+        r.respond(SHOW, Output::ok("closing\n"));
+        let c = FakeClock::new();
+        let t = Ticking {
+            inner: &r,
+            clock: &c,
+            step: Duration::from_secs(4),
+        };
+        on_login_with(&paths(d.path()), &t, &c, "me", uid());
+        assert!(profile(&d));
+        assert_eq!(result(&d).unwrap().outcome, "deadline");
+        assert!(
+            r.calls()
+                .iter()
+                .all(|l| !l.starts_with("loginctl kill-user")),
+            "{:?}",
+            r.calls()
+        );
+    }
+
+    #[test]
+    fn on_login_deadline_before_the_tidy() {
+        let (d, r) = setup(Some("learning\n"), "/home/me");
+        r.respond(SHOW, Output::ok("offline\n"));
+        let c = FakeClock::new();
+        let t = Ticking {
+            inner: &r,
+            clock: &c,
+            step: Duration::from_secs(6),
+        };
+        on_login_with(&paths(d.path()), &t, &c, "me", uid());
+        assert!(profile(&d));
+        assert_eq!(result(&d).unwrap().outcome, "deadline");
     }
 
     #[test]
