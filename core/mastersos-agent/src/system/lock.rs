@@ -40,16 +40,13 @@ pub fn step() -> Step {
     }
 }
 
-/// `loginctl list-users --json=short` 的一行（只取用到的列；老版本没有的列取默认值）。
+/// One row of `loginctl list-users --json=short` (only the columns used; a column older versions lack defaults).
 #[derive(Deserialize)]
 pub(crate) struct LoginUser {
     pub(crate) uid: u32,
     pub(crate) user: String,
     #[serde(default)]
     pub(crate) linger: bool,
-    #[serde(default)]
-    #[allow(dead_code)]
-    pub(crate) state: String,
 }
 
 /// 解析 `loginctl list-users --no-legend --json=short`；空输出是没有用户。

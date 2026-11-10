@@ -70,7 +70,7 @@ struct Run {
 /// 跑一次 `desktop` 步骤。`bundle` 是包目录（图标的 `files/…` 从这里读）。
 fn run_step(
     root: &Path,
-    r: &MountSim,
+    r: &dyn crate::runner::Runner,
     sys: &mut SysState,
     g: &Config,
     bundle: &Path,
@@ -82,7 +82,7 @@ fn run_step(
 /// 同 [`run_step`]，`superseded` 一开始就是给定的值（有更新的应用请求）。
 fn run_step_with(
     root: &Path,
-    r: &MountSim,
+    r: &dyn crate::runner::Runner,
     sys: &mut SysState,
     g: &Config,
     bundle: &Path,
@@ -1273,7 +1273,9 @@ fn dump_desktop_output(root: &Path, calls: &[String]) -> String {
         s.push_str(&format!("== {rel} {body}\n"));
     }
     // The linger step (learning mode, added after the snapshot was captured) is not part of the legacy output.
-    for c in calls.iter().filter(|c| !c.starts_with("loginctl ")) {
+    for c in calls.iter().filter(|c| {
+        !c.starts_with("loginctl list-users") && !c.starts_with("loginctl disable-linger")
+    }) {
         s.push_str(&format!(
             "$ {}\n",
             c.replace(super::super::exec_block::STUB, "<stub>")
@@ -1631,9 +1633,30 @@ fn tightening_publishes_learning_first() {
     );
     assert_eq!(session_mode(root.path()), "full\n");
     r.fake.respond("dconf update", Output::fail(1, "boom"));
+    // Reads the session mode at the step's first command: `learning` must already be published by then.
+    struct FirstCall<'a> {
+        inner: &'a MountSim,
+        root: &'a Path,
+        seen: std::sync::Mutex<Option<String>>,
+    }
+    impl crate::runner::Runner for FirstCall<'_> {
+        fn run(&self, cmd: &crate::runner::Cmd) -> anyhow::Result<Output> {
+            let mut g = self.seen.lock().unwrap();
+            if g.is_none() {
+                *g = Some(session_mode(self.root));
+            }
+            drop(g);
+            crate::runner::Runner::run(self.inner, cmd)
+        }
+    }
+    let probe = FirstCall {
+        inner: &r,
+        root: root.path(),
+        seen: std::sync::Mutex::new(None),
+    };
     let out = run_step(
         root.path(),
-        &r,
+        &probe,
         &mut sys,
         &grp(Kind::LegacyBrowser, vec![]),
         bundle.path(),
@@ -1641,6 +1664,11 @@ fn tightening_publishes_learning_first() {
     )
     .out;
     assert!(!item(&out, ITEM).ok);
+    assert_eq!(
+        probe.seen.lock().unwrap().as_deref(),
+        Some("learning\n"),
+        "learning was not published before the first command"
+    );
     assert_eq!(session_mode(root.path()), "learning\n");
 }
 
