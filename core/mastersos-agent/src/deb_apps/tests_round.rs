@@ -1223,3 +1223,34 @@ async fn argument_evidence_defers_for_a_day_at_most() {
     assert!(detail(&t).contains("24 hours"), "{t:?}");
     assert_eq!(version(&fx), "2.0");
 }
+
+#[tokio::test]
+async fn argument_deferral_clock_restarts_after_a_round_without_one() {
+    let fx = Fx::new().await;
+    let w1 = wanted(vec![("testnav", pinned(&fx))]);
+    ready(&fx.round_at(&w1, T0).await, "testnav");
+    let d = fx.root().join("proc/90");
+    fs::create_dir_all(&d).unwrap();
+    fs::write(
+        d.join("cmdline"),
+        "/usr/bin/python3\0/opt/testnav/bin/testnav\0",
+    )
+    .unwrap();
+    let w2 = wanted(vec![("testnav", testnav2(&fx))]);
+    let r = fx.round_at(&w2, T0 + HOUR).await;
+    assert_eq!(r["testnav"].state, AppState::WaitingForClose);
+
+    // the settings go back: nothing pending, nothing held back on arguments
+    ready(&fx.round_at(&w1, T0 + 2 * HOUR).await, "testnav");
+
+    // weeks later the update comes again: it waits a day again, from now
+    let later = T0 + 30 * 24 * HOUR;
+    let r = fx.round_at(&w2, later).await;
+    assert_eq!(r["testnav"].state, AppState::WaitingForClose, "{r:?}");
+    let r = fx.round_at(&w2, later + 23 * HOUR).await;
+    assert_eq!(r["testnav"].state, AppState::WaitingForClose, "{r:?}");
+    assert_eq!(version(&fx), "1.0");
+    let t = ready(&fx.round_at(&w2, later + 24 * HOUR).await, "testnav");
+    assert!(detail(&t).contains("24 hours"), "{t:?}");
+    assert_eq!(version(&fx), "2.0");
+}

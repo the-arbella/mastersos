@@ -533,3 +533,28 @@ fn swap_all_is_one_change() {
     assert_eq!(marker(tmp.path(), "app-y"), b"new y");
     assert_eq!(r.fake.calls().len(), 3, "one refresh for all three");
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn swap_all_moves_nothing_when_a_pair_is_unreadable() {
+    let tmp = tempfile::tempdir().unwrap();
+    tree(tmp.path(), "app-deps", b"old deps");
+    tree(tmp.path(), "app-deps.new", b"new deps");
+    tree(tmp.path(), "app-x.new", b"new x");
+    let r = Probe::new(tmp.path());
+    // the last pair's new tree is missing
+    let pairs = [
+        ("app-deps", "app-deps.new"),
+        ("app-x", "app-x.new"),
+        ("app-y", "app-y.new"),
+    ];
+    assert!(swap_in_all(&r, &open(tmp.path()), &pairs).is_err());
+    // the last pair's installed name is not a directory
+    std::fs::write(tmp.path().join("app-y"), b"a file").unwrap();
+    tree(tmp.path(), "app-y.new", b"new y");
+    assert!(swap_in_all(&r, &open(tmp.path()), &pairs).is_err());
+    assert_eq!(marker(tmp.path(), "app-deps"), b"old deps");
+    assert_eq!(marker(tmp.path(), "app-deps.new"), b"new deps");
+    assert!(!tmp.path().join("app-x").exists());
+    assert!(r.fake.calls().is_empty(), "{:?}", r.fake.calls());
+}

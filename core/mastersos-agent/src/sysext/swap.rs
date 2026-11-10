@@ -30,20 +30,34 @@ pub fn swap_in(runner: &dyn Runner, ext_dir: &OwnedFd, name: &str, new_name: &st
 /// with them are merged together or not at all.
 pub fn swap_in_all(runner: &dyn Runner, ext_dir: &OwnedFd, pairs: &[(&str, &str)]) -> Result<()> {
     let _lock = lock_merge(MERGE_LOCK_TIMEOUT)?;
+    // Look at every pair before moving anything, so a pair that cannot be read leaves all of them as they were.
     // (name, new_name, first install)
-    let mut done: Vec<(&str, &str, bool)> = vec![];
+    let mut plan: Vec<(&str, &str, bool)> = vec![];
+    for (name, new_name) in pairs {
+        if safefs::open_child_dir(ext_dir, new_name)?.is_none() {
+            anyhow::bail!("{new_name} is missing");
+        }
+        let first = safefs::open_child_dir(ext_dir, name)?.is_none();
+        plan.push((name, new_name, first));
+    }
+    // Best effort over all of them; the first error is returned, every one is logged.
     let back = |done: &[(&str, &str, bool)]| -> Result<()> {
+        let mut first_err = None;
         for (name, new_name, first) in done.iter().rev() {
-            if *first {
-                safefs::rename_at(ext_dir, name, new_name)?;
+            let r = if *first {
+                safefs::rename_at(ext_dir, name, new_name)
             } else {
-                safefs::exchange_at(ext_dir, name, new_name)?;
+                safefs::exchange_at(ext_dir, name, new_name)
+            };
+            if let Err(e) = r {
+                log::warn!("sysext: switching {name} back failed: {e:#}");
+                first_err.get_or_insert(e);
             }
         }
-        Ok(())
+        first_err.map_or(Ok(()), Err)
     };
-    for (name, new_name) in pairs {
-        let first = safefs::open_child_dir(ext_dir, name)?.is_none();
+    let mut done: Vec<(&str, &str, bool)> = vec![];
+    for (name, new_name, first) in plan {
         let r = if first {
             safefs::rename_at(ext_dir, new_name, name)
         } else {

@@ -130,6 +130,9 @@ pub(super) struct RoundState {
     /// Extension name → since when (Unix seconds) only a process's arguments have held its change back ([`busy`]).
     #[serde(default)]
     pub(super) argv_since: BTreeMap<String, i64>,
+    /// The extensions [`busy`] held back on arguments alone this round; the others' `argv_since` is dropped at its end.
+    #[serde(skip)]
+    pub(super) argv_held: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,6 +286,10 @@ pub async fn run_once(env: &RoundEnv) -> Vec<AppResult> {
             (kept, Some(format!("{e:#}")))
         }
     };
+    // the day counts from the first of an unbroken run of rounds held back on arguments alone: a round without one
+    // (nothing pending, other evidence, the change went ahead or was dropped) starts it over
+    let held = std::mem::take(&mut st.argv_held);
+    st.argv_since.retain(|k, _| held.contains(k));
     if let Err(e) = serde_json::to_vec(&st)
         .map_err(anyhow::Error::from)
         .and_then(|b| safefs::write_at(&work, STATE_FILE, &b, 0o600).map(drop))
@@ -922,6 +929,7 @@ async fn busy(
                     )),
                 )
             } else {
+                st.argv_held.insert(key.to_string());
                 (true, None)
             }
         }
