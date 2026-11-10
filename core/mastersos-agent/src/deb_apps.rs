@@ -17,6 +17,9 @@ pub const ARCHIVE_URL: &str = "http://archive.ubuntu.com/ubuntu";
 pub const SECURITY_URL: &str = "http://security.ubuntu.com/ubuntu";
 
 pub mod apt;
+pub mod assemble;
 
 #[cfg(test)]
 mod tests_apt;
+#[cfg(test)]
+mod tests_assemble;
