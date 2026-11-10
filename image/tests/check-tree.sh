@@ -3421,7 +3421,7 @@ for u in ubuntu-dock@ubuntu.com ding@rastersoft.com tiling-assistant@ubuntu.com 
 done
 [ "$r" = 0 ] && ok 75 "upstream GNOME: no ubuntu-session, ubuntu-settings or Yaru; the tray from gnome-shell-ubuntu-extensions, its other six extensions removed in postinst"
 
-# 77. Exam quiet (exam-quiet Task 7): mastersos-quiet.target is a bare marker (no [Install], no Conflicts=, no dependencies); the three
+# 77. Exam quiet (exam-quiet Task 7): mastersos-quiet.target is a bare marker (no [Install], no Conflicts=, no dependencies); the four
 #     download services carry the exact ExecCondition line; every unit in quiet.rs STOP_UNITS except the transient
 #     mastersos-flatpak.service has a unit file in the image
 r=0
@@ -3440,7 +3440,7 @@ else
 		r=1
 	fi
 fi
-for u in mastersos-update mastersos-chrome mastersos-golden-fetch; do
+for u in mastersos-update mastersos-chrome mastersos-golden-fetch mastersos-deb-apps; do
 	if grep -qE '^Conflicts=.*mastersos-quiet' "$qd/$u.service" 2>/dev/null; then
 		bad 77 "$u.service should not use Conflicts= with the quiet target (conflicts are two-way)"
 		r=1
@@ -3463,6 +3463,76 @@ for u in "${stop_units[@]}"; do
 		r=1
 	}
 done
-[ "$r" = 0 ] && ok 77 "mastersos-quiet.target is a bare marker; update, chrome and golden-fetch services refuse to start while it is active; STOP_UNITS all have unit files (flatpak is transient)"
+[ "$r" = 0 ] && ok 77 "mastersos-quiet.target is a bare marker; update, chrome, golden-fetch and deb-apps services refuse to start while it is active; STOP_UNITS all have unit files (flatpak is transient)"
+
+# 78. deb-apps (docs/specs/2026-11-10-deb-apps-design.md §4.2, §4.5, §4.6, §5): os-release carries SYSEXT_LEVEL; mkosi.finalize writes
+#     /usr/lib/mastersos/ubuntu-source with all three keys from the snapshot build.sh passes in; ubuntu-keyring is in the package list;
+#     the work directory is made by tmpfiles; the deb-apps unit has the fixed sandbox and paths; its timer is enabled; both sysext
+#     units may write /run/mastersos (the merge lock lives there) and /run/mastersos exists at boot
+r=0
+# shellcheck disable=SC2016 # literal text on purpose
+grep -qF 'SYSEXT_LEVEL=${IMAGE_VERSION:-dev}' "$rel/mkosi.postinst.chroot" || {
+	bad 78 "mkosi.postinst.chroot should write SYSEXT_LEVEL=\${IMAGE_VERSION:-dev} into os-release"
+	r=1
+}
+for k in 'SNAPSHOT=' 'CODENAME=' 'COMPONENTS=main universe restricted'; do
+	grep -qF "$k" "$rel/mkosi.finalize" || {
+		bad 78 "mkosi.finalize should write $k into usr/lib/mastersos/ubuntu-source"
+		r=1
+	}
+done
+grep -qF 'usr/lib/mastersos/ubuntu-source' "$rel/mkosi.finalize" || {
+	bad 78 "mkosi.finalize should write usr/lib/mastersos/ubuntu-source"
+	r=1
+}
+# shellcheck disable=SC2016 # literal text on purpose
+grep -qF -- '--environment=MASTERSOS_SNAPSHOT="$snapshot"' "$rel/build.sh" || {
+	bad 78 "build.sh should pass the snapshot to mkosi with --environment=MASTERSOS_SNAPSHOT"
+	r=1
+}
+grep -qxE '[[:space:]]+ubuntu-keyring' "$rel/mkosi.conf" || {
+	bad 78 "mkosi.conf Packages= should list ubuntu-keyring"
+	r=1
+}
+tf=$rel/mkosi.extra/usr/lib/tmpfiles.d/mastersos.conf
+grep -qxE 'd /var/lib/mastersos/deb-apps 0700 root root -' "$tf" || {
+	bad 78 "$tf should have d /var/lib/mastersos/deb-apps 0700 root root -"
+	r=1
+}
+grep -qE '^d /run/mastersos 0[0-7]{3} root root -' "$tf" || {
+	bad 78 "$tf should create /run/mastersos at boot"
+	r=1
+}
+du=$qd/mastersos-deb-apps.service
+for l in 'ExecStart=/usr/bin/mastersos-agent deb-apps' \
+	'ReadWritePaths=/var/lib/extensions /var/lib/mastersos/deb-apps /var/lib/mastersos-public /run/mastersos' \
+	'TimeoutStartSec=3h' 'Nice=10' 'IOSchedulingClass=idle' 'Type=oneshot' 'ProtectSystem=strict' 'NoNewPrivileges=yes' \
+	'CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_FSETID' \
+	'ConditionKernelCommandLine=!systemd.unit=mastersos-installer.target'; do
+	grep -qxF "$l" "$du" 2>/dev/null || {
+		bad 78 "mastersos-deb-apps.service should have $l"
+		r=1
+	}
+done
+grep -qE '^RestrictSUIDSGID=' "$du" 2>/dev/null && {
+	bad 78 "mastersos-deb-apps.service must not set RestrictSUIDSGID (dpkg-deb -x keeps setuid bits until the agent strips them)"
+	r=1
+}
+dt=$qd/mastersos-deb-apps.timer
+for l in 'OnBootSec=5min' 'OnCalendar=hourly' 'RandomizedDelaySec=30min' 'WantedBy=timers.target'; do
+	grep -qxF "$l" "$dt" 2>/dev/null || {
+		bad 78 "mastersos-deb-apps.timer should have $l"
+		r=1
+	}
+done
+[ "$(readlink "$qd/timers.target.wants/mastersos-deb-apps.timer" 2>/dev/null)" = ../mastersos-deb-apps.timer ] || {
+	bad 78 "timers.target.wants/mastersos-deb-apps.timer should link to ../mastersos-deb-apps.timer"
+	r=1
+}
+grep -qE '^ReadWritePaths=.*(^|[ =])/run/mastersos( |$)' "$qd/mastersos-chrome.service" || {
+	bad 78 "mastersos-chrome.service ReadWritePaths= should include /run/mastersos (the sysext merge lock)"
+	r=1
+}
+[ "$r" = 0 ] && ok 78 "deb-apps: SYSEXT_LEVEL, ubuntu-source from the build snapshot, ubuntu-keyring, work dir, unit and timer; Chrome and deb-apps units may write /run/mastersos"
 
 exit $fail

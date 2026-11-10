@@ -21,6 +21,22 @@ if [ "$have_systemd" != "$want_systemd" ]; then
 fi
 echo "finalize: systemd ${have_systemd}（与 initrd drop-in 核对过的版本相同）"
 
+# --- Ubuntu source of this image (deb-apps resolves dependencies against exactly this snapshot) ---------------------
+# build.sh passes the snapshot it gave mkosi as MASTERSOS_SNAPSHOT; mkosi exports RELEASE (Release= in mkosi.conf).
+snapshot=${MASTERSOS_SNAPSHOT:-}
+if ! [[ $snapshot =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; then
+	echo "finalize: MASTERSOS_SNAPSHOT should look like 20261012T000000Z, got: '${snapshot}'" >&2
+	exit 1
+fi
+codename=${RELEASE:-}
+if ! [[ $codename =~ ^[a-z]+$ ]]; then
+	echo "finalize: RELEASE (the Ubuntu release from mkosi.conf) should be a codename, got: '${codename}'" >&2
+	exit 1
+fi
+mkdir -p "$R/usr/lib/mastersos"
+printf 'SNAPSHOT=%s\nCODENAME=%s\nCOMPONENTS=main universe restricted\n' "$snapshot" "$codename" >"$R/usr/lib/mastersos/ubuntu-source"
+echo "finalize: usr/lib/mastersos/ubuntu-source: snapshot ${snapshot}, ${codename}"
+
 # --- 更新源、构建变体 ------------------------------------------------------------
 # MASTERSOS_UPDATE_BASE 换掉 transfer 里的 @BASE@。正式镜像只收 https:// 加域名（不收 IP、localhost——
 # 试验网那个 IP 上的明文地址永远进不了正式镜像）；lab profile 才收明文的 http。MASTERSOS_BROKEN 只许 lab。

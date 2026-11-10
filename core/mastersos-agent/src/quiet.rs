@@ -20,6 +20,7 @@ pub const TARGET: &str = "mastersos-quiet.target";
 pub const STOP_UNITS: &[&str] = &[
     "mastersos-update.service",
     "mastersos-chrome.service",
+    "mastersos-deb-apps.service",
     "mastersos-golden-fetch.service",
     "mastersos-flatpak.service",
 ];

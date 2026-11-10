@@ -218,6 +218,7 @@ args=(
 	--snapshot="$snapshot"
 	--output-directory="$out"
 	--extra-search-path="$ukwrap"
+	--environment=MASTERSOS_SNAPSHOT="$snapshot"
 	--environment=MASTERSOS_UPDATE_BASE="$base"
 	--environment=MASTERSOS_BROKEN="$broken"
 	--extra-tree="$extra"

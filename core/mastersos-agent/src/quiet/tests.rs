@@ -269,7 +269,7 @@ fn enter_issues_start_then_stop() {
         r.calls(),
         vec![
             "systemctl start --no-block mastersos-quiet.target",
-            "systemctl stop --no-block mastersos-update.service mastersos-chrome.service mastersos-golden-fetch.service mastersos-flatpak.service",
+            "systemctl stop --no-block mastersos-update.service mastersos-chrome.service mastersos-deb-apps.service mastersos-golden-fetch.service mastersos-flatpak.service",
         ]
     );
 }
@@ -331,7 +331,7 @@ async fn eventually(what: &str, cond: impl Fn() -> bool) {
 }
 
 const START: &str = "systemctl start --no-block mastersos-quiet.target";
-const STOP_UNITS_LINE: &str = "systemctl stop --no-block mastersos-update.service mastersos-chrome.service mastersos-golden-fetch.service mastersos-flatpak.service";
+const STOP_UNITS_LINE: &str = "systemctl stop --no-block mastersos-update.service mastersos-chrome.service mastersos-deb-apps.service mastersos-golden-fetch.service mastersos-flatpak.service";
 const STOP_TARGET: &str = "systemctl stop --no-block mastersos-quiet.target";
 
 fn inactive() -> Output {

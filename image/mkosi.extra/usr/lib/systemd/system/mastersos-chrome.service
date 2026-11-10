@@ -36,7 +36,8 @@ ProtectSystem=strict
 # /var/lib/extensions 由 tmpfiles（mastersos.conf）开机建好
 StateDirectory=mastersos/chrome
 StateDirectoryMode=0700
-ReadWritePaths=/var/lib/extensions
+# /run/mastersos: the sysext merge lock (sysext.lock) shared with mastersos-deb-apps.service
+ReadWritePaths=/var/lib/extensions /run/mastersos
 ProtectHome=yes
 PrivateDevices=yes
 NoNewPrivileges=yes
