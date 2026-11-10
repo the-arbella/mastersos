@@ -33,6 +33,7 @@ pub mod signin_handoff;
 pub mod state;
 pub mod status;
 pub mod support;
+pub mod sysext;
 pub mod system;
 pub mod token;
 pub mod tpm;

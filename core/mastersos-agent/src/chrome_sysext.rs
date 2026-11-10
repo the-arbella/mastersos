@@ -18,9 +18,12 @@
 //! 冻结（一直回放同一份最新见过的索引）挡不住——那只等于网络断了，回报的版本号停着不动，IT 看得到。
 //!
 //! 换版本：解到 `<ext>.new`、补上 sysext 要的元数据与图标，`renameat2(RENAME_EXCHANGE)` 原子互换
-//! `<ext>` 与 `<ext>.new`（第一次安装直接改名），让 systemd 重新合并（见 [`refresh_cmd`]），**然后**才删换下来的旧目录。
+//! `<ext>` 与 `<ext>.new`（第一次安装直接改名），让 systemd 重新合并（见 [`sysext::refresh_cmd`]），**然后**才删换下来的旧目录。
 //! refresh 失败就换回去、再合并一次（失败的那次可能已经卸下了旧的），成功了才删 `<ext>.new`。上一轮中途断掉留下的
 //! `<ext>.new` 开轮先合并、再删（互换之后、合并之前断掉时，`.new` 正是合并着的那一层，先删会从开着的 Chrome 脚下抽走文件）。
+//! 下载、互换、回滚与开轮的清理都是共用的 [`crate::sysext`]（.deb 应用也用）。锁的顺序：先拿 `<work>` 的 flock（整轮），
+//! 只在合并的那几步（[`sysext::recover_leftover`]、[`sysext::swap_in`] 里面）才拿全局的合并锁 [`sysext::MERGE_LOCK`]，
+//! 从不反过来，所以与 .deb 应用的任务不会互相卡死。
 //!
 //! **IT 控制什么时候换版本**（Task 23）：分组的 `[chrome]` 由主 agent 写进 `SysState`（`chrome_window`、`chrome_pause_until`），
 //! 这里在**联网之前**读它：不在更新时段（本机时区）、或今天还没过暂停日期，就不取索引、不换版本，回报 `ok` 与当前版本。
@@ -36,6 +39,7 @@
 
 use std::future::Future;
 use std::io::Write;
+use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -50,6 +54,7 @@ use crate::apply::hex;
 use crate::jobs::{Job, JobCtx};
 use crate::runner::{last_lines, run_ok, Cmd, Output, Runner};
 use crate::safefs;
+use crate::sysext::{self, FetchOutcome};
 use crate::system::{SysPaths, SysState};
 
 pub const CHROME_REPO: &str = "https://dl.google.com/linux/chrome/deb";
@@ -640,51 +645,45 @@ impl ChromeJob {
         Ok(body)
     }
 
-    /// 把 .deb 边下边算 sha256 写进 `<work>/chrome.deb`；哈希对不上时不留文件。
-    async fn download_deb(&self, work: &std::os::fd::OwnedFd, e: &DebEntry) -> Result<()> {
-        let mut resp = self
-            .http
-            .get(format!("{}/{}", self.repo, e.filename))
-            .timeout(DEB_TIMEOUT)
-            .send()
-            .await
-            .context("downloading the Chrome .deb failed")?;
-        ensure!(
-            resp.status().is_success(),
-            "downloading the Chrome .deb: the source returned {}",
-            resp.status()
-        );
-        ensure!(
-            resp.content_length().is_none_or(|n| n <= self.max_deb),
-            "the Chrome .deb exceeds the size limit"
-        );
-        let mut tmp = safefs::TmpFile::create(work, DEB_FILE, 0o600)?;
-        let mut h = Sha256::new();
-        let mut n: u64 = 0;
-        let mut stamped = false;
-        while let Some(chunk) = resp
-            .chunk()
-            .await
-            .context("reading the Chrome .deb failed")?
-        {
-            // 收到第一批字节时留时间戳：NetworkManager 钩子看到一小时内下载过就不再触发（下载之后才失败的，不因
-            // Wi‑Fi 时断时续一遍遍重下约 140 MB）。请求立刻失败、一个字节都没收到的不算，钩子下次连网照样触发
-            if !stamped {
-                safefs::TmpFile::create(work, DEB_STAMP, 0o600)?.commit()?;
-                stamped = true;
-            }
-            n += chunk.len() as u64;
-            ensure!(n <= self.max_deb, "the Chrome .deb exceeds the size limit");
-            h.update(&chunk);
-            tmp.write_all(&chunk).context("writing the Chrome .deb")?;
+    /// 把 .deb 边下边算 sha256 写进 `<work>/chrome.deb`（[`sysext::download_with`]）；哈希对不上时不留文件。
+    async fn download_deb(&self, work: &OwnedFd, e: &DebEntry) -> Result<()> {
+        // 收到第一批字节时留时间戳：NetworkManager 钩子看到一小时内下载过就不再触发（下载之后才失败的，不因
+        // Wi‑Fi 时断时续一遍遍重下约 140 MB）。请求立刻失败、一个字节都没收到的不算，钩子下次连网照样触发
+        let mut stamp = || safefs::TmpFile::create(work, DEB_STAMP, 0o600)?.commit();
+        let got = sysext::download_with(
+            &self.http,
+            &format!("{}/{}", self.repo, e.filename),
+            Some(&e.sha256),
+            self.max_deb,
+            DEB_TIMEOUT,
+            work,
+            DEB_FILE,
+            None,
+            &mut stamp,
+        )
+        .await
+        .context(
+            "downloading the Chrome .deb listed in Packages failed; keeping the current version",
+        )?;
+        match got {
+            FetchOutcome::Fetched(_) => Ok(()),
+            FetchOutcome::NotModified => bail!("unexpected 304 for the Chrome .deb"),
         }
-        let got = hex(&h.finalize());
-        ensure!(
-            got == e.sha256,
-            "the Chrome .deb sha256 does not match Packages ({got} ≠ {}); keeping the current version",
-            e.sha256
-        );
-        tmp.commit()
+    }
+
+    /// 在阻塞线程里做一件要用 runner 与扩展目录的事（合并锁可能要等，不占住异步线程）。
+    async fn blocking<T: Send + 'static>(
+        &self,
+        ext_dir: &OwnedFd,
+        f: impl FnOnce(&dyn Runner, &OwnedFd) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let r = self.runner.clone();
+        let d = ext_dir
+            .try_clone()
+            .context("duplicating the extension directory fd")?;
+        tokio::task::spawn_blocking(move || f(r.as_ref(), &d))
+            .await
+            .map_err(|e| anyhow!("merging the extensions exited abnormally: {e}"))?
     }
 
     async fn round(&self) -> Result<RoundOut> {
@@ -700,10 +699,12 @@ impl ChromeJob {
         let ext_dir = safefs::open_abs_dir(ext_parent, true)?;
 
         // 上一轮中途断掉留下的 .new：它可能正是合并着的那一层（互换之后、合并之前断掉），先合并、再删。
-        if safefs::open_child_dir(&ext_dir, &new_name)?.is_some() {
-            log::warn!("chrome: the previous round left {new_name}; re-merging before removing it");
-            self.exec_ok(refresh_cmd()).await?;
-            safefs::remove_tree_at(&ext_dir, &new_name)?;
+        {
+            let new_name = new_name.clone();
+            self.blocking(&ext_dir, move |r, d| {
+                sysext::recover_leftover(r, d, &new_name)
+            })
+            .await?;
         }
         let _ = safefs::remove_at(&work, DEB_FILE);
 
@@ -840,38 +841,17 @@ impl ChromeJob {
             return Err(e);
         }
 
-        // 5. 换上：已装过就原子互换，第一次直接改名
-        let first = installed.is_none();
-        if first {
-            safefs::rename_at(&ext_dir, &new_name, ext_name)?;
-        } else {
-            safefs::exchange_at(&ext_dir, ext_name, &new_name)?;
-        }
-        if let Err(e) = self.exec_ok(refresh_cmd()).await {
-            // 换回去，再合并一次（失败的那次可能已经卸下了旧的）；这次也成功了才删 .new——它可能已被合并了一半，
-            // 留着的话下一轮开头先合并再删
-            let back = if first {
-                safefs::rename_at(&ext_dir, ext_name, &new_name)
-            } else {
-                safefs::exchange_at(&ext_dir, ext_name, &new_name)
-            };
-            match back {
-                Err(b) => log::warn!("chrome: the merge failed and switching back to the old version also failed: {b:#}"),
-                Ok(()) => match self.exec_ok(refresh_cmd()).await {
-                    Ok(_) => {
-                        let _ = safefs::remove_tree_at(&ext_dir, &new_name);
-                    }
-                    Err(r) => log::warn!("chrome: re-merging after switching back to the old version also failed (retrying next round): {r:#}"),
-                },
-            }
-            return Err(
+        // 5. 换上：已装过就原子互换，第一次直接改名；合并失败就换回去、再合并一次，这次也成功了才删 .new——它可能已被
+        // 合并了一半，留着的话下一轮开头先合并再删（[`sysext::swap_in`]，持合并锁）
+        {
+            let (name, new_name) = (ext_name.to_string(), new_name.clone());
+            self.blocking(&ext_dir, move |r, d| {
+                sysext::swap_in(r, d, &name, &new_name)
+            })
+            .await
+            .map_err(|e| {
                 e.context("merging the new Chrome version failed; keeping the current version")
-            );
-        }
-        if let Err(e) = safefs::remove_tree_at(&ext_dir, &new_name) {
-            log::warn!(
-                "chrome: removing the replaced old version failed (retrying next round): {e:#}"
-            );
+            })?;
         }
         log::info!(
             "chrome: installed {} (was {})",
@@ -969,17 +949,6 @@ impl ChromeJob {
         )?;
         Ok(())
     }
-}
-
-/// 重新合并扩展。不能自己跑 `systemd-sysext refresh`：agent 的单元有 `PrivateTmp=yes`，跑在自己的挂载命名空间里，
-/// 在那里合并只有 agent 自己看得见（VM 165 实测：agent 回报装好了，系统里 `/opt/google` 不存在）。交给 PID 1 的
-/// `systemd-sysext.service`：在跑就 `reload`（= `systemd-sysext refresh`），没在跑（开机时 `/var/lib/extensions` 是空的，
-/// 条件不满足）就 `start`（同样是 refresh）。
-fn refresh_cmd() -> Cmd {
-    Cmd::new(
-        "systemctl",
-        &["reload-or-restart", "systemd-sysext.service"],
-    )
 }
 
 fn split(p: &Path) -> Result<(&Path, &str)> {
