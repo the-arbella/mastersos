@@ -163,21 +163,17 @@ fn browser_mode_locks_and_favorites() {
         "[org/gnome/desktop/screensaver]\nlock-enabled=true\n",
         "[org/gnome/desktop/lockdown]\ndisable-command-line=true\nuser-administration-disabled=true\n",
         "[org/gnome/settings-daemon/plugins/media-keys]\nterminal=['']\n",
-        // Ubuntu 的桌面图标扩展（DING）自己就能在 ~/Desktop 上建、删、改名文件、「在终端中打开」，还一直拉
-        // Nautilus；Dock 的回收站与外接盘也是打开文件管理器（VM 上实测）
-        "disabled-extensions=['ding@rastersoft.com']\n",
-        // 复审 T13 发现 5：用户自己装、自己开的扩展与自定义快捷键都关掉、锁住；Ubuntu 会话自带的（去掉 DING）照开
+        // Nothing switched off by name: the mastersos session mode has no desktop-icons extension (design 2026-11-10)
+        "disabled-extensions=@as []\n",
+        // 复审 T13 发现 5：用户自己装、自己开的扩展与自定义快捷键都关掉、锁住；mastersos 会话模式的两个照开
         "disable-user-extensions=true\n",
         "allow-extension-installation=false\n",
-        "enabled-extensions=['ubuntu-dock@ubuntu.com', 'ubuntu-appindicators@ubuntu.com', \
-         'tiling-assistant@ubuntu.com', 'snapd-prompting@canonical.com', \
-         'snapd-search-provider@canonical.com', 'web-search-provider@ubuntu.com', \
-         'mastersos-managed@mastersos.org']\n",
+        "enabled-extensions=['ubuntu-appindicators@ubuntu.com', 'mastersos-managed@mastersos.org']\n",
         "custom-keybindings=@as []\n",
-        "always-center-icons=true\ndock-fixed=true\ndash-max-icon-size=44\nshow-trash=false\nshow-mounts=false\n",
     ] {
         assert!(k.contains(want), "缺 {want:?}：\n{k}");
     }
+    assert!(!k.contains("dash-to-dock") && !k.contains("ding@"), "{k}");
     let keys: BTreeSet<&str> = locks
         .lines()
         .filter(|l| !l.starts_with('#') && !l.is_empty())
@@ -190,8 +186,6 @@ fn browser_mode_locks_and_favorites() {
             "/org/gnome/desktop/lockdown/user-administration-disabled",
             "/org/gnome/settings-daemon/plugins/media-keys/terminal",
             "/org/gnome/shell/disabled-extensions",
-            "/org/gnome/shell/extensions/dash-to-dock/show-trash",
-            "/org/gnome/shell/extensions/dash-to-dock/show-mounts",
             "/org/gnome/shell/disable-user-extensions",
             "/org/gnome/shell/enabled-extensions",
             "/org/gnome/shell/allow-extension-installation",
@@ -214,11 +208,7 @@ fn desktop_mode_has_no_locks() {
         "{k}"
     );
     assert!(k.contains("lock-enabled=true"));
-    assert!(k.contains("dock-position='BOTTOM'"), "{k}");
-    assert!(
-        k.contains("dash-max-icon-size=44\nshow-mounts=false\n"),
-        "{k}"
-    );
+    assert!(!k.contains("dash-to-dock"), "{k}");
     assert!(
         !k.contains("lockdown")
             && !k.contains("media-keys")
@@ -228,6 +218,23 @@ fn desktop_mode_has_no_locks() {
             && !k.contains("custom-keybindings"),
         "{k}"
     );
+}
+
+/// The locked sessions turn on exactly the extensions of the image's session mode (design 2026-11-10): one list, in
+/// `image/mkosi.extra/usr/share/gnome-shell/modes/mastersos.json`, read by gnome-shell; the agent locks the same list.
+#[test]
+fn locked_extensions_match_session_mode() {
+    let mode: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../../image/mkosi.extra/usr/share/gnome-shell/modes/mastersos.json"
+    ))
+    .unwrap();
+    let listed: Vec<&str> = mode["enabledExtensions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(listed, LOCKED_EXTENSIONS);
 }
 
 /// Review Focus 1、Ruling 15：用 GLib 读回。

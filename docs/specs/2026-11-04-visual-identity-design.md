@@ -108,6 +108,9 @@ logo 与开机画面简单、温暖、不说教，不改。
 
 ### 5.3 GNOME 默认值（`90_mastersos.gschema.override`）
 
+> 2026-11-10：Dock 部分（下面 `dash-to-dock` 一条及其读回）已被 `2026-11-10-upstream-gnome-session-design.md` 取代：
+> 桌面改用上游 GNOME 会话，没有常驻 Dock。半透明顶栏保留（受管提示扩展在 `mastersos` 模式下加样式）。
+
 - `org.gnome.desktop.background`：`picture-uri` 白天、`picture-uri-dark` 夜间，`picture-options='zoom'`。
 - `org.gnome.desktop.interface`：`color-scheme='default'`（浅色，见第 2 节的学生取舍），`accent-color` 见第 3 节。
 - `org.gnome.shell.extensions.dash-to-dock`：在已有的底部整宽布局上加 `transparency-mode='FIXED'`、

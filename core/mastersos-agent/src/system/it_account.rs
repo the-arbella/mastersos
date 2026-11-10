@@ -789,7 +789,7 @@ mod tests {
             with_system_account("[Other]\nA=1\n"),
             "[Other]\nA=1\n[User]\nSystemAccount=true\n"
         );
-        let once = with_system_account("[User]\nSession=ubuntu\n");
+        let once = with_system_account("[User]\nSession=mastersos\n");
         assert_eq!(with_system_account(&once), once);
     }
 

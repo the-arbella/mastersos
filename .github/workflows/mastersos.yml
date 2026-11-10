@@ -118,6 +118,8 @@ jobs:
           image/mkosi.extra/usr/lib/mastersos/integrity
           image/mkosi.extra/usr/lib/mastersos/golden-fetch
           image/mkosi.extra/usr/lib/mastersos/installer-mount
+          image/mkosi.extra/usr/local/lib/systemd/user-environment-generators/30-systemd-environment-d-generator
+          image/mkosi.extra/usr/local/lib/systemd/user-environment-generators/60-flatpak
           image/mkosi.extra/usr/lib/systemd/system-generators/mastersos-seed-generator
           image/mkosi.extra/usr/lib/mastersos/etc-migrate
           image/mkosi.extra/usr/lib/mastersos/update-done
@@ -171,6 +173,8 @@ jobs:
           MASTERSOS_UPDATE_RUN_TEST_REQUIRE: "1"
       # browser-wait: Chrome there, full / no session-mode (one notification), learning (zenity until Chrome appears), window closed, kiosk-* skipped, th/zh first line (offline status Task 4)
       - run: bash image/tests/browser-wait-test.sh
+      # The session environment comes from the system only: no user environment.d, Flatpak system exports only (2026-11-10)
+      - run: bash image/tests/user-env-test.sh
       # 考试扩展的 crx3 打包（计划 9 Task 7）：一次性钥匙现生成，openssl 验签，id、updates.xml、宿主清单、kiosk-ext.json、不漏私钥
       - run: bash image/tests/kiosk-ext-pack-test.sh
         env:
