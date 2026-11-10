@@ -329,5 +329,15 @@ elif grep -rlF 'mastersos-agent pam-' /etc/pam.d; then
 	echo "postinst: 没有 MASTERSOS_PAM_HOOKS=1，/etc/pam.d 里却有 mastersos-agent 的钩子" >&2
 	exit 1
 fi
+# No ~/.pam_environment (locked-session hardening, 2026-11-10): gdm-password and Ubuntu's other GDM services read it with
+# user_readenv=1, and a DCONF_PROFILE or GSETTINGS_BACKEND set there switches every dconf lock of the locked sessions off for
+# the local accounts that sign in with a password. The system's /etc/environment and /etc/default/locale stay (readenv=1).
+while IFS= read -r f; do
+	sed -i -E 's/[[:space:]]+user_readenv=1//' "$f" || exit 1
+done < <(grep -rlE 'user_readenv=1' /etc/pam.d /usr/lib/pam.d 2>/dev/null || true)
+if grep -rlE 'user_readenv=1' /etc/pam.d /usr/lib/pam.d 2>/dev/null; then
+	echo "postinst: the PAM services above still read ~/.pam_environment (user_readenv=1)" >&2
+	exit 1
+fi
 # 口令段的分流与 authd 的 --exec-env 也再核对一次（Task 9）
 "${SRCDIR:?}/pam-password.sh" check /etc/pam.d
