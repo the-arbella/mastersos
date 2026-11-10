@@ -54,9 +54,31 @@ pub const UBUNTU_DENY: &[&str] = &[
     "usr/share/initramfs-tools",
     "usr/lib/extension-release.d",
     "usr/lib/os-release",
+    "usr/lib/clock-epoch",
+    "usr/lib/cryptsetup",
+    "usr/lib/linux",
+    // systemd's other search directories below /usr/lib: user and group records (nss-systemd, userdbd), credentials,
+    // system and configuration extensions, portable services, machine images, repart, sysupdate, pcrlock
+    "usr/lib/userdb",
+    "usr/lib/credstore",
+    "usr/lib/credstore.encrypted",
+    "usr/lib/extensions",
+    "usr/lib/confexts",
+    "usr/lib/portables",
+    "usr/lib/machines",
+    "usr/lib/repart.d",
+    "usr/lib/sysupdate*",
+    "usr/lib/pcrlock.d",
     // login, permissions and privileged helpers
     "usr/lib/pam.d",
     "usr/lib/security",
+    "usr/lib/libnss_*",
+    "usr/lib/motd.d",
+    "usr/lib/issue",
+    "usr/lib/issue.d",
+    "usr/lib/apparmor",
+    "usr/lib/dbus-1.0",
+    "usr/lib/policykit-1",
     "usr/lib/x86_64-linux-gnu/security",
     "usr/share/pam-configs",
     "usr/share/polkit-1",
@@ -112,8 +134,42 @@ pub const UBUNTU_DENY: &[&str] = &[
     "usr/libexec/mastersos",
 ];
 
+/// `usr/lib/<name>` directories a vendor package may not have even under its own `Package:` name (on top of every
+/// first-level `usr/lib` name of [`UBUNTU_DENY`], which [`reserved_lib_name`] takes from there): directories system
+/// programs load code or data from. `*` at the end matches every name starting with the rest.
+const RESERVED_LIB: &[&str] = &[
+    "x86_64-linux-gnu",
+    "python3*",
+    "perl*",
+    "systemd",
+    "udev",
+    "security",
+    "pam.d",
+    "modules",
+    "firmware",
+    "kernel",
+    "os-release",
+    "extension-release.d",
+    "locale",
+];
+
+/// Is `usr/lib/<name>` closed to a vendor package called `name` ([`prune`] removes it, the rest of the package stays)?
+/// Every first-level `usr/lib` name of [`UBUNTU_DENY`] plus [`RESERVED_LIB`].
+pub fn reserved_lib_name(name: &str) -> bool {
+    UBUNTU_DENY
+        .iter()
+        .filter_map(|d| d.strip_prefix("usr/lib/"))
+        .map(|rest| rest.split('/').next().unwrap_or(rest))
+        .chain(RESERVED_LIB.iter().copied())
+        .any(|p| match p.strip_suffix('*') {
+            Some(prefix) => name.starts_with(prefix),
+            None => name == p,
+        })
+}
+
 /// Vendor packages (no Ubuntu signature): directory → the children kept there (each must be a real directory). Below
-/// a kept directory everything stays, except in `usr/lib` (only `usr/lib/<package>`) and `usr/bin` (files and links
+/// a kept directory everything stays, except in `usr/lib` (only `usr/lib/<package>`, and not
+/// that for a [`reserved_lib_name`]) and `usr/bin` (files and links
 /// only); the deny list and the link check still apply.
 const VENDOR_ALLOW: &[(&str, &[&str])] = &[
     ("usr", &["bin", "lib", "share"]),
@@ -424,11 +480,17 @@ fn drop_generated(root: &OwnedFd, removed: &mut Vec<String>) -> Result<()> {
 }
 
 fn prune_vendor(root: &OwnedFd, package: &str, removed: &mut Vec<String>) -> Result<()> {
-    let lib = [package];
+    // usr/lib/<package>, unless the name is one systemd or other system programs read from (removed and recorded)
+    let own = [package];
+    let lib: &[&str] = if reserved_lib_name(package) {
+        &[]
+    } else {
+        &own
+    };
     let levels = VENDOR_ALLOW
         .iter()
         .copied()
-        .chain(std::iter::once(("usr/lib", &lib[..])));
+        .chain(std::iter::once(("usr/lib", lib)));
     for (dir, keep) in levels {
         let Some(d) = open_level(root, dir)? else {
             continue;

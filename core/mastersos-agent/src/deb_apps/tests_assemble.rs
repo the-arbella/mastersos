@@ -354,7 +354,7 @@ fn setuid_bit_cleared() {
 
 /// The image's list of `/usr` next to the factory dir (`usr-paths`): the dpkg paths below plus what no package has.
 const USR_PATHS: &str = "d usr\nd usr/bin\nl usr/bin/cat\nf usr/bin/ls\nf usr/bin/mastersos-agent\n\
-f usr/bin/mastersos-kiosk\nd usr/lib\nd usr/lib/mastersos\nf usr/lib/mastersos/usr-paths\nd usr/lib/python3\n\
+f usr/bin/mastersos-kiosk\nd usr/lib\nd usr/lib/gcc\nd usr/lib/mastersos\nf usr/lib/mastersos/usr-paths\nd usr/lib/python3\n\
 d usr/lib/repart.d\nf usr/lib/repart.d/10-root.conf\nd usr/share\nd usr/share/dconf\nd usr/share/doc\n\
 d usr/share/doc/coreutils\nf usr/share/doc/coreutils/copyright\nl usr/share/doc/libfoo1\nd usr/share/empty\n";
 
@@ -531,7 +531,8 @@ fn files_outside_dpkg_are_not_covered() {
 fn vendor_lib_dir_only_when_the_image_has_none() {
     let f = factory();
     let owned = owned_of(&f);
-    for (package, keeps) in [("python3", false), ("testnav", true)] {
+    // a name the image has but prune does not reserve (gcc): kept by prune, dropped here
+    for (package, keeps) in [("gcc", false), ("testnav", true)] {
         let t = tempfile::tempdir().unwrap();
         let r = t.path();
         put(r, &format!("usr/lib/{package}/x.py"), "x", 0o644);
@@ -545,6 +546,15 @@ fn vendor_lib_dir_only_when_the_image_has_none() {
         assert_eq!(got.is_none(), keeps, "{package}");
         assert_eq!(exists(r, &format!("usr/lib/{package}")), keeps, "{package}");
     }
+    // python3 is reserved: prune already removed it, nothing left to drop
+    let t = tempfile::tempdir().unwrap();
+    put(t.path(), "usr/lib/python3/x.py", "x", 0o644);
+    let fd = open(t.path());
+    assert_eq!(
+        prune(&fd, &vendor("python3")).unwrap(),
+        vec!["usr/lib/python3"]
+    );
+    assert_eq!(drop_image_lib_dir(&fd, "python3", &owned).unwrap(), None);
     // not a Debian package name: refused, never a directory name
     let t = tempfile::tempdir().unwrap();
     put(t.path(), "usr/lib/x86_64-linux-gnu/libevil.so", "x", 0o644);
@@ -1117,4 +1127,135 @@ fn deny_list_has_the_review_additions() {
     let mut removed = prune(&open(t.path()), &Policy::UbuntuDeny).unwrap();
     removed.sort();
     assert_eq!(removed, vec!["usr/share/factory", "usr/share/thumbnailers"]);
+}
+
+#[test]
+fn vendor_named_like_a_systemd_search_dir_gets_no_lib_dir() {
+    // systemd reads /usr/lib/userdb (user records), /usr/lib/credstore (credentials), /usr/lib/extensions (sysext
+    // images) …: a vendor package picking such a Package: name must not fill it through usr/lib/<package>
+    for (pkg, file) in [
+        ("userdb", "evil.user"),
+        ("credstore", "evil.cred"),
+        ("credstore.encrypted", "evil.cred"),
+        ("extensions", "evil.raw"),
+        ("confexts", "evil.raw"),
+        ("pcrlock.d", "evil.pcrlock"),
+        ("repart.d", "00-evil.conf"),
+    ] {
+        let t = testnav_tree();
+        let rel = format!("usr/lib/{pkg}/{file}");
+        put(t.path(), &rel, "x", 0o644);
+        let removed = prune(&open(t.path()), &vendor(pkg)).unwrap();
+        assert_eq!(removed, vec![format!("usr/lib/{pkg}")], "{pkg}");
+        assert!(!exists(t.path(), &format!("usr/lib/{pkg}")), "{pkg}");
+        assert!(exists(t.path(), "opt/testnav/bin/testnav"), "{pkg}");
+    }
+}
+
+#[test]
+fn reserved_package_names_get_no_lib_dir() {
+    // Names system programs load from, even where the deny list has no entry (python3.12, perl5, locale)
+    for pkg in [
+        "python3",
+        "python3.12",
+        "perl",
+        "perl5",
+        "locale",
+        "systemd",
+        "udev",
+        "security",
+        "modules",
+        "firmware",
+        "kernel",
+        "os-release",
+        "pam.d",
+    ] {
+        let t = tempfile::tempdir().unwrap();
+        put(t.path(), &format!("usr/lib/{pkg}/x"), "x", 0o644);
+        let removed = prune(&open(t.path()), &vendor(pkg)).unwrap();
+        assert_eq!(removed, vec![format!("usr/lib/{pkg}")], "{pkg}");
+        assert!(!exists(t.path(), &format!("usr/lib/{pkg}")), "{pkg}");
+    }
+    // an ordinary name keeps its directory
+    let t = tempfile::tempdir().unwrap();
+    put(t.path(), "usr/lib/testnav/data.bin", "d", 0o644);
+    assert_eq!(
+        prune(&open(t.path()), &vendor("testnav")).unwrap(),
+        Vec::<String>::new()
+    );
+    assert!(exists(t.path(), "usr/lib/testnav/data.bin"));
+}
+
+#[test]
+fn every_usr_lib_name_of_the_deny_list_is_reserved() {
+    // derived from UBUNTU_DENY: the two lists cannot drift
+    for d in UBUNTU_DENY {
+        let Some(rest) = d.strip_prefix("usr/lib/") else {
+            continue;
+        };
+        let first = rest.split('/').next().unwrap();
+        let name = first.replace('*', "x");
+        assert!(reserved_lib_name(&name), "{d}");
+    }
+    for name in [
+        "x86_64-linux-gnu",
+        "python3.12",
+        "perl5",
+        "systemd",
+        "udev",
+        "security",
+        "pam.d",
+        "modules",
+        "firmware",
+        "kernel",
+        "os-release",
+        "extension-release.d",
+        "locale",
+        "userdb",
+        "credstore",
+        "sysupdate.d",
+    ] {
+        assert!(reserved_lib_name(name), "{name}");
+    }
+    for name in ["testnav", "safeexambrowser", "google-chrome"] {
+        assert!(!reserved_lib_name(name), "{name}");
+    }
+}
+
+#[test]
+fn deps_lose_systemd_search_dirs() {
+    for d in [
+        "usr/lib/userdb",
+        "usr/lib/credstore",
+        "usr/lib/credstore.encrypted",
+        "usr/lib/extensions",
+        "usr/lib/confexts",
+        "usr/lib/portables",
+        "usr/lib/machines",
+        "usr/lib/repart.d",
+        "usr/lib/sysupdate.d",
+        "usr/lib/pcrlock.d",
+        "usr/lib/clock-epoch",
+        "usr/lib/motd.d",
+        "usr/lib/issue.d",
+    ] {
+        let t = tempfile::tempdir().unwrap();
+        put(t.path(), &format!("{d}/x"), "x", 0o644);
+        put(
+            t.path(),
+            "usr/lib/x86_64-linux-gnu/libfoo.so.1",
+            "elf",
+            0o644,
+        );
+        let removed = prune(&open(t.path()), &Policy::UbuntuDeny).unwrap();
+        assert_eq!(removed, vec![d.to_string()], "{d}");
+        assert!(exists(t.path(), "usr/lib/x86_64-linux-gnu/libfoo.so.1"));
+    }
+    // a component's own sysupdate directory too (sysupdate.<component>.d)
+    let t = tempfile::tempdir().unwrap();
+    put(t.path(), "usr/lib/sysupdate.foo.d/x.transfer", "x", 0o644);
+    assert_eq!(
+        prune(&open(t.path()), &Policy::UbuntuDeny).unwrap(),
+        vec!["usr/lib/sysupdate.foo.d"]
+    );
 }
