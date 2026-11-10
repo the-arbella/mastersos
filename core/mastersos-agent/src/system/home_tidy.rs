@@ -651,6 +651,9 @@ fn outcome(name: &str) -> LastTidy {
 
 /// True when the passwd record of `user` (with uid `uid`) says its home is exactly `/home/<user>`.
 fn home_is_standard(runner: &dyn Runner, user: &str, uid: u32) -> bool {
+    if user.is_empty() || user.contains('/') || user.starts_with('.') {
+        return false;
+    }
     let id = uid.to_string();
     let Ok(out) = runner.run(&pam_cmd("getent", &["passwd", "--", user])) else {
         return false;
@@ -705,17 +708,17 @@ fn write_result(paths: &SysPaths, t: &LastTidy) -> Result<()> {
     Ok(())
 }
 
-/// The root PAM login hook for `user`: in learning mode tidy the home before the session starts. Never fails and
-/// never panics: any problem only shows in the result file (or not at all), and the login goes on. In full mode
-/// (or without a session mode) nothing is read from the home, written or run.
+/// The root PAM login hook for `user`: in learning mode tidy the home before the session starts. Must not panic by
+/// construction (release builds are `panic = "abort"` and the hook is `session requisite`, see `system/mod.rs`): it
+/// has no `unwrap`, indexing or unchecked arithmetic, and every error only shows in the result file (or not at
+/// all) while the login goes on. In full mode (or without a session mode) nothing is read from the home, written
+/// or run.
 pub fn on_login(paths: &SysPaths, runner: &dyn Runner, user: &str, uid: u32) {
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if !tidy_decision(&paths.public_dir) {
-            return;
-        }
-        let t = tidy_for_login(paths, runner, user, uid);
-        let _ = write_result(paths, &t);
-    }));
+    if !tidy_decision(&paths.public_dir) {
+        return;
+    }
+    let t = tidy_for_login(paths, runner, user, uid);
+    let _ = write_result(paths, &t);
 }
 
 #[cfg(test)]

@@ -504,7 +504,9 @@ pub fn pam_session_main() -> ExitCode {
         }
         SessionAction::Enqueue(user) => {
             if let Some(uid) = login::lookup_uid_checked(&user) {
-                // learning mode: tidy the home before the session starts (never fails the login)
+                // learning mode: tidy the home before the session starts (never fails the login). This must run
+                // before claim_from_pam (which can put files into the home), and pam-session runs before
+                // pam_mkhomedir and pam_systemd, so the home is not yet in use.
                 crate::system::home_tidy::on_login(
                     &crate::system::SysPaths::default(),
                     &RealRunner,

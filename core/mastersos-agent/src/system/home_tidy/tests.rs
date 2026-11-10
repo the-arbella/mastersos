@@ -622,9 +622,7 @@ mod login {
         assert_eq!(result(&d).unwrap().outcome, "not-a-home");
     }
 
-    #[test]
-    fn on_login_never_fails_on_broken_setup() {
-        // var_dir is a file, /home missing, odd names: nothing may panic
+    fn learning_root() -> tempfile::TempDir {
         let d = tempfile::tempdir().unwrap();
         let p = paths(d.path());
         std::fs::create_dir_all(&p.public_dir).unwrap();
@@ -633,17 +631,58 @@ mod login {
             "learning\n",
         )
         .unwrap();
-        std::fs::create_dir_all(p.var_dir.parent().unwrap()).unwrap();
-        std::fs::write(&p.var_dir, "not a dir").unwrap();
+        d
+    }
+
+    fn passwd(name: &str, home: &str) -> FakeRunner {
         let r = FakeRunner::new();
         r.respond(
             "getent passwd",
-            Output::ok(&format!("me:x:{}:1:M:/home/me:/bin/sh\n", uid())),
+            Output::ok(&format!("{name}:x:{}:1:M:{home}:/bin/sh\n", uid())),
         );
         r.respond(SHOW, Output::ok("offline\n"));
+        r
+    }
+
+    #[test]
+    fn on_login_var_dir_is_a_file_writes_nothing_and_returns() {
+        let (d, r) = setup(Some("learning\n"), "/home/me");
+        r.respond(SHOW, Output::ok("offline\n"));
+        let p = paths(d.path());
+        std::fs::create_dir_all(p.var_dir.parent().unwrap()).unwrap();
+        std::fs::write(&p.var_dir, "not a dir").unwrap();
         on_login(&p, &r, "me", uid());
-        on_login(&p, &r, "../x", uid());
-        on_login(&p, &r, "", 0);
+        assert_eq!(std::fs::read_to_string(&p.var_dir).unwrap(), "not a dir");
+        assert!(result(&d).is_none());
+        // the tidy itself still ran
+        assert!(!profile(&d));
+    }
+
+    #[test]
+    fn on_login_odd_names_are_not_a_home_and_run_nothing() {
+        for name in ["../x", "", ".", "a/b", ".hidden"] {
+            let d = learning_root();
+            std::fs::create_dir_all(d.path().join("home")).unwrap();
+            let r = passwd(name, &format!("/home/{name}"));
+            on_login(&paths(d.path()), &r, name, uid());
+            assert_eq!(result(&d).unwrap().outcome, "not-a-home", "{name:?}");
+            assert!(
+                r.calls().iter().all(|c| !c.starts_with("loginctl")),
+                "{:?}",
+                r.calls()
+            );
+        }
+    }
+
+    #[test]
+    fn on_login_missing_home_root_is_reported_as_io() {
+        let d = learning_root();
+        let r = passwd("me", "/home/me");
+        on_login(&paths(d.path()), &r, "me", uid());
+        let t = result(&d).unwrap();
+        assert_eq!(t.outcome, "tidied");
+        assert_eq!(t.skipped, vec!["io"]);
+        assert_eq!(t.moved, 0);
     }
 
     #[test]
