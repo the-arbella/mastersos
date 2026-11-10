@@ -210,6 +210,37 @@ config = "standard"
 Issues: `kiosk_id_invalid`, `kiosk_name_invalid`, `kiosk_url_not_https`, `kiosk_allow_invalid`,
 `kiosk_no_entry`, `kiosk_too_many`.
 
+## Add a third-party .deb app (TestNav)
+
+Goal: install a vendor's `.deb` from its https link and run it as a locked kiosk app. Add
+`[config.apps.deb.<id>]` with a `name` and the `url`; `kiosk = true` puts it on the login screen.
+Writing `sha256` pins the exact file (without it the app follows the link). `packages` lists Ubuntu
+packages the program needs but the `.deb` does not declare. `exec` is only needed when the package has
+no usable `.desktop` file. `ubuntu_mirror` is optional.
+
+```toml check=ok
+[[config]]
+id = "standard"
+name = "Standard"
+login_methods = ["guest"]
+
+[config.apps.deb.testnav]
+name = "TestNav"
+url = "https://download.testnav.com/_testnavinstallers/testnav-1.15.7.deb"
+kiosk = true
+packages = ["x11-utils"]
+exec = "/opt/testnav/bin/testnav"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "standard"
+```
+
+Issues: `deb_id_invalid`, `deb_name_invalid`, `deb_url_invalid`, `deb_sha256_invalid`,
+`deb_packages_invalid`, `deb_exec_invalid`, `deb_icon_invalid`, `deb_kiosk_id_conflict`,
+`ubuntu_mirror_invalid`, `kiosk_too_many` (`.deb` apps with `kiosk = true` count).
+
 ## Pause Chrome updates
 
 Goal: no Chrome update during exams. Set `pause_until` in the Config's `[config.chrome]` to a day at most

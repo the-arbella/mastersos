@@ -303,21 +303,8 @@ pub fn allow_hosts(app: &KioskApp) -> Result<Vec<String>, KioskError> {
 /// 图标要看包里有哪些文件，由 lint 判断。
 pub fn check(id: &str, app: &KioskApp) -> Result<(), KioskError> {
     check_id(id)?;
-    // 名字写进账号的 GECOS（`usermod -c`）：`:` 是 passwd 的字段分隔符，写进去 usermod 拒绝、清理永远做不完；
-    // `,` 分隔 GECOS 的子字段，accountsservice 只取第一个 `,` 之前的当名字，登录界面显示被截断
-    if app.name.trim().is_empty()
-        || has_control(&app.name)
-        || app.name.contains([':', ','])
-        || app.name.chars().count() > MAX_NAME_CHARS
-    {
-        return fail(
-            "kiosk_name_invalid",
-            "name",
-            format!(
-                "Name {:?} must be non-empty, at most {MAX_NAME_CHARS} characters, and contain no colon :, comma , or control characters (newline, tab, etc.)",
-                app.name
-            ),
-        );
+    if let Err(why) = name_problem(&app.name) {
+        return fail("kiosk_name_invalid", "name", why);
     }
     let how = launch(app)?;
     if let Some(ua) = &app.user_agent {
@@ -633,14 +620,35 @@ fn toml_to_json(v: &toml::Value) -> Result<Value, String> {
     })
 }
 
-/// id：`^[a-z][a-z0-9-]{0,23}$`。
-pub fn check_id(id: &str) -> Result<(), KioskError> {
-    let ok = id.len() <= MAX_ID_LEN
+/// What is wrong with an app `name`, if anything. Shared by kiosk apps and `[config.apps.deb.<id>]`.
+///
+/// 名字写进账号的 GECOS（`usermod -c`）：`:` 是 passwd 的字段分隔符，写进去 usermod 拒绝、清理永远做不完；
+/// `,` 分隔 GECOS 的子字段，accountsservice 只取第一个 `,` 之前的当名字，登录界面显示被截断。
+pub fn name_problem(name: &str) -> Result<(), String> {
+    if name.trim().is_empty()
+        || has_control(name)
+        || name.contains([':', ','])
+        || name.chars().count() > MAX_NAME_CHARS
+    {
+        return Err(format!(
+            "Name {name:?} must be non-empty, at most {MAX_NAME_CHARS} characters, and contain no colon :, comma , or control characters (newline, tab, etc.)"
+        ));
+    }
+    Ok(())
+}
+
+/// Whether `id` is a valid app id: `^[a-z][a-z0-9-]{0,23}$`.
+pub fn id_ok(id: &str) -> bool {
+    id.len() <= MAX_ID_LEN
         && id.starts_with(|c: char| c.is_ascii_lowercase())
         && id
             .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
-    if ok {
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+/// id：`^[a-z][a-z0-9-]{0,23}$`。
+pub fn check_id(id: &str) -> Result<(), KioskError> {
+    if id_ok(id) {
         Ok(())
     } else {
         fail(
@@ -654,7 +662,7 @@ pub fn check_id(id: &str) -> Result<(), KioskError> {
 }
 
 /// `https://` 开头、有内容，不含空白、控制字符、引号与反斜杠（这些会进 `.desktop` 与 JSON）。
-fn https_url(u: &str) -> Result<&str, &'static str> {
+pub(crate) fn https_url(u: &str) -> Result<&str, &'static str> {
     let Some(rest) = u.strip_prefix("https://") else {
         return Err("is not an https:// address");
     };
@@ -741,19 +749,29 @@ fn host(d: &str) -> Result<String, String> {
     Ok(h)
 }
 
-/// `exec`：Flatpak id（[`checks::flatpak_id`]），或 `/usr/` 下的绝对路径（每段非空、不是 `.` 或 `..`，
-/// 只含字母、数字、`.`、`_`、`-`、`+`）。不收参数，也就不收 shell 命令。
-fn exec(x: &str) -> Result<(), KioskError> {
-    let ok = if let Some(rest) = x.strip_prefix("/usr/") {
-        x.len() <= 4096
-            && rest.split('/').all(|seg| {
-                !seg.is_empty()
-                    && seg != "."
-                    && seg != ".."
-                    && seg.bytes().all(|b| {
-                        b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'+')
-                    })
+/// An absolute path under one of `prefixes` (each ends in `/`): every segment non-empty, not `.` or `..`,
+/// only letters, digits, `.`, `_`, `-`, `+`. No arguments, so no shell commands either.
+pub(crate) fn abs_path_under(x: &str, prefixes: &[&str]) -> bool {
+    x.len() <= 4096
+        && prefixes.iter().any(|p| {
+            x.strip_prefix(p).is_some_and(|rest| {
+                rest.split('/').all(|seg| {
+                    !seg.is_empty()
+                        && seg != "."
+                        && seg != ".."
+                        && seg.bytes().all(|b| {
+                            b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'+')
+                        })
+                })
             })
+        })
+}
+
+/// `exec`：Flatpak id（[`checks::flatpak_id`]），或 `/usr/`、`/opt/` 下的绝对路径（见 [`abs_path_under`]）。
+/// `/opt/` 是 .deb 应用（`[config.apps.deb]`）装的位置；lint 只查形状，这个路径是否由某个 .deb 应用提供由 agent 装好之后查。
+fn exec(x: &str) -> Result<(), KioskError> {
+    let ok = if x.starts_with('/') {
+        abs_path_under(x, &["/usr/", "/opt/"])
     } else {
         checks::flatpak_id(x).is_ok()
     };
@@ -764,7 +782,7 @@ fn exec(x: &str) -> Result<(), KioskError> {
             "kiosk_exec_invalid",
             "exec",
             format!(
-                "exec {x:?} is neither a Flatpak id (for example org.example.App) nor an absolute path under /usr/ without ..; arguments are not allowed"
+                "exec {x:?} is neither a Flatpak id (for example org.example.App) nor an absolute path under /usr/ or /opt/ without ..; arguments are not allowed"
             ),
         )
     }
@@ -1023,13 +1041,27 @@ url = "https://test.mapnwea.org/"
     }
 
     #[test]
+    fn exec_under_opt_ok() {
+        let a = app("name = \"n\"\nexec = \"/opt/testnav/bin/testnav\"");
+        check("x", &a).unwrap();
+    }
+
+    #[test]
     fn exec_rules() {
         let with = |x: &str| app(&format!("name = \"n\"\nexec = {}", q(x)));
-        for ok in ["org.example.Calc", "/usr/bin/foo", "/usr/lib/x/run-me_2"] {
+        for ok in [
+            "org.example.Calc",
+            "/usr/bin/foo",
+            "/usr/lib/x/run-me_2",
+            "/opt/testnav/bin/testnav",
+        ] {
             check("x", &with(ok)).unwrap_or_else(|e| panic!("{ok}: {e:?}"));
         }
         for bad in [
-            "/opt/x",
+            "/etc/x",
+            "/opt/",
+            "/opt/../bin/sh",
+            "/optx/y",
             "/usr/../bin/sh",
             "/usr/bin/../../bin/sh",
             "foo bar",
@@ -1510,7 +1542,7 @@ url = "https://test.mapnwea.org/"
             "kiosk_policy_locked"
         );
         // 不合规的应用照样报错，不是策略。
-        let bad = app("name = \"n\"\nexec = \"/opt/x\"");
+        let bad = app("name = \"n\"\nexec = \"/etc/x\"");
         assert_eq!(
             chrome_policy(&bad, &exam(), None).unwrap_err().code,
             "kiosk_exec_invalid"

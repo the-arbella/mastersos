@@ -363,7 +363,7 @@ Defaults, and what it leaves out is taken as is:
 - A collection (entries with names): the Config's entries are added after the inherited ones; an
   entry with the same name replaces the inherited entry as a whole (no key-by-key merge). The name
   is `ssid` for `wifi`, `name` for `apps.web`, `printers` and `scanners`, the app id for
-  `apps.flatpak`, the key for `apps.kiosk` and `chrome_policy`, `dest` for `files` and `downloads`,
+  `apps.flatpak`, the key for `apps.kiosk`, `apps.deb` and `chrome_policy`, `dest` for `files` and `downloads`,
   `path` for `scripts`. To leave an inherited entry out, name it in [`[config.drop]`](#configdrop).
 
 A Config that writes nothing is exactly the Defaults.
@@ -529,7 +529,7 @@ is `drop_conflict` (an error).
 | `wifi` | `ssid` |
 | `apps.web`, `printers`, `scanners` | `name` |
 | `apps.flatpak` | the app id |
-| `apps.kiosk` | the key (app id) |
+| `apps.kiosk`, `apps.deb` | the key (app id) |
 | `files`, `downloads` | `dest` |
 | `scripts` | `path` |
 | `chrome_policy` | the policy name |
@@ -552,6 +552,7 @@ is `drop_conflict` (an error).
 | `web` | list of strings | `[]` | web app names | — | |
 | `flatpak` | list of strings | `[]` | Flatpak app ids | `drop.apps.flatpak = ["org.gimp.GIMP"]` | |
 | `kiosk` | list of strings | `[]` | kiosk app ids | — | |
+| `deb` | list of strings | `[]` | .deb app ids | `drop.apps.deb = ["testnav"]` | |
 
 ### `[[group]]`
 
@@ -807,6 +808,8 @@ The apps of a Config.
 | `web` | list of tables | `[]` | see [`[[config.apps.web]]`](#configappsweb) | — | Web app launchers. |
 | `flatpak` | list of strings | `[]` | Flatpak app ids: at least three dot-separated parts of letters, digits, `_` and `-`, starting with a letter | `flatpak = ["org.libreoffice.LibreOffice"]` | Installed from Flathub in both `full` and `learning` mode, and added to the Dock and the app grid. Apps removed from the list are uninstalled if MastersOS installed them. |
 | `kiosk` | table of apps | `{}` | see [`[config.apps.kiosk.<id>]`](#configappskioskid) | — | Kiosk apps keyed by app id. |
+| `deb` | table of apps | `{}` | see [`[config.apps.deb.<id>]`](#configappsdebid) | — | Third-party .deb apps keyed by app id. Devices too old to know them reject the version (`feature_unsupported`). |
+| `ubuntu_mirror` | string | the Ubuntu snapshot the image was built from | an `http://` or `https://` address of an Ubuntu archive root (it has `dists/<release>` below it); see `ubuntu_mirror_invalid` | `ubuntu_mirror = "http://th.archive.ubuntu.com/ubuntu"` | Where the .deb apps' dependencies come from. May differ per Config, and a Config's value replaces the `[defaults]` one. The mirror itself need not be trusted: its files are verified with the Ubuntu archive keys in the image. |
 
 ### `[[config.apps.web]]`
 
@@ -832,6 +835,46 @@ icon = "files/khan-academy.png"
 [[config.apps.web]]
 name = "Google Classroom"
 url = "https://classroom.google.com/"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "standard"
+```
+
+### `[config.apps.deb.<id>]`
+
+A third-party .deb app: a program a vendor ships as a `.deb` file at an https link, installed on the
+Devices with its dependencies taken from Ubuntu. `<id>` is the app id: it starts with a lowercase
+letter, has only lowercase letters, digits and `-`, and is at most 24 characters. With
+`kiosk = true` the app also runs alone in a kiosk session; its id then shares one name space with
+`apps.kiosk` (the account is `kiosk-<id>`, `deb_kiosk_id_conflict`) and the apps of both count toward
+the cap of 32 (`kiosk_too_many`).
+
+| Key | Type | Required / default | Allowed values | Example | Notes |
+|---|---|---|---|---|---|
+| `name` | string | required | 1-64 characters; no `:`, `,` or control characters | `name = "TestNav"` | Shown in the Dock and, with `kiosk = true`, on the login screen. |
+| `url` | string | required | `https://` with a host name; no spaces, quotes or backslash; at most 2048 bytes | `url = "https://download.testnav.com/_testnavinstallers/testnav-1.15.7.deb"` | The `.deb` file. |
+| `sha256` | string | optional; follow the link | 64 lowercase hexadecimal digits | `sha256 = "2e06d735c1a4f0b8d9e3a7b65c4f1e28a9d0b3c7e5f64a18b2c9d0e7f3a51b46"` | Written: only a file with this hash is installed and the version never changes by itself. Absent: the app follows whatever the link serves. |
+| `kiosk` | boolean | `false` | `true` or `false` | `kiosk = true` | Also run it as a kiosk app. |
+| `packages` | list of strings | `[]` | at most 32 Debian package names (lowercase letters, digits, `+`, `.`, `-`; at least two characters, starting with a letter or digit) | `packages = ["x11-utils"]` | Ubuntu packages the program needs but the `.deb` does not declare; resolved together with the app's dependencies. |
+| `exec` | string | optional; read from the package's `.desktop` file | an absolute path under `/opt/` or `/usr/`; no `..`, no arguments | `exec = "/opt/testnav/bin/testnav"` | Required when the package has no usable `.desktop` file or several. Only the shape is checked here; after installing, the Device checks that the path is really provided by this app. |
+| `icon` | string | optional; the `.desktop` file's icon | a `files/…` file in the bundle, or an `https://` link | `icon = "files/testnav.png"` | Same rule as a kiosk app's `icon`. |
+
+```toml check=ok
+[[config]]
+id = "standard"
+name = "Standard"
+
+[config.apps]
+ubuntu_mirror = "http://th.archive.ubuntu.com/ubuntu"
+
+[config.apps.deb.testnav]
+name = "TestNav"
+url = "https://download.testnav.com/_testnavinstallers/testnav-1.15.7.deb"
+kiosk = true
+packages = ["x11-utils"]
+exec = "/opt/testnav/bin/testnav"
 
 [[group]]
 id = "default"
@@ -1216,6 +1259,14 @@ last Version), so only the server's check at `mastersos publish` reports them.
 | `config_duplicate_id` | error | two Configs with one id |
 | `config_shape_mixed` | error | `[[config]]` and a `[[group]]` with settings (parse) |
 | `config_unused` | info | no Group uses a Config |
+| `deb_exec_invalid` | error | `.deb` app `exec` |
+| `deb_icon_invalid` | error | `.deb` app `icon` |
+| `deb_id_invalid` | error | `.deb` app id |
+| `deb_kiosk_id_conflict` | error | `.deb` app with `kiosk = true` and a kiosk app share an id |
+| `deb_name_invalid` | error | `.deb` app `name` |
+| `deb_packages_invalid` | error | `.deb` app `packages` |
+| `deb_sha256_invalid` | error | `.deb` app `sha256` |
+| `deb_url_invalid` | error | `.deb` app `url` |
 | `default_group_missing` | error | no `default` Group |
 | `dest_not_absolute` | error | `files` / `downloads` destination |
 | `device_duplicate_id` | error | Device listed twice |
@@ -1290,6 +1341,7 @@ last Version), so only the server's check at `mastersos publish` reports them.
 | `trust_key_invalid` | error | trust `public_key` |
 | `trust_rp_id_forbidden` | error | `rp_id` on an `ed25519` key |
 | `trust_rp_id_invalid` | error | Passkey `rp_id` |
+| `ubuntu_mirror_invalid` | error | `[config.apps] ubuntu_mirror` |
 | `unknown_field` | error | misspelled or unknown key (parse) |
 | `update_channel_unknown` | error | `update_channel` in `[school]`, `[defaults]` or a `[[config]]` |
 | `update_mirror_invalid` | error | `[school] update_mirror` |
@@ -1612,6 +1664,231 @@ login_methods = ["guest"]
 id = "default"
 name = "Unassigned"
 config = "student"
+```
+<!-- /prompt:omit -->
+
+### `deb_exec_invalid`
+
+**Level:** error. **Meaning:** a `.deb` app's `exec` is not an absolute path under `/opt/` or `/usr/`, or contains `..`, a space or another character a path does not need.
+
+<!-- prompt:omit -->
+**Why:** the program is started as written; arguments and shell commands are not accepted.
+<!-- /prompt:omit -->
+
+**How to fix:** write the path of the program only, for example `/opt/testnav/bin/testnav`, or remove `exec` to read it from the package's `.desktop` file.
+
+<!-- prompt:omit -->
+```toml check=deb_exec_invalid
+[[config]]
+id = "standard"
+name = "Standard"
+
+[config.apps.deb.testnav]
+name = "TestNav"
+url = "https://download.testnav.com/testnav.deb"
+exec = "/etc/testnav/start"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "standard"
+```
+<!-- /prompt:omit -->
+
+### `deb_icon_invalid`
+
+**Level:** error. **Meaning:** a `.deb` app's `icon` is neither a `files/…` file present in the bundle nor an `https://` link.
+
+<!-- prompt:omit -->
+**Why:** the icon is copied from the bundle or downloaded when the app is set up.
+<!-- /prompt:omit -->
+
+**How to fix:** add the file under `files/`, use an `https://` link, or remove `icon` to use the one from the package.
+
+<!-- prompt:omit -->
+```toml check=deb_icon_invalid
+[[config]]
+id = "standard"
+name = "Standard"
+
+[config.apps.deb.testnav]
+name = "TestNav"
+url = "https://download.testnav.com/testnav.deb"
+icon = "files/testnav.png"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "standard"
+```
+<!-- /prompt:omit -->
+
+### `deb_id_invalid`
+
+**Level:** error. **Meaning:** a `.deb` app's id (the table name) does not start with a lowercase letter, has characters other than lowercase letters, digits and `-`, or is longer than 24 characters.
+
+<!-- prompt:omit -->
+**Why:** with `kiosk = true` the id becomes part of the account name `kiosk-<id>`.
+<!-- /prompt:omit -->
+
+**How to fix:** rename the table, for example `[config.apps.deb.testnav]`.
+
+<!-- prompt:omit -->
+```toml check=deb_id_invalid
+[[config]]
+id = "standard"
+name = "Standard"
+
+[config.apps.deb.TestNav]
+name = "TestNav"
+url = "https://download.testnav.com/testnav.deb"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "standard"
+```
+<!-- /prompt:omit -->
+
+### `deb_kiosk_id_conflict`
+
+**Level:** error. **Meaning:** a `.deb` app with `kiosk = true` has the same id as an app in `apps.kiosk` of the same Config.
+
+<!-- prompt:omit -->
+**Why:** both would use the account `kiosk-<id>`.
+<!-- /prompt:omit -->
+
+**How to fix:** rename one of them, or set `kiosk = false` on the `.deb` app.
+
+<!-- prompt:omit -->
+```toml check=deb_kiosk_id_conflict
+[[config]]
+id = "standard"
+name = "Standard"
+
+[config.apps.kiosk.testnav]
+name = "TestNav web"
+url = "https://home.testnav.com/"
+
+[config.apps.deb.testnav]
+name = "TestNav"
+url = "https://download.testnav.com/testnav.deb"
+kiosk = true
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "standard"
+```
+<!-- /prompt:omit -->
+
+### `deb_name_invalid`
+
+**Level:** error. **Meaning:** a `.deb` app's `name` is empty, longer than 64 characters, or contains `:`, `,` or a control character.
+
+<!-- prompt:omit -->
+**Why:** the name becomes the display name of the app and, with `kiosk = true`, of its account, where `:` and `,` break it.
+<!-- /prompt:omit -->
+
+**How to fix:** shorten the name and drop those characters.
+
+<!-- prompt:omit -->
+```toml check=deb_name_invalid
+[[config]]
+id = "standard"
+name = "Standard"
+
+[config.apps.deb.testnav]
+name = "Test: Nav"
+url = "https://download.testnav.com/testnav.deb"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "standard"
+```
+<!-- /prompt:omit -->
+
+### `deb_packages_invalid`
+
+**Level:** error. **Meaning:** a `.deb` app's `packages` has more than 32 entries, or an entry that is not a Debian package name.
+
+<!-- prompt:omit -->
+**Why:** the names are handed to the package resolver.
+<!-- /prompt:omit -->
+
+**How to fix:** use Ubuntu package names such as `x11-utils` (lowercase letters, digits, `+`, `.`, `-`; at least two characters) and keep at most 32.
+
+<!-- prompt:omit -->
+```toml check=deb_packages_invalid
+[[config]]
+id = "standard"
+name = "Standard"
+
+[config.apps.deb.testnav]
+name = "TestNav"
+url = "https://download.testnav.com/testnav.deb"
+packages = ["X11 Utils"]
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "standard"
+```
+<!-- /prompt:omit -->
+
+### `deb_sha256_invalid`
+
+**Level:** error. **Meaning:** a `.deb` app's `sha256` is not 64 lowercase hexadecimal digits.
+
+<!-- prompt:omit -->
+**Why:** the hash pins the exact file to install.
+<!-- /prompt:omit -->
+
+**How to fix:** write the output of `sha256sum` in lowercase, or remove `sha256` to follow the link.
+
+<!-- prompt:omit -->
+```toml check=deb_sha256_invalid
+[[config]]
+id = "standard"
+name = "Standard"
+
+[config.apps.deb.testnav]
+name = "TestNav"
+url = "https://download.testnav.com/testnav.deb"
+sha256 = "ABC123"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "standard"
+```
+<!-- /prompt:omit -->
+
+### `deb_url_invalid`
+
+**Level:** error. **Meaning:** a `.deb` app's `url` is not an `https://` address, is longer than 2048 bytes, or contains spaces, quotes or a backslash.
+
+<!-- prompt:omit -->
+**Why:** the file is downloaded on the Devices and must not travel over an unprotected connection.
+<!-- /prompt:omit -->
+
+**How to fix:** use the vendor's `https://` download link.
+
+<!-- prompt:omit -->
+```toml check=deb_url_invalid
+[[config]]
+id = "standard"
+name = "Standard"
+
+[config.apps.deb.testnav]
+name = "TestNav"
+url = "http://download.testnav.com/testnav.deb"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "standard"
 ```
 <!-- /prompt:omit -->
 
@@ -1990,7 +2267,7 @@ with Configs counts as using it, `wifi_ext`: any `[[school.wifi]]`, or a Wi-Fi e
 `wpa3_only` (either value), `eap` or an enterprise key, or `oidc_card`: `client_secret` or
 `card_hosts` in `[school.oidc]`, or `support`: `[config.support]` or `support` in `[defaults]`, or
 `config_update_channel`: `update_channel` in `[defaults]` or a `[[config]]`, or `oidc_idp_hint`:
-`idp_hint` in `[school.oidc]`),
+`idp_hint` in `[school.oidc]`, or `deb_apps`: `apps.deb` or `ubuntu_mirror` in `[defaults]` or a `[[config]]`),
 and some Devices seen in the last 30 days have not reported that they understand it.
 
 <!-- prompt:omit -->
@@ -2386,14 +2663,14 @@ config = "standard"
 ### `kiosk_exec_invalid`
 
 **Level:** error. **Meaning:** a kiosk app's `exec` is neither a Flatpak app id nor an absolute path
-under `/usr/`.
+under `/usr/` or `/opt/` (without `..`).
 
 <!-- prompt:omit -->
 **Why:** kiosk apps start one known program; arguments and shell commands are not accepted.
 <!-- /prompt:omit -->
 
-**How to fix:** use a Flatpak id (and list it in `apps.flatpak`) or a program path under `/usr/`,
-without arguments.
+**How to fix:** use a Flatpak id (and list it in `apps.flatpak`) or a program path under `/usr/` or
+`/opt/`, without arguments. A path under `/opt/` is only useful when a `.deb` app of the Config installs it.
 
 <!-- prompt:omit -->
 ```toml check=kiosk_exec_invalid
@@ -2403,7 +2680,7 @@ name = "Standard"
 
 [config.apps.kiosk.exam-client]
 name = "Exam client"
-exec = "/opt/exam/start.sh"
+exec = "/etc/exam/start.sh"
 
 [[group]]
 id = "default"
@@ -2748,7 +3025,8 @@ config = "standard"
 
 ### `kiosk_too_many`
 
-**Level:** error. **Meaning:** a Config has more than 32 kiosk apps.
+**Level:** error. **Meaning:** a Config has more than 32 kiosk apps, counting the `.deb` apps with
+`kiosk = true`.
 
 <!-- prompt:omit -->
 **Why:** each kiosk app takes a system account from a fixed range.
@@ -3590,6 +3868,32 @@ rp_id = "https://sign.os.khundavid.com"
 [[config]]
 id = "standard"
 name = "Standard"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "standard"
+```
+<!-- /prompt:omit -->
+
+### `ubuntu_mirror_invalid`
+
+**Level:** error. **Meaning:** `ubuntu_mirror` in `[config.apps]` is not an `http://` or `https://` address with a host and optional folder, or it contains a query, fragment, credentials, `%`, `@`, `..`, spaces or non-ASCII characters.
+
+<!-- prompt:omit -->
+**Why:** the address is written into the Devices' package source configuration.
+<!-- /prompt:omit -->
+
+**How to fix:** write the Ubuntu archive root, for example `http://th.archive.ubuntu.com/ubuntu`.
+
+<!-- prompt:omit -->
+```toml check=ubuntu_mirror_invalid
+[[config]]
+id = "standard"
+name = "Standard"
+
+[config.apps]
+ubuntu_mirror = "ftp://th.archive.ubuntu.com/ubuntu"
 
 [[group]]
 id = "default"

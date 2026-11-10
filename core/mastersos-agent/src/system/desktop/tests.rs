@@ -1132,7 +1132,7 @@ fn desktop_writes_in_session_launcher_only_when_enabled() {
     );
     g.apps.kiosk.insert(
         "bad".into(),
-        kiosk_app("name = \"Bad\"\nexec = \"/opt/x\"\nin_session = true\n"),
+        kiosk_app("name = \"Bad\"\nexec = \"/etc/x\"\nin_session = true\n"),
     );
     kiosk_launch(root.path(), "nwea");
     kiosk_launch(root.path(), "forms");
