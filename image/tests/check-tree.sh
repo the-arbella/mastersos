@@ -3355,4 +3355,48 @@ if ! grep -qxF '[Service]' "$gx" 2>/dev/null ||
 fi
 [ "$r" = 0 ] && ok 74 "systemd-tmpfiles-setup waits for /tmp and the seed mount; GDM resets /tmp/.X11-unix to root:root 1777 before the greeter"
 
+# 75. Exam quiet (exam-quiet Task 7): mastersos-quiet.target is a bare marker (no [Install], no Conflicts=, no dependencies); the three
+#     download services carry the exact ExecCondition line; every unit in quiet.rs STOP_UNITS except the transient
+#     mastersos-flatpak.service has a unit file in the image
+r=0
+qd=$ex/usr/lib/systemd/system
+qt=$qd/mastersos-quiet.target
+if [ ! -f "$qt" ]; then
+	bad 75 "$qt is missing"
+	r=1
+else
+	if grep -qE '^\[Install\]' "$qt"; then
+		bad 75 "$qt should have no [Install] section"
+		r=1
+	fi
+	if grep -qE '^(Conflicts|Requires|Wants|After|Before|BindsTo|PartOf)=' "$qt"; then
+		bad 75 "$qt should have no dependencies or Conflicts="
+		r=1
+	fi
+fi
+for u in mastersos-update mastersos-chrome mastersos-golden-fetch; do
+	if grep -qE '^Conflicts=.*mastersos-quiet' "$qd/$u.service" 2>/dev/null; then
+		bad 75 "$u.service should not use Conflicts= with the quiet target (conflicts are two-way)"
+		r=1
+	fi
+	grep -qxF "ExecCondition=/bin/sh -c '! systemctl is-active --quiet mastersos-quiet.target'" "$qd/$u.service" 2>/dev/null || {
+		bad 75 "$u.service should have ExecCondition=/bin/sh -c '! systemctl is-active --quiet mastersos-quiet.target'"
+		r=1
+	}
+done
+qrs=$core/mastersos-agent/src/quiet.rs
+mapfile -t stop_units < <(sed -n '/STOP_UNITS: &\[&str\] = &\[/,/^\];/p' "$qrs" | grep -oE '"[^"]+"' | tr -d '"')
+[ "${#stop_units[@]}" -ge 3 ] || {
+	bad 75 "could not read STOP_UNITS from $qrs"
+	r=1
+}
+for u in "${stop_units[@]}"; do
+	[ "$u" = mastersos-flatpak.service ] && continue
+	[ -f "$qd/$u" ] || {
+		bad 75 "STOP_UNITS has $u but the image has no $qd/$u"
+		r=1
+	}
+done
+[ "$r" = 0 ] && ok 75 "mastersos-quiet.target is a bare marker; update, chrome and golden-fetch services refuse to start while it is active; STOP_UNITS all have unit files (flatpak is transient)"
+
 exit $fail
