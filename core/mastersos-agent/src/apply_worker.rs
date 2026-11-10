@@ -9,7 +9,8 @@
 //!   一轮的结果时发来的新请求让脚本重跑。
 //! - Exam quiet (`quiet`): a round does not start while quiet; requests that arrive meanwhile only replace the held one,
 //!   and the newest is applied once the quiet ends. Quiet starting mid-round stops the applier between steps (and
-//!   keeps the files and the apply scripts from starting); the same request then runs again after the quiet.
+//!   keeps the files and the apply scripts from starting); the same request then runs again after the quiet. A
+//!   closed quiet sender (shutdown) keeps its last value: a held request stays held until the worker ends.
 //! - 有失败项时 `RETRY_MIN_SECS` 后重跑同一份请求，之后翻倍、上限 `FALLBACK_SECS`；没有失败项时
 //!   每 `REAPPLY_SECS` 也整体重应用一次（spec §4.4：下一次同步时覆盖本机改动）。
 
@@ -213,11 +214,13 @@ impl Worker {
             let Some(mut fresh) = fresh else {
                 return; // 主循环退出了
             };
-            // Hold while quiet: newer requests replace the held one (taken below), nothing is applied.
+            // Hold while quiet: newer requests replace the held one (taken below), nothing is applied. A closed
+            // sender (the monitor stopped at shutdown) keeps the last value: quiet holds until the requests end.
             let mut quiet = self.quiet.clone();
-            while quiet.borrow().is_some() && quiet.has_changed().is_ok() {
+            while quiet.borrow().is_some() {
+                let open = quiet.has_changed().is_ok();
                 tokio::select! {
-                    _ = wait_until_loud(&mut quiet) => {}
+                    _ = wait_until_loud(&mut quiet), if open => {}
                     r = rx.changed() => {
                         if r.is_err() {
                             return; // 主循环退出了
@@ -249,8 +252,8 @@ impl Worker {
             let watcher = {
                 let (mut q, f) = (self.quiet.clone(), quiet_flag.clone());
                 AbortOnDrop(tokio::spawn(async move {
-                    // A closed sender (the monitor is gone) counts as loud, as in the hold above.
-                    if q.wait_for(|v| v.is_some()).await.is_ok() && q.has_changed().is_ok() {
+                    // A closed sender keeps its last value, as in the hold above.
+                    if q.wait_for(|v| v.is_some()).await.is_ok() {
                         f.store(true, Ordering::SeqCst);
                     }
                 }))
@@ -289,9 +292,9 @@ impl Worker {
         }
     }
 
-    /// The quiet is on now (a closed sender counts as loud, as in the hold in `run`).
+    /// The quiet is on now (a closed sender keeps its last value, as in the hold in `run`).
     fn is_quiet(&self) -> bool {
-        self.quiet.borrow().is_some() && self.quiet.has_changed().is_ok()
+        self.quiet.borrow().is_some()
     }
 
     /// Before the files and before the apply scripts: has the quiet started? Checks the receiver too, so the answer
@@ -759,6 +762,26 @@ mod tests {
         assert!(!o.had_failures, "{:?}", o.results);
         assert_eq!(r.calls(), vec!["second"]);
         assert!(!h.pending());
+    }
+
+    /// The quiet sender goes away (the monitor stopped at shutdown) while quiet: the held request is not applied,
+    /// up to the end of the worker.
+    #[tokio::test(start_paused = true)]
+    async fn closed_quiet_sender_keeps_holding() {
+        let (qtx, qrx) = watch::channel(quiet_now());
+        let (mut h, r, _d) = worker_quiet(vec![step("second", second)], qrx);
+        h.request(req());
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        drop(qtx);
+        assert!(
+            timeout(Duration::from_secs(10), h.next_outcome())
+                .await
+                .is_err(),
+            "applied after the quiet sender closed"
+        );
+        let out = h.finish().await;
+        assert!(out.is_empty());
+        assert!(r.calls().is_empty(), "{:?}", r.calls());
     }
 
     /// Two requests while quiet: only the newest is applied after the quiet ends.

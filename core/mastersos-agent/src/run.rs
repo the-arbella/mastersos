@@ -226,11 +226,6 @@ async fn run_resident(
         .take()
         .context("the quiet sender was already taken")?;
     let quiet_rx = agent.quiet.clone();
-    tokio::spawn(crate::quiet::monitor(
-        Arc::new(RealRunner),
-        quiet_tx,
-        shutdown.clone(),
-    ));
     let cx = Arc::new(JobCtx {
         fetcher: agent.fetcher.clone(),
         ident: agent.machine.ident.clone(),
@@ -250,6 +245,14 @@ async fn run_resident(
         agent.job_wake.clone(),
     );
     agent.side_changed = Some(spawned.changed.clone());
+    // Spawned after the jobs: it reports a failing `loginctl` among their results.
+    tokio::spawn(crate::quiet::monitor(
+        Arc::new(RealRunner),
+        quiet_tx,
+        agent.side.clone(),
+        spawned.changed.clone(),
+        shutdown.clone(),
+    ));
     // 导入的缓存包被接受时已经交过请求了。应用与拉取都不等托管，只有回报等。
     if !agent.apply_pending() {
         agent.request_apply();
@@ -725,7 +728,16 @@ impl Agent {
         let cfg_root = cfg.root.clone();
         let heartbeat_due = later(cfg.heartbeat_every);
         // The quiet monitor publishes here (`run_resident` takes the sender); without it the quiet never starts.
-        let (quiet_tx, quiet) = tokio::sync::watch::channel(None);
+        // Resident: start from the target's state, so a restart during a kiosk session applies nothing held before
+        // the monitor's first round.
+        let initial_quiet = if mode == Mode::Resident {
+            tokio::task::spawn_blocking(|| crate::quiet::initial(&RealRunner))
+                .await
+                .unwrap_or(None)
+        } else {
+            None
+        };
+        let (quiet_tx, quiet) = tokio::sync::watch::channel(initial_quiet);
         let worker = (mode == Mode::Resident).then(|| {
             apply_worker::spawn(
                 applier.clone(),
@@ -1576,6 +1588,8 @@ impl Agent {
                         self.inbox_retry = None;
                         self.job_wake.notify_waiters();
                     }
+                    // IT sees the start and the end of the quiet now, not at the next periodic report.
+                    self.report_then_renew().await;
                 }
                 Wake::Report => self.report_then_renew().await,
                 Wake::GateOpen => self.open_reports().await,
@@ -2225,6 +2239,45 @@ mod tests {
         // Loud again: the retry is armed.
         agent.quiet_tx.as_ref().unwrap().send(None).unwrap();
         assert!(agent.inbox_retry_due().is_some());
+    }
+
+    /// Entering the quiet is reported at once (IT sees the exam), not at the next periodic report.
+    #[tokio::test]
+    async fn quiet_change_reports_at_once() {
+        let (dir, srv) = (tempfile::tempdir().unwrap(), inbox_server().await);
+        Mock::given(method("POST"))
+            .and(path("/v1/status"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&srv)
+            .await;
+        let mut agent = inbox_agent(dir.path(), &srv).await;
+        agent.mode = Mode::Resident;
+        agent.reports_held = false;
+        agent.cfg.report_every = Duration::from_secs(3600);
+        agent.last_report = Instant::now();
+        agent.heartbeat_due = later(Duration::from_secs(3600));
+        agent.sync_inbox = false;
+        let (shutdown, wake) = (CancellationToken::new(), Notify::new());
+        agent
+            .quiet_tx
+            .as_ref()
+            .unwrap()
+            .send(Some(Utc::now()))
+            .unwrap();
+        let w = agent
+            .wait(Some(later(Duration::from_millis(300))), &shutdown, &wake)
+            .await;
+        assert!(matches!(w, Wake::Elapsed));
+        let reports: Vec<serde_json::Value> = srv
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.url.path() == "/v1/status")
+            .map(|r| serde_json::from_slice(&r.body).unwrap())
+            .collect();
+        assert_eq!(reports.len(), 1, "{reports:?}");
+        assert!(reports[0]["quiet_since"].is_string(), "{:?}", reports[0]);
     }
 
     fn futures_now_or_never<F: std::future::Future>(f: F) -> Option<F::Output> {
