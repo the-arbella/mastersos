@@ -10,6 +10,10 @@ use crate::DebApp;
 /// `ubuntu_mirror` is at most this many bytes.
 pub const MAX_MIRROR_LEN: usize = 2048;
 
+/// The app id no .deb app may have: the Device's extension of the apps' shared dependencies is `app-deps`, the one of
+/// app `<id>` is `app-<id>`.
+pub const RESERVED_ID: &str = "deps";
+
 /// At most this many extra Ubuntu packages per app.
 pub const MAX_PACKAGES: usize = 32;
 
@@ -55,6 +59,15 @@ pub fn check(id: &str, app: &DebApp) -> Result<(), DebError> {
             format!(
                 "Deb app id {id:?} must start with a lowercase letter, contain only lowercase letters, digits and -, and be at most {} characters",
                 kiosk::MAX_ID_LEN
+            ),
+        );
+    }
+    if id == RESERVED_ID {
+        return fail(
+            "deb_id_invalid",
+            "id",
+            format!(
+                "Deb app id {id:?} is reserved (the Device keeps the apps' shared dependencies under that name); choose another id"
             ),
         );
     }
@@ -164,6 +177,15 @@ mod tests {
             assert_eq!((e.code, e.field), ("deb_id_invalid", "id"), "{bad}");
         }
         check(&"a".repeat(24), &testnav()).unwrap();
+    }
+
+    #[test]
+    fn deps_id_reserved() {
+        let e = check("deps", &testnav()).unwrap_err();
+        assert_eq!((e.code, e.field), ("deb_id_invalid", "id"));
+        assert!(e.message.contains("reserved"), "{}", e.message);
+        check("deps2", &testnav()).unwrap();
+        check("mydeps", &testnav()).unwrap();
     }
 
     #[test]

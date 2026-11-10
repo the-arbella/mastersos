@@ -773,11 +773,18 @@ pub(crate) fn abs_path_under(x: &str, prefixes: &[&str]) -> bool {
         })
 }
 
-/// `exec`：Flatpak id（[`checks::flatpak_id`]），或 `/usr/`、`/opt/` 下的绝对路径（见 [`abs_path_under`]）。
+/// A program path a locked app's `exec` may name: an absolute path under `/usr/` or `/opt/` whose parts are letters,
+/// digits, `.`, `_`, `-`, `+` ([`abs_path_under`]). The agent applies the same rule to the program it finds in a
+/// `kiosk = true` .deb app, so an app it builds is never refused by the kiosk step afterwards.
+pub fn exec_path_ok(x: &str) -> bool {
+    abs_path_under(x, &["/usr/", "/opt/"])
+}
+
+/// `exec`：Flatpak id（[`checks::flatpak_id`]），或 `/usr/`、`/opt/` 下的绝对路径（见 [`exec_path_ok`]）。
 /// `/opt/` 是 .deb 应用（`[config.apps.deb]`）装的位置；lint 只查形状，这个路径是否由某个 .deb 应用提供由 agent 装好之后查。
 fn exec(x: &str) -> Result<(), KioskError> {
     let ok = if x.starts_with('/') {
-        abs_path_under(x, &["/usr/", "/opt/"])
+        exec_path_ok(x)
     } else {
         checks::flatpak_id(x).is_ok()
     };
