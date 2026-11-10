@@ -356,6 +356,8 @@ impl SystemApplier {
 
 impl Applier for SystemApplier {
     fn apply(&self, ctx: &ApplyContext) -> Vec<ItemResult> {
+        // Checked between steps only. Known limit: a step already running when the quiet starts (printers, desktop
+        // downloads, kiosk) checks only `superseded` inside and finishes.
         self.run_steps(
             ctx.phase,
             &|| ctx.superseded.load(Ordering::SeqCst) || ctx.quiet.load(Ordering::SeqCst),

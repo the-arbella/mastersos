@@ -176,6 +176,16 @@ impl Drop for Pin<'_> {
 
 type Maps = (BTreeMap<String, String>, BTreeMap<String, String>);
 
+/// How a round ended.
+enum Round {
+    Applied(ApplyOutcome),
+    /// Superseded or quiet. `maps` are the records after `place()` when it already ran (it may have placed and
+    /// removed files), so the next round starts from them.
+    Stopped {
+        maps: Option<Maps>,
+    },
+}
+
 impl Worker {
     async fn run(
         self,
@@ -233,8 +243,9 @@ impl Worker {
             let init = maps
                 .clone()
                 .unwrap_or_else(|| (req.managed_paths.clone(), req.script_hashes.clone()));
-            // Set when the quiet starts during this round; the watcher ends with the round.
-            let quiet_flag = Arc::new(AtomicBool::new(false));
+            // Set when the quiet starts during this round; the watcher ends with the round. Starts set when the quiet
+            // began after the hold above, before the watcher runs.
+            let quiet_flag = Arc::new(AtomicBool::new(self.is_quiet()));
             let watcher = {
                 let (mut q, f) = (self.quiet.clone(), quiet_flag.clone());
                 AbortOnDrop(tokio::spawn(async move {
@@ -248,15 +259,21 @@ impl Worker {
                 .apply_once(&req, init, flag.clone(), quiet_flag.clone())
                 .await;
             drop(watcher);
-            let Some(o) = o else {
-                if !flag.load(Ordering::SeqCst) && quiet_flag.load(Ordering::SeqCst) {
-                    // Stopped by the quiet: come straight back, wait for it to end and run the same request again.
-                    rerun = Some(Duration::ZERO);
-                } else {
-                    // 作废：新请求已在 watch 里（或主循环在退出），下一圈立即拿到。
-                    rerun = None;
+            let o = match o {
+                Round::Applied(o) => o,
+                Round::Stopped { maps: m } => {
+                    if m.is_some() {
+                        maps = m;
+                    }
+                    if !flag.load(Ordering::SeqCst) && quiet_flag.load(Ordering::SeqCst) {
+                        // Stopped by the quiet: come straight back, wait for it to end and run the same request again.
+                        rerun = Some(Duration::ZERO);
+                    } else {
+                        // 作废：新请求已在 watch 里（或主循环在退出），下一圈立即拿到。
+                        rerun = None;
+                    }
+                    continue;
                 }
-                continue;
             };
             maps = Some((o.managed_paths.clone(), o.script_hashes.clone()));
             if o.had_failures {
@@ -272,15 +289,29 @@ impl Worker {
         }
     }
 
-    /// 跑一轮。applier 这段被作废时返回 None（后两段不跑）。Also None when the quiet started (`quiet`) before the files
-    /// or before the apply scripts.
+    /// The quiet is on now (a closed sender counts as loud, as in the hold in `run`).
+    fn is_quiet(&self) -> bool {
+        self.quiet.borrow().is_some() && self.quiet.has_changed().is_ok()
+    }
+
+    /// Before the files and before the apply scripts: has the quiet started? Checks the receiver too, so the answer
+    /// does not depend on when the watcher task ran; sets `quiet` when it has.
+    fn quiet_started(&self, quiet: &AtomicBool) -> bool {
+        if self.is_quiet() {
+            quiet.store(true, Ordering::SeqCst);
+        }
+        quiet.load(Ordering::SeqCst)
+    }
+
+    /// 跑一轮。applier 这段被作废时 Stopped（后两段不跑）。Also Stopped when the quiet started (`quiet`) before the
+    /// files or before the apply scripts (then with the records `place()` left).
     async fn apply_once(
         &self,
         req: &ApplyRequest,
         (managed, hashes): Maps,
         flag: Arc<AtomicBool>,
         quiet: Arc<AtomicBool>,
-    ) -> Option<ApplyOutcome> {
+    ) -> Round {
         let applier = self.applier.clone();
         let phase = req.phase;
         let Some(bundle) = req.bundle.clone() else {
@@ -289,7 +320,7 @@ impl Worker {
                 tokio::task::spawn_blocking(move || applier.apply_without_bundle(&seed, phase))
                     .await
                     .unwrap_or_else(|e| vec![failed("applier", format!("crashed: {e}"))]);
-            return Some(outcome(results, managed, hashes));
+            return Round::Applied(outcome(results, managed, hashes));
         };
         // 这一轮从头到尾只用这个包自己的目录（解好之后不再改动）；登记为正在用，主循环不会删它。
         *self.pinned.lock().unwrap_or_else(|e| e.into_inner()) = Some(state::version_name(&bundle));
@@ -319,11 +350,11 @@ impl Worker {
         })
         .await
         .unwrap_or_else(|e| vec![failed("applier", format!("crashed: {e}"))]);
-        if flag.load(Ordering::SeqCst) || quiet.load(Ordering::SeqCst) {
-            return None;
+        if flag.load(Ordering::SeqCst) || self.quiet_started(&quiet) {
+            return Round::Stopped { maps: None };
         }
         if phase == Phase::Boot {
-            return Some(outcome(results, managed, hashes));
+            return Round::Applied(outcome(results, managed, hashes));
         }
 
         let config = select(&bundle.manifest, &self.ident, self.seed.group.as_deref())
@@ -337,8 +368,10 @@ impl Worker {
         results.extend(place(&config, &bundle_dir, &self.cfg.root, &mut st, &self.http).await);
         // 脚本那段异常退出时（panic = "abort" 下实际不会发生）沿用放文件之后的记录。
         let (managed, hashes) = (st.managed_paths.clone(), st.script_hashes.clone());
-        if quiet.load(Ordering::SeqCst) {
-            return None;
+        if self.quiet_started(&quiet) {
+            return Round::Stopped {
+                maps: Some((managed, hashes)),
+            };
         }
         let work = match state::run_dir(&self.cfg.state_dir) {
             Ok(w) => w,
@@ -347,7 +380,7 @@ impl Worker {
                     "scripts",
                     format!("failed to prepare the execution directory: {e:#}"),
                 ));
-                return Some(outcome(results, managed, hashes));
+                return Round::Applied(outcome(results, managed, hashes));
             }
         };
         match tokio::task::spawn_blocking(move || {
@@ -358,11 +391,11 @@ impl Worker {
         {
             Ok((st, r)) => {
                 results.extend(r);
-                Some(outcome(results, st.managed_paths, st.script_hashes))
+                Round::Applied(outcome(results, st.managed_paths, st.script_hashes))
             }
             Err(e) => {
                 results.push(failed("scripts", format!("crashed: {e}")));
-                Some(outcome(results, managed, hashes))
+                Round::Applied(outcome(results, managed, hashes))
             }
         }
     }
@@ -764,14 +797,21 @@ mod tests {
         vec![]
     }
 
-    /// Turns the quiet on the first time it runs, and gives the worker time to notice.
-    fn quiet_on_once(_: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
+    /// Turns the quiet on the first time it runs, and waits until the worker has noticed (`ctx.quiet`).
+    fn quiet_on_once(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
         call(env, "two");
         if !MID_QUIET_DONE.swap(true, Ordering::SeqCst) {
             if let Some(tx) = MID_QUIET.lock().unwrap().as_ref() {
                 tx.send_replace(quiet_now());
             }
-            std::thread::sleep(Duration::from_millis(500));
+            let t0 = std::time::Instant::now();
+            while !ctx.quiet.load(Ordering::SeqCst) {
+                assert!(
+                    t0.elapsed() < Duration::from_secs(10),
+                    "the worker did not notice the quiet"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
         }
         vec![]
     }
@@ -819,5 +859,77 @@ mod tests {
         assert!(!o.had_failures, "{:?}", o.results);
         assert_eq!(r.calls(), vec!["one", "two", "one", "two", "three"]);
         *MID_QUIET.lock().unwrap() = None;
+    }
+
+    /// Sets the quiet when the download is fetched (so after the bundle's files are placed), then serves it.
+    struct QuietOnFetch(watch::Sender<Option<chrono::DateTime<chrono::Utc>>>);
+
+    impl wiremock::Respond for QuietOnFetch {
+        fn respond(&self, _: &wiremock::Request) -> wiremock::ResponseTemplate {
+            self.0.send_replace(quiet_now());
+            wiremock::ResponseTemplate::new(200).set_body_bytes(b"d".to_vec())
+        }
+    }
+
+    /// Quiet hits after `place()` of version 5 (which placed `/opt/x`); version 6 without the file is requested during
+    /// the quiet. After the quiet the file is removed: the stopped round's records were kept.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn quiet_after_place_keeps_its_records() {
+        let srv = wiremock::MockServer::start().await;
+        let (qtx, qrx) = watch::channel(None);
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(QuietOnFetch(qtx.clone()))
+            .mount(&srv)
+            .await;
+        let s = Ed25519Signer::from_pkcs8("k1", &Ed25519Signer::generate_pkcs8()).unwrap();
+        let k = s.trust_key();
+        let manifest_text = format!(
+            "version = 5\n\n[[trust]]\nid = \"{}\"\nalg = \"ed25519\"\npublic_key = \"{}\"\n\n[[group]]\nid = \"default\"\nname = \"x\"\n\
+             files = [{{ src = \"files/x\", dest = \"/opt/x\" }}]\n\
+             downloads = [{{ url = \"{}/d\", sha256 = \"{}\", dest = \"/opt/d\" }}]\n",
+            k.id,
+            k.public_key,
+            srv.uri(),
+            crate::apply::sha256_hex(b"d")
+        );
+        let c = Contents {
+            manifest_text,
+            files: [("files/x".to_string(), b"x".to_vec())].into(),
+        };
+        let archive = pack(&c, &s).unwrap();
+        let v5 = Arc::new(accept(&archive, &[k], None).unwrap());
+
+        let (mut h, _r, d) = worker_quiet(vec![], qrx);
+        std::fs::create_dir_all(d.path().join("root")).unwrap();
+        state::store_bundle(&d.path().join("state"), &archive, &v5).unwrap();
+        let x = d.path().join("root/opt/x");
+        h.request(ApplyRequest {
+            bundle: Some(v5),
+            ..req()
+        });
+        let t0 = Instant::now();
+        while qtx.borrow().is_none() || !x.exists() {
+            assert!(
+                t0.elapsed() < Duration::from_secs(10),
+                "version 5 was not placed"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(
+            timeout(Duration::from_secs(1), h.next_outcome())
+                .await
+                .is_err(),
+            "version 5 finished while quiet"
+        );
+        h.request(req());
+        qtx.send_replace(None);
+        let o = timeout(Duration::from_secs(10), h.next_outcome())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!o.had_failures, "{:?}", o.results);
+        assert!(!x.exists(), "a file of the stopped round was left behind");
+        assert!(!d.path().join("root/opt/d").exists());
+        assert!(o.managed_paths.is_empty(), "{:?}", o.managed_paths);
     }
 }
