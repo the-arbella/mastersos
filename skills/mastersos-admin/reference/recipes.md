@@ -229,7 +229,8 @@ login_methods = ["guest"]
 [config.apps.deb.testnav]
 name = "TestNav"
 url = "https://download.testnav.com/_testnavinstallers/testnav-1.15.7.deb"
-sha256 = "2e06d735c1a4f0b8d9e3a7b65c4f1e28a9d0b3c7e5f64a18b2c9d0e7f3a51b46"
+# placeholder: replace with the sha256 of the .deb you tested (sha256sum testnav-1.15.7.deb)
+sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 kiosk = true
 packages = ["x11-utils"]
 exec = "/opt/testnav/bin/testnav"
