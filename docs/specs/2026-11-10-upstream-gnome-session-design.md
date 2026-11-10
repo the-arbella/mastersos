@@ -63,9 +63,9 @@ David 裁定：不做对照测试，直接换回上游 GNOME 会话，凭判断�
 - 去掉：`ubuntu-session`、`ubuntu-settings`（Ubuntu 不带 `:ubuntu` 的那份默认值，指向 Yaru 的 GTK、图标、声音主题）、
   `yaru-theme-gnome-shell`、`yaru-theme-gtk`、`yaru-theme-icon`。若某个必需的包硬依赖 `ubuntu-settings` 去不掉，就在我们的 override
   里把这几个键改回上游值。postinst 断言 `gtk-theme`、`icon-theme`、`sound-theme` 的默认值都不含 Yaru。
-- 加：Ubuntu 的 AppIndicator 扩展包（`gnome-shell-extension-appindicator`）。它装的 uuid 以包里实际的 `metadata.json` 为准，
-  postinst 核对 uuid 与 `shell-version`，与受管提示扩展同样处理。
-- 确认 ubuntu-dock、DING、tiling-assistant、snapd 相关扩展都不再进镜像（它们是 `ubuntu-session` 拉进来的），postinst 断言目录不在。
+- 加：`gnome-shell-ubuntu-extensions`。resolute 里 Ubuntu 的七个扩展（托盘 `ubuntu-appindicators@ubuntu.com`、ubuntu-dock、DING、
+  tiling-assistant、两个 snapd、web-search-provider）在这同一个包里；我们只要托盘，postinst 删掉其余六个扩展目录并逐个断言不在，
+  核对托盘扩展的 `shell-version`。
 
 ### 默认值（gschema override）
 
