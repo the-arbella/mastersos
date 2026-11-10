@@ -39,11 +39,14 @@ run() { env -i HOME="$home" PATH=/usr/bin:/bin "$@"; }
 # The image's generators, reading the session-mode file from the test's public dir (their only path to it)
 mkdir -p "$tmp/gen" "$tmp/public"
 for g in 30-systemd-environment-d-generator 60-flatpak; do
-	grep -qxF 'mode_file=/var/lib/mastersos-public/session-mode' "$gens/$g" || {
-		echo "user-env-test: $g does not read /var/lib/mastersos-public/session-mode" >&2
-		exit 1
-	}
-	sed "s|^mode_file=/var/lib/mastersos-public/session-mode$|mode_file=$tmp/public/session-mode|" "$gens/$g" >"$tmp/gen/$g"
+	for l in mode_file=/var/lib/mastersos-public/session-mode locks_file=/etc/dconf/db/mastersos.d/locks/50-mastersos; do
+		grep -qxF "$l" "$gens/$g" || {
+			echo "user-env-test: $g has no line $l" >&2
+			exit 1
+		}
+	done
+	sed -e "s|^mode_file=/var/lib/mastersos-public/session-mode$|mode_file=$tmp/public/session-mode|" \
+		-e "s|^locks_file=/etc/dconf/db/mastersos.d/locks/50-mastersos$|locks_file=$tmp/locks|" "$gens/$g" >"$tmp/gen/$g"
 	chmod +x "$tmp/gen/$g"
 done
 mode() { if [ "$1" = none ]; then rm -f "$tmp/public/session-mode"; else printf '%s\n' "$1" >"$tmp/public/session-mode"; fi; }
@@ -69,6 +72,11 @@ check "learning (spaced, capitalised): DCONF_PROFILE left out" no "$(has '^DCONF
 for m in full none; do
 	mode "$m"
 	check "$m: the user's environment.d is read as on Ubuntu" "$(run "$sysd")" "$(run "$tmp/gen/30-systemd-environment-d-generator")"
+	# The dconf locks are what is enforced: with the agent's locks file there, the session counts as learning whatever
+	# session-mode says (a stale or missing copy fails towards the lock)
+	: >"$tmp/locks"
+	check "$m with dconf locks present: DCONF_PROFILE left out" no "$(has '^DCONF_PROFILE=' "$(run "$tmp/gen/30-systemd-environment-d-generator")")"
+	rm -f "$tmp/locks"
 done
 
 # Flatpak: system installation only in learning mode
@@ -82,6 +90,9 @@ check "learning: 60-flatpak asks for the system installation only" "GIO_USE_VFS=
 for m in full none; do
 	mode "$m"
 	check "$m: 60-flatpak includes the user's installation" "GIO_USE_VFS=local ARGS=--print-updated-env" "$(fp)"
+	: >"$tmp/locks"
+	check "$m with dconf locks present: 60-flatpak system only" "GIO_USE_VFS=local ARGS=--print-updated-env --print-system-only" "$(fp)"
+	rm -f "$tmp/locks"
 done
 
 echo "user-env-test: $((n - fails))/$n"

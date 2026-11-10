@@ -9,10 +9,16 @@
 # Tested by image/tests/user-env-test.sh.
 set -euo pipefail
 mode_file=/var/lib/mastersos-public/session-mode
+locks_file=/etc/dconf/db/mastersos.d/locks/50-mastersos
 mode=
 if [ -e "$mode_file" ]; then
 	mode=$(tr -d '[:space:]' <"$mode_file" | tr '[:upper:]' '[:lower:]') || mode=learning
 	[ -n "$mode" ] || mode=learning
+fi
+# The agent's dconf locks are the lock actually enforced: while they exist the session counts as learning, whatever the
+# session-mode copy says (a stale or missing copy then fails towards the lock, not away from it).
+if [ -e "$locks_file" ]; then
+	mode=learning
 fi
 export GIO_USE_VFS=local
 case "$mode" in
