@@ -12,18 +12,18 @@
 //! - **锁住的会话**：`/usr/share/applications` 与系统 Flatpak 导出目录里看得见的 `.desktop`（不是 `NoDisplay`/
 //!   `Hidden` 的），除了 Chrome、网页应用与（`learning` 下）配置里装好的 Flatpak 导出的，都在
 //!   [`XDG_DIR`]`/applications/` 写一个同名的 `Hidden=true` 覆盖；
-//!   文件管理器与设置的 D-Bus 激活覆盖成 `/bin/false`（[`DBUS_OVERRIDES`]）。这些只管搜索、Dock 与被别的程序拉起：
+//!   文件管理器与设置的 D-Bus 激活覆盖成 `/bin/false`（[`DBUS_OVERRIDES`]）。这些只管搜索、Dash 与被别的程序拉起：
 //!   `~/.local/share`（`XDG_DATA_HOME`）永远排在 `XDG_DATA_DIRS` 前面，学生自己写的 `.desktop` 能盖过它们，所以
 //!   终端、文件管理器、设置另由 [`super::exec_block`] 在执行层堵住。`full` 删掉全部覆盖、卸掉桩。
-//! - **锁住的会话的 dconf** 除了 Dock、运行对话框、终端快捷键、用户管理，还关掉 Ubuntu 的桌面图标扩展（DING）、
-//!   藏起 Dock 的回收站与外接盘（都是通往文件管理器的路，VM 上实测）。文件选择框（上传、另存为）不能跟着
+//! - **锁住的会话的 dconf** 锁住 Dash（概览里的收藏栏）、运行对话框、终端快捷键、用户管理与 shell 扩展（只开
+//!   mastersos 会话模式的两个，[`LOCKED_EXTENSIONS`]）。文件选择框（上传、另存为）不能跟着
 //!   Nautilus 一起没了：GNOME 50 的 xdg-desktop-portal-gnome 把它交给 Nautilus，镜像里的
-//!   `/usr/share/xdg-desktop-portal/ubuntu-portals.conf` 把 FileChooser 改走 xdg-desktop-portal-gtk。
+//!   `/usr/share/xdg-desktop-portal/mastersos-portals.conf` 把 FileChooser 改走 xdg-desktop-portal-gtk。
 //! - **锁定应用**（计划 9 Task 6）：`in_session = true` 的，在 [`XDG_DIR`]`/applications/` 写
 //!   `mastersos-kiosk-<id>.desktop`（执行 `mastersos-kiosk enter <id>`：确认后结束当前会话，回到登录界面点这个应用）并
-//!   排进 Dock（每种模式都是，在网页应用之后）。只给 kiosk 步骤（排在前面）建好了的应用写——有它的 `launch.json`；
+//!   排进 Dash（每种模式都是，在网页应用之后）。只给 kiosk 步骤（排在前面）建好了的应用写——有它的 `launch.json`；
 //!   图标用 kiosk 步骤缓存的那份。锁住的会话的 `Hidden=true` 覆盖不盖它、切模式删覆盖时也不碰它。
-//! - **Flatpak**（`learning` 与 `full`；旧的浏览器模式没有）：Dock 里加上配置里已由
+//! - **Flatpak**（`learning` 与 `full`；旧的浏览器模式没有）：Dash 里加上配置里已由
 //!   [`super::flatpak::FlatpakJob`] 装好的应用；装卸由那个后台任务做，它改了状态会叫主循环再应用一次。
 //! - 回报项 `desktop`（dconf、覆盖、执行层堵法的错误汇总在这一项）与每个网页应用的 `webapp:<name>`。
 
@@ -56,7 +56,7 @@ pub const CHROME_BIN: &str = "/usr/bin/google-chrome-stable";
 /// writes cookies into (`signin_handoff::import`). Moving to Chromium changes these with [`CHROME_BIN`].
 pub const CHROME_USER_DATA: &str = ".config/google-chrome";
 pub const CHROME_PROFILE: &str = "Default";
-/// `full` 的 Dock 里另有文件管理器。
+/// `full` 的 Dash 里另有文件管理器。
 pub const NAUTILUS_DESKTOP: &str = "org.gnome.Nautilus.desktop";
 /// 网页应用的启动器与图标的文件名前缀（后面是 `slug`）。
 pub const WEB_PREFIX: &str = "mastersos-web-";
@@ -123,24 +123,11 @@ pub const DBUS_OVERRIDES: &[&str] = &[
     "org.gnome.Settings.service",
 ];
 
-/// Ubuntu 会话自带的桌面图标扩展（DING）。它自己就是个小文件管理器（在 `~/Desktop` 上建、删、改名文件，
-/// 「在终端中打开」），还不停地经 D-Bus 拉 Nautilus（VM 上实测）：锁住的会话里关掉。
-pub const DING_EXTENSION: &str = "ding@rastersoft.com";
-
-/// Ubuntu 会话（`/usr/share/gnome-shell/modes/ubuntu.json`）自带的扩展里锁住的会话照开的那些（去掉 DING）。锁住的会话
-/// 把 `enabled-extensions` 锁成它、`disable-user-extensions` 锁成 true：学生放进 `~/.local/share/gnome-shell/extensions`
-/// 的扩展不加载（复审 T13 发现 5）。
-pub const LOCKED_EXTENSIONS: &[&str] = &[
-    "ubuntu-dock@ubuntu.com",
-    "ubuntu-appindicators@ubuntu.com",
-    "tiling-assistant@ubuntu.com",
-    "snapd-prompting@canonical.com",
-    "snapd-search-provider@canonical.com",
-    "web-search-provider@ubuntu.com",
-    // The image's own quick-settings "managed by" line. Under the lock it is loaded through the session mode
-    // (image/mkosi.postinst.chroot adds it to ubuntu.json); listed here so the locked list stays the full set.
-    MANAGED_EXTENSION,
-];
+/// The extensions the locked sessions turn on: exactly those of the image's session mode
+/// (`/usr/share/gnome-shell/modes/mastersos.json`, design 2026-11-10; a test reads that file and compares). The locked
+/// sessions lock `enabled-extensions` to this list and `disable-user-extensions` to true: extensions a student puts in
+/// `~/.local/share/gnome-shell/extensions` do not load (复审 T13 发现 5).
+pub const LOCKED_EXTENSIONS: &[&str] = &["ubuntu-appindicators@ubuntu.com", MANAGED_EXTENSION];
 
 /// The image's quick-settings extension showing "This device is managed by <school>".
 pub const MANAGED_EXTENSION: &str = "mastersos-managed@mastersos.org";
@@ -152,8 +139,6 @@ const LOCKED_KEYS: &[&str] = &[
     "/org/gnome/desktop/lockdown/user-administration-disabled",
     "/org/gnome/settings-daemon/plugins/media-keys/terminal",
     "/org/gnome/shell/disabled-extensions",
-    "/org/gnome/shell/extensions/dash-to-dock/show-trash",
-    "/org/gnome/shell/extensions/dash-to-dock/show-mounts",
     "/org/gnome/shell/disable-user-extensions",
     "/org/gnome/shell/enabled-extensions",
     "/org/gnome/shell/allow-extension-installation",
@@ -166,13 +151,13 @@ const LOCKED_KEYS: &[&str] = &[
 #[derive(Debug, PartialEq, Eq)]
 pub struct Profile {
     /// The dconf keys locked. Non-empty means a locked-down session: the lockdown settings in
-    /// dconf, `Hidden=true` over every app not in the Dock, the D-Bus overrides ([`DBUS_OVERRIDES`])
+    /// dconf, `Hidden=true` over every app not in the Dash, the D-Bus overrides ([`DBUS_OVERRIDES`])
     /// and the stub over the terminal, file manager and settings ([`exec_block::TARGETS`]).
     pub locks: &'static [&'static str],
-    /// The file manager has a place in the Dock.
+    /// The file manager has a place in the Dash (the overview's favourites).
     pub dock_files: bool,
     /// The Config's Flatpaks are installed ([`super::flatpak`]), and once installed sit in the
-    /// Dock and stay visible.
+    /// Dash and stay visible.
     pub flatpaks: bool,
 }
 
@@ -241,17 +226,8 @@ fn gv_str(s: &str) -> String {
     o
 }
 
-/// Every mode: a full-width shelf along the bottom with the icons centred, ChromeOS style. Full
-/// width so a maximized window meets the shelf rather than leaving strips of wallpaper beside it.
-const DOCK_LAYOUT: &str = "\n[org/gnome/shell/extensions/dash-to-dock]\n\
-    dock-position='BOTTOM'\n\
-    extend-height=true\n\
-    always-center-icons=true\n\
-    dock-fixed=true\n\
-    dash-max-icon-size=44\n";
-
 /// dconf 的 keyfile 与 locks。`webapps` 是网页应用的 desktop 文件名（按清单顺序），`kiosk` 是锁定应用的启动器
-/// （每种模式都进 Dock），`flatpaks` 是已装好的受管 Flatpak id（[`Profile::flatpaks`] 的模式才进 Dock）。
+/// （每种模式都进 Dash），`flatpaks` 是已装好的受管 Flatpak id（[`Profile::flatpaks`] 的模式才进 Dash）。
 pub fn render_dconf(
     config: &Config,
     webapps: &[String],
@@ -277,11 +253,10 @@ pub fn render_dconf(
     if p.locked() {
         let enabled: Vec<String> = LOCKED_EXTENSIONS.iter().map(|e| gv_str(e)).collect();
         k.push_str(&format!(
-            "disabled-extensions=[{}]\n\
+            "disabled-extensions=@as []\n\
              disable-user-extensions=true\n\
              allow-extension-installation=false\n\
              enabled-extensions=[{}]\n",
-            gv_str(DING_EXTENSION),
             enabled.join(", ")
         ));
     }
@@ -301,14 +276,6 @@ pub fn render_dconf(
             locks.push_str(l);
             locks.push('\n');
         }
-    }
-    k.push_str(DOCK_LAYOUT);
-    if p.locked() {
-        // Ubuntu Dock 里的回收站与外接盘点开就是文件管理器
-        k.push_str("show-trash=false\nshow-mounts=false\n");
-    } else {
-        // No drives in any mode: Ubuntu's Dock lists every volume, the machine's own unmounted partitions included.
-        k.push_str("show-mounts=false\n");
     }
     (k, locks)
 }
@@ -620,7 +587,7 @@ pub(crate) fn read_bundle_file(bundle_dir: &Path, rel: &str) -> Result<Vec<u8>> 
 }
 
 /// 按文件头认 PNG 或 SVG，返回扩展名。SVG 要求跳过 XML 声明、注释、DOCTYPE 与空白之后的第一个元素就是 `<svg`
-/// （复审 T13 发现 8：只是「里面有 `<svg`」的 HTML 会被存成 .svg、Dock 里画不出来）。
+/// （复审 T13 发现 8：只是「里面有 `<svg`」的 HTML 会被存成 .svg、Dash 里画不出来）。
 pub fn sniff_icon(b: &[u8]) -> Option<&'static str> {
     if b.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Some("png");

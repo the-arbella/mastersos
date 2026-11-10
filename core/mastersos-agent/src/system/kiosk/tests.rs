@@ -967,7 +967,7 @@ fn cleanup_restores_accountsservice_from_template() {
     let keyfile = p.join(ACCOUNTS_DIR).join("kiosk-nwea");
     let want = fs::read_to_string(&keyfile).unwrap();
     // 上一位在登录界面换了会话
-    fs::write(&keyfile, "[User]\nSession=ubuntu\n").unwrap();
+    fs::write(&keyfile, "[User]\nSession=mastersos\n").unwrap();
 
     let me = rustix::process::geteuid().as_raw();
     let acct = ephemeral::kiosk("nwea", me, "NWEA MAP");

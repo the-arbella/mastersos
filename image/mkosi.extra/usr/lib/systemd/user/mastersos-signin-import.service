@@ -1,7 +1,7 @@
 # The sign-in handoff (docs/specs/2026-11-05-browser-signin-handoff-design.md): the identity provider's cookies from the login
 # screen's sign-in card go into this user's own Chrome profile, as this user. Runs only when pam-session left a placeholder
-# for this uid (a school account that signed in with the card). Pulled in by gnome-session@ubuntu.target and
-# gnome-session@gnome.target (their .target.d/mastersos-signin-import.conf), not by gnome-session.target, which the locked-app
+# for this uid (a school account that signed in with the card). Pulled in by gnome-session@gnome.target
+# (the mastersos session; its .target.d/mastersos-signin-import.conf), not by gnome-session.target, which the locked-app
 # session reaches too. No [Install].
 [Unit]
 Description=MastersOS: sign the web browser in to the school

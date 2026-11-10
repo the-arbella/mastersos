@@ -1,4 +1,4 @@
-// MastersOS managed-indicator extension, user session (loaded through the ubuntu.json session
+// MastersOS managed-indicator extension, user session (loaded through the mastersos.json session
 // mode, so it also runs under the locked learning profile). Adds one row
 // "This device is managed by <school>" (with the school's quick menu icon when there is one) to the quick
 // settings menu. Reads /var/lib/mastersos-public/branding/branding.json; missing, broken or
@@ -195,7 +195,7 @@ export default class MastersosManagedExtension extends Extension {
         qs.menu.box.insert_child_at_index(this._help, 0);
     }
 
-    // This extension is enabled through ubuntu.json, and the lock screen's session mode has no such list of its own: session-modes
+    // This extension is enabled through mastersos.json, and the lock screen's session mode has no such list of its own: session-modes
     // in metadata.json lets it run there, this keeps it on the list while the mode is unlock-dialog.
     _stayWhileLocked() {
         const manager = Main.extensionManager;
@@ -223,7 +223,7 @@ export default class MastersosManagedExtension extends Extension {
             this._brand.destroy();
             this._brand = null;
         }
-        // The desktop runs the ubuntu mode (ubuntu.json, parentMode user): currentMode alone is never 'user' there
+        // The desktop runs the mastersos mode (mastersos.json, parentMode user): currentMode alone is never 'user' there
         const mode = Main.sessionMode;
         if (mode.currentMode === 'user' || Main.sessionMode.parentMode === 'user')
             panel.add_style_class_name('mastersos-panel');

@@ -1,0 +1,7 @@
+{
+    "parentMode": "user",
+    "enabledExtensions": [
+        "ubuntu-appindicators@ubuntu.com",
+        "mastersos-managed@mastersos.org"
+    ]
+}

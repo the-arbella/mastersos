@@ -271,7 +271,7 @@ systemd-boot 都按 systemd 的版本比较排序（`20261012.10` > `20261012.9`
   「A system update is ready. Restart the computer to finish installing it.」，按 `LANG`/`/etc/locale.conf` 换中文、泰文。
   这一步出什么错都不改 `update-run` 的退出码；这一轮失败就不碰这个文件。
 - **登录时再提醒**：用户单元 `mastersos-update-reminder.service`（`ConditionPathExists=/run/mastersos-update-pending`，
-  由 `gnome-session@ubuntu.target.d` 与 `gnome-session@gnome.target.d` 的 drop-in 拉起，同 `mastersos-signin-import`；
+  由 `gnome-session@gnome.target.d` 的 drop-in 拉起（桌面会话 `mastersos` 跑 `--session=gnome`），同 `mastersos-signin-import`；
   锁定应用会话与登录界面不会拉起它）以用户身份跑 `update-run --remind`：读文件、版本合法且比正在跑的新，就发同一条通知。
   不要 root，30 秒超时，不重试。
 - **回报**：agent 每次回报都读这个文件，放进 `StatusReport.os_pending_version`（只收 `YYYYMMDD.N`、最多 64 字节、且比

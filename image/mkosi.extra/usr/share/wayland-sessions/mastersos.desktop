@@ -1,0 +1,15 @@
+[Desktop Entry]
+# The regular desktop (design 2026-11-10, upstream GNOME session): upstream GNOME rather than Ubuntu's "ubuntu" session.
+# Our own session name and shell mode, not the stock gnome.desktop: the stock session runs gnome-shell's built-in "user" mode,
+# which has no JSON to list extensions in, and the locked profiles (disable-user-extensions=true) only load the extensions a
+# mode lists (the managed indicator, the tray). GNOME_SHELL_SESSION_MODE picks /usr/share/gnome-shell/modes/mastersos.json.
+# --session=gnome: the systemd user instance reaches gnome-session@gnome.target, whose .target.d drop-ins start
+# mastersos-browser-wait, mastersos-signin-import and mastersos-update-reminder.
+# DesktopNames: XDG_CURRENT_DESKTOP=MastersOS:GNOME (still GNOME for apps; xdg-desktop-portal reads mastersos-portals.conf first).
+# postinst removes every other session file, so GDM has this one and mastersos-kiosk.
+Name=MastersOS
+Comment=This session logs you into MastersOS
+Exec=env GNOME_SHELL_SESSION_MODE=mastersos gnome-session --session=gnome
+TryExec=gnome-session
+Type=Application
+DesktopNames=MastersOS;GNOME;
