@@ -19,6 +19,7 @@ pub mod kiosk_session;
 pub mod login_queue;
 pub mod luks;
 pub mod push;
+pub mod quiet;
 pub mod report;
 pub mod reset;
 pub mod run;
