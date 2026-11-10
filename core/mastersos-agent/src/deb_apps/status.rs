@@ -194,6 +194,9 @@ pub(crate) struct Saved {
     /// The round's own failure.
     #[serde(default)]
     pub error: Option<String>,
+    /// What the round as a whole wants IT to know without failing (a dependency check that failed, updates held back).
+    #[serde(default)]
+    pub notes: Vec<String>,
     /// When the round finished (Unix seconds).
     #[serde(default)]
     pub finished_at: i64,
@@ -319,7 +322,15 @@ impl DebAppsStatus {
             None => ItemResult {
                 item: ITEM.into(),
                 ok: true,
-                detail: Some(format!("{} apps (round at {when})", saved.apps.len())),
+                detail: Some(if saved.notes.is_empty() {
+                    format!("{} apps (round at {when})", saved.apps.len())
+                } else {
+                    format!(
+                        "{} apps (round at {when}); {}",
+                        saved.apps.len(),
+                        saved.notes.join("; ")
+                    )
+                }),
             },
         });
         items

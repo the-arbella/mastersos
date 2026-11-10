@@ -33,7 +33,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::build::{self, app_ext, AppSpec, BuiltApp, DEPS_EXT};
-pub use super::busy::in_use;
+pub use super::busy::{in_use, in_use_why, Evidence};
 use super::busy::{kiosk_of, sessions_json};
 use super::inputs::{
     app_key, check_record, dep_label, dependencies, fetch, icon_for, prune_archives, Main,
@@ -127,12 +127,18 @@ pub(super) struct RoundState {
     pub(super) deps: Option<DepsInstalled>,
     #[serde(default)]
     pub(super) resolved: Option<Resolved>,
+    /// Extension name → since when (Unix seconds) only a process's arguments have held its change back ([`busy`]).
+    #[serde(default)]
+    pub(super) argv_since: BTreeMap<String, i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct Installed {
     /// [`app_key`] of what was built.
     pub(super) key: String,
+    /// The sha256 of the main package it was built from (empty in state written before it was recorded).
+    #[serde(default)]
+    pub(super) deb_sha256: String,
     pub(super) package: String,
     pub(super) version: String,
     pub(super) exec: String,
@@ -265,7 +271,8 @@ pub async fn run_once(env: &RoundEnv) -> Vec<AppResult> {
         .flatten()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default();
-    let (apps, error) = match round(env, &work, &wanted, &mut st).await {
+    let mut notes = vec![];
+    let (apps, error) = match round(env, &work, &wanted, &mut st, &mut notes).await {
         Ok(a) => (a, None),
         Err(e) => {
             log::warn!("deb-apps: {e:#}");
@@ -285,27 +292,30 @@ pub async fn run_once(env: &RoundEnv) -> Vec<AppResult> {
     let saved = Saved {
         apps,
         error,
+        notes,
         finished_at: env.now,
     };
     if let Err(e) = write_saved(&work, &saved) {
         log::warn!("deb-apps: cannot write the results: {e:#}");
     }
     let ext = safefs::open_abs_dir(&env.paths.ext_dir, false).ok();
-    let public: BTreeMap<String, PublicApp> = wanted
+    let merged = |id: &str| -> Option<&Installed> {
+        st.apps.get(id).filter(|i| {
+            i.level == env.sysext_level && ext.as_ref().is_some_and(|e| has(e, &app_ext(id)))
+        })
+    };
+    let ready = |id: &str, i: &Installed| PublicApp {
+        state: AppState::Ready,
+        exec: Some(i.exec.clone()),
+        kiosk: i.kiosk,
+        desktop: format!("mastersos-app-{id}.desktop"),
+    };
+    let mut public: BTreeMap<String, PublicApp> = wanted
         .apps
         .iter()
         .map(|(id, cfg)| {
-            let desktop = format!("mastersos-app-{id}.desktop");
-            let installed = st.apps.get(id).filter(|i| {
-                i.level == env.sysext_level && ext.as_ref().is_some_and(|e| has(e, &app_ext(id)))
-            });
-            let p = match installed {
-                Some(i) => PublicApp {
-                    state: AppState::Ready,
-                    exec: Some(i.exec.clone()),
-                    kiosk: i.kiosk,
-                    desktop,
-                },
+            let p = match merged(id) {
+                Some(i) => ready(id, i),
                 None => PublicApp {
                     state: saved
                         .apps
@@ -315,12 +325,18 @@ pub async fn run_once(env: &RoundEnv) -> Vec<AppResult> {
                         .unwrap_or(AppState::Installing),
                     exec: None,
                     kiosk: cfg.kiosk,
-                    desktop,
+                    desktop: format!("mastersos-app-{id}.desktop"),
                 },
             };
             (id.clone(), p)
         })
         .collect();
+    // removed from the settings but still merged (in use, or the round stopped first): it is there until it is gone
+    for id in st.apps.keys().filter(|id| !wanted.apps.contains_key(*id)) {
+        if let Some(i) = merged(id) {
+            public.insert(id.clone(), ready(id, i));
+        }
+    }
     if let Err(e) = write_public(&env.paths.public_file, &public) {
         log::warn!("deb-apps: cannot write the public status: {e:#}");
     }
@@ -333,6 +349,7 @@ async fn round(
     work: &OwnedFd,
     wanted: &Wanted,
     st: &mut RoundState,
+    notes: &mut Vec<String>,
 ) -> Result<BTreeMap<String, AppResult>> {
     let p = &env.paths;
     let level = env.sysext_level.clone();
@@ -371,14 +388,38 @@ async fn round(
         }
     }
 
-    // 3. the shared dependencies, all apps together
-    let deps = dependencies(env, &u, wanted, &mains, st).await;
+    // 3. the shared dependencies, all apps together. An installed app whose package is not at hand this round (its
+    // download or record check failed) still runs on the installed dependencies: they are neither resolved again nor
+    // changed (nor the cache pruned) until it is back, and nothing that would need new ones is merged meanwhile.
+    let held: Vec<String> = st
+        .apps
+        .iter()
+        .filter(|(id, i)| {
+            wanted.apps.contains_key(*id) && i.level == level && !mains.contains_key(*id)
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    let deps = if held.is_empty() {
+        dependencies(env, &u, wanted, &mains, st, notes).await
+    } else {
+        notes.push(format!(
+            "the shared dependencies stay as they are while {} cannot be fetched or checked",
+            held.join(", ")
+        ));
+        Ok(st
+            .deps
+            .as_ref()
+            .filter(|d| d.level == level)
+            .map(|d| d.files.clone())
+            .unwrap_or_default())
+    };
+    let frozen = !held.is_empty();
     let labels: Vec<String> = deps
         .as_ref()
         .map(|f| f.iter().map(|n| dep_label(n)).collect())
         .unwrap_or_default();
 
-    // 4. build what changed into <ext>.new
+    // 4. build what changed (staged privately, then <ext>.new)
     let mut prepared: Option<Prepared> = None;
     let mut new_deps = false;
     let mut new_apps: BTreeMap<String, (BuiltApp, String)> = BTreeMap::new();
@@ -397,16 +438,19 @@ async fn round(
                 level: level.clone(),
             };
             let mut deps_ok = true;
-            if !files.is_empty() && (st.deps.as_ref() != Some(&want) || !has(&ext, DEPS_EXT)) {
+            if !frozen
+                && !files.is_empty()
+                && (st.deps.as_ref() != Some(&want) || !has(&ext, DEPS_EXT))
+            {
                 let built = async {
                     let (owned, mirror) = prepare(env, &mut prepared).await?;
                     let debs: Vec<PathBuf> = files
                         .iter()
                         .map(|f| p.work.join("apt/archives").join(f))
                         .collect();
-                    let (ext_dir, lv) = (p.ext_dir.clone(), level.clone());
+                    let (ext_dir, w, lv) = (p.ext_dir.clone(), p.work.clone(), level.clone());
                     blocking(env, move |r| {
-                        build::build_deps(r, &ext_dir, &owned, &mirror, &lv, &debs)
+                        build::build_deps(r, &ext_dir, &w, &owned, &mirror, &lv, &debs)
                     })
                     .await
                 }
@@ -440,6 +484,14 @@ async fn round(
                         continue;
                     }
                 }
+                if frozen && main_changed(st, id, m, &level) {
+                    let why = format!(
+                        "the update waits until {} can be fetched again (the shared dependencies are held)",
+                        held.join(", ")
+                    );
+                    out.insert(id.clone(), held_back(st, id, m, &labels, why));
+                    continue;
+                }
                 let spec = AppSpec {
                     id: id.clone(),
                     name: app.name.clone(),
@@ -451,9 +503,9 @@ async fn round(
                 };
                 let built = async {
                     let (owned, mirror) = prepare(env, &mut prepared).await?;
-                    let (ext_dir, lv) = (p.ext_dir.clone(), level.clone());
+                    let (ext_dir, w, lv) = (p.ext_dir.clone(), p.work.clone(), level.clone());
                     blocking(env, move |r| {
-                        build::build_app(r, &ext_dir, &owned, &mirror, &lv, &spec)
+                        build::build_app(r, &ext_dir, &w, &owned, &mirror, &lv, &spec)
                     })
                     .await
                 }
@@ -483,7 +535,8 @@ async fn round(
         }
     }
 
-    // 5. overlaps: Chrome, the installed trees that stay, then the new ones; the later one fails
+    // 5. overlaps: Chrome, the installed trees that stay, then the new ones; the later one fails. (google-chrome is read
+    // without the merge lock: only its own unit changes it, and a tree swapped meanwhile is caught by the next round.)
     {
         let mut trees: Vec<(String, OwnedFd)> = vec![];
         let add = |name: &str, trees: &mut Vec<(String, OwnedFd)>| {
@@ -538,30 +591,31 @@ async fn round(
         }
     }
 
-    // 6. a locked session may have started while building
-    if (new_deps || !new_apps.is_empty()) && quiet_active(env).await {
-        log::info!("deb-apps: a locked session started while building; dropping the new trees until the next round");
+    // 6. right before anything is merged or removed: a locked session may have started during the round
+    if quiet_active(env).await {
+        log::info!("deb-apps: a locked session started during the round; nothing merged or removed this round");
+        notes.push(
+            "a locked session started during the round; nothing was merged or removed".into(),
+        );
         if new_deps {
             build::discard(&p.ext_dir, &format!("{DEPS_EXT}.new"));
         }
         for id in std::mem::take(&mut new_apps).into_keys() {
             build::discard(&p.ext_dir, &format!("{}.new", app_ext(&id)));
-            let note = Some("waiting for the exam quiet to end".to_string());
-            let r = match st.apps.get(&id) {
-                Some(i) => ready_from(&id, i, &labels, note),
-                None => AppResult {
-                    detail: note,
-                    ..out
-                        .remove(&id)
-                        .unwrap_or_else(|| AppResult::new(&id, AppState::Installing))
-                },
-            };
+            let m = &mains[&id];
+            let r = held_back(
+                st,
+                &id,
+                m,
+                &labels,
+                "waiting for the exam quiet to end".into(),
+            );
             out.insert(id, r);
         }
         return Ok(out);
     }
 
-    // 7. swap in, unless in use (a first install is exempt)
+    // 7. what is in use stays (a first install is exempt); the dependencies and the apps resolved with them go together
     let mut sessions: Option<String> = None;
     let installed_trees = |ext: &OwnedFd| -> Vec<PathBuf> {
         safefs::list_at(ext)
@@ -571,18 +625,8 @@ async fn round(
             .map(|n| p.ext_dir.join(n))
             .collect()
     };
-    let swap = |name: String| {
-        let dir = p.ext_dir.clone();
-        blocking(env, move |r| {
-            sysext::swap_in(
-                r,
-                &safefs::open_abs_dir(&dir, false)?,
-                &name,
-                &format!("{name}.new"),
-            )
-        })
-    };
-    if new_deps {
+    let deps_built = new_deps;
+    if new_deps && has(&ext, DEPS_EXT) {
         let all_kiosk: Vec<String> = wanted
             .apps
             .keys()
@@ -591,62 +635,38 @@ async fn round(
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
-        let busy = has(&ext, DEPS_EXT)
-            && in_use(
-                &p.proc_root,
-                &installed_trees(&ext),
-                &all_kiosk,
-                &sessions_json(env, &mut sessions).await,
-            );
-        let result = if busy {
-            Err(None)
-        } else {
-            swap(DEPS_EXT.into()).await.map_err(Some)
-        };
-        match result {
-            Ok(()) => {
-                st.deps = Some(DepsInstalled {
-                    files: deps.as_ref().cloned().unwrap_or_default(),
-                    level: level.clone(),
-                })
-            }
-            Err(e) => {
-                build::discard(&p.ext_dir, &format!("{DEPS_EXT}.new"));
-                for id in std::mem::take(&mut new_apps).into_keys() {
-                    build::discard(&p.ext_dir, &format!("{}.new", app_ext(&id)));
-                    let r = out
-                        .entry(id.clone())
-                        .or_insert_with(|| AppResult::new(&id, AppState::Installing));
-                    match &e {
-                        None => {
-                            r.state = AppState::WaitingForClose;
-                            r.detail = Some(
-                                "waiting for the apps to close: the shared dependencies change"
-                                    .into(),
-                            );
-                        }
-                        Some(e) => {
-                            let f =
-                                failed(&id, st, format!("merging the dependencies failed: {e:#}"));
-                            r.state = AppState::Failed;
-                            r.detail = f.detail;
-                        }
-                    }
-                }
-            }
+        let trees = installed_trees(&ext);
+        let (b, note) = busy(env, st, DEPS_EXT, &trees, &all_kiosk, &mut sessions).await;
+        notes.extend(note);
+        if b {
+            new_deps = false;
+            notes.push("the shared dependencies change once no .deb app is running".into());
         }
     }
-    for (id, (b, key)) in std::mem::take(&mut new_apps) {
+    for id in new_apps.keys().cloned().collect::<Vec<_>>() {
         let name = app_ext(&id);
-        let busy = has(&ext, &name)
-            && in_use(
-                &p.proc_root,
-                &[p.ext_dir.join(&name)],
-                &kiosk_of(wanted, st, &id),
-                &sessions_json(env, &mut sessions).await,
-            );
+        if !has(&ext, &name) {
+            continue;
+        }
+        let kiosk = kiosk_of(wanted, st, &id);
+        let (b, note) = busy(
+            env,
+            st,
+            &name,
+            &[p.ext_dir.join(&name)],
+            &kiosk,
+            &mut sessions,
+        )
+        .await;
         let r = out.get_mut(&id).expect("built apps have a result");
-        if busy {
+        if let Some(n) = note {
+            r.detail = Some(match r.detail.take() {
+                Some(d) => format!("{d}; {n}"),
+                None => n,
+            });
+        }
+        if b {
+            new_apps.remove(&id);
             build::discard(&p.ext_dir, &format!("{name}.new"));
             r.state = AppState::WaitingForClose;
             r.detail = Some(match st.apps.get(&id) {
@@ -656,34 +676,108 @@ async fn round(
                 ),
                 None => "waiting for the app to close".into(),
             });
-            continue;
         }
-        match swap(name).await {
-            Ok(()) => {
-                r.state = AppState::Ready;
-                st.apps.insert(
-                    id.clone(),
-                    Installed {
-                        key,
-                        package: r.package.clone().unwrap_or_default(),
-                        version: r.version.clone().unwrap_or_default(),
-                        exec: b.exec,
-                        kiosk: wanted.apps.get(&id).is_some_and(|a| a.kiosk),
-                        level: level.clone(),
-                        pruned: b.pruned,
-                        setid: b.setid,
-                    },
+    }
+    // An installed app whose package changed is not being updated (failed, overlapping, in use): the new dependencies
+    // were resolved for its new version, so they are not merged under its old one
+    if new_deps {
+        let blockers: Vec<String> = mains
+            .iter()
+            .filter(|(id, m)| {
+                st.apps.get(*id).is_some_and(|i| i.level == level)
+                    && main_changed(st, id, m, &level)
+                    && !new_apps.contains_key(*id)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        if !blockers.is_empty() {
+            new_deps = false;
+            notes.push(format!(
+                "the shared dependencies change together with {}, which is not updated this round",
+                blockers.join(", ")
+            ));
+        }
+    }
+    if deps_built && !new_deps {
+        build::discard(&p.ext_dir, &format!("{DEPS_EXT}.new"));
+        // the apps whose package changed need the new dependencies
+        for id in new_apps.keys().cloned().collect::<Vec<_>>() {
+            let m = &mains[&id];
+            if main_changed(st, &id, m, &level) {
+                new_apps.remove(&id);
+                build::discard(&p.ext_dir, &format!("{}.new", app_ext(&id)));
+                let r = held_back(
+                    st,
+                    &id,
+                    m,
+                    &labels,
+                    "the update waits for the shared dependencies to change".into(),
                 );
-            }
-            Err(e) => {
-                let f = failed(&id, st, format!("merging failed: {e:#}"));
-                r.state = AppState::Failed;
-                r.detail = f.detail;
+                out.insert(id, r);
             }
         }
     }
 
-    // 8. uninstall what the settings no longer have
+    // 8. swap in, all as one change (one refresh; a failure puts every one of them back)
+    let mut pairs: Vec<(String, String)> = vec![];
+    if new_deps {
+        pairs.push((DEPS_EXT.into(), format!("{DEPS_EXT}.new")));
+    }
+    for id in new_apps.keys() {
+        pairs.push((app_ext(id), format!("{}.new", app_ext(id))));
+    }
+    if !pairs.is_empty() {
+        let dir = p.ext_dir.clone();
+        let swapped = blocking(env, move |r| {
+            let refs: Vec<(&str, &str)> = pairs
+                .iter()
+                .map(|(a, b)| (a.as_str(), b.as_str()))
+                .collect();
+            sysext::swap_in_all(r, &safefs::open_abs_dir(&dir, false)?, &refs)
+        })
+        .await;
+        match swapped {
+            Ok(()) => {
+                if new_deps {
+                    st.deps = Some(DepsInstalled {
+                        files: deps.as_ref().cloned().unwrap_or_default(),
+                        level: level.clone(),
+                    });
+                }
+                for (id, (b, key)) in std::mem::take(&mut new_apps) {
+                    let r = out.get_mut(&id).expect("built apps have a result");
+                    r.state = AppState::Ready;
+                    st.apps.insert(
+                        id.clone(),
+                        Installed {
+                            key,
+                            deb_sha256: mains[&id].sha256.clone(),
+                            package: r.package.clone().unwrap_or_default(),
+                            version: r.version.clone().unwrap_or_default(),
+                            exec: b.exec,
+                            kiosk: wanted.apps.get(&id).is_some_and(|a| a.kiosk),
+                            level: level.clone(),
+                            pruned: b.pruned,
+                            setid: b.setid,
+                        },
+                    );
+                }
+            }
+            Err(e) => {
+                if new_deps {
+                    notes.push(format!("merging the shared dependencies failed: {e:#}"));
+                }
+                for id in std::mem::take(&mut new_apps).into_keys() {
+                    let f = failed(&id, st, format!("merging failed: {e:#}"));
+                    let r = out.get_mut(&id).expect("built apps have a result");
+                    r.state = AppState::Failed;
+                    r.detail = f.detail;
+                }
+            }
+        }
+    }
+
+    // 9. uninstall what the settings no longer have
     let mut gone: BTreeSet<String> = st.apps.keys().cloned().collect();
     for n in safefs::list_at(&ext)? {
         if let Some(id) = n.strip_prefix("app-") {
@@ -695,18 +789,24 @@ async fn round(
     gone.retain(|id| !wanted.apps.contains_key(id));
     for id in gone {
         let name = app_ext(&id);
-        if has(&ext, &name)
-            && in_use(
-                &p.proc_root,
+        if has(&ext, &name) {
+            let kiosk = kiosk_of(wanted, st, &id);
+            let (b, note) = busy(
+                env,
+                st,
+                &name,
                 &[p.ext_dir.join(&name)],
-                &kiosk_of(wanted, st, &id),
-                &sessions_json(env, &mut sessions).await,
+                &kiosk,
+                &mut sessions,
             )
-        {
-            let mut r = AppResult::new(&id, AppState::WaitingForClose);
-            r.detail = Some("removed from the settings; waiting for the app to close".into());
-            out.insert(id, r);
-            continue;
+            .await;
+            if b {
+                let mut r = AppResult::new(&id, AppState::WaitingForClose);
+                r.detail = Some("removed from the settings; waiting for the app to close".into());
+                out.insert(id, r);
+                continue;
+            }
+            notes.extend(note.map(|n| format!("{id}: {n}")));
         }
         let dir = p.ext_dir.clone();
         let n2 = name.clone();
@@ -721,6 +821,7 @@ async fn round(
             continue;
         }
         st.apps.remove(&id);
+        st.argv_since.remove(&name);
         if let Ok(apps) = safefs::open_dir_at(work, Path::new("apps"), true) {
             if let Err(e) = safefs::remove_tree_at(&apps, &id) {
                 log::warn!("deb-apps: removing the work directory of {id}: {e:#}");
@@ -738,12 +839,9 @@ async fn round(
             .keys()
             .flat_map(|id| kiosk_of(wanted, st, id))
             .collect();
-        if !in_use(
-            &p.proc_root,
-            &trees,
-            &all_kiosk,
-            &sessions_json(env, &mut sessions).await,
-        ) {
+        let (b, note) = busy(env, st, DEPS_EXT, &trees, &all_kiosk, &mut sessions).await;
+        notes.extend(note);
+        if !b {
             let dir = p.ext_dir.clone();
             match blocking(env, move |r| {
                 sysext::remove_ext(r, &safefs::open_abs_dir(&dir, false)?, DEPS_EXT)
@@ -768,4 +866,65 @@ async fn round(
         }
     }
     Ok(out)
+}
+
+/// Is the main package of `id` not the one its installed tree was built from (or is it not installed for this image)?
+fn main_changed(st: &RoundState, id: &str, m: &Main, level: &str) -> bool {
+    st.apps
+        .get(id)
+        .is_none_or(|i| i.deb_sha256 != m.sha256 || i.level != level)
+}
+
+/// The result of an app whose new tree is not merged this round: the installed one stays ready, else it is installing.
+fn held_back(st: &RoundState, id: &str, m: &Main, labels: &[String], why: String) -> AppResult {
+    match st.apps.get(id) {
+        Some(i) => ready_from(id, i, labels, Some(why)),
+        None => AppResult {
+            package: Some(m.package.clone()),
+            version: Some(m.version.clone()),
+            deps: labels.to_vec(),
+            detail: Some(why),
+            ..AppResult::new(id, AppState::Installing)
+        },
+    }
+}
+
+/// Is `key`'s extension (`trees`) in use ([`in_use_why`])? A session or a readable program link holds it back; evidence
+/// from a process's arguments alone holds it back for at most a day from the first time it did (`argv_since`), then the
+/// round goes ahead and says so (the returned note).
+async fn busy(
+    env: &RoundEnv,
+    st: &mut RoundState,
+    key: &str,
+    trees: &[PathBuf],
+    kiosk: &[String],
+    sessions: &mut Option<String>,
+) -> (bool, Option<String>) {
+    let s = if kiosk.is_empty() {
+        String::new()
+    } else {
+        sessions_json(env, sessions).await
+    };
+    match in_use_why(&env.paths.proc_root, trees, kiosk, &s) {
+        None => {
+            st.argv_since.remove(key);
+            (false, None)
+        }
+        Some(Evidence::Argv(prog)) => {
+            let since = *st.argv_since.entry(key.to_string()).or_insert(env.now);
+            if env.now - since >= DAY || since > env.now + DAY {
+                st.argv_since.remove(key);
+                log::warn!("deb-apps: {key}: only a process's arguments name {prog}, for over a day; going ahead");
+                (
+                    false,
+                    Some(format!(
+                        "went ahead although a process named {prog} seemed to run the app for over 24 hours (its program could not be read)"
+                    )),
+                )
+            } else {
+                (true, None)
+            }
+        }
+        Some(_) => (true, None),
+    }
 }

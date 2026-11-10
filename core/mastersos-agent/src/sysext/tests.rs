@@ -500,3 +500,36 @@ fn merge_lock_waits_then_times_out() {
     drop(held);
     waiter.join().unwrap().unwrap();
 }
+
+/// Several extensions as one change: one refresh; when it fails every one of them is back as it was.
+#[cfg(target_os = "linux")]
+#[test]
+fn swap_all_is_one_change() {
+    let tmp = tempfile::tempdir().unwrap();
+    tree(tmp.path(), "app-deps", b"old deps");
+    tree(tmp.path(), "app-deps.new", b"new deps");
+    tree(tmp.path(), "app-x", b"old x");
+    tree(tmp.path(), "app-x.new", b"new x");
+    tree(tmp.path(), "app-y.new", b"new y");
+    let pairs = [
+        ("app-deps", "app-deps.new"),
+        ("app-x", "app-x.new"),
+        ("app-y", "app-y.new"),
+    ];
+    let r = Probe::new(tmp.path());
+    r.fake.respond(REFRESH, Output::fail(1, "boom"));
+    assert!(swap_in_all(&r, &open(tmp.path()), &pairs).is_err());
+    assert_eq!(names(tmp.path()), vec!["app-deps", "app-x"]);
+    assert_eq!(marker(tmp.path(), "app-deps"), b"old deps");
+    assert_eq!(marker(tmp.path(), "app-x"), b"old x");
+    assert_eq!(r.fake.calls(), vec![REFRESH, REFRESH]);
+
+    tree(tmp.path(), "app-deps.new", b"new deps");
+    tree(tmp.path(), "app-x.new", b"new x");
+    tree(tmp.path(), "app-y.new", b"new y");
+    swap_in_all(&r, &open(tmp.path()), &pairs).unwrap();
+    assert_eq!(names(tmp.path()), vec!["app-deps", "app-x", "app-y"]);
+    assert_eq!(marker(tmp.path(), "app-deps"), b"new deps");
+    assert_eq!(marker(tmp.path(), "app-y"), b"new y");
+    assert_eq!(r.fake.calls().len(), 3, "one refresh for all three");
+}

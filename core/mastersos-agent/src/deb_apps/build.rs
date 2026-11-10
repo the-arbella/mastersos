@@ -12,6 +12,8 @@
 //! an extension is mirrored too and walked into: its entries that no extension has are the root partition's. (A file both
 //! the root partition and an extension have is shadowed by the extension and cannot be told apart; it counts as the
 //! extension's, which is what a rebuild of that extension needs.)
+//!
+//! Trees are unpacked and sanitized in the private `<work>/stage` and only then moved to `/var/lib/extensions` ([`STAGE`]).
 
 use std::collections::HashSet;
 use std::os::fd::OwnedFd;
@@ -126,17 +128,26 @@ pub(crate) fn discard(ext_dir: &Path, name: &str) {
     }
 }
 
-/// An empty `<ext_dir>/<new_name>` and `dpkg-deb -x` of every package into it; returns the opened tree.
+/// The private place trees are unpacked and sanitized in: `<work>/stage` (0700, inside the 0700 work directory). A vendor
+/// package may carry setuid files; until [`strip_setid`] has run they must not be reachable by anyone but root, so the
+/// tree reaches `/var/lib/extensions` (0755) only afterwards ([`publish`]).
+pub(crate) const STAGE: &str = "stage";
+
+/// An empty `<work>/stage/<new_name>` and `dpkg-deb -x` of every package into it; returns the stage and the tree.
 fn unpack(
     runner: &dyn Runner,
-    ext_dir: &Path,
+    work: &Path,
     new_name: &str,
     debs: &[PathBuf],
-) -> Result<OwnedFd> {
-    let ext = safefs::open_abs_dir(ext_dir, true)?;
-    safefs::remove_tree_at(&ext, new_name)?;
-    drop(safefs::open_dir_at(&ext, Path::new(new_name), true)?);
-    let target = ext_dir.join(new_name);
+) -> Result<(OwnedFd, OwnedFd)> {
+    let w = safefs::open_abs_dir(work, false)?;
+    let stage = safefs::open_dir_at(&w, Path::new(STAGE), true)?;
+    safefs::set_mode(&stage, 0o700)?;
+    safefs::remove_tree_at(&stage, new_name)?;
+    let tree = safefs::open_dir_at(&stage, Path::new(new_name), true)?;
+    safefs::set_mode(&tree, 0o700)?;
+    drop(tree);
+    let target = work.join(STAGE).join(new_name);
     for d in debs {
         run_ok(
             runner,
@@ -148,7 +159,37 @@ fn unpack(
         )
         .with_context(|| format!("unpacking {}", d.display()))?;
     }
-    safefs::open_child_dir(&ext, new_name)?.ok_or_else(|| anyhow!("{new_name} is missing"))
+    let tree = safefs::open_child_dir(&stage, new_name)?
+        .ok_or_else(|| anyhow!("{new_name} is missing"))?;
+    Ok((stage, tree))
+}
+
+/// Moves the sanitized `<work>/stage/<new_name>` to `<ext_dir>/<new_name>` (one file system: both are on `/var`), its root
+/// made 0755 first.
+fn publish(stage: &OwnedFd, tree: &OwnedFd, ext_dir: &Path, new_name: &str) -> Result<()> {
+    safefs::set_mode(tree, 0o755)?;
+    let ext = safefs::open_abs_dir(ext_dir, true)?;
+    safefs::remove_tree_at(&ext, new_name)?;
+    rustix::fs::renameat(stage, new_name, &ext, new_name)
+        .map_err(std::io::Error::from)
+        .with_context(|| format!("moving {new_name} into {}", ext_dir.display()))
+}
+
+/// Runs `f` on a freshly unpacked tree, then publishes it; the stage is cleaned up either way.
+fn staged(
+    runner: &dyn Runner,
+    work: &Path,
+    ext_dir: &Path,
+    new_name: &str,
+    debs: &[PathBuf],
+    f: impl FnOnce(&OwnedFd) -> Result<()>,
+) -> Result<()> {
+    let (stage, tree) = unpack(runner, work, new_name, debs)?;
+    let r = f(&tree).and_then(|()| publish(&stage, &tree, ext_dir, new_name));
+    if r.is_err() {
+        let _ = safefs::remove_tree_at(&stage, new_name);
+    }
+    r
 }
 
 /// Builds `app-<id>.new`: unpack the main package, keep the allowlist, drop what covers the system, clear setuid bits,
@@ -156,75 +197,90 @@ fn unpack(
 pub(crate) fn build_app(
     runner: &dyn Runner,
     ext_dir: &Path,
+    work: &Path,
     owned: &HashSet<String>,
     opt_root: &Path,
     level: &str,
     s: &AppSpec,
 ) -> Result<BuiltApp> {
     let name = app_ext(&s.id);
-    let root = unpack(
+    let mut out = None;
+    staged(
         runner,
+        work,
         ext_dir,
         &format!("{name}.new"),
         std::slice::from_ref(&s.deb),
-    )?;
-    let mut pruned = prune(
-        &root,
-        &Policy::VendorAllow {
-            package: s.package.clone(),
+        |root| {
+            let mut pruned = prune(
+                root,
+                &Policy::VendorAllow {
+                    package: s.package.clone(),
+                },
+            )?;
+            pruned.extend(drop_image_files(root, owned, opt_root)?);
+            if !pruned.is_empty() {
+                log::info!("deb-apps: {}: removed {}", s.id, pruned.join(", "));
+            }
+            let setid = strip_setid(root)?;
+            let launcher = pick_launcher(root, s.exec.as_deref())?;
+            let icon = match &s.icon {
+                None => None,
+                Some((bytes, ext)) => {
+                    let dir = if *ext == "svg" {
+                        "usr/share/icons/hicolor/scalable/apps"
+                    } else {
+                        "usr/share/icons/hicolor/256x256/apps"
+                    };
+                    let file = format!("mastersos-app-{}.{ext}", s.id);
+                    let d = safefs::open_dir_at(root, Path::new(dir), true)?;
+                    safefs::write_at(&d, &file, bytes, 0o644)?;
+                    Some(format!("/{dir}/{file}"))
+                }
+            };
+            write_desktop(root, &s.id, &s.name, &launcher, icon.as_deref(), s.kiosk)?;
+            write_release(root, &name, level)?;
+            out = Some(BuiltApp {
+                exec: launcher.exec,
+                pruned: pruned.len(),
+                setid,
+            });
+            Ok(())
         },
     )?;
-    pruned.extend(drop_image_files(&root, owned, opt_root)?);
-    if !pruned.is_empty() {
-        log::info!("deb-apps: {}: removed {}", s.id, pruned.join(", "));
-    }
-    let setid = strip_setid(&root)?;
-    let launcher = pick_launcher(&root, s.exec.as_deref())?;
-    let icon = match &s.icon {
-        None => None,
-        Some((bytes, ext)) => {
-            let dir = if *ext == "svg" {
-                "usr/share/icons/hicolor/scalable/apps"
-            } else {
-                "usr/share/icons/hicolor/256x256/apps"
-            };
-            let file = format!("mastersos-app-{}.{ext}", s.id);
-            let d = safefs::open_dir_at(&root, Path::new(dir), true)?;
-            safefs::write_at(&d, &file, bytes, 0o644)?;
-            Some(format!("/{dir}/{file}"))
-        }
-    };
-    write_desktop(&root, &s.id, &s.name, &launcher, icon.as_deref(), s.kiosk)?;
-    write_release(&root, &name, level)?;
-    Ok(BuiltApp {
-        exec: launcher.exec,
-        pruned: pruned.len(),
-        setid,
-    })
+    out.ok_or_else(|| anyhow!("building {name} gave no result"))
 }
 
 /// Builds `app-deps.new` from the dependency packages (the Ubuntu deny list). The caller removes `.new` on error.
 pub(crate) fn build_deps(
     runner: &dyn Runner,
     ext_dir: &Path,
+    work: &Path,
     owned: &HashSet<String>,
     opt_root: &Path,
     level: &str,
     debs: &[PathBuf],
 ) -> Result<()> {
-    let root = unpack(runner, ext_dir, &format!("{DEPS_EXT}.new"), debs)?;
-    let mut pruned = prune(&root, &Policy::UbuntuDeny)?;
-    pruned.extend(drop_image_files(&root, owned, opt_root)?);
-    if !pruned.is_empty() {
-        log::info!("deb-apps: dependencies: removed {}", pruned.join(", "));
-    }
-    let setid = strip_setid(&root)?;
-    if !setid.is_empty() {
-        log::warn!(
-            "deb-apps: dependencies: cleared setuid/setgid on {}",
-            setid.join(", ")
-        );
-    }
-    write_release(&root, DEPS_EXT, level)?;
-    Ok(())
+    staged(
+        runner,
+        work,
+        ext_dir,
+        &format!("{DEPS_EXT}.new"),
+        debs,
+        |root| {
+            let mut pruned = prune(root, &Policy::UbuntuDeny)?;
+            pruned.extend(drop_image_files(root, owned, opt_root)?);
+            if !pruned.is_empty() {
+                log::info!("deb-apps: dependencies: removed {}", pruned.join(", "));
+            }
+            let setid = strip_setid(root)?;
+            if !setid.is_empty() {
+                log::warn!(
+                    "deb-apps: dependencies: cleared setuid/setgid on {}",
+                    setid.join(", ")
+                );
+            }
+            write_release(root, DEPS_EXT, level)
+        },
+    )
 }

@@ -22,36 +22,70 @@ fn refresh(runner: &dyn Runner) -> Result<()> {
 /// [`recover_leftover`]. Returns the merge error as is (callers add their own context). On success the replaced tree (now
 /// `<new_name>`) is removed; failing that is only logged (the next round's [`recover_leftover`] does it).
 pub fn swap_in(runner: &dyn Runner, ext_dir: &OwnedFd, name: &str, new_name: &str) -> Result<()> {
+    swap_in_all(runner, ext_dir, &[(name, new_name)])
+}
+
+/// [`swap_in`] for several extensions as one change: every `(name, new_name)` is put in place, then **one** refresh; when
+/// it fails all of them are switched back and merged again. So the .deb apps' shared dependencies and the apps resolved
+/// with them are merged together or not at all.
+pub fn swap_in_all(runner: &dyn Runner, ext_dir: &OwnedFd, pairs: &[(&str, &str)]) -> Result<()> {
     let _lock = lock_merge(MERGE_LOCK_TIMEOUT)?;
-    let first = safefs::open_child_dir(ext_dir, name)?.is_none();
-    if first {
-        safefs::rename_at(ext_dir, new_name, name)?;
-    } else {
-        safefs::exchange_at(ext_dir, name, new_name)?;
-    }
-    if let Err(e) = refresh(runner) {
-        let back = if first {
-            safefs::rename_at(ext_dir, name, new_name)
+    // (name, new_name, first install)
+    let mut done: Vec<(&str, &str, bool)> = vec![];
+    let back = |done: &[(&str, &str, bool)]| -> Result<()> {
+        for (name, new_name, first) in done.iter().rev() {
+            if *first {
+                safefs::rename_at(ext_dir, name, new_name)?;
+            } else {
+                safefs::exchange_at(ext_dir, name, new_name)?;
+            }
+        }
+        Ok(())
+    };
+    for (name, new_name) in pairs {
+        let first = safefs::open_child_dir(ext_dir, name)?.is_none();
+        let r = if first {
+            safefs::rename_at(ext_dir, new_name, name)
         } else {
             safefs::exchange_at(ext_dir, name, new_name)
         };
-        match back {
+        if let Err(e) = r {
+            // nothing refreshed yet: putting back what was moved is enough
+            if let Err(b) = back(&done) {
+                log::warn!(
+                    "sysext: putting the extensions back after a failed rename also failed: {b:#}"
+                );
+            }
+            return Err(e);
+        }
+        done.push((name, new_name, first));
+    }
+    let names: Vec<&str> = pairs.iter().map(|(n, _)| *n).collect();
+    let names = names.join(", ");
+    if let Err(e) = refresh(runner) {
+        match back(&done) {
             Err(b) => log::warn!(
-                "sysext: merging the new {name} failed and switching back to the old version also failed: {b:#}"
+                "sysext: merging the new {names} failed and switching back to the old versions also failed: {b:#}"
             ),
             Ok(()) => match refresh(runner) {
                 Ok(()) => {
-                    let _ = safefs::remove_tree_at(ext_dir, new_name);
+                    for (_, new_name) in pairs {
+                        let _ = safefs::remove_tree_at(ext_dir, new_name);
+                    }
                 }
                 Err(r) => log::warn!(
-                    "sysext: re-merging after switching {name} back to the old version also failed (retrying next round): {r:#}"
+                    "sysext: re-merging after switching {names} back to the old versions also failed (retrying next round): {r:#}"
                 ),
             },
         }
         return Err(e);
     }
-    if let Err(e) = safefs::remove_tree_at(ext_dir, new_name) {
-        log::warn!("sysext: removing the replaced old {name} failed (retrying next round): {e:#}");
+    for (name, new_name) in pairs {
+        if let Err(e) = safefs::remove_tree_at(ext_dir, new_name) {
+            log::warn!(
+                "sysext: removing the replaced old {name} failed (retrying next round): {e:#}"
+            );
+        }
     }
     Ok(())
 }

@@ -306,6 +306,7 @@ pub(super) async fn dependencies(
     wanted: &Wanted,
     mains: &BTreeMap<String, Main>,
     st: &mut RoundState,
+    notes: &mut Vec<String>,
 ) -> Result<Vec<String>, String> {
     if mains.is_empty() {
         return Ok(vec![]);
@@ -371,6 +372,17 @@ pub(super) async fn dependencies(
             });
             Ok(names)
         }
-        Err(e) => Err(e.to_string()),
+        // Only the daily re-check against IT's mirror failed (nothing the apps depend on changed): keep the previous
+        // resolution, its packages are all cached; retried next round
+        Err(e) => match &st.resolved {
+            Some(r) if r.key == key && r.files.iter().all(|f| archives.join(f).is_file()) => {
+                log::warn!("deb-apps: the daily dependency check failed, keeping the previous resolution: {e}");
+                notes.push(format!(
+                    "the daily dependency check against the Ubuntu mirror failed ({e}); keeping the dependencies resolved before"
+                ));
+                Ok(r.files.clone())
+            }
+            _ => Err(e.to_string()),
+        },
     }
 }

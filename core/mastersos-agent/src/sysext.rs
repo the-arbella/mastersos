@@ -3,7 +3,7 @@
 //!
 //! - [`download`]: streams a file into a private directory with a timeout and a size cap, hashing while downloading,
 //!   optionally as a conditional GET (`ETag` / `Last-Modified`).
-//! - [`swap_in`] / [`remove_ext`] / [`recover_leftover`]: change what is merged and let PID 1 re-merge ([`refresh_cmd`]),
+//! - [`swap_in`] / [`swap_in_all`] / [`remove_ext`] / [`recover_leftover`]: change what is merged and let PID 1 re-merge ([`refresh_cmd`]),
 //!   rolling back when the merge fails.
 //!
 //! **One merger at a time.** A refresh replaces the whole `/usr` overlay, which every extension shares, so whoever changes
@@ -25,7 +25,7 @@ mod download;
 mod swap;
 
 pub use download::{download, download_with, FetchOutcome, Fetched};
-pub use swap::{recover_leftover, remove_ext, swap_in};
+pub use swap::{recover_leftover, remove_ext, swap_in, swap_in_all};
 
 /// The merge lock; `/run/mastersos` is created 0700 root by tmpfiles (and the initrd) and is writable for
 /// `mastersos-chrome.service` and `mastersos-deb-apps.service`.

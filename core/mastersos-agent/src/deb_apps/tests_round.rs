@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
@@ -72,6 +72,19 @@ fn otherapp() -> Vec<u8> {
     )
 }
 
+/// `libfoo1`, asked for by name, is the only package it pulls in.
+const FOO: (&str, &str, &str, &str) = (
+    "libfoo1",
+    "1.0-1",
+    "libfoo1_1.0-1_amd64.deb",
+    "usr/lib/x86_64-linux-gnu/libfoo.so.1",
+);
+
+/// A TestNav that cannot be built: no launcher.
+fn broken() -> Vec<u8> {
+    fake_deb("testnav", "3.0", &[("opt/testnav/VERSION", "3.0")])
+}
+
 /// The Ubuntu packages the fake apt knows: `x11-utils` pulls in `libxxf86dga1`.
 const DEPS: &[(&str, &str, &str, &str)] = &[
     (
@@ -123,6 +136,11 @@ struct World {
     /// Replaces the plan apt prints.
     plan: Mutex<Option<String>>,
     sessions: Mutex<String>,
+    /// `systemctl is-active` calls so far, and from which one on (1-based; 0: never) the quiet target is active.
+    active_calls: AtomicUsize,
+    quiet_from: AtomicUsize,
+    /// Every `dpkg-deb -x` target, with its mode and its parent's when it ran.
+    extracts: Mutex<Vec<(PathBuf, u32, u32)>>,
 }
 
 impl World {
@@ -159,7 +177,13 @@ impl World {
             }
             return Ok(Output::ok(""));
         }
-        let wants_x11 = pkgs.contains(&"x11-utils");
+        let mut deps: Vec<(&str, &str, &str, &str)> = vec![];
+        if pkgs.contains(&"x11-utils") {
+            deps.extend(DEPS.iter().copied());
+        }
+        if pkgs.contains(&"libfoo1") {
+            deps.push(FOO);
+        }
         if a.contains(&"-s") {
             if let Some(p) = self.plan.lock().unwrap().clone() {
                 return Ok(Output::ok(&p));
@@ -173,16 +197,14 @@ impl World {
                     field(&c, "Version")
                 ));
             }
-            if wants_x11 {
-                for (n, v, _, _) in DEPS {
-                    out.push_str(&format!("Inst {n} ({v} Ubuntu:26.04/resolute [amd64])\n"));
-                }
+            for (n, v, _, _) in &deps {
+                out.push_str(&format!("Inst {n} ({v} Ubuntu:26.04/resolute [amd64])\n"));
             }
             return Ok(Output::ok(&out));
         }
-        if a.contains(&"--download-only") && wants_x11 {
+        if a.contains(&"--download-only") && !deps.is_empty() {
             fs::create_dir_all(&archives).unwrap();
-            for (n, v, file, content) in DEPS {
+            for (n, v, file, content) in deps {
                 let f = archives.join(file);
                 if !f.exists() {
                     fs::write(f, fake_deb(n, v, &[(content, "elf")])).unwrap();
@@ -199,16 +221,27 @@ impl Runner for World {
         let a: Vec<&str> = cmd.args.iter().map(String::as_str).collect();
         match (cmd.program.as_str(), a.first().copied()) {
             ("systemctl", _) if a.contains(&"is-active") => {
-                Ok(if self.quiet.load(Ordering::SeqCst) {
-                    Output::ok("")
-                } else {
-                    Output::fail(3, "")
-                })
+                let n = self.active_calls.fetch_add(1, Ordering::SeqCst) + 1;
+                let from = self.quiet_from.load(Ordering::SeqCst);
+                Ok(
+                    if self.quiet.load(Ordering::SeqCst) || (from > 0 && n >= from) {
+                        Output::ok("")
+                    } else {
+                        Output::fail(3, "")
+                    },
+                )
             }
             ("loginctl", _) => Ok(Output::ok(&self.sessions.lock().unwrap())),
             ("dpkg-deb", Some("-x")) => {
                 let (_, files) = parse_deb(&fs::read(a[1])?);
                 let root = Path::new(a[2]);
+                let mode =
+                    |p: &Path| fs::metadata(p).map_or(0, |m| m.permissions().mode() & 0o7777);
+                self.extracts.lock().unwrap().push((
+                    root.to_path_buf(),
+                    mode(root),
+                    mode(root.parent().unwrap()),
+                ));
                 for (mode, p, body) in files {
                     let f = root.join(p);
                     fs::create_dir_all(f.parent().unwrap())?;
@@ -275,6 +308,7 @@ impl Fx {
             ("/testnav.deb", testnav("1.0")),
             ("/testnav2.deb", testnav("2.0")),
             ("/otherapp.deb", otherapp()),
+            ("/broken.deb", broken()),
         ] {
             Mock::given(method("GET"))
                 .and(path(p))
@@ -492,8 +526,8 @@ async fn unpinned_checked_once_a_day() {
     assert_eq!(updates(), 2);
     assert_eq!(
         fx.world.count(REFRESH),
-        2,
-        "same dependencies: nothing swapped"
+        1,
+        "the dependencies and the app merged as one change, and since then nothing swapped"
     );
 }
 
@@ -886,4 +920,306 @@ async fn status_reports_items_and_starts_the_unit_on_new_settings() {
     // the same settings again: nothing to start
     st.offer(w2, false).await;
     assert_eq!(fake.calls().iter().filter(|c| *c == start).count(), 1);
+}
+
+impl Fx {
+    /// The quiet target becomes active from the `k`th `is-active` call on, counting from the next one.
+    fn quiet_from_next(&self, k: usize) {
+        let n = self.world.active_calls.load(Ordering::SeqCst);
+        self.world.quiet_from.store(n + k, Ordering::SeqCst);
+    }
+
+    fn report(&self) -> Vec<mastersos_bundle::ItemResult> {
+        DebAppsStatus::with_paths(Arc::new(FakeRunner::new()), self.root().join("work")).report()
+    }
+
+    fn has_archive(&self, file: &str) -> bool {
+        self.root().join("work/apt/archives").join(file).is_file()
+    }
+}
+
+fn other(fx: &Fx) -> DebApp {
+    let mut b = app(fx.url("otherapp.deb"), Some(hex(&otherapp())));
+    b.name = "Other".into();
+    b
+}
+
+fn testnav2(fx: &Fx) -> DebApp {
+    app(fx.url("testnav2.deb"), Some(hex(&testnav("2.0"))))
+}
+
+fn version(fx: &Fx) -> String {
+    fs::read_to_string(fx.ext("app-testnav/opt/testnav/VERSION")).unwrap()
+}
+
+fn detail(a: &AppResult) -> &str {
+    a.detail.as_deref().unwrap_or("")
+}
+
+#[tokio::test]
+async fn held_installed_app_keeps_the_shared_dependencies() {
+    let fx = Fx::new().await;
+    let mut a = pinned(&fx);
+    a.packages = vec!["x11-utils".into()];
+    let mut b = other(&fx);
+    b.packages = vec!["libfoo1".into()];
+    let r = fx
+        .round(&wanted(vec![("testnav", a.clone()), ("other", b.clone())]))
+        .await;
+    ready(&r, "testnav");
+    ready(&r, "other");
+    assert!(fx
+        .ext("app-deps/usr/lib/x86_64-linux-gnu/libfoo.so.1")
+        .is_file());
+    let (sims, extracts, refreshes) = (
+        fx.world.count(" -s install"),
+        fx.world.count("dpkg-deb -x"),
+        fx.world.count(REFRESH),
+    );
+
+    // other's package cannot be had this round, and testnav has a new version that would need new dependencies
+    b.sha256 = Some(hex(b"something else"));
+    let mut a2 = testnav2(&fx);
+    a2.packages = a.packages.clone();
+    let w = wanted(vec![("testnav", a2), ("other", b)]);
+    let r = fx.round(&w).await;
+    let o = &r["other"];
+    assert_eq!(o.state, AppState::Failed, "{o:?}");
+    assert!(detail(o).contains("keeping the installed version"), "{o:?}");
+    let t = ready(&r, "testnav");
+    assert_eq!(t.version.as_deref(), Some("1.0"));
+    assert!(detail(&t).contains("other"), "{t:?}");
+    assert_eq!(fx.world.count(" -s install"), sims, "not resolved again");
+    assert_eq!(fx.world.count("dpkg-deb -x"), extracts, "nothing built");
+    assert_eq!(fx.world.count(REFRESH), refreshes, "nothing swapped");
+    assert!(fx
+        .ext("app-deps/usr/lib/x86_64-linux-gnu/libfoo.so.1")
+        .is_file());
+    assert!(fx.ext("app-other/opt/otherapp/bin/otherapp").is_file());
+    assert_eq!(version(&fx), "1.0");
+    assert!(fx.has_archive(FOO.2), "the cache is not pruned");
+    assert_eq!(fx.public()["other"].state, AppState::Ready);
+    let deb = fx.report();
+    let d = deb.iter().find(|i| i.item == "deb-apps").unwrap();
+    assert!(d.detail.as_deref().unwrap_or("").contains("other"), "{d:?}");
+}
+
+#[tokio::test]
+async fn deps_not_swapped_when_a_changed_app_fails_to_build() {
+    let fx = Fx::new().await;
+    let mut a = pinned(&fx);
+    a.packages = vec!["x11-utils".into()];
+    ready(&fx.round(&wanted(vec![("testnav", a)])).await, "testnav");
+    let refreshes = fx.world.count(REFRESH);
+
+    // the new version needs libfoo1 too, but cannot be built
+    let mut a3 = app(fx.url("broken.deb"), Some(hex(&broken())));
+    a3.packages = vec!["x11-utils".into(), "libfoo1".into()];
+    let r = fx.round(&wanted(vec![("testnav", a3)])).await;
+    let t = &r["testnav"];
+    assert_eq!(t.state, AppState::Failed, "{t:?}");
+    assert!(
+        fx.world.calls().iter().any(|c| c.contains("libfoo1_1.0-1")),
+        "the new dependencies were built: {:?}",
+        fx.world.calls()
+    );
+    assert!(!fx
+        .ext("app-deps/usr/lib/x86_64-linux-gnu/libfoo.so.1")
+        .exists());
+    assert!(fx.ext("app-deps/usr/bin/xprop").is_file());
+    assert!(!fx.ext("app-deps.new").exists());
+    assert_eq!(fx.world.count(REFRESH), refreshes, "nothing swapped");
+    assert_eq!(version(&fx), "1.0");
+    assert_eq!(fx.public()["testnav"].state, AppState::Ready);
+}
+
+#[tokio::test]
+async fn failed_daily_mirror_check_keeps_the_previous_resolution() {
+    let fx = Fx::new().await;
+    let mut a = pinned(&fx);
+    a.packages = vec!["x11-utils".into()];
+    let mut w = wanted(vec![("testnav", a)]);
+    w.ubuntu_mirror = Some("http://mirror.example.org/ubuntu".into());
+    ready(&fx.round_at(&w, T0).await, "testnav");
+    let refreshes = fx.world.count(REFRESH);
+
+    fx.world.offline.store(true, Ordering::SeqCst);
+    let before = fx.world.count(" update");
+    let t = ready(&fx.round_at(&w, T0 + 25 * HOUR).await, "testnav");
+    assert!(fx.world.count(" update") > before, "the daily check ran");
+    assert!(t.deps.contains(&"x11-utils 7.7+6".to_string()), "{t:?}");
+    assert!(fx.ext("app-deps/usr/bin/xprop").is_file());
+    assert_eq!(fx.world.count(REFRESH), refreshes);
+    assert_eq!(fx.public()["testnav"].state, AppState::Ready);
+    let items = fx.report();
+    let d = items.iter().find(|i| i.item == "deb-apps").unwrap();
+    assert!(
+        d.detail
+            .as_deref()
+            .unwrap_or("")
+            .contains("daily dependency check"),
+        "{d:?}"
+    );
+}
+
+#[tokio::test]
+async fn quiet_starting_during_the_round_stops_merges_and_removals() {
+    let fx = Fx::new().await;
+    ready(
+        &fx.round(&wanted(vec![("testnav", pinned(&fx))])).await,
+        "testnav",
+    );
+    let refreshes = fx.world.count(REFRESH);
+
+    // an update: built, then the quiet starts before the merge
+    fx.quiet_from_next(2);
+    let r = fx.round(&wanted(vec![("testnav", testnav2(&fx))])).await;
+    let t = ready(&r, "testnav");
+    assert_eq!(t.version.as_deref(), Some("1.0"));
+    assert!(!fx.ext("app-testnav.new").exists());
+    assert_eq!(version(&fx), "1.0");
+    assert_eq!(fx.world.count(REFRESH), refreshes);
+
+    // a removal: nothing built, the quiet still stops it
+    fx.world.quiet_from.store(0, Ordering::SeqCst);
+    fx.quiet_from_next(2);
+    fx.round(&wanted(vec![])).await;
+    assert!(fx.ext("app-testnav/opt/testnav/bin/testnav").is_file());
+    assert_eq!(fx.world.count(REFRESH), refreshes);
+    assert_eq!(
+        fx.public()["testnav"].state,
+        AppState::Ready,
+        "still merged"
+    );
+
+    fx.world.quiet_from.store(0, Ordering::SeqCst);
+    fx.round(&wanted(vec![])).await;
+    assert!(!fx.ext("app-testnav").exists());
+    assert!(fx.world.count(REFRESH) > refreshes);
+}
+
+#[tokio::test]
+async fn removal_waits_while_in_use() {
+    let fx = Fx::new().await;
+    ready(
+        &fx.round(&wanted(vec![("testnav", pinned(&fx))])).await,
+        "testnav",
+    );
+    let proc_ = fx.root().join("proc/4242");
+    fs::create_dir_all(&proc_).unwrap();
+    symlink("/opt/testnav/bin/testnav", proc_.join("exe")).unwrap();
+    let refreshes = fx.world.count(REFRESH);
+
+    let r = fx.round(&wanted(vec![])).await;
+    let t = &r["testnav"];
+    assert_eq!(t.state, AppState::WaitingForClose, "{t:?}");
+    assert!(fx.ext("app-testnav/opt/testnav/bin/testnav").is_file());
+    assert_eq!(fx.world.count(REFRESH), refreshes);
+    assert_eq!(
+        fx.public()["testnav"].state,
+        AppState::Ready,
+        "still merged"
+    );
+
+    fs::remove_dir_all(&proc_).unwrap();
+    let r = fx.round(&wanted(vec![])).await;
+    assert!(r.is_empty(), "{r:?}");
+    assert!(!fx.ext("app-testnav").exists());
+    assert!(fx.public().is_empty());
+}
+
+#[tokio::test]
+async fn unpacked_in_a_private_stage() {
+    let fx = Fx::new().await;
+    let mut a = pinned(&fx);
+    a.packages = vec!["x11-utils".into()];
+    ready(&fx.round(&wanted(vec![("testnav", a)])).await, "testnav");
+    let extracts = fx.world.extracts.lock().unwrap().clone();
+    assert!(!extracts.is_empty());
+    let stage = fx.root().join("work/stage");
+    for (target, mode, parent) in &extracts {
+        assert!(target.starts_with(&stage), "{target:?}");
+        assert_eq!((*mode, *parent), (0o700, 0o700), "{target:?}");
+    }
+    for t in ["app-testnav", "app-deps"] {
+        let m = fs::metadata(fx.ext(t)).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(m, 0o755, "{t}");
+    }
+    assert_eq!(
+        fs::read_dir(&stage).unwrap().count(),
+        0,
+        "nothing left staged"
+    );
+}
+
+#[test]
+fn in_use_from_arguments_when_the_program_is_unreadable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let proc_ = tmp.path().join("proc");
+    let ext = tmp.path().join("app-testnav");
+    fs::create_dir_all(ext.join("opt/testnav/bin")).unwrap();
+    fs::write(ext.join("opt/testnav/bin/testnav"), "").unwrap();
+    let exts = vec![ext];
+    let cmdline = |pid: &str, args: &[&str]| {
+        let d = proc_.join(pid);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("cmdline"), args.join("\0") + "\0").unwrap();
+    };
+    // another user's process: no exe link to read
+    cmdline("90", &["/usr/bin/python3", "-u", "/usr/lib/other.py"]);
+    assert_eq!(in_use_why(&proc_, &exts, &[], "[]"), None);
+    cmdline(
+        "91",
+        &["/usr/bin/python3", "/opt/testnav/bin/testnav", "--x"],
+    );
+    assert_eq!(
+        in_use_why(&proc_, &exts, &[], "[]"),
+        Some(Evidence::Argv("/opt/testnav/bin/testnav".into()))
+    );
+    assert!(in_use(&proc_, &exts, &[], "[]"));
+    // only the first two absolute paths count
+    fs::remove_dir_all(proc_.join("91")).unwrap();
+    cmdline(
+        "92",
+        &[
+            "/usr/bin/env",
+            "/usr/bin/python3",
+            "/opt/testnav/bin/testnav",
+        ],
+    );
+    assert_eq!(in_use_why(&proc_, &exts, &[], "[]"), None);
+    // a readable program link is stronger
+    fs::create_dir_all(proc_.join("93")).unwrap();
+    symlink("/opt/testnav/bin/testnav", proc_.join("93/exe")).unwrap();
+    cmdline("94", &["/opt/testnav/bin/testnav"]);
+    assert_eq!(
+        in_use_why(&proc_, &exts, &[], "[]"),
+        Some(Evidence::Program("/opt/testnav/bin/testnav".into()))
+    );
+}
+
+#[tokio::test]
+async fn argument_evidence_defers_for_a_day_at_most() {
+    let fx = Fx::new().await;
+    let w1 = wanted(vec![("testnav", pinned(&fx))]);
+    ready(&fx.round_at(&w1, T0).await, "testnav");
+    let d = fx.root().join("proc/90");
+    fs::create_dir_all(&d).unwrap();
+    fs::write(
+        d.join("cmdline"),
+        "/usr/bin/python3\0/opt/testnav/bin/testnav\0",
+    )
+    .unwrap();
+
+    let w2 = wanted(vec![("testnav", testnav2(&fx))]);
+    for at in [T0 + HOUR, T0 + 23 * HOUR, T0 + 24 * HOUR] {
+        let r = fx.round_at(&w2, at).await;
+        assert_eq!(r["testnav"].state, AppState::WaitingForClose, "at {at}");
+        assert_eq!(version(&fx), "1.0");
+    }
+    // a day after it first held the update back
+    let r = fx.round_at(&w2, T0 + 25 * HOUR).await;
+    let t = ready(&r, "testnav");
+    assert!(detail(&t).contains("24 hours"), "{t:?}");
+    assert_eq!(version(&fx), "2.0");
 }
