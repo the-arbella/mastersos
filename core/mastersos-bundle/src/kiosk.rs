@@ -620,6 +620,12 @@ fn toml_to_json(v: &toml::Value) -> Result<Value, String> {
     })
 }
 
+/// The shape of an `icon`: a `files/...` entry or an `https://` link. Whether a `files/` entry is in
+/// the bundle is judged by lint (`icon_ok`).
+pub fn icon_shape_ok(icon: &str) -> bool {
+    icon.starts_with("https://") || icon.starts_with("files/")
+}
+
 /// What is wrong with an app `name`, if anything. Shared by kiosk apps and `[config.apps.deb.<id>]`.
 ///
 /// 名字写进账号的 GECOS（`usermod -c`）：`:` 是 passwd 的字段分隔符，写进去 usermod 拒绝、清理永远做不完；

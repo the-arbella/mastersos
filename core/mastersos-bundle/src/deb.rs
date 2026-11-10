@@ -7,6 +7,9 @@
 use crate::kiosk;
 use crate::DebApp;
 
+/// `ubuntu_mirror` is at most this many bytes.
+pub const MAX_MIRROR_LEN: usize = 2048;
+
 /// At most this many extra Ubuntu packages per app.
 pub const MAX_PACKAGES: usize = 32;
 
@@ -107,11 +110,7 @@ pub fn check(id: &str, app: &DebApp) -> Result<(), DebError> {
             ),
         );
     }
-    if let Some(i) = app
-        .icon
-        .as_deref()
-        .filter(|i| !(i.starts_with("https://") || i.starts_with("files/")) || i.len() > 2048)
-    {
+    if let Some(i) = app.icon.as_deref().filter(|i| !kiosk::icon_shape_ok(i)) {
         return fail(
             "deb_icon_invalid",
             "icon",
@@ -121,9 +120,15 @@ pub fn check(id: &str, app: &DebApp) -> Result<(), DebError> {
     Ok(())
 }
 
-/// `ubuntu_mirror`: an `http://` or `https://` archive root (same spelling rules as `update_mirror`).
+/// `ubuntu_mirror`: an `http://` or `https://` Ubuntu archive root, at most [`MAX_MIRROR_LEN`] bytes
+/// (same spelling rules as `update_mirror`).
 pub fn check_mirror(url: &str) -> Result<(), String> {
-    crate::checks::update_mirror(url).map_err(|e| e.replacen("update_mirror", "ubuntu_mirror", 1))
+    crate::checks::archive_url(
+        url,
+        "ubuntu_mirror",
+        "http://archive.ubuntu.com/ubuntu",
+        MAX_MIRROR_LEN,
+    )
 }
 
 #[cfg(test)]

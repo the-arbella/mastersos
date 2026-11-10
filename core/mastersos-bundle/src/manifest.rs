@@ -4001,7 +4001,6 @@ chrome_policy.PolB = 1
         );
         let a = &eff(&m).apps.deb["a"];
         assert_eq!((a.name.as_str(), a.kiosk), ("Mine", true));
-        assert!(!m.configs[0].drop.is_empty() || m.configs[0].drop.apps.deb.is_empty());
         let dropped = layered_with(&app("a"), "drop.apps.deb = [\"a\"]");
         assert!(!dropped.configs[0].drop.is_empty());
     }

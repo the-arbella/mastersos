@@ -667,7 +667,7 @@ pub fn school_id_mismatch(m: &Manifest, expected: &str) -> Option<Lint> {
 
 /// An icon is a `files/...` entry present in the bundle or an `https://` link (same rule for web apps and kiosk apps).
 fn icon_ok(icon: &str, present: &BTreeSet<String>) -> bool {
-    icon.starts_with("https://") || (icon.starts_with("files/") && present.contains(icon))
+    kiosk::icon_shape_ok(icon) && (icon.starts_with("https://") || present.contains(icon))
 }
 
 /// Web apps of one layer: icon and https rules (their format rule, `web_app_invalid`, is in
