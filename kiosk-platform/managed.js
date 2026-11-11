@@ -14,7 +14,7 @@
   "use strict";
   const MARK = Symbol.for("mastersos.platform.managed");
   if (window[MARK]) return;
-  Object.defineProperty(window, MARK, { value: true });
+  Object.defineProperty(window, MARK, { __proto__: null, value: true });
 
   // @@MASTERSOS_MANAGED@@
 
@@ -34,6 +34,7 @@
   const promiseReject = PromiseCtor.reject.bind(PromiseCtor);
   const defineProperty = Object.defineProperty;
   const hasOwn = Object.prototype.hasOwnProperty;
+  const ArrayCtor = Array;
   const arrayFrom = Array.from;
   const jsonParse = JSON.parse;
   const jsonStringify = JSON.stringify;
@@ -55,6 +56,7 @@
   }.toString;
   call(wmSet, disguised, toString, call(nativeToString, nativeToString));
   defineProperty(Function.prototype, "toString", {
+    __proto__: null,
     value: toString,
     writable: true,
     configurable: true,
@@ -66,7 +68,7 @@
   };
   // Same descriptor as a native WebIDL operation.
   const install = (name, fn) =>
-    defineProperty(proto, name, { value: as(fn), writable: true, enumerable: true, configurable: true });
+    defineProperty(proto, name, { __proto__: null, value: as(fn), writable: true, enumerable: true, configurable: true });
 
   const rejected = (name, message) => promiseReject(new DOMEx(message, name));
   const typeError = (message) => promiseReject(new TypeErr(message));
@@ -138,7 +140,7 @@
           if (keys === null || (typeof keys !== "object" && typeof keys !== "function") || typeof keys[iteratorSym] !== "function") {
             return typeError("Failed to execute 'getManagedConfiguration' on 'NavigatorManagedData': The provided value cannot be converted to a sequence.");
           }
-          list = call(arrayFrom, Array, keys, (k) => toStr(k));
+          list = call(arrayFrom, ArrayCtor, keys, (k) => toStr(k));
         } catch (e) {
           return promiseReject(e);
         }
@@ -147,7 +149,7 @@
           const k = list[i];
           if (!call(hasOwn, managed, k)) continue;
           const value = jsonParse(jsonStringify(managed[k])); // a fresh copy each call (the data came from JSON)
-          defineProperty(out, k, { value, writable: true, enumerable: true, configurable: true });
+          defineProperty(out, k, { __proto__: null, value, writable: true, enumerable: true, configurable: true });
         }
         return promiseResolve(out);
       },

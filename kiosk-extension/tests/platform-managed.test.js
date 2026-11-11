@@ -203,7 +203,7 @@ describe("brand check and captured globals", () => {
       Promise.resolve = boom; Promise.reject = boom;
       Array.from = boom; Object.defineProperty = boom;
       Array.prototype.includes = boom; WeakMap.prototype.has = boom; WeakMap.prototype.get = boom;
-      Object.prototype.hasOwnProperty = boom; String = boom;
+      Object.prototype.hasOwnProperty = boom; String = boom; Array = class { constructor() { boom(); } };
     `);
     const p1 = managed.getHostname();
     expect(p1).toBeInstanceOf(RealPromise);
@@ -213,6 +213,26 @@ describe("brand check and captured globals", () => {
     await expect(p2).resolves.toEqual({ a: { b: 1 } });
     expect((await settle(managed.getManagedConfiguration(5))).err).toBeInstanceOf(w.TypeError);
     expect(w.Function.prototype.toString.call(managed.getHostname)).toBe("function getHostname() { [native code] }");
+  });
+});
+
+describe("Object.prototype pollution", () => {
+  it("does not break the methods (descriptors have no prototype)", async () => {
+    const { w, managed } = on({ v: 1, device_methods: true, device: DEVICE, managed: { a: { b: 1 } } });
+    w.eval(`Object.prototype.get = () => 1; Object.prototype.set = () => {};`);
+    try {
+      await expect(managed.getManagedConfiguration(["a"])).resolves.toEqual({ a: { b: 1 } });
+      await expect(managed.getHostname()).resolves.toBe("lab-pc-7");
+    } finally {
+      w.eval(`delete Object.prototype.get; delete Object.prototype.set;`);
+    }
+  });
+  it("does not break the install either", () => {
+    const { w, run } = page({ v: 1, device_methods: true, device: DEVICE, managed: { a: 1 } });
+    w.eval(`Object.prototype.get = () => 1; Object.prototype.set = () => {};`);
+    expect(() => run()).not.toThrow();
+    w.eval(`delete Object.prototype.get; delete Object.prototype.set;`);
+    expect(typeof w.NavigatorManagedData.prototype.getHostname).toBe("function");
   });
 });
 
