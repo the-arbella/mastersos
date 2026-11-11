@@ -52,7 +52,7 @@
 2. 页面改了 `getManagedConfiguration` 拿到的对象，再调一次：拿到的是原样（每次新拷贝）。→ Task 3。
 3. 托管配置里有 `</script>`、U+2028 这类字符：嵌进 `managed.js` 后脚本仍能解析，值原样。→ Task 4。
 4. 改了某台设备的 `asset_id` 或托管配置文件：下一轮平台扩展重新打包（`source.sha256` 变）。→ Task 4。
-5. 旧设置（四个新键都没写）的应用：平台扩展与以前一字节不差（摘要不变），不多出 `managed.js`。→ Task 4。
+5. 只写 `inject` 的旧应用：平台扩展与以前一字节不差（摘要不变），不多出 `managed.js`（写了 `platform` 的应用按裁定多出 `managed.js`，重打包一次）。→ Task 4。
 
 ---
 
@@ -196,7 +196,8 @@ fn device_annotation_rules() {
 //   device_attributes = true、serial None → device.serial 为 null，五个键都在；managed_config → "managed" 原样
 // select.rs：命中 [[device]] 时 Selection.device 是那一条；走种子 / default 时为 None
 // platform_ext.rs：
-//   - 旧设置（只有 platform 或只有 inject）：digest 与改动前相同（把改动前算出的 digest 写死在测试里，在改代码之前先跑一次拿到），没有 managed.js
+//   - 只有 inject 的应用：digest 与改动前相同（把改动前算出的 digest 写死在测试里，在改代码之前先跑一次拿到），没有 managed.js；
+//     只有 platform 的应用：有 managed.js（DATA.device_methods 为 true、没有 device 与 managed）
 //   - device_attributes = true：zip 里有 managed.js，不含标记行，含 "const DATA = "；content_scripts 顺序 chromeos.js、managed.js（有 platform 时），
 //     managed.js 一条是 MAIN、all_frames、match_origin_as_fallback；permissions 与只写 platform 时相同
 //   - 托管配置的值含 "</script>" 与 "\u{2028}"：managed.js 里出现的是 "</script>" 与 " "，原文不出现
