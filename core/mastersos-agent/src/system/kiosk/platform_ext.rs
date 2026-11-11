@@ -1,17 +1,22 @@
-//! The platform extension of a kiosk app (design docs/specs/2026-11-06-kiosk-platform-inject-design.md §3.4).
+//! The platform extension of a kiosk app (design docs/specs/2026-11-06-kiosk-platform-inject-design.md §3.4, and
+//! docs/specs/2026-11-10-kiosk-managed-apis-design.md §4, §5 for `managed.js`).
 //!
-//! A web kiosk app with `platform` or `inject` gets one more extension, built here on the Device and force-installed in
-//! that app's sessions only. It holds everything those two settings need, so the exam extension (in every web kiosk
-//! session) keeps only `nativeMessaging`, `storage` and NWEA's hosts:
+//! A web kiosk app with `platform`, `inject`, `device_attributes = true` or `managed_config` gets one more extension,
+//! built here on the Device and force-installed in that app's sessions only. It holds everything those settings need,
+//! so the exam extension (in every web kiosk session) keeps only `nativeMessaging`, `storage` and NWEA's hosts:
 //!
 //! - `manifest.json`: MV3; `tabs` (reload the start page after install), and with `platform` also
 //!   `declarativeNetRequest` and host permissions on the app's hosts (the request header rule); static content scripts
-//!   on the app's hosts, all `document_start`: `chromeos.js` (MAIN, all frames) with `platform`; `relay.js` (isolated,
-//!   top frame) and `inject.js` (MAIN, all frames) with `inject`. Static content scripts are the only ones sure to run
-//!   before the page's scripts. No web-accessible resources: pages cannot open the start page.
+//!   on the app's hosts, all `document_start`, in this order: `chromeos.js` (MAIN, all frames) with `platform`;
+//!   `managed.js` (MAIN, all frames) with `platform`, `device_attributes` or `managed_config` (no permission of its
+//!   own); `relay.js` (isolated, top frame) and `inject.js` (MAIN, all frames) with `inject`. Static content scripts are
+//!   the only ones sure to run before the page's scripts. No web-accessible resources: pages cannot open the start
+//!   page.
 //! - `background.js`, `start.html`, `start.js`, `relay.js`, `chromeos.js`: `kiosk-platform/` of this repository, built
 //!   into the agent; `config.js`: [`kiosk::platform_config`]; `inject.js`: the bundle's script inside
-//!   `kiosk-platform/inject-wrapper.js` (it gets `mastersos.exit()`).
+//!   `kiosk-platform/inject-wrapper.js` (it gets `mastersos.exit()`); `managed.js`: `kiosk-platform/managed.js` with
+//!   its marker line replaced by `const DATA = JSON.parse("…");` ([`kiosk::managed_values`]: the device values and
+//!   the bundle's `managed_config` file).
 //! - CRX3 with a stored (uncompressed) zip, signed with ECDSA P-256 (`sha256_with_ecdsa`). The key is per app, made on
 //!   first use and kept in `<var_dir>/`[`KEY_DIR`]`/<id>.p8` (root 0600, `var_dir` is 0700), so the extension id stays the
 //!   same. It only lets Chrome check that the CRX is whole: the script comes from the signed bundle, and whoever can
@@ -20,14 +25,16 @@
 //! [`prepare`] builds it in memory (and makes the key); [`place`] writes `platform.crx`, `updates.xml` and
 //! `source.sha256` into `PUBLIC_DIR/<id>/`[`EXT_DIR`] when the content changed. ECDSA signatures differ every time, so
 //! the content is compared by the digest of what goes in, not by the CRX. All of it is 0644 and world-readable on the
-//! Device, the inject script included (manifest-spec: no secrets in it).
+//! Device, the inject script included (manifest-spec: no secrets in it), and so are `managed.js`'s values: with
+//! `device_attributes = true` the serial number, device id, hostname, asset tag and location are in a 0644 CRX any
+//! local account can read, and the managed configuration always is (it is not secret either).
 
 use std::os::fd::OwnedFd;
 use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
-use mastersos_bundle::kiosk::{self, PlatformExtension};
-use mastersos_bundle::KioskApp;
+use mastersos_bundle::kiosk::{self, DeviceValues, PlatformExtension};
+use mastersos_bundle::{DeviceEntry, DeviceIdent, KioskApp};
 use ring::rand::SystemRandom;
 use ring::signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_ASN1_SIGNING};
 use sha2::{Digest, Sha256};
@@ -57,6 +64,9 @@ const CHROMEOS_JS: &str = include_str!("../../../../../kiosk-platform/chromeos.j
 const INJECT_WRAPPER: &str = include_str!("../../../../../kiosk-platform/inject-wrapper.js");
 /// The line of [`INJECT_WRAPPER`] the school's script replaces.
 const INJECT_MARKER: &str = "// @@MASTERSOS_INJECT@@\n";
+const MANAGED_JS: &str = include_str!("../../../../../kiosk-platform/managed.js");
+/// The line of [`MANAGED_JS`] `const DATA = …;` replaces.
+const MANAGED_MARKER: &str = "// @@MASTERSOS_MANAGED@@\n";
 
 /// The DER prefix of a P-256 SubjectPublicKeyInfo (id-ecPublicKey, prime256v1, BIT STRING of 66 bytes).
 const P256_SPKI_PREFIX: &[u8] = &[
@@ -84,14 +94,20 @@ pub fn start_url(ext_id: &str) -> String {
     format!("chrome-extension://{ext_id}/start.html")
 }
 
-/// Reads the app's inject script (if any) from the bundle, checks it ([`kiosk::check_inject_source`]) and builds the
-/// platform extension that sends `{cmd:"exit"}` to the exam extension `exam_id`. Makes the app's key on first use.
+/// Reads the app's inject script and managed configuration (if any) from the bundle, checks them
+/// ([`kiosk::check_inject_source`], [`kiosk::check_managed_config`]) and builds the platform extension that sends
+/// `{cmd:"exit"}` to the exam extension `exam_id`. The device values come from `device` (the matched `[[device]]`),
+/// `ident` and `<root>/etc/hostname`. Makes the app's key on first use.
+#[allow(clippy::too_many_arguments)]
 pub fn prepare(
     bundle_dir: &Path,
     var_dir: &Path,
+    root: &Path,
     id: &str,
     app: &KioskApp,
     exam_id: &str,
+    device: Option<&DeviceEntry>,
+    ident: &DeviceIdent,
 ) -> Result<Prepared> {
     let script = match app.inject.as_deref() {
         Some(file) => {
@@ -102,6 +118,26 @@ pub fn prepare(
         }
         None => None,
     };
+    let managed = match app.managed_config.as_deref() {
+        Some(file) => {
+            let b = desktop::read_bundle_file(bundle_dir, file).with_context(|| {
+                format!("cannot read managed configuration {file} from the bundle")
+            })?;
+            Some(
+                kiosk::check_managed_config(&b)
+                    .map_err(|why| anyhow!("managed configuration {file} {why}"))?,
+            )
+        }
+        None => None,
+    };
+    let values = DeviceValues {
+        asset_id: device.and_then(|d| d.asset_id.clone()),
+        location: device.and_then(|d| d.location.clone()),
+        directory_id: Some(ident.device_id.clone()).filter(|s| !s.is_empty()),
+        hostname: hostname(root),
+        serial: ident.serial.clone(),
+    };
+    let managed = kiosk::managed_values(app, &values, managed);
     let config = kiosk::platform_config(app, exam_id).map_err(|e| anyhow!(e.message))?;
     let (_, hosts) = kiosk::start_hosts(app).map_err(|e| anyhow!(e.message))?;
     let key = app_key(var_dir, id)?;
@@ -113,7 +149,15 @@ pub fn prepare(
         exam_id,
         config: &config,
         script: script.as_deref(),
+        managed: managed.as_ref(),
     })
+}
+
+/// The first line of `<root>/etc/hostname` without surrounding spaces; `None` when it cannot be read or is empty.
+fn hostname(root: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(root.join("etc/hostname")).ok()?;
+    let first = text.lines().next()?.trim();
+    (!first.is_empty()).then(|| first.to_string())
 }
 
 /// What goes into one platform extension.
@@ -128,6 +172,8 @@ pub struct Parts<'a> {
     pub config: &'a serde_json::Value,
     /// The inject script, byte for byte (UTF-8, checked).
     pub script: Option<&'a [u8]>,
+    /// [`kiosk::managed_values`], embedded in `managed.js`.
+    pub managed: Option<&'a serde_json::Value>,
 }
 
 /// The platform extension for `parts`.
@@ -138,8 +184,8 @@ pub fn build(parts: &Parts) -> Result<Prepared> {
             parts.exam_id
         );
     }
-    if !parts.platform && parts.script.is_none() {
-        bail!("an app without platform or inject has no platform extension");
+    if !parts.platform && parts.script.is_none() && parts.managed.is_none() {
+        bail!("an app without platform, inject, device_attributes or managed_config has no platform extension");
     }
     let manifest = manifest_json(parts)?;
     let config = format!("self.MASTERSOS_PLATFORM = {};\n", parts.config);
@@ -151,6 +197,7 @@ pub fn build(parts: &Parts) -> Result<Prepared> {
         }
         None => None,
     };
+    let managed = parts.managed.map(embed).transpose()?;
     // Sorted by name: the zip and the digest do not depend on the order things are added.
     let mut files: Vec<(&str, &[u8])> = vec![
         ("background.js", BACKGROUND_JS.as_bytes()),
@@ -161,6 +208,9 @@ pub fn build(parts: &Parts) -> Result<Prepared> {
     ];
     if parts.platform {
         files.push(("chromeos.js", CHROMEOS_JS.as_bytes()));
+    }
+    if let Some(m) = &managed {
+        files.push(("managed.js", m.as_bytes()));
     }
     if let Some(i) = &inject {
         files.push(("inject.js", i.as_bytes()));
@@ -204,6 +254,26 @@ fn wrap(script: &str) -> Result<String> {
     Ok(format!("{head}{script}{nl}{tail}"))
 }
 
+/// [`MANAGED_JS`] with its marker line replaced by `const DATA = JSON.parse("…");`. The JSON text goes in as a string
+/// for `JSON.parse`, not as an object literal: in a literal a top level `"__proto__"` key would set the prototype
+/// instead of being a key of the managed configuration.
+fn embed(data: &serde_json::Value) -> Result<String> {
+    let (head, tail) = MANAGED_JS
+        .split_once(MANAGED_MARKER)
+        .ok_or_else(|| anyhow!("managed.js has no marker line"))?;
+    let literal = js_string(&serde_json::to_string(data)?)?;
+    Ok(format!("{head}const DATA = JSON.parse({literal});\n{tail}"))
+}
+
+/// `text` as a double-quoted JS string literal (a JSON string), with `<`, U+2028 and U+2029 escaped too: nothing in it
+/// can end a script element or a line.
+fn js_string(text: &str) -> Result<String> {
+    Ok(serde_json::to_string(text)?
+        .replace('<', "\\u003c")
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029"))
+}
+
 /// Writes the extension into `app_dir/platform/` unless `source.sha256` says it is already there; removes the inject
 /// helper of earlier images.
 pub fn place(app_dir: &OwnedFd, p: &Prepared) -> Result<()> {
@@ -225,7 +295,8 @@ pub fn place(app_dir: &OwnedFd, p: &Prepared) -> Result<()> {
     Ok(())
 }
 
-/// Removes `app_dir/platform/` (and an earlier image's `inject/`): the app has neither `platform` nor `inject` now.
+/// Removes `app_dir/platform/` (and an earlier image's `inject/`): the app has none of `platform`, `inject`,
+/// `device_attributes` and `managed_config` now.
 pub fn unplace(app_dir: &OwnedFd) -> Result<()> {
     safefs::remove_tree_at(app_dir, LEGACY_DIR)?;
     safefs::remove_tree_at(app_dir, EXT_DIR)
@@ -311,6 +382,9 @@ fn manifest_json(parts: &Parts) -> Result<Vec<u8>> {
         m["permissions"] = serde_json::json!(["declarativeNetRequest", "tabs"]);
         m["host_permissions"] = serde_json::json!(matches);
         scripts.push(main("chromeos.js"));
+    }
+    if parts.managed.is_some() {
+        scripts.push(main("managed.js"));
     }
     if parts.script.is_some() {
         // relay.js first: it must be listening when the wrapper in inject.js posts its channel
@@ -567,6 +641,7 @@ mod tests {
             exam_id: EXAM,
             config: cfg,
             script,
+            managed: None,
         }
     }
 
@@ -720,9 +795,282 @@ mod tests {
         assert_eq!(js, ["relay.js", "inject.js"]);
     }
 
+    /// An app with only `inject` gets no managed.js: its extension is byte for byte what it was before managed.js
+    /// existed (the digest computed by the code before that change).
+    #[test]
+    fn inject_only_digest_is_unchanged() {
+        let k = key();
+        let hosts = vec!["testnav.com".to_string()];
+        let cfg = config();
+        let p = build(&parts(&k, &hosts, &cfg, false, Some(b"window.x = 1;\n"))).unwrap();
+        let (files, _) = manifest_of(&p);
+        assert!(files.iter().all(|(n, _)| n != "managed.js"));
+        assert_eq!(
+            p.digest,
+            "d17c33b2e16c7adb37ab80d6a60772a748a44932fbc2acad2918e3052a7d69c3"
+        );
+    }
+
+    fn file_of(files: &[(String, Vec<u8>)], n: &str) -> Option<String> {
+        files
+            .iter()
+            .find(|(x, _)| x == n)
+            .map(|(_, d)| String::from_utf8(d.clone()).unwrap())
+    }
+
+    /// The `DATA` a managed.js holds: the JS string literal in `const DATA = JSON.parse(…);` is also a JSON string.
+    fn data_of(js: &str) -> serde_json::Value {
+        let line = js
+            .lines()
+            .find_map(|l| l.trim_start().strip_prefix("const DATA = JSON.parse("))
+            .unwrap();
+        let lit = line.strip_suffix(");").unwrap();
+        let text: String = serde_json::from_str(lit).unwrap();
+        serde_json::from_str(&text).unwrap()
+    }
+
+    fn device_data() -> serde_json::Value {
+        serde_json::json!({"v": 1, "device_methods": true, "device": {"asset_id": "A-1", "location": "Room 2",
+            "directory_id": "dev-1", "hostname": "lab-07", "serial": null}})
+    }
+
+    #[test]
+    fn managed_js_holds_the_data_after_chromeos_js() {
+        let k = key();
+        let hosts = vec!["testnav.com".to_string()];
+        let cfg = config();
+        let data = device_data();
+        // platform and managed: chromeos.js, then managed.js, then the inject scripts
+        let mut both = parts(&k, &hosts, &cfg, true, Some(b"1;"));
+        both.managed = Some(&data);
+        let p = build(&both).unwrap();
+        let (files, m) = manifest_of(&p);
+        let js = file_of(&files, "managed.js").unwrap();
+        assert!(!js.contains("@@MASTERSOS_MANAGED@@"));
+        assert!(js.contains("const DATA = "));
+        assert_eq!(data_of(&js), data);
+        let (head, tail) = MANAGED_JS.split_once(MANAGED_MARKER).unwrap();
+        assert!(js.starts_with(head) && js.ends_with(tail));
+        let cs = m["content_scripts"].as_array().unwrap();
+        let names: Vec<&str> = cs.iter().map(|c| c["js"][0].as_str().unwrap()).collect();
+        assert_eq!(
+            names,
+            ["chromeos.js", "managed.js", "relay.js", "inject.js"]
+        );
+        assert_eq!(cs[1]["world"], "MAIN");
+        assert_eq!(cs[1]["all_frames"], true);
+        assert_eq!(cs[1]["match_origin_as_fallback"], true);
+        assert_eq!(cs[1]["run_at"], "document_start");
+        // no permission of its own: the same as platform alone
+        let alone = build(&parts(&k, &hosts, &cfg, true, None)).unwrap();
+        let (_, m_alone) = manifest_of(&alone);
+        assert_eq!(m["permissions"], m_alone["permissions"]);
+        assert_eq!(m["host_permissions"], m_alone["host_permissions"]);
+        // managed without platform: managed.js first, permissions as without it
+        let mut only = parts(&k, &hosts, &cfg, false, None);
+        only.managed = Some(&data);
+        let p = build(&only).unwrap();
+        let (files, m) = manifest_of(&p);
+        assert!(files.iter().all(|(n, _)| n != "chromeos.js"));
+        let names: Vec<&str> = m["content_scripts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["js"][0].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["managed.js"]);
+        assert_eq!(m["permissions"], serde_json::json!(["tabs"]));
+        assert!(m.get("host_permissions").is_none());
+    }
+
+    #[test]
+    fn managed_js_digest_follows_the_values() {
+        let k = key();
+        let hosts = vec!["testnav.com".to_string()];
+        let cfg = config();
+        let data = device_data();
+        let mut a = parts(&k, &hosts, &cfg, true, None);
+        a.managed = Some(&data);
+        let p = build(&a).unwrap();
+        assert_eq!(build(&a).unwrap().digest, p.digest);
+        let mut other = data.clone();
+        other["device"]["asset_id"] = "A-2".into();
+        a.managed = Some(&other);
+        assert_ne!(build(&a).unwrap().digest, p.digest);
+    }
+
+    #[test]
+    fn managed_js_escapes_what_could_end_a_script() {
+        let k = key();
+        let hosts = vec!["testnav.com".to_string()];
+        let cfg = config();
+        let data = serde_json::json!({"v": 1, "device_methods": false,
+            "managed": {"note": "</script><script>alert(1)</script>", "sep": "a\u{2028}b\u{2029}c"}});
+        let mut a = parts(&k, &hosts, &cfg, false, None);
+        a.managed = Some(&data);
+        let (files, _) = manifest_of(&build(&a).unwrap());
+        let js = file_of(&files, "managed.js").unwrap();
+        assert!(js.contains("\\u003c/script>"));
+        assert!(js.contains("\\u2028") && js.contains("\\u2029"));
+        assert!(!js.contains("</script>"));
+        assert!(!js.contains('\u{2028}') && !js.contains('\u{2029}'));
+        assert_eq!(data_of(&js), data);
+    }
+
+    #[test]
+    fn managed_js_keeps_a_proto_key_as_data() {
+        // an object literal would make "__proto__" the prototype; JSON.parse keeps it an own key
+        let managed = kiosk::check_managed_config(br#"{"__proto__": {"x": 1}}"#).unwrap();
+        let data = serde_json::json!({"v": 1, "device_methods": false, "managed": managed});
+        let k = key();
+        let hosts = vec!["testnav.com".to_string()];
+        let cfg = config();
+        let mut a = parts(&k, &hosts, &cfg, false, None);
+        a.managed = Some(&data);
+        let (files, _) = manifest_of(&build(&a).unwrap());
+        let js = file_of(&files, "managed.js").unwrap();
+        assert!(js.contains("const DATA = JSON.parse(\""));
+        assert!(js.contains(r#"\"__proto__\":{\"x\":1}"#));
+        assert_eq!(data_of(&js)["managed"]["__proto__"]["x"], 1);
+    }
+
+    fn kiosk_app(extra: &str) -> KioskApp {
+        toml::from_str(&format!(
+            "name = \"TestNav\"\nurl = \"https://home.testnav.com/\"\n{extra}"
+        ))
+        .unwrap()
+    }
+
+    /// Bundle, var and root directories for [`prepare`].
+    fn prepare_dirs(
+        hostname: Option<&str>,
+        managed: Option<&[u8]>,
+    ) -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        std::path::PathBuf,
+    ) {
+        let tmp = tempfile::tempdir().unwrap();
+        let (bundle, var, root) = (
+            tmp.path().join("bundle"),
+            tmp.path().join("var"),
+            tmp.path().join("root"),
+        );
+        std::fs::create_dir_all(bundle.join("files")).unwrap();
+        std::fs::create_dir_all(root.join("etc")).unwrap();
+        if let Some(h) = hostname {
+            std::fs::write(root.join("etc/hostname"), h).unwrap();
+        }
+        if let Some(m) = managed {
+            std::fs::write(bundle.join("files/testnav.json"), m).unwrap();
+        }
+        (tmp, bundle, var, root)
+    }
+
+    fn ident() -> DeviceIdent {
+        DeviceIdent {
+            serial: Some("PF2ABC12".into()),
+            device_id: "dev-1".into(),
+        }
+    }
+
+    fn prepared_data(p: &Prepared) -> Option<serde_json::Value> {
+        let (files, _) = manifest_of(p);
+        file_of(&files, "managed.js").map(|js| data_of(&js))
+    }
+
+    #[test]
+    fn prepare_embeds_the_device_values_and_the_managed_configuration() {
+        let device: DeviceEntry = toml::from_str(
+            "serial = \"PF2ABC12\"\ngroup = \"g\"\nasset_id = \"A-1\"\nlocation = \"Room 2\"",
+        )
+        .unwrap();
+        let (_t, bundle, var, root) = prepare_dirs(
+            Some(" lab-07 \nsecond\n"),
+            Some(br#"{"server": "https://x.example/"}"#),
+        );
+        let app = kiosk_app("device_attributes = true\nmanaged_config = \"files/testnav.json\"");
+        let p = prepare(
+            &bundle,
+            &var,
+            &root,
+            "testnav",
+            &app,
+            EXAM,
+            Some(&device),
+            &ident(),
+        )
+        .unwrap();
+        assert_eq!(
+            prepared_data(&p).unwrap(),
+            serde_json::json!({"v": 1, "device_methods": true,
+                "device": {"asset_id": "A-1", "location": "Room 2", "directory_id": "dev-1",
+                    "hostname": "lab-07", "serial": "PF2ABC12"},
+                "managed": {"server": "https://x.example/"}})
+        );
+        // no [[device]], no hostname: null
+        for h in [None, Some(""), Some(" \n")] {
+            let (_t, bundle, var, root) = prepare_dirs(h, None);
+            let app = kiosk_app("device_attributes = true");
+            let p = prepare(&bundle, &var, &root, "testnav", &app, EXAM, None, &ident()).unwrap();
+            let d = prepared_data(&p).unwrap();
+            assert_eq!(d["device"]["hostname"], serde_json::Value::Null, "{h:?}");
+            assert_eq!(d["device"]["asset_id"], serde_json::Value::Null);
+            assert_eq!(d["device"]["location"], serde_json::Value::Null);
+            assert_eq!(d["device"]["serial"], "PF2ABC12");
+        }
+        // platform only: managed.js with the device methods, without values or a managed configuration
+        let (_t, bundle, var, root) = prepare_dirs(Some("lab-07\n"), None);
+        let p = prepare(
+            &bundle,
+            &var,
+            &root,
+            "testnav",
+            &kiosk_app("platform = \"chromeos\""),
+            EXAM,
+            Some(&device),
+            &ident(),
+        )
+        .unwrap();
+        assert_eq!(
+            prepared_data(&p).unwrap(),
+            serde_json::json!({"v": 1, "device_methods": true})
+        );
+        // inject only: no managed.js
+        std::fs::write(bundle.join("files/a.js"), b"1;\n").unwrap();
+        let p = prepare(
+            &bundle,
+            &var,
+            &root,
+            "testnav",
+            &kiosk_app("inject = \"files/a.js\""),
+            EXAM,
+            Some(&device),
+            &ident(),
+        )
+        .unwrap();
+        assert_eq!(prepared_data(&p), None);
+    }
+
+    #[test]
+    fn prepare_refuses_a_bad_managed_configuration() {
+        let app = kiosk_app("managed_config = \"files/testnav.json\"");
+        for bad in [&b"[1, 2]"[..], b"{", b"\xff"] {
+            let (_t, bundle, var, root) = prepare_dirs(None, Some(bad));
+            let e = prepare(&bundle, &var, &root, "testnav", &app, EXAM, None, &ident())
+                .err()
+                .unwrap();
+            assert!(format!("{e:#}").contains("files/testnav.json"), "{e:#}");
+        }
+        let (_t, bundle, var, root) = prepare_dirs(None, None);
+        assert!(prepare(&bundle, &var, &root, "testnav", &app, EXAM, None, &ident()).is_err());
+    }
+
     #[test]
     fn wrapper_has_one_marker_line() {
         assert_eq!(INJECT_WRAPPER.matches(INJECT_MARKER).count(), 1);
+        assert_eq!(MANAGED_JS.matches(MANAGED_MARKER).count(), 1);
         assert_eq!(wrap("a;\n").unwrap(), wrap("a;").unwrap());
     }
 

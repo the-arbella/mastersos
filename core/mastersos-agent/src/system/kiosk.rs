@@ -356,8 +356,17 @@ fn plan(
             // platform / inject: the start page, the disguise and the script go into the app's platform extension,
             // built here (design §3.4); a bad or missing script skips the app like any other failed check
             if kiosk::uses_start_page(app) {
-                let p = platform_ext::prepare(ctx.bundle_dir, &paths.var_dir, id, app, &ext.id)
-                    .map_err(|e| format!("{e:#}"))?;
+                let p = platform_ext::prepare(
+                    ctx.bundle_dir,
+                    &paths.var_dir,
+                    root,
+                    id,
+                    app,
+                    &ext.id,
+                    ctx.device,
+                    ctx.ident,
+                )
+                .map_err(|e| format!("{e:#}"))?;
                 launch.start = Some(platform_ext::start_url(&p.ext.id));
                 platform = Some(p);
             }

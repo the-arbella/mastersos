@@ -316,6 +316,8 @@ mod tests {
                 phase: Phase::Boot,
                 superseded: &flag,
                 quiet: &std::sync::atomic::AtomicBool::new(false),
+                device: None,
+                ident: &crate::system::tests::test_ident(),
             };
             let r = run(
                 &ctx,

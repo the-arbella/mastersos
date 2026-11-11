@@ -1902,6 +1902,8 @@ client_id = "laptops"
             phase: Phase::Boot,
             superseded: &flag,
             quiet: &std::sync::atomic::AtomicBool::new(false),
+            device: None,
+            ident: &crate::system::tests::test_ident(),
         };
         run(
             &ctx,
@@ -3338,6 +3340,8 @@ client_id = "laptops"
             phase: Phase::Full,
             superseded: &flag,
             quiet: &std::sync::atomic::AtomicBool::new(false),
+            device: None,
+            ident: &crate::system::tests::test_ident(),
         };
         let env = Env {
             paths: &p,

@@ -10,7 +10,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 
 use anyhow::{anyhow, bail, Context, Result};
-use mastersos_bundle::{Config, Group, ItemResult, Lock, School, Seed};
+use mastersos_bundle::{Config, DeviceEntry, DeviceIdent, Group, ItemResult, Lock, School, Seed};
 use sha2::{Digest, Sha256};
 
 use crate::safefs;
@@ -40,6 +40,11 @@ pub struct ApplyContext<'a> {
     /// The exam quiet started during this round: the applier stops between steps as for `superseded`, and the worker
     /// applies the same (or a newer) request again once the quiet ends.
     pub quiet: &'a AtomicBool,
+    /// The `[[device]]` that picked the Group ([`Selection::device`](mastersos_bundle::Selection::device)): its
+    /// annotations go to kiosk apps with `device_attributes`.
+    pub device: Option<&'a DeviceEntry>,
+    /// This Device's serial number and device id.
+    pub ident: &'a DeviceIdent,
 }
 
 pub trait Applier: Send + Sync {

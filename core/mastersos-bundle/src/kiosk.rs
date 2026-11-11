@@ -175,9 +175,9 @@ pub fn check_managed_config(bytes: &[u8]) -> Result<Map<String, Value>, String> 
     }
 }
 
-/// Whether `app` has a platform extension and starts at its start page (`platform`, `inject`,
-/// `device_attributes = true` or `managed_config` written; design §3.3). Those apps get `chrome-extension://<platform extension id>` in the
-/// allowlist.
+/// Whether `app` has a platform extension and starts at its start page: it writes `platform`,
+/// `inject`, `device_attributes = true` or `managed_config`, and so gets
+/// `chrome-extension://<platform extension id>` in the allowlist (design §3.3).
 pub fn uses_start_page(app: &KioskApp) -> bool {
     app.platform.is_some()
         || app.inject.is_some()
@@ -217,6 +217,55 @@ pub fn platform_config(app: &KioskApp, exam_id: &str) -> Result<Value, KioskErro
     }))
 }
 
+/// What a Device knows about itself for the device attribute methods of `managed.js` (design
+/// docs/specs/2026-11-10-kiosk-managed-apis-design.md §4): the matched `[[device]]`'s annotations,
+/// the device id, `/etc/hostname` and the hardware serial. `None` where there is no value.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeviceValues {
+    pub asset_id: Option<String>,
+    pub location: Option<String>,
+    pub directory_id: Option<String>,
+    pub hostname: Option<String>,
+    pub serial: Option<String>,
+}
+
+/// The `DATA` of the platform extension's `managed.js` (design §4, §5): `None` when the app writes
+/// none of `platform`, `device_attributes` and `managed_config` (no `managed.js`). Otherwise
+/// `{"v":1,"device_methods":…}`, with `"device"` (all five values, `null` where there is none)
+/// when `device_attributes = true`, and `"managed"` (`managed`, the checked `managed_config`
+/// file) when there is one. The five methods are there with `platform` or `device_attributes`.
+pub fn managed_values(
+    app: &KioskApp,
+    device: &DeviceValues,
+    managed: Option<Map<String, Value>>,
+) -> Option<Value> {
+    if app.platform.is_none() && !app.device_attributes && app.managed_config.is_none() {
+        return None;
+    }
+    let mut data = Map::new();
+    data.insert("v".into(), json!(1));
+    data.insert(
+        "device_methods".into(),
+        json!(app.platform.is_some() || app.device_attributes),
+    );
+    if app.device_attributes {
+        data.insert(
+            "device".into(),
+            json!({
+                "asset_id": device.asset_id,
+                "location": device.location,
+                "directory_id": device.directory_id,
+                "hostname": device.hostname,
+                "serial": device.serial,
+            }),
+        );
+    }
+    if let Some(m) = managed {
+        data.insert("managed".into(), Value::Object(m));
+    }
+    Some(Value::Object(data))
+}
+
 /// A web app's `url` and the hosts its disguise and inject script apply to: the allowlist's hosts
 /// (`allow`, then the host of `url`, each once). Only for web apps without pwa.
 pub fn start_hosts(app: &KioskApp) -> Result<(&str, Vec<String>), KioskError> {
@@ -226,7 +275,8 @@ pub fn start_hosts(app: &KioskApp) -> Result<(&str, Vec<String>), KioskError> {
             return fail(
                 "kiosk_platform_invalid",
                 "platform",
-                "platform and inject are only for web apps without pwa".into(),
+                "platform, inject, device_attributes and managed_config are only for web apps without pwa"
+                    .into(),
             )
         }
     };
@@ -2047,5 +2097,48 @@ url = "https://test.mapnwea.org/"
         assert_eq!(features_used(&m), [FEATURE_KIOSK]);
         assert_eq!(FEATURE_KIOSK_PLATFORM, "kiosk_platform");
         assert_eq!(FEATURE_KIOSK_INJECT, "kiosk_inject");
+    }
+
+    fn values() -> DeviceValues {
+        DeviceValues {
+            asset_id: Some("A-1".into()),
+            location: None,
+            directory_id: Some("dev-1".into()),
+            hostname: Some("lab-07".into()),
+            serial: None,
+        }
+    }
+
+    #[test]
+    fn managed_values_only_for_the_three_keys() {
+        // neither platform, device_attributes nor managed_config: no managed.js (inject alone included)
+        assert_eq!(managed_values(&web(""), &values(), None), None);
+        assert_eq!(
+            managed_values(&web("inject = \"files/a.js\""), &values(), None),
+            None
+        );
+        // platform only: the device methods, without values or a managed configuration
+        let d = managed_values(&web("platform = \"chromeos\""), &values(), None).unwrap();
+        assert_eq!(d, json!({"v": 1, "device_methods": true}));
+        // device_attributes: all five values, null where there is none
+        let d = managed_values(&web("device_attributes = true"), &values(), None).unwrap();
+        assert_eq!(
+            d,
+            json!({"v": 1, "device_methods": true, "device": {"asset_id": "A-1", "location": null,
+                "directory_id": "dev-1", "hostname": "lab-07", "serial": null}})
+        );
+        // managed_config: the object as it is, no device methods
+        let mut m = Map::new();
+        m.insert("server".into(), json!({"url": "https://x.example/"}));
+        let d = managed_values(
+            &web("managed_config = \"files/a.json\""),
+            &values(),
+            Some(m.clone()),
+        )
+        .unwrap();
+        assert_eq!(
+            d,
+            json!({"v": 1, "device_methods": false, "managed": Value::Object(m)})
+        );
     }
 }
