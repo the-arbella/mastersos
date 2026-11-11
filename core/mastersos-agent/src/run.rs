@@ -1116,6 +1116,8 @@ impl Agent {
                 phase,
                 superseded: &superseded,
                 quiet: &AtomicBool::new(false),
+                device: sel.device,
+                ident: &ident,
             })
         })
         .await

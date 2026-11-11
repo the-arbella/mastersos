@@ -924,6 +924,8 @@ Write exactly one of `url` (a web page or PWA) and `exec` (a local program).
 | `user_agent` | string | Chrome's own | at most 512 bytes, no control characters; only with `url` | `user_agent = "Mozilla/5.0 (X11; Linux x86_64) ExampleExamClient/1.0"` | For sites that detect browsers. Exam vendors' secure-client detection needs no change (`kiosk_user_agent`). |
 | `platform` | string | none | `"chromeos"`; only with `url`, not with `pwa = true` or `user_agent` | `platform = "chromeos"` | The pages see ChromeOS: `navigator.userAgent`, `navigator.userAgentData` and the `User-Agent` and `Sec-CH-UA-Platform` headers say ChromeOS, with the real Chrome version. Devices whose agent does not know it reject the version (`feature_unsupported`). |
 | `inject` | string | none | a `files/….js` file in the bundle, UTF-8, at most 64 KiB; only with `url`, not with `pwa = true` | `inject = "files/testnav.js"` | Runs in the pages of the app's sites (`allow` and the host of `url`), in the page's own JavaScript world, before any of the page's scripts, inside a function: declare globals as `window.name = …`. To end the kiosk session from the script: `mastersos.exit()` (top frame; the page's own scripts cannot do this). **No secrets:** the script is stored on each Device as a world-readable file (mode 0644) that every account on the Device can read; never put passwords, keys or tokens in it. |
+| `device_attributes` | boolean | `false` | `true` only with `url`, not with `pwa = true` | `device_attributes = true` | Pages on the exact origin of `url` (same host and port; not its subdomains, not the hosts in `allow`) can read the Device's serial number, hostname, asset tag (`asset_id`), location and device id through the browser's Device Attributes API, as on a managed ChromeOS kiosk. With `platform = "chromeos"` and without `device_attributes`, the five methods exist but reject. The values are also readable by every account on the Device. The asset tag and location come from the Device's `[[device]]` entry (`asset_id`, `location`). Devices whose agent does not know it reject the version (`feature_unsupported`). |
+| `managed_config` | string | none | a `files/….json` file in the bundle: UTF-8 JSON with an object at the top level, at most 64 KiB; only with `url`, not with `pwa = true` | `managed_config = "files/testnav.json"` | Pages on the exact origin of `url` (same host and port; not its subdomains, not the hosts in `allow`) read this object as their managed configuration (`navigator.managed.getManagedConfiguration()`). **No secrets:** the file is stored on each Device as a world-readable file (mode 0644) that every account on the Device can read, as for `inject`; never put passwords, keys or tokens in it. Devices whose agent does not know it reject the version (`feature_unsupported`). |
 | `extensions` | list of tables | `[]` | see [`[[config.apps.kiosk.<id>.extensions]]`](#configappskioskidextensions) | — | Extensions force-installed in the session. |
 | `chrome_policy` | table | `{}` | Chrome policy names and values, except the locked keys | `chrome_policy = { PrintingEnabled = true }` | Laid over the kiosk session's default locks. The Config's `chrome_policy` is not inherited. Policies that are off by default and may be turned on here: `PrintingEnabled`, `TranslateEnabled`, `SpellcheckEnabled`, `LensOverlaySettings`, `GenAiDefaultSettings`, `UserFeedbackAllowed`. Locked keys (`kiosk_policy_locked`) cannot be set. |
 | `exec` | string | one of `url` / `exec` | a Flatpak app id, or an absolute path under `/usr/` or `/opt/` (no arguments, no `..`; each part only letters, digits, `.`, `_`, `-`, `+`) | `exec = "org.geogebra.GeoGebra"` | A Flatpak app must also be in `apps.flatpak`. A path under `/opt/` is a program a `.deb` app provides (`[config.apps.deb.<id>]`). |
@@ -971,6 +973,26 @@ url = "https://home.testnav.com/"
 allow = ["testnav.com", "pearsontestcontent.com"]
 platform = "chromeos"
 inject = "files/testnav.js"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "standard"
+```
+
+A web app that also reads the Device's attributes and a managed configuration (`files/testnav.json` is in the bundle):
+
+```toml check=ok files=files/testnav.json
+[[config]]
+id = "standard"
+name = "Standard"
+
+[config.apps.kiosk.testnav]
+name = "TestNav"
+url = "https://home.testnav.com/"
+allow = ["testnav.com", "pearsontestcontent.com"]
+device_attributes = true
+managed_config = "files/testnav.json"
 
 [[group]]
 id = "default"
@@ -1191,6 +1213,8 @@ without an entry uses its seed's Group or `default`.
 | `group` | string | required | the id of an existing Group | `group = "teachers"` | |
 | `locked` | table | optional; not locked | see [`[device.locked]`](#devicelocked) | — | Lock the Device. |
 | `reset` | table | optional | see [`[device.reset]`](#devicereset) | — | Legacy; Devices ignore it. |
+| `asset_id` | string | optional | 1-128 characters, no control characters | `asset_id = "A-1024"` | The school's asset tag. An annotation: it does not pick the Group. Needs Devices that report `device_annotations`. |
+| `location` | string | optional | 1-128 characters, no control characters | `location = "Building 3, room 301"` | Where the Device is. An annotation: it does not pick the Group. Needs Devices that report `device_annotations`. |
 
 ```toml check=ok
 [[config]]
@@ -1291,6 +1315,7 @@ last Version), so only the server's check at `mastersos publish` reports them.
 | `deb_url_invalid` | error | `.deb` app `url` |
 | `default_group_missing` | error | no `default` Group |
 | `dest_not_absolute` | error | `files` / `downloads` destination |
+| `device_annotation_invalid` | error | `[[device]]` `asset_id` or `location` |
 | `device_duplicate_id` | error | Device listed twice |
 | `device_name_duplicate` | error | printer / scanner name repeated |
 | `device_no_identity` | error | `[[device]]` without serial or device_id |
@@ -1321,6 +1346,7 @@ last Version), so only the server's check at `mastersos publish` reports them.
 | `issues_truncated` | info | more than 1000 Issues, the rest not shown |
 | `it_account_invalid` | error | `it_account` password hash |
 | `kiosk_allow_invalid` | error | kiosk `allow` entry |
+| `kiosk_device_attributes_invalid` | error | kiosk `device_attributes` |
 | `kiosk_exec_invalid` | error | kiosk `exec` |
 | `kiosk_extension_invalid` | error | kiosk `extensions` |
 | `kiosk_flatpak_missing` | warning | kiosk Flatpak not installed |
@@ -1328,6 +1354,7 @@ last Version), so only the server's check at `mastersos publish` reports them.
 | `kiosk_in_session_only` | error | kiosk app only in sessions |
 | `kiosk_inject_invalid` | error | kiosk `inject` |
 | `kiosk_launch_invalid` | error | kiosk `url` / `exec` / `pwa` / `android` |
+| `kiosk_managed_config_invalid` | error | kiosk `managed_config` |
 | `kiosk_name_invalid` | error | kiosk `name` |
 | `kiosk_no_entry` | warning | kiosk app shown nowhere |
 | `kiosk_platform_invalid` | error | kiosk `platform` |
@@ -2058,6 +2085,35 @@ group = "default"
 ```
 <!-- /prompt:omit -->
 
+### `device_annotation_invalid`
+
+**Level:** error. **Meaning:** a `[[device]]` entry's `asset_id` or `location` is empty, longer than
+128 characters, or contains a control character (a tab or a line break, for example).
+
+<!-- prompt:omit -->
+**Why:** the values are shown in the console and handed to apps on the Device as single-line text.
+<!-- /prompt:omit -->
+
+**How to fix:** write 1-128 characters on one line, or remove the key.
+
+<!-- prompt:omit -->
+```toml check=device_annotation_invalid
+[[config]]
+id = "standard"
+name = "Standard"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "standard"
+
+[[device]]
+serial = "9JK4LM2"
+group = "default"
+asset_id = ""
+```
+<!-- /prompt:omit -->
+
 ### `device_reset_id_invalid`
 
 **Level:** error. **Meaning:** the legacy `[device.reset] id` is not 1-64 letters, digits or `-`.
@@ -2289,7 +2345,7 @@ with Configs counts as using it, `wifi_ext`: any `[[school.wifi]]`, or a Wi-Fi e
 `wpa3_only` (either value), `eap` or an enterprise key, or `oidc_card`: `client_secret` or
 `card_hosts` in `[school.oidc]`, or `support`: `[config.support]` or `support` in `[defaults]`, or
 `config_update_channel`: `update_channel` in `[defaults]` or a `[[config]]`, or `oidc_idp_hint`:
-`idp_hint` in `[school.oidc]`, or `deb_apps`: `apps.deb` or `ubuntu_mirror` in `[defaults]` or a `[[config]]`),
+`idp_hint` in `[school.oidc]`, or `deb_apps`: `apps.deb` or `ubuntu_mirror` in `[defaults]` or a `[[config]]`, or `device_annotations`: `asset_id` or `location` in a `[[device]]`, or `kiosk_platform`, `kiosk_inject`, `kiosk_device_attributes`, `kiosk_managed_config`: the kiosk app keys `platform`, `inject`, `device_attributes = true` and `managed_config`),
 and some Devices seen in the last 30 days have not reported that they understand it.
 
 <!-- prompt:omit -->
@@ -2682,6 +2738,37 @@ config = "standard"
 ```
 <!-- /prompt:omit -->
 
+### `kiosk_device_attributes_invalid`
+
+**Level:** error. **Meaning:** `device_attributes = true` is set on a local program (`exec`) or a PWA
+(`pwa = true`).
+
+<!-- prompt:omit -->
+**Why:** only the Chrome web session of a kiosk app can answer the browser's Device Attributes API.
+<!-- /prompt:omit -->
+
+**How to fix:** remove `device_attributes` from `exec` and PWA apps, or turn the app into a web app
+with `url` and without `pwa`.
+
+<!-- prompt:omit -->
+```toml check=kiosk_device_attributes_invalid
+[[config]]
+id = "standard"
+name = "Standard"
+
+[config.apps.kiosk.testnav]
+name = "TestNav"
+url = "https://home.testnav.com/"
+pwa = true
+device_attributes = true
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "standard"
+```
+<!-- /prompt:omit -->
+
 ### `kiosk_exec_invalid`
 
 **Level:** error. **Meaning:** a kiosk app's `exec` is neither a Flatpak app id nor an absolute path
@@ -2883,6 +2970,38 @@ name = "Standard"
 name = "GeoGebra"
 url = "https://www.geogebra.org/classic"
 exec = "org.geogebra.GeoGebra"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "standard"
+```
+<!-- /prompt:omit -->
+
+### `kiosk_managed_config_invalid`
+
+**Level:** error. **Meaning:** a kiosk app's `managed_config` is not a `files/….json` file, the file
+is not in the bundle, it is larger than 64 KiB, not UTF-8 text, not valid JSON or not an object at
+the top level, or `managed_config` is set on a local program (`exec`) or a PWA (`pwa = true`).
+
+<!-- prompt:omit -->
+**Why:** the Device hands the object to the app's sites as their managed configuration; it must be
+there, and only Chrome web sessions can do this.
+<!-- /prompt:omit -->
+
+**How to fix:** put a JSON object under `files/` with a `.json` name and write that path; keep it
+under 64 KiB; remove `managed_config` from `exec` and PWA apps. Keep secrets out of it.
+
+<!-- prompt:omit -->
+```toml check=kiosk_managed_config_invalid
+[[config]]
+id = "standard"
+name = "Standard"
+
+[config.apps.kiosk.testnav]
+name = "TestNav"
+url = "https://home.testnav.com/"
+managed_config = "files/testnav.json"
 
 [[group]]
 id = "default"

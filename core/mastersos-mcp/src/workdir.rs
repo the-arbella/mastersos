@@ -665,6 +665,9 @@ fn check_at(w: &Workdir, cur: &Snapshot, today: chrono::NaiveDate) -> Result<Vec
                 out.extend(mastersos_bundle::lint_inject_sources(m, |f| {
                     cur.files.get(f).map(Vec::as_slice)
                 }));
+                out.extend(mastersos_bundle::lint_managed_config_sources(m, |f| {
+                    cur.files.get(f).map(Vec::as_slice)
+                }));
             }
             if checked.manifest.is_some_and(|m| m.trust.is_empty())
                 && !out.iter().any(|l| l.code == "trust_empty")

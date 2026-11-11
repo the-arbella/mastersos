@@ -101,6 +101,8 @@ fn run_step_with(
         phase,
         superseded: &flag,
         quiet: &std::sync::atomic::AtomicBool::new(false),
+        device: None,
+        ident: &crate::system::tests::test_ident(),
     };
     let p = paths(root);
     let mut env = Env {

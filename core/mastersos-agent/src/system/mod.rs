@@ -408,6 +408,14 @@ pub(crate) mod tests {
         }
     }
 
+    /// A Device with a serial number and a device id.
+    pub(crate) fn test_ident() -> mastersos_bundle::DeviceIdent {
+        mastersos_bundle::DeviceIdent {
+            serial: Some("TEST0001".into()),
+            device_id: "test-device".into(),
+        }
+    }
+
     /// A seed with nothing but a server address (no school name, no Wi-Fi).
     pub(crate) fn test_seed() -> Seed {
         Seed {
@@ -482,6 +490,8 @@ pub(crate) mod tests {
             phase,
             superseded,
             quiet: &std::sync::atomic::AtomicBool::new(false),
+            device: None,
+            ident: &crate::system::tests::test_ident(),
         })
     }
 

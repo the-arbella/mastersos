@@ -349,6 +349,8 @@ impl Worker {
                 phase,
                 superseded: &f,
                 quiet: &q,
+                device: sel.device,
+                ident: &ident,
             })
         })
         .await

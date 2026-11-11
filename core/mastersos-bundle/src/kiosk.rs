@@ -145,11 +145,44 @@ pub struct PlatformExtension {
 /// extension: the only other extension it takes `{cmd:"exit"}` from.
 pub const EXAM_PLATFORM_KEY: &str = "platform_extension";
 
-/// Whether `app` has a platform extension and starts at its start page (`platform` or `inject`
-/// written; design §3.3). Those apps get `chrome-extension://<platform extension id>` in the
-/// allowlist.
+/// A `managed_config` file is at most this many bytes (64 KiB).
+pub const MAX_MANAGED_CONFIG_BYTES: usize = 64 * 1024;
+
+/// `managed_config`: a bundle member under `files/` ending in `.json`.
+pub fn managed_config_path_ok(f: &str) -> bool {
+    f.starts_with("files/")
+        && f.len() > "files/.json".len()
+        && f.ends_with(".json")
+        && crate::check_member_path(f).is_ok()
+}
+
+/// The rules for the contents of a `managed_config` file, where the contents are at hand: UTF-8
+/// JSON whose top level is an object, at most [`MAX_MANAGED_CONFIG_BYTES`]. The object, or the
+/// reason otherwise.
+pub fn check_managed_config(bytes: &[u8]) -> Result<Map<String, Value>, String> {
+    if bytes.len() > MAX_MANAGED_CONFIG_BYTES {
+        return Err(format!(
+            "is {} bytes, more than the {} KiB a managed configuration may have",
+            bytes.len(),
+            MAX_MANAGED_CONFIG_BYTES / 1024
+        ));
+    }
+    let text = std::str::from_utf8(bytes).map_err(|_| "is not UTF-8 text".to_string())?;
+    match serde_json::from_str::<Value>(text) {
+        Ok(Value::Object(map)) => Ok(map),
+        Ok(_) => Err("is JSON, but not an object at the top level".into()),
+        Err(e) => Err(format!("is not valid JSON ({e})")),
+    }
+}
+
+/// Whether `app` has a platform extension and starts at its start page: it writes `platform`,
+/// `inject`, `device_attributes = true` or `managed_config`, and so gets
+/// `chrome-extension://<platform extension id>` in the allowlist (design §3.3).
 pub fn uses_start_page(app: &KioskApp) -> bool {
-    app.platform.is_some() || app.inject.is_some()
+    app.platform.is_some()
+        || app.inject.is_some()
+        || app.device_attributes
+        || app.managed_config.is_some()
 }
 
 /// The rules for the contents of an `inject` script, where the contents are at hand (the agent,
@@ -184,6 +217,83 @@ pub fn platform_config(app: &KioskApp, exam_id: &str) -> Result<Value, KioskErro
     }))
 }
 
+/// What a Device knows about itself for the device attribute methods of `managed.js` (design
+/// docs/specs/2026-11-10-kiosk-managed-apis-design.md §4): the matched `[[device]]`'s annotations,
+/// the device id, `/etc/hostname` and the hardware serial. `None` where there is no value.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeviceValues {
+    pub asset_id: Option<String>,
+    pub location: Option<String>,
+    pub directory_id: Option<String>,
+    pub hostname: Option<String>,
+    pub serial: Option<String>,
+}
+
+/// The `DATA` of the platform extension's `managed.js` (design §4, §5): `None` when the app writes
+/// none of `platform`, `device_attributes` and `managed_config` (no `managed.js`). Otherwise
+/// `{"v":1,"origin":…,"device_methods":…}` (`origin`: [`url_origin`], the only origin
+/// `managed.js` acts on), with `"device"` (all five values, `null` where there is none)
+/// when `device_attributes = true`, and `"managed"` (`managed`, the checked `managed_config`
+/// file) when there is one. The five methods are there with `platform` or `device_attributes`.
+pub fn managed_values(
+    app: &KioskApp,
+    device: &DeviceValues,
+    managed: Option<Map<String, Value>>,
+) -> Result<Option<Value>, KioskError> {
+    if app.platform.is_none() && !app.device_attributes && app.managed_config.is_none() {
+        return Ok(None);
+    }
+    let mut data = Map::new();
+    data.insert("v".into(), json!(1));
+    let (url, _) = start_hosts(app)?;
+    data.insert("origin".into(), json!(url_origin(url)?));
+    data.insert(
+        "device_methods".into(),
+        json!(app.platform.is_some() || app.device_attributes),
+    );
+    if app.device_attributes {
+        data.insert(
+            "device".into(),
+            json!({
+                "asset_id": device.asset_id,
+                "location": device.location,
+                "directory_id": device.directory_id,
+                "hostname": device.hostname,
+                "serial": device.serial,
+            }),
+        );
+    }
+    if let Some(m) = managed {
+        data.insert("managed".into(), Value::Object(m));
+    }
+    Ok(Some(Value::Object(data)))
+}
+
+/// The origin of an app's `url` as `location.origin` prints it: `https://<host>` with the host
+/// lowercased, plus `:<port>` unless the port is 443 (design §5: the managed values are for this
+/// origin only). `url` failing the rules is `kiosk_url_not_https`.
+pub fn url_origin(u: &str) -> Result<String, KioskError> {
+    let host = url_host(u)?;
+    let authority = https_url(u)
+        .unwrap_or("")
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("");
+    let port = match authority.rsplit_once(':') {
+        Some((_, p)) if !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) => p,
+        _ => return Ok(format!("https://{host}")),
+    };
+    match port.parse::<u16>() {
+        Ok(443) => Ok(format!("https://{host}")),
+        Ok(n) => Ok(format!("https://{host}:{n}")),
+        Err(_) => fail(
+            "kiosk_url_not_https",
+            "url",
+            format!("url {u:?} has port {port} that is not a port number (1-65535)"),
+        ),
+    }
+}
+
 /// A web app's `url` and the hosts its disguise and inject script apply to: the allowlist's hosts
 /// (`allow`, then the host of `url`, each once). Only for web apps without pwa.
 pub fn start_hosts(app: &KioskApp) -> Result<(&str, Vec<String>), KioskError> {
@@ -193,7 +303,8 @@ pub fn start_hosts(app: &KioskApp) -> Result<(&str, Vec<String>), KioskError> {
             return fail(
                 "kiosk_platform_invalid",
                 "platform",
-                "platform and inject are only for web apps without pwa".into(),
+                "platform, inject, device_attributes and managed_config are only for web apps without pwa"
+                    .into(),
             )
         }
     };
@@ -357,6 +468,29 @@ pub fn check(id: &str, app: &KioskApp) -> Result<(), KioskError> {
                 "kiosk_inject_invalid",
                 "inject",
                 format!("inject {f:?} must be a files/….js file in the bundle, such as \"files/testnav.js\""),
+            );
+        }
+    }
+    if app.device_attributes && !web_only {
+        return fail(
+            "kiosk_device_attributes_invalid",
+            "device_attributes",
+            "device_attributes is only for web apps (url) without pwa = true".into(),
+        );
+    }
+    if let Some(f) = &app.managed_config {
+        if !web_only {
+            return fail(
+                "kiosk_managed_config_invalid",
+                "managed_config",
+                "managed_config is only for web apps (url) without pwa = true".into(),
+            );
+        }
+        if !managed_config_path_ok(f) {
+            return fail(
+                "kiosk_managed_config_invalid",
+                "managed_config",
+                format!("managed_config {f:?} must be a files/….json file in the bundle, such as \"files/testnav.json\""),
             );
         }
     }
@@ -706,7 +840,14 @@ fn https_host(u: &str) -> Result<String, String> {
         return Err("must not carry a user name or password (@)".into());
     }
     let h = match authority.rsplit_once(':') {
-        Some((h, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => h,
+        Some((h, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
+            if !matches!(port.parse::<u16>(), Ok(n) if n >= 1) {
+                return Err(format!(
+                    "has port {port} that is not a port number (1-65535)"
+                ));
+            }
+            h
+        }
         _ => authority,
     };
     host(h).map_err(|why| format!("has host name {h:?} that {why}"))
@@ -996,6 +1137,7 @@ url = "https://test.mapnwea.org/"
             "https://test.mapnwea.org/",
             "https://docs.google.com/forms/d/e/x/viewform?usp=1#a",
             "https://a.org:8443/x",
+            "https://a.org:65535/x",
         ] {
             check("x", &with(ok)).unwrap_or_else(|e| panic!("{ok}: {e:?}"));
         }
@@ -1012,6 +1154,9 @@ url = "https://test.mapnwea.org/"
             "https://u@a.org/",
             "https://localhost/",
             "file:///etc/passwd",
+            "https://a.org:65536/",
+            "https://a.org:99999999999999999999/x",
+            "https://a.org:0/",
         ] {
             let e = check("x", &with(bad)).unwrap_err();
             assert_eq!((e.code, e.field), ("kiosk_url_not_https", "url"), "{bad}");
@@ -1798,6 +1943,106 @@ url = "https://test.mapnwea.org/"
     }
 
     #[test]
+    fn device_attributes_rules() {
+        assert_eq!(code(check("x", &web("device_attributes = true"))), "ok");
+        assert_eq!(code(check("x", &web("device_attributes = false"))), "ok");
+        let e = check("x", &web("device_attributes = true\npwa = true")).unwrap_err();
+        assert_eq!(
+            (e.code, e.field),
+            ("kiosk_device_attributes_invalid", "device_attributes")
+        );
+        let calc = |v: &str| {
+            app(&format!(
+                "name = \"Calc\"\nexec = \"/usr/bin/gnome-calculator\"\ndevice_attributes = {v}"
+            ))
+        };
+        let e = check("x", &calc("true")).unwrap_err();
+        assert_eq!(
+            (e.code, e.field),
+            ("kiosk_device_attributes_invalid", "device_attributes")
+        );
+        assert_eq!(code(check("x", &calc("false"))), "ok");
+    }
+
+    #[test]
+    fn managed_config_rules() {
+        for ok in ["files/x.json", "files/a/b.json"] {
+            assert!(managed_config_path_ok(ok), "{ok}");
+            assert_eq!(
+                code(check("x", &web(&format!("managed_config = {}", q(ok))))),
+                "ok",
+                "{ok}"
+            );
+        }
+        for bad in [
+            "files/x.js",
+            "x.json",
+            "files/.json",
+            "files/../x.json",
+            "files//x.json",
+            "https://x.example/a.json",
+        ] {
+            assert!(!managed_config_path_ok(bad), "{bad}");
+            let e = check("x", &web(&format!("managed_config = {}", q(bad)))).unwrap_err();
+            assert_eq!(
+                (e.code, e.field),
+                ("kiosk_managed_config_invalid", "managed_config"),
+                "{bad}"
+            );
+        }
+        let e = check("x", &web("managed_config = \"files/a.json\"\npwa = true")).unwrap_err();
+        assert_eq!(e.code, "kiosk_managed_config_invalid");
+        let calc = app(
+            "name = \"Calc\"\nexec = \"/usr/bin/gnome-calculator\"\nmanaged_config = \"files/a.json\"",
+        );
+        assert_eq!(code(check("x", &calc)), "kiosk_managed_config_invalid");
+    }
+
+    #[test]
+    fn managed_config_source_rules() {
+        let map = check_managed_config(br#"{"a":1}"#).unwrap();
+        assert!(map.contains_key("a"));
+        assert!(check_managed_config(b"[1]").is_err());
+        assert!(check_managed_config(b"{").is_err());
+        assert!(check_managed_config(&[0xff]).is_err());
+        assert!(check_managed_config(b"null").is_err());
+        // Exactly 64 KiB: a valid object padded with spaces.
+        let mut full = br#"{"a":1}"#.to_vec();
+        full.resize(MAX_MANAGED_CONFIG_BYTES, b' ');
+        assert!(check_managed_config(&full).is_ok());
+        full.push(b' ');
+        let why = check_managed_config(&full).unwrap_err();
+        assert!(why.contains("64 KiB"), "{why}");
+    }
+
+    #[test]
+    fn device_attributes_and_managed_config_start_at_the_start_page() {
+        assert!(uses_start_page(&web("device_attributes = true")));
+        assert!(uses_start_page(&web("managed_config = \"files/x.json\"")));
+        assert!(!uses_start_page(&web("")));
+        assert!(!uses_start_page(&web("device_attributes = false")));
+    }
+
+    #[test]
+    fn device_attributes_and_managed_config_are_features() {
+        use crate::{FEATURE_KIOSK_DEVICE_ATTRIBUTES, FEATURE_KIOSK_MANAGED_CONFIG};
+        let used = |extra: &str| {
+            features_used(&parse(&format!(
+                "[group.apps.kiosk.x]\nname = \"X\"\nurl = \"https://x.example/\"\n{extra}"
+            )))
+        };
+        let u = used("device_attributes = true");
+        assert!(u.contains(&FEATURE_KIOSK_DEVICE_ATTRIBUTES), "{u:?}");
+        assert!(!u.contains(&FEATURE_KIOSK_MANAGED_CONFIG), "{u:?}");
+        let u = used("managed_config = \"files/x.json\"");
+        assert!(u.contains(&FEATURE_KIOSK_MANAGED_CONFIG), "{u:?}");
+        assert!(!u.contains(&FEATURE_KIOSK_DEVICE_ATTRIBUTES), "{u:?}");
+        assert_eq!(used("device_attributes = false"), [FEATURE_KIOSK]);
+        assert_eq!(FEATURE_KIOSK_DEVICE_ATTRIBUTES, "kiosk_device_attributes");
+        assert_eq!(FEATURE_KIOSK_MANAGED_CONFIG, "kiosk_managed_config");
+    }
+
+    #[test]
     fn inject_source_rules() {
         assert_eq!(check_inject_source(b"console.log(1);\n"), Ok(()));
         assert_eq!(check_inject_source(&vec![b' '; MAX_INJECT_BYTES]), Ok(()));
@@ -1891,5 +2136,92 @@ url = "https://test.mapnwea.org/"
         assert_eq!(features_used(&m), [FEATURE_KIOSK]);
         assert_eq!(FEATURE_KIOSK_PLATFORM, "kiosk_platform");
         assert_eq!(FEATURE_KIOSK_INJECT, "kiosk_inject");
+    }
+
+    fn values() -> DeviceValues {
+        DeviceValues {
+            asset_id: Some("A-1".into()),
+            location: None,
+            directory_id: Some("dev-1".into()),
+            hostname: Some("lab-07".into()),
+            serial: None,
+        }
+    }
+
+    #[test]
+    fn managed_values_only_for_the_three_keys() {
+        // neither platform, device_attributes nor managed_config: no managed.js (inject alone included)
+        assert_eq!(managed_values(&web(""), &values(), None).unwrap(), None);
+        assert_eq!(
+            managed_values(&web("inject = \"files/a.js\""), &values(), None).unwrap(),
+            None
+        );
+        // platform only: the device methods, without values or a managed configuration
+        let d = managed_values(&web("platform = \"chromeos\""), &values(), None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            d,
+            json!({"v": 1, "origin": "https://test.mapnwea.org", "device_methods": true})
+        );
+        // device_attributes: all five values, null where there is none
+        let d = managed_values(&web("device_attributes = true"), &values(), None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            d,
+            json!({"v": 1, "origin": "https://test.mapnwea.org", "device_methods": true,
+                "device": {"asset_id": "A-1", "location": null, "directory_id": "dev-1",
+                    "hostname": "lab-07", "serial": null}})
+        );
+        // managed_config: the object as it is, no device methods
+        let mut m = Map::new();
+        m.insert("server".into(), json!({"url": "https://x.example/"}));
+        let d = managed_values(
+            &web("managed_config = \"files/a.json\""),
+            &values(),
+            Some(m.clone()),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            d,
+            json!({"v": 1, "origin": "https://test.mapnwea.org", "device_methods": false,
+                "managed": Value::Object(m)})
+        );
+        // the origin is the url's, as location.origin prints it
+        let d = managed_values(
+            &app("name = \"n\"\nurl = \"https://Home.TestNav.COM:8443/start?x=1\"\ndevice_attributes = true"),
+            &values(),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(d["origin"], "https://home.testnav.com:8443");
+    }
+
+    #[test]
+    fn url_origin_is_what_location_origin_prints() {
+        for (url, origin) in [
+            ("https://home.testnav.com/", "https://home.testnav.com"),
+            ("https://home.testnav.com", "https://home.testnav.com"),
+            ("https://Home.TestNav.COM/A/b", "https://home.testnav.com"),
+            ("https://a.org:443/", "https://a.org"),
+            ("https://a.org:0443/", "https://a.org"),
+            ("https://a.org:8443/x", "https://a.org:8443"),
+            ("https://a.org:08443", "https://a.org:8443"),
+            ("https://a.org?q=1", "https://a.org"),
+            ("https://a.org:8443#f", "https://a.org:8443"),
+        ] {
+            assert_eq!(url_origin(url).unwrap(), origin, "{url}");
+        }
+        for bad in [
+            "http://a.org/",
+            "https://a.org:65536/",
+            "https://u@a.org/",
+            "https://*.a.org/",
+        ] {
+            assert!(url_origin(bad).is_err(), "{bad}");
+        }
     }
 }

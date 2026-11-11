@@ -33,6 +33,8 @@ pub struct Selection<'a> {
     pub config: Config,
     pub source: GroupSource,
     pub lock: Option<&'a Lock>,
+    /// The `[[device]]` that picked the Group (`source` is `Bundle`); `None` otherwise.
+    pub device: Option<&'a DeviceEntry>,
 }
 
 /// Picks this machine's Group and its expanded Config. Assumes the manifest passed `validate`
@@ -52,6 +54,7 @@ pub fn select<'a>(m: &'a Manifest, ident: &DeviceIdent, seed_group: Option<&str>
                 config,
                 source: GroupSource::Bundle,
                 lock: d.locked.as_ref(),
+                device: Some(d),
             };
         }
     }
@@ -61,6 +64,7 @@ pub fn select<'a>(m: &'a Manifest, ident: &DeviceIdent, seed_group: Option<&str>
             config,
             source: GroupSource::Seed,
             lock: None,
+            device: None,
         };
     }
     let (group, config) =
@@ -70,6 +74,7 @@ pub fn select<'a>(m: &'a Manifest, ident: &DeviceIdent, seed_group: Option<&str>
         config,
         source: GroupSource::Default,
         lock: None,
+        device: None,
     }
 }
 
@@ -351,5 +356,19 @@ group = "staff"
         assert_eq!(s.source, GroupSource::Default);
         assert_eq!(s.config, eff("student"));
         assert_eq!(s.config.printers.len(), 1, "inherited from Defaults");
+    }
+
+    #[test]
+    fn selection_carries_the_matched_device_entry() {
+        let m = manifest();
+        let s = select(&m, &ident(Some("abc1234"), "x"), Some("teacher"));
+        assert_eq!(s.device, Some(&m.devices[0]));
+        let s = select(&m, &ident(None, "dev-77"), None);
+        assert_eq!(s.device, Some(&m.devices[1]));
+        // seed and default: no [[device]]
+        let s = select(&m, &ident(None, "x"), Some("teacher"));
+        assert_eq!((s.source, s.device), (GroupSource::Seed, None));
+        let s = select(&m, &ident(None, "x"), None);
+        assert_eq!((s.source, s.device), (GroupSource::Default, None));
     }
 }

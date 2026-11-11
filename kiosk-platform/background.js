@@ -1,6 +1,6 @@
 // The platform extension's service worker (design docs/specs/2026-11-06-kiosk-platform-inject-design.md §3). The agent
-// builds one platform extension per kiosk app with platform or inject, signs it with the app's own key and force-installs
-// it in that app's sessions only; config.js (written by the agent) says which app. Only this extension has the
+// builds one platform extension per kiosk app with any of platform, inject, device_attributes or
+// managed_config, signs it with the app's own key and force-installs it in that app's sessions only; config.js (written by the agent) says which app. Only this extension has the
 // declarativeNetRequest and tabs permissions and host permissions, and only on the app's hosts: the exam extension
 // keeps nativeMessaging, storage and NWEA's hosts.
 //   - {cmd:"launch"} from this extension's own start page: put the DNR session rule for the ChromeOS request headers in
@@ -100,10 +100,13 @@ function mayExit(sender) {
 }
 
 async function launch(tabId) {
-  await chrome.declarativeNetRequest.updateSessionRules({
-    removeRuleIds: [PLATFORM_RULE],
-    addRules: CFG.platform === "chromeos" ? [platformRule(CFG.hosts)] : [],
-  });
+  // Only a platform = "chromeos" app has the declarativeNetRequest permission (and so the API).
+  if (CFG.platform === "chromeos") {
+    await chrome.declarativeNetRequest.updateSessionRules({
+      removeRuleIds: [PLATFORM_RULE],
+      addRules: [platformRule(CFG.hosts)],
+    });
+  }
   await chrome.tabs.update(tabId, { url: CFG.url });
 }
 
