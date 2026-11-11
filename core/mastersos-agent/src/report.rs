@@ -25,10 +25,10 @@ const MAX_RESULTS: usize = 200;
 /// `config_update_channel`: `update_channel` of the Device's Config or the Defaults picks its update channel.
 /// `kiosk_platform`, `kiosk_inject`: the kiosk step builds the app's platform extension (start page, ChromeOS disguise,
 /// inject script) and the exam extension takes its exit (design docs/specs/2026-11-06-kiosk-platform-inject-design.md).
-/// `deb_apps`: `[config.apps.deb]` and `ubuntu_mirror` (docs/specs/2026-11-10-deb-apps-design.md; the device side is built in later tasks).
+/// `deb_apps`: `[config.apps.deb]` and `ubuntu_mirror` (docs/specs/2026-11-10-deb-apps-design.md).
 /// `device_annotations`: `asset_id` and `location` of a `[[device]]` (annotations only; the agent reads them with the kiosk device attributes later).
 /// `kiosk_device_attributes`, `kiosk_managed_config`: the platform extension's `managed.js` answers the Device Attributes
-/// API and `getManagedConfiguration` (design docs/specs/2026-11-10-kiosk-managed-apis-design.md; the device side is built in later tasks).
+/// API and `getManagedConfiguration` (design docs/specs/2026-11-10-kiosk-managed-apis-design.md).
 /// `oidc_idp_hint`: the `login` step hands `[school.oidc] idp_hint` to the sign-in card (`login-browser/card.json`).
 pub const SUPPORTED_FEATURES: &[&str] = &[
     mastersos_bundle::FEATURE_UPDATE_MIRROR,

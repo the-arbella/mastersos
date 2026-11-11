@@ -32,7 +32,7 @@ const UNKNOWN =
 function source(data) {
   const parts = SRC.split(MARKER);
   if (parts.length !== 2) throw new Error("the marker line must occur exactly once");
-  return `${parts[0]}const DATA = ${JSON.stringify(data)};\n${parts[1]}`;
+  return `${parts[0]}const DATA = JSON.parse(${JSON.stringify(JSON.stringify(data))});\n${parts[1]}`;
 }
 
 /** Chrome's shapes in window `w`. */

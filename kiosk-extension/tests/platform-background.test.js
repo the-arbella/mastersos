@@ -17,7 +17,7 @@ function event() {
   return { addListener: (f) => ls.push(f), fire: (...a) => ls.forEach((f) => f(...a)), ls };
 }
 
-function load({ platform = "chromeos", exam = () => ({ ok: true }), updateFails = false } = {}) {
+function load({ platform = "chromeos", exam = () => ({ ok: true }), updateFails = false, noDnr = false } = {}) {
   const order = [];
   const chrome = {
     tabs: {
@@ -51,6 +51,7 @@ function load({ platform = "chromeos", exam = () => ({ ok: true }), updateFails 
       sendMessage: vi.fn((id, msg, cb) => setTimeout(() => cb(exam(id, msg)), 0)),
     },
   };
+  if (noDnr) delete chrome.declarativeNetRequest;
   const self = {};
   const importScripts = vi.fn((f) => {
     expect(f).toBe("config.js");
@@ -97,12 +98,13 @@ describe("platform extension: launch", () => {
     expect(order[1]).toEqual(["update", 5, "https://home.testnav.com/"]);
   });
 
-  it("inject only: no header rule (an old one removed), then the app", async () => {
-    const { send, order } = load({ platform: null });
+  it("no platform and no declarativeNetRequest permission: the app is still opened", async () => {
+    const { chrome, send, order } = load({ platform: null, noDnr: true });
+    expect(chrome.declarativeNetRequest).toBeUndefined();
     const { sendResponse } = send({ cmd: "launch" }, START);
     await answered(sendResponse);
-    expect(order[0][1]).toEqual({ removeRuleIds: [1], addRules: [] });
-    expect(order[1][0]).toBe("update");
+    expect(sendResponse).toHaveBeenCalledWith({ ok: true });
+    expect(order).toEqual([["update", 5, "https://home.testnav.com/"]]);
   });
 
   it("the rule cannot be set: the app is not opened", async () => {

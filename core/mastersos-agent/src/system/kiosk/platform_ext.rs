@@ -9,10 +9,10 @@
 //!   `declarativeNetRequest` and host permissions on the app's hosts (the request header rule); static content scripts,
 //!   all `document_start`, in this order: `chromeos.js` (MAIN, all frames) with `platform`; `managed.js` (MAIN, all
 //!   frames) with `platform`, `device_attributes` or `managed_config`; `relay.js` (isolated, top frame) and `inject.js`
-//!   (MAIN, all frames) with `inject`. They match every allowed host and its subdomains, except `managed.js`: it
-//!   matches only the exact origin of the app's `url` (`https://<host>[:port]/*`; no subdomains, no other `allow`
-//!   host), as ChromeOS gives these values to the kiosk app's origin only, and it also checks `location.origin` against
-//!   `DATA.origin`. It has no permission of its own. Static content scripts are the only ones sure to run before the
+//!   (MAIN, all frames) with `inject`. They match every allowed host and its subdomains, except `managed.js`: its
+//!   manifest pattern is the host of the app's `url` (`https://<host>[:port]/*`; the port only if the url has one;
+//!   no subdomains, no other `allow` host), and the script itself checks `location.origin` against `DATA.origin`
+//!   (the exact origin), as ChromeOS gives these values to the kiosk app's origin only. It has no permission of its own. Static content scripts are the only ones sure to run before the
 //!   page's scripts. No web-accessible resources: pages cannot open the start page.
 //! - `background.js`, `start.html`, `start.js`, `relay.js`, `chromeos.js`: `kiosk-platform/` of this repository, built
 //!   into the agent; `config.js`: [`kiosk::platform_config`]; `inject.js`: the bundle's script inside
@@ -819,7 +819,7 @@ mod tests {
         assert!(files.iter().all(|(n, _)| n != "managed.js"));
         assert_eq!(
             p.digest,
-            "d17c33b2e16c7adb37ab80d6a60772a748a44932fbc2acad2918e3052a7d69c3"
+            "764e68af537c56ac1f344132a302de49991ebdf4152d2ed0113727a21ed488b1"
         );
     }
 

@@ -20,7 +20,7 @@ Verified Access、`enterprise.platformKeys` 不在本文，也不在「以后」
 | `getDirectoryId()` | Device Attributes | 设备在 Google 目录里的 id | 安装时生成的 `device_id`（控制台里显示的那个） |
 | `getHostname()` | Device Attributes | `DeviceHostnameTemplate` 策略 | 本机主机名（`/etc/hostname`） |
 | `getSerialNumber()` | Device Attributes | 硬件序列号 | DMI 序列号（`ident::read` 已读，占位值算没有） |
-| `getManagedConfiguration(keys)` | Managed Configuration | `ManagedConfigurationPerOrigin` 下载的 JSON | 锁定应用新键 `managed_config` 指向的 JSON |
+| `getManagedConfiguration(keys)` | Managed Configuration | `ManagedConfigurationPerOrigin` 下载的 JSON | 锁定应用新键 `managed_config` 指向的 JSON；同样只给 `url` 的确切源 |
 | `onmanagedconfigurationchange` / 事件 `managedconfigurationchange` | Managed Configuration | 策略刷新时触发 | 定义好、可挂监听，但会话中不会触发（§4） |
 
 **照 Chromium 的实现，不照规范文本**（两者有出入时页面看到的是实现）。出处：`third_party/blink/renderer/modules/managed_device/`
@@ -56,7 +56,7 @@ Verified Access、`enterprise.platformKeys` 不在本文，也不在「以后」
 
 | 键 | 类型 | 缺省 | 说明 |
 |---|---|---|---|
-| `device_attributes` | 布尔 | `false` | 这个应用的主机能用五个设备属性方法（对应 ChromeOS 的 `DeviceAttributesAllowedForOrigins`）。`false` 时：写了 `platform = "chromeos"` 的应用上方法仍在、一律 reject `UnknownError` 加「没被授予 device-attributes 权限」的那句，与 ChromeOS kiosk 里没被放行的源一样（§1）；没写 `platform` 的应用上方法不存在，与 Linux 上原样的 Chrome 一样 |
+| `device_attributes` | 布尔 | `false` | 只有 `url` 的确切源（同主机同端口；不含子域，不含 `allow` 里的主机）上的页面能用五个设备属性方法（序列号、主机名、资产编号、位置、device_id；对应 ChromeOS 的 `DeviceAttributesAllowedForOrigins`）。`false` 时：写了 `platform = "chromeos"` 的应用上方法仍在、一律 reject `UnknownError` 加「没被授予 device-attributes 权限」的那句，与 ChromeOS kiosk 里没被放行的源一样（§1）；没写 `platform` 的应用上方法不存在，与 Linux 上原样的 Chrome 一样 |
 | `managed_config` | 字符串 | 没有 | `files/<名>.json`：UTF-8 的 JSON，顶层是对象，至多 64 KiB（**我的取值**）。与 Google 管理控制台里贴的 JSON 同一格式 |
 
 - 两个键与 `platform`、`inject` 一样，只用于 `url` 应用、不与 `pwa = true` 同时写（理由同伪装设计 §1）。
@@ -123,7 +123,7 @@ Verified Access、`enterprise.platformKeys` 不在本文，也不在「以后」
   `length` 与属性描述符同原生；`toString()` 像原生；没有 `navigator.managed` 时什么都不改。
 - Chromium 容器：开了 `device_attributes` 的页面里调一遍，并核对没装平台扩展时 Linux 上本来就是「有 `getManagedConfiguration`、没有五个设备属性方法」。
 - `mastersos-bundle`：两个应用键与两个 `[[device]]` 键的 lint、四个 feature、`check_managed_config`、`platform_config` 的新输出。
-- `mastersos-agent`：平台扩展的生成条件、`config.js` 带值、改了资产编号或托管配置时重打包。
+- `mastersos-agent`：平台扩展的生成条件、值写进 `managed.js`、改了资产编号或托管配置时重打包。
 
 ## 7. 没做 / 要实测的
 

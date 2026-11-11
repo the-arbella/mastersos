@@ -840,7 +840,14 @@ fn https_host(u: &str) -> Result<String, String> {
         return Err("must not carry a user name or password (@)".into());
     }
     let h = match authority.rsplit_once(':') {
-        Some((h, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => h,
+        Some((h, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
+            if !matches!(port.parse::<u16>(), Ok(n) if n >= 1) {
+                return Err(format!(
+                    "has port {port} that is not a port number (1-65535)"
+                ));
+            }
+            h
+        }
         _ => authority,
     };
     host(h).map_err(|why| format!("has host name {h:?} that {why}"))
@@ -1130,6 +1137,7 @@ url = "https://test.mapnwea.org/"
             "https://test.mapnwea.org/",
             "https://docs.google.com/forms/d/e/x/viewform?usp=1#a",
             "https://a.org:8443/x",
+            "https://a.org:65535/x",
         ] {
             check("x", &with(ok)).unwrap_or_else(|e| panic!("{ok}: {e:?}"));
         }
@@ -1146,6 +1154,9 @@ url = "https://test.mapnwea.org/"
             "https://u@a.org/",
             "https://localhost/",
             "file:///etc/passwd",
+            "https://a.org:65536/",
+            "https://a.org:99999999999999999999/x",
+            "https://a.org:0/",
         ] {
             let e = check("x", &with(bad)).unwrap_err();
             assert_eq!((e.code, e.field), ("kiosk_url_not_https", "url"), "{bad}");

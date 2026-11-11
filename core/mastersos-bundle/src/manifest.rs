@@ -1535,18 +1535,18 @@ pub struct KioskApp {
     #[cfg_attr(
         feature = "schema",
         schemars(
-            description = "Only for web apps without pwa: true lets the app's sites read the Device's serial number, asset tag, location and device id. Default false."
+            description = "Only for web apps without pwa: true lets pages on the exact origin of url (not subdomains, not allow hosts) read the Device's serial number, hostname, asset tag, location and device id; with platform = chromeos and without it the methods exist and reject. Default false."
         )
     )]
     pub device_attributes: bool,
     /// Only for web apps (not PWA): a `files/….json` file in the bundle (a JSON object, at most
-    /// 64 KiB) that the app's sites read as their managed configuration
+    /// 64 KiB) that pages on the exact origin of `url` read as their managed configuration
     /// ([`FEATURE_KIOSK_MANAGED_CONFIG`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(
         feature = "schema",
         schemars(
-            description = "Only for web apps without pwa: a files/<name>.json file in the bundle (a JSON object, at most 64 KiB) the app's sites read as their managed configuration. Not secret."
+            description = "Only for web apps without pwa: a files/<name>.json file in the bundle (a JSON object, at most 64 KiB) that pages on the exact origin of url (not subdomains, not allow hosts) read as their managed configuration. Not secret."
         )
     )]
     pub managed_config: Option<String>,

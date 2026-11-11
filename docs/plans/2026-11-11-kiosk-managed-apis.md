@@ -227,5 +227,6 @@ fn device_annotation_rules() {
 1. Chromium 容器（同伪装设计 §3.5 的实验）：不装平台扩展时，Linux 上 `typeof navigator.managed.getManagedConfiguration === "function"`、
    `"getSerialNumber" in NavigatorManagedData.prototype === false`、`getManagedConfiguration(["a"])` reject `NotAllowedError` 与那句文案。
 2. 同一容器，平台扩展写 `device_attributes = true` 与 `managed_config`：顶层页面五个方法拿到值、子框架 reject、`getManagedConfiguration` 拿到配置；
-   只写 `platform` 时五个方法 reject `UnknownError`。
+   只写 `platform` 时五个方法 reject `UnknownError`；
+   另起只写 `device_attributes` 的应用、只写 `inject` 的应用：起始页都能到达应用的 url（没有 `platform` 时清单里没有 `declarativeNetRequest`）。
 3. 真镜像 VM 的锁定会话（TestNav 应用加上两个新键）：同第 2 条，并核对改了 `asset_id` 后下一次会话拿到新值。
