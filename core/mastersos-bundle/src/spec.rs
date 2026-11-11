@@ -105,6 +105,7 @@ pub const ISSUE_CODES: &[&str] = &[
     "deb_url_invalid",
     "default_group_missing",
     "dest_not_absolute",
+    "device_annotation_invalid",
     "device_duplicate_id",
     "device_name_duplicate",
     "device_no_identity",

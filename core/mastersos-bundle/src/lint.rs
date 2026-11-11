@@ -242,6 +242,19 @@ pub fn lint_at(m: &Manifest, present: &BTreeSet<String>, today: chrono::NaiveDat
                 format!("device[{i}].locked.message"),
             ));
         }
+        for (key, value) in [("asset_id", &d.asset_id), ("location", &d.location)] {
+            if let Some(Err(e)) = value.as_deref().map(checks::device_annotation) {
+                out.push(
+                    Lint::new(
+                        LintLevel::Error,
+                        "device_annotation_invalid",
+                        format!("Device {who}: `{key}` is invalid. {e}"),
+                    )
+                    .at(format!("device[{i}].{key}"))
+                    .param("device", who),
+                );
+            }
+        }
         if d.reset.is_some() {
             out.push(
                 Lint::new(
@@ -554,6 +567,13 @@ pub fn feature_path(m: &Manifest, feature: &str) -> String {
                         .map(|_| format!("{base}.apps.ubuntu_mirror"))
                 }
             }),
+        FEATURE_DEVICE_ANNOTATIONS => m.devices.iter().enumerate().find_map(|(i, d)| {
+            if d.asset_id.is_some() {
+                Some(format!("device[{i}].asset_id"))
+            } else {
+                d.location.as_ref().map(|_| format!("device[{i}].location"))
+            }
+        }),
         FEATURE_WIFI_EXT if !m.school.wifi.is_empty() => Some("school.wifi".to_owned()),
         FEATURE_WIFI_EXT => layers().find_map(|(base, _, wifi)| {
             wifi.iter()
@@ -2193,6 +2213,41 @@ scanners = [{ name = "s", uri = "http://x" }, { name = "s", uri = "http://y" }]"
     }
 
     #[test]
+    fn lint_device_annotation_invalid() {
+        let mut m = manifest("", "", "\"local\"");
+        m.devices = Manifest::parse(
+            "version = 1\n[[device]]\nserial = \"SN-1\"\ngroup = \"teacher\"\nasset_id = \"a\\tb\"\nlocation = \"Room 1\"\n",
+        )
+        .unwrap()
+        .devices;
+        let l = lint(&m, &present());
+        assert_eq!(codes(&l), ["device_annotation_invalid"], "{l:?}");
+        assert_eq!(l[0].path.as_deref(), Some("device[0].asset_id"));
+        assert_eq!(l[0].params.get("device").map(String::as_str), Some("SN-1"));
+    }
+
+    #[test]
+    fn feature_path_device_annotations() {
+        let m = Manifest::parse(
+            "version = 1\n[[device]]\nserial = \"A\"\ngroup = \"g\"\n\
+             [[device]]\nserial = \"B\"\ngroup = \"g\"\nlocation = \"x\"\nasset_id = \"y\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            feature_path(&m, crate::FEATURE_DEVICE_ANNOTATIONS),
+            "device[1].asset_id"
+        );
+        let m = Manifest::parse(
+            "version = 1\n[[device]]\nserial = \"B\"\ngroup = \"g\"\nlocation = \"x\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            feature_path(&m, crate::FEATURE_DEVICE_ANNOTATIONS),
+            "device[0].location"
+        );
+    }
+
+    #[test]
     fn lint_serializes_params_and_null_span() {
         let l = Lint::new(LintLevel::Error, "icon_invalid", "x")
             .at("group.a.apps.web[0].icon")
@@ -2255,6 +2310,7 @@ scanners = [{ name = "s", uri = "http://x" }, { name = "s", uri = "http://y" }]"
             ("update_mirror_invalid", &[]),
             ("escrow_recipients_invalid", &[]),
             ("lock_message_too_long", &[]),
+            ("device_annotation_invalid", &["device"]),
             ("chrome_window_invalid", &[]),
             ("chrome_pause_invalid", &[]),
             ("chrome_pause_too_long", &[]),
@@ -2412,7 +2468,7 @@ flatpak = ["libreoffice"]"#,
         // Device lints need `m.devices`, which the `manifest` helper leaves empty.
         let mut m = manifest("", "", "\"local\"");
         m.devices = Manifest::parse(&format!(
-            "version = 1\n[[device]]\nserial = \"SN-1\"\ngroup = \"teacher\"\nlocked = {{ message = \"{}\" }}\nreset = {{ id = \"a b\", requested_at = \"2026-10-15T00:00:00Z\" }}\n",
+            "version = 1\n[[device]]\nserial = \"SN-1\"\ngroup = \"teacher\"\nasset_id = \"\"\nlocked = {{ message = \"{}\" }}\nreset = {{ id = \"a b\", requested_at = \"2026-10-15T00:00:00Z\" }}\n",
             "x".repeat(501)
         ))
         .unwrap()

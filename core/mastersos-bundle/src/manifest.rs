@@ -1694,6 +1694,25 @@ pub struct DeviceEntry {
         )
     )]
     pub reset: Option<ResetRequest>,
+    /// The school's asset tag for this Device, 1-128 characters without control characters. An
+    /// annotation only: it does not take part in choosing the Group.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            description = "Optional asset tag of this Device, 1-128 characters, no control characters. Not used to pick the Group."
+        )
+    )]
+    pub asset_id: Option<String>,
+    /// Where the Device is, 1-128 characters without control characters. An annotation only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            description = "Optional location of this Device (for example a room), 1-128 characters, no control characters. Not used to pick the Group."
+        )
+    )]
+    pub location: Option<String>,
 }
 
 /// `[[device]].reset = { id = "<UUIDv4>", requested_at = "<RFC 3339>" }`.
@@ -1788,6 +1807,9 @@ pub const FEATURE_KIOSK_INJECT: &str = "kiosk_inject";
 /// See [`FEATURE_UPDATE_MIRROR`]: `[config.apps.deb]` and `ubuntu_mirror` (design
 /// docs/specs/2026-11-10-deb-apps-design.md §4.1).
 pub const FEATURE_DEB_APPS: &str = "deb_apps";
+/// See [`FEATURE_UPDATE_MIRROR`]: `asset_id` or `location` in a `[[device]]` (design
+/// docs/specs/2026-11-10-kiosk-managed-apis-design.md §3.2).
+pub const FEATURE_DEVICE_ANNOTATIONS: &str = "device_annotations";
 
 /// Whether `s` is a school id as written in manifests and seeds: a UUID in its canonical text
 /// form, lowercase hex in 8-4-4-4-12 groups (36 characters). One spelling only, so the machine's
@@ -1911,6 +1933,12 @@ pub fn features_used(m: &Manifest) -> Vec<&'static str> {
     let deb_used = |a: &Apps| !a.deb.is_empty() || a.ubuntu_mirror.is_some();
     if defaults.is_some_and(|d| deb_used(&d.apps)) || m.configs.iter().any(|c| deb_used(&c.apps)) {
         out.push(FEATURE_DEB_APPS);
+    }
+    if m.devices
+        .iter()
+        .any(|d| d.asset_id.is_some() || d.location.is_some())
+    {
+        out.push(FEATURE_DEVICE_ANNOTATIONS);
     }
     out
 }
@@ -4031,6 +4059,22 @@ chrome_policy.PolB = 1
         assert!(used(mirror, "").contains(&FEATURE_DEB_APPS));
         assert!(used("", mirror).contains(&FEATURE_DEB_APPS));
         assert_eq!(FEATURE_DEB_APPS, "deb_apps");
+    }
+
+    #[test]
+    fn features_used_reports_device_annotations() {
+        let parse = |extra: &str| {
+            Manifest::parse(&format!(
+                "version = 1\n[[device]]\nserial = \"A\"\ngroup = \"g\"\n{extra}"
+            ))
+            .unwrap()
+        };
+        assert!(!features_used(&parse("")).contains(&FEATURE_DEVICE_ANNOTATIONS));
+        assert!(
+            features_used(&parse("location = \"Room 1\"\n")).contains(&FEATURE_DEVICE_ANNOTATIONS)
+        );
+        assert!(features_used(&parse("asset_id = \"A-1\"\n")).contains(&FEATURE_DEVICE_ANNOTATIONS));
+        assert_eq!(FEATURE_DEVICE_ANNOTATIONS, "device_annotations");
     }
 
     #[test]

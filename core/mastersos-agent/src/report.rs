@@ -26,6 +26,7 @@ const MAX_RESULTS: usize = 200;
 /// `kiosk_platform`, `kiosk_inject`: the kiosk step builds the app's platform extension (start page, ChromeOS disguise,
 /// inject script) and the exam extension takes its exit (design docs/specs/2026-11-06-kiosk-platform-inject-design.md).
 /// `deb_apps`: `[config.apps.deb]` and `ubuntu_mirror` (docs/specs/2026-11-10-deb-apps-design.md; the device side is built in later tasks).
+/// `device_annotations`: `asset_id` and `location` of a `[[device]]` (annotations only; the agent reads them with the kiosk device attributes later).
 /// `oidc_idp_hint`: the `login` step hands `[school.oidc] idp_hint` to the sign-in card (`login-browser/card.json`).
 pub const SUPPORTED_FEATURES: &[&str] = &[
     mastersos_bundle::FEATURE_UPDATE_MIRROR,
@@ -42,6 +43,7 @@ pub const SUPPORTED_FEATURES: &[&str] = &[
     mastersos_bundle::FEATURE_KIOSK_PLATFORM,
     mastersos_bundle::FEATURE_KIOSK_INJECT,
     mastersos_bundle::FEATURE_DEB_APPS,
+    mastersos_bundle::FEATURE_DEVICE_ANNOTATIONS,
 ];
 
 /// 机器的硬件与系统身份。
@@ -365,7 +367,8 @@ mod tests {
                 "oidc_idp_hint",
                 "kiosk_platform",
                 "kiosk_inject",
-                "deb_apps"
+                "deb_apps",
+                "device_annotations"
             ]
         );
         assert_eq!(r.manifest_features, SUPPORTED_FEATURES);
@@ -386,6 +389,7 @@ mod tests {
             mastersos_bundle::FEATURE_KIOSK_PLATFORM,
             mastersos_bundle::FEATURE_KIOSK_INJECT,
             mastersos_bundle::FEATURE_DEB_APPS,
+            mastersos_bundle::FEATURE_DEVICE_ANNOTATIONS,
         ];
         assert!(SUPPORTED_FEATURES.iter().all(|f| all.contains(f)));
     }

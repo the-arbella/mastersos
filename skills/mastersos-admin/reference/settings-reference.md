@@ -1191,6 +1191,8 @@ without an entry uses its seed's Group or `default`.
 | `group` | string | required | the id of an existing Group | `group = "teachers"` | |
 | `locked` | table | optional; not locked | see [`[device.locked]`](#devicelocked) | — | Lock the Device. |
 | `reset` | table | optional | see [`[device.reset]`](#devicereset) | — | Legacy; Devices ignore it. |
+| `asset_id` | string | optional | 1-128 characters, no control characters | `asset_id = "A-1024"` | The school's asset tag. An annotation: it does not pick the Group. Needs Devices that report `device_annotations`. |
+| `location` | string | optional | 1-128 characters, no control characters | `location = "Building 3, room 301"` | Where the Device is. An annotation: it does not pick the Group. Needs Devices that report `device_annotations`. |
 
 ```toml check=ok
 [[config]]
@@ -1291,6 +1293,7 @@ last Version), so only the server's check at `mastersos publish` reports them.
 | `deb_url_invalid` | error | `.deb` app `url` |
 | `default_group_missing` | error | no `default` Group |
 | `dest_not_absolute` | error | `files` / `downloads` destination |
+| `device_annotation_invalid` | error | `[[device]]` `asset_id` or `location` |
 | `device_duplicate_id` | error | Device listed twice |
 | `device_name_duplicate` | error | printer / scanner name repeated |
 | `device_no_identity` | error | `[[device]]` without serial or device_id |
@@ -2058,6 +2061,35 @@ group = "default"
 ```
 <!-- /prompt:omit -->
 
+### `device_annotation_invalid`
+
+**Level:** error. **Meaning:** a `[[device]]` entry's `asset_id` or `location` is empty, longer than
+128 characters, or contains a control character (a tab or a line break, for example).
+
+<!-- prompt:omit -->
+**Why:** the values are shown in the console and handed to apps on the Device as single-line text.
+<!-- /prompt:omit -->
+
+**How to fix:** write 1-128 characters on one line, or remove the key.
+
+<!-- prompt:omit -->
+```toml check=device_annotation_invalid
+[[config]]
+id = "standard"
+name = "Standard"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "standard"
+
+[[device]]
+serial = "9JK4LM2"
+group = "default"
+asset_id = ""
+```
+<!-- /prompt:omit -->
+
 ### `device_reset_id_invalid`
 
 **Level:** error. **Meaning:** the legacy `[device.reset] id` is not 1-64 letters, digits or `-`.
@@ -2289,7 +2321,7 @@ with Configs counts as using it, `wifi_ext`: any `[[school.wifi]]`, or a Wi-Fi e
 `wpa3_only` (either value), `eap` or an enterprise key, or `oidc_card`: `client_secret` or
 `card_hosts` in `[school.oidc]`, or `support`: `[config.support]` or `support` in `[defaults]`, or
 `config_update_channel`: `update_channel` in `[defaults]` or a `[[config]]`, or `oidc_idp_hint`:
-`idp_hint` in `[school.oidc]`, or `deb_apps`: `apps.deb` or `ubuntu_mirror` in `[defaults]` or a `[[config]]`),
+`idp_hint` in `[school.oidc]`, or `deb_apps`: `apps.deb` or `ubuntu_mirror` in `[defaults]` or a `[[config]]`, or `device_annotations`: `asset_id` or `location` in a `[[device]]`),
 and some Devices seen in the last 30 days have not reported that they understand it.
 
 <!-- prompt:omit -->

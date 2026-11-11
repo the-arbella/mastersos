@@ -573,6 +573,23 @@ pub fn lock_message(m: &str) -> Result<(), String> {
     }
 }
 
+/// `[[device]]` `asset_id` / `location`: 1-128 characters, none of them a control character.
+pub fn device_annotation(s: &str) -> Result<(), String> {
+    let n = s.chars().count();
+    if !(1..=128).contains(&n) {
+        Err(format!(
+            "The value has {n} characters, it must have 1 to 128"
+        ))
+    } else if s.chars().any(char::is_control) {
+        Err(
+            "The value must not contain control characters (such as a tab or a line break)"
+                .to_owned(),
+        )
+    } else {
+        Ok(())
+    }
+}
+
 /// Chrome 暂停更新最多到发布日之后这么多天（含）。
 pub const MAX_CHROME_PAUSE_DAYS: i64 = 14;
 /// 更新时段至少这么多分钟：`mastersos-chrome.timer` 每小时一轮、落在整点后 20 分钟内（RandomizedDelaySec），
@@ -1265,6 +1282,18 @@ mod tests {
         assert!(timezone("UTC").is_ok());
         assert!(timezone("/Asia").is_err());
         assert!(timezone("Asia//x").is_err());
+    }
+
+    #[test]
+    fn device_annotation_rules() {
+        assert!(device_annotation("A-1024").is_ok());
+        assert!(device_annotation("教学楼 3 层 301").is_ok());
+        assert!(device_annotation(&"x".repeat(128)).is_ok());
+        assert!(device_annotation(&"字".repeat(128)).is_ok());
+        assert!(device_annotation("").is_err());
+        assert!(device_annotation(&"x".repeat(129)).is_err());
+        assert!(device_annotation("a\nb").is_err());
+        assert!(device_annotation("a\tb").is_err());
     }
 
     #[test]
