@@ -526,9 +526,16 @@ pub fn feature_path(m: &Manifest, feature: &str) -> String {
                     .map(|c| format!("config.{}.update_channel", c.id)),
             )
             .next(),
-        FEATURE_KIOSK_PLATFORM | FEATURE_KIOSK_INJECT => {
-            let platform = feature == FEATURE_KIOSK_PLATFORM;
-            let key = if platform { "platform" } else { "inject" };
+        FEATURE_KIOSK_PLATFORM
+        | FEATURE_KIOSK_INJECT
+        | FEATURE_KIOSK_DEVICE_ATTRIBUTES
+        | FEATURE_KIOSK_MANAGED_CONFIG => {
+            let key = match feature {
+                FEATURE_KIOSK_PLATFORM => "platform",
+                FEATURE_KIOSK_INJECT => "inject",
+                FEATURE_KIOSK_DEVICE_ATTRIBUTES => "device_attributes",
+                _ => "managed_config",
+            };
             m.defaults
                 .iter()
                 .map(|d| ("defaults".to_owned(), &d.apps.kiosk))
@@ -539,12 +546,11 @@ pub fn feature_path(m: &Manifest, feature: &str) -> String {
                 )
                 .find_map(|(base, apps)| {
                     apps.iter()
-                        .find(|(_, a)| {
-                            if platform {
-                                a.platform.is_some()
-                            } else {
-                                a.inject.is_some()
-                            }
+                        .find(|(_, a)| match feature {
+                            FEATURE_KIOSK_PLATFORM => a.platform.is_some(),
+                            FEATURE_KIOSK_INJECT => a.inject.is_some(),
+                            FEATURE_KIOSK_DEVICE_ATTRIBUTES => a.device_attributes,
+                            _ => a.managed_config.is_some(),
                         })
                         .map(|(id, _)| format!("{base}.apps.kiosk.{id}.{key}"))
                 })
@@ -781,6 +787,26 @@ fn lint_kiosk(v: &View, present: &BTreeSet<String>, out: &mut Vec<Lint>) {
                 .param("file", f),
             ));
         }
+        // Same for managed_config: contents in `lint_managed_config_sources`, presence here.
+        if let Some(f) = app
+            .managed_config
+            .as_deref()
+            .filter(|f| kiosk::managed_config_path_ok(f) && !present.contains(*f))
+        {
+            out.push(v.tag(
+                err(
+                    "kiosk_managed_config_invalid",
+                    format!(
+                        "Kiosk app {:?} has managed_config {f:?}, which is not in the bundle: add the file under files/.",
+                        app.name
+                    ),
+                    format!("{at}.managed_config"),
+                )
+                .param("app_id", id)
+                .param("field", "managed_config")
+                .param("file", f),
+            ));
+        }
         // Final review I2: "entering" from the desktop only ends the current session and returns to the login screen
         // (one-time auto-login is not built yet, design 9.4), and an app with login_screen = false is not listed
         // there, so the student cannot find it. Relax this once auto-login exists.
@@ -932,6 +958,47 @@ pub fn lint_inject_sources<'a>(m: &Manifest, file: impl Fn(&str) -> Option<&'a [
                         )
                         .param("app_id", id)
                         .param("field", "inject")
+                        .param("file", f),
+                    ),
+                );
+            }
+        }
+    }
+    out
+}
+
+/// The contents of every kiosk `managed_config` file that is in the bundle
+/// ([`kiosk::check_managed_config`]: size, UTF-8, a JSON object), for the callers of
+/// [`lint_inject_sources`]. One `kiosk_managed_config_invalid` per layer and app.
+pub fn lint_managed_config_sources<'a>(
+    m: &Manifest,
+    file: impl Fn(&str) -> Option<&'a [u8]>,
+) -> Vec<Lint> {
+    let mut out = Vec::new();
+    for v in &views(m) {
+        let base = format!("{}.apps.kiosk", v.base);
+        for (id, app) in &v.apps.kiosk {
+            let Some(f) = app
+                .managed_config
+                .as_deref()
+                .filter(|f| kiosk::managed_config_path_ok(f))
+            else {
+                continue;
+            };
+            let Some(bytes) = file(f) else { continue };
+            if let Err(why) = kiosk::check_managed_config(bytes) {
+                out.push(
+                    v.tag(
+                        err(
+                            "kiosk_managed_config_invalid",
+                            format!(
+                                "Kiosk app {:?}: managed configuration file {f:?} {why}.",
+                                app.name
+                            ),
+                            format!("{base}.{id}.managed_config"),
+                        )
+                        .param("app_id", id)
+                        .param("field", "managed_config")
                         .param("file", f),
                     ),
                 );
@@ -2332,6 +2399,8 @@ scanners = [{ name = "s", uri = "http://x" }, { name = "s", uri = "http://y" }]"
             ("kiosk_policy_locked", &["field"]),
             ("kiosk_platform_invalid", &["field"]),
             ("kiosk_inject_invalid", &["field"]),
+            ("kiosk_device_attributes_invalid", &["field"]),
+            ("kiosk_managed_config_invalid", &["field"]),
             ("deb_id_invalid", &["config", "group", "app_id", "field"]),
             ("deb_name_invalid", &["config", "group", "app_id", "field"]),
             ("deb_url_invalid", &["config", "group", "app_id", "field"]),
@@ -2432,6 +2501,11 @@ flatpak = ["libreoffice"]"#,
             ("x", format!("{NWEA}\nuser_agent = \"Mozilla/5.0\"")),
             ("x", format!("{NWEA}\nplatform = \"windows\"")),
             ("x", format!("{NWEA}\ninject = \"files/missing.js\"")),
+            (
+                "x",
+                format!("{NWEA}\nmanaged_config = \"files/missing.json\""),
+            ),
+            ("x", format!("{NWEA}\ndevice_attributes = true\npwa = true")),
             ("x", "name = \"c\"\nexec = \"org.example.Calc\"".to_string()),
         ] {
             run("", &kiosk(id, &fields), "\"local\"");
@@ -2923,6 +2997,77 @@ config = "a"
         assert_eq!(l[0].code, "kiosk_inject_invalid");
         assert_eq!(l[0].path.as_deref(), Some("config.a.apps.kiosk.t.inject"));
         assert_eq!(lint_inject_sources(&m, |_| Some(&bad[..])).len(), 1);
+    }
+
+    #[test]
+    fn feature_path_points_at_device_attributes_and_managed_config() {
+        let m = manifest2(
+            r#"
+[[config]]
+id = "a"
+name = "a"
+apps.kiosk.k = { name = "K", url = "https://k.example/", device_attributes = false }
+
+[[config]]
+id = "b"
+name = "b"
+apps.kiosk.t = { name = "T", url = "https://t.example/", device_attributes = true, managed_config = "files/t.json" }
+
+[[group]]
+id = "default"
+name = "D"
+config = "a"
+"#,
+        );
+        assert_eq!(
+            feature_path(&m, crate::FEATURE_KIOSK_DEVICE_ATTRIBUTES),
+            "config.b.apps.kiosk.t.device_attributes"
+        );
+        assert_eq!(
+            feature_path(&m, crate::FEATURE_KIOSK_MANAGED_CONFIG),
+            "config.b.apps.kiosk.t.managed_config"
+        );
+    }
+
+    #[test]
+    fn managed_config_file_must_be_in_the_bundle_and_valid() {
+        let m = manifest2(
+            "[[config]]\nid = \"a\"\nname = \"a\"\n\n[config.apps.kiosk.t]\nname = \"T\"\n\
+             url = \"https://t.example/\"\nmanaged_config = \"files/t.json\"\n\n\
+             [[group]]\nid = \"default\"\nname = \"D\"\nconfig = \"a\"\n",
+        );
+        let found = |present: &BTreeSet<String>| -> Vec<Lint> {
+            lint(&m, present)
+                .into_iter()
+                .filter(|l| l.code == "kiosk_managed_config_invalid")
+                .collect()
+        };
+        let l = found(&BTreeSet::new());
+        assert_eq!(l.len(), 1, "{l:?}");
+        assert_eq!(
+            l[0].path.as_deref(),
+            Some("config.a.apps.kiosk.t.managed_config")
+        );
+        let with: BTreeSet<String> = ["files/t.json".to_string()].into();
+        assert!(found(&with).is_empty());
+        let ok = br#"{"a":1}"#.to_vec();
+        let array = b"[1]".to_vec();
+        assert!(
+            lint_managed_config_sources(&m, |f| (f == "files/t.json").then_some(&ok[..]))
+                .is_empty()
+        );
+        assert!(lint_managed_config_sources(&m, |_| None).is_empty());
+        let l = lint_managed_config_sources(&m, |_| Some(&array[..]));
+        assert_eq!(l.len(), 1, "{l:?}");
+        assert_eq!(l[0].code, "kiosk_managed_config_invalid");
+        assert_eq!(
+            l[0].path.as_deref(),
+            Some("config.a.apps.kiosk.t.managed_config")
+        );
+        assert_eq!(
+            l[0].params.get("file").map(String::as_str),
+            Some("files/t.json")
+        );
     }
 
     #[test]

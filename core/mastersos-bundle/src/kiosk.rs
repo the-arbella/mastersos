@@ -145,11 +145,44 @@ pub struct PlatformExtension {
 /// extension: the only other extension it takes `{cmd:"exit"}` from.
 pub const EXAM_PLATFORM_KEY: &str = "platform_extension";
 
-/// Whether `app` has a platform extension and starts at its start page (`platform` or `inject`
-/// written; design §3.3). Those apps get `chrome-extension://<platform extension id>` in the
+/// A `managed_config` file is at most this many bytes (64 KiB).
+pub const MAX_MANAGED_CONFIG_BYTES: usize = 64 * 1024;
+
+/// `managed_config`: a bundle member under `files/` ending in `.json`.
+pub fn managed_config_path_ok(f: &str) -> bool {
+    f.starts_with("files/")
+        && f.len() > "files/.json".len()
+        && f.ends_with(".json")
+        && crate::check_member_path(f).is_ok()
+}
+
+/// The rules for the contents of a `managed_config` file, where the contents are at hand: UTF-8
+/// JSON whose top level is an object, at most [`MAX_MANAGED_CONFIG_BYTES`]. The object, or the
+/// reason otherwise.
+pub fn check_managed_config(bytes: &[u8]) -> Result<Map<String, Value>, String> {
+    if bytes.len() > MAX_MANAGED_CONFIG_BYTES {
+        return Err(format!(
+            "is {} bytes, more than the {} KiB a managed configuration may have",
+            bytes.len(),
+            MAX_MANAGED_CONFIG_BYTES / 1024
+        ));
+    }
+    let text = std::str::from_utf8(bytes).map_err(|_| "is not UTF-8 text".to_string())?;
+    match serde_json::from_str::<Value>(text) {
+        Ok(Value::Object(map)) => Ok(map),
+        Ok(_) => Err("is JSON, but not an object at the top level".into()),
+        Err(e) => Err(format!("is not valid JSON ({e})")),
+    }
+}
+
+/// Whether `app` has a platform extension and starts at its start page (`platform`, `inject`,
+/// `device_attributes = true` or `managed_config` written; design §3.3). Those apps get `chrome-extension://<platform extension id>` in the
 /// allowlist.
 pub fn uses_start_page(app: &KioskApp) -> bool {
-    app.platform.is_some() || app.inject.is_some()
+    app.platform.is_some()
+        || app.inject.is_some()
+        || app.device_attributes
+        || app.managed_config.is_some()
 }
 
 /// The rules for the contents of an `inject` script, where the contents are at hand (the agent,
@@ -357,6 +390,29 @@ pub fn check(id: &str, app: &KioskApp) -> Result<(), KioskError> {
                 "kiosk_inject_invalid",
                 "inject",
                 format!("inject {f:?} must be a files/….js file in the bundle, such as \"files/testnav.js\""),
+            );
+        }
+    }
+    if app.device_attributes && !web_only {
+        return fail(
+            "kiosk_device_attributes_invalid",
+            "device_attributes",
+            "device_attributes is only for web apps (url) without pwa = true".into(),
+        );
+    }
+    if let Some(f) = &app.managed_config {
+        if !web_only {
+            return fail(
+                "kiosk_managed_config_invalid",
+                "managed_config",
+                "managed_config is only for web apps (url) without pwa = true".into(),
+            );
+        }
+        if !managed_config_path_ok(f) {
+            return fail(
+                "kiosk_managed_config_invalid",
+                "managed_config",
+                format!("managed_config {f:?} must be a files/….json file in the bundle, such as \"files/testnav.json\""),
             );
         }
     }
@@ -1795,6 +1851,106 @@ url = "https://test.mapnwea.org/"
         let calc =
             app("name = \"Calc\"\nexec = \"/usr/bin/gnome-calculator\"\ninject = \"files/a.js\"");
         assert_eq!(code(check("x", &calc)), "kiosk_inject_invalid");
+    }
+
+    #[test]
+    fn device_attributes_rules() {
+        assert_eq!(code(check("x", &web("device_attributes = true"))), "ok");
+        assert_eq!(code(check("x", &web("device_attributes = false"))), "ok");
+        let e = check("x", &web("device_attributes = true\npwa = true")).unwrap_err();
+        assert_eq!(
+            (e.code, e.field),
+            ("kiosk_device_attributes_invalid", "device_attributes")
+        );
+        let calc = |v: &str| {
+            app(&format!(
+                "name = \"Calc\"\nexec = \"/usr/bin/gnome-calculator\"\ndevice_attributes = {v}"
+            ))
+        };
+        let e = check("x", &calc("true")).unwrap_err();
+        assert_eq!(
+            (e.code, e.field),
+            ("kiosk_device_attributes_invalid", "device_attributes")
+        );
+        assert_eq!(code(check("x", &calc("false"))), "ok");
+    }
+
+    #[test]
+    fn managed_config_rules() {
+        for ok in ["files/x.json", "files/a/b.json"] {
+            assert!(managed_config_path_ok(ok), "{ok}");
+            assert_eq!(
+                code(check("x", &web(&format!("managed_config = {}", q(ok))))),
+                "ok",
+                "{ok}"
+            );
+        }
+        for bad in [
+            "files/x.js",
+            "x.json",
+            "files/.json",
+            "files/../x.json",
+            "files//x.json",
+            "https://x.example/a.json",
+        ] {
+            assert!(!managed_config_path_ok(bad), "{bad}");
+            let e = check("x", &web(&format!("managed_config = {}", q(bad)))).unwrap_err();
+            assert_eq!(
+                (e.code, e.field),
+                ("kiosk_managed_config_invalid", "managed_config"),
+                "{bad}"
+            );
+        }
+        let e = check("x", &web("managed_config = \"files/a.json\"\npwa = true")).unwrap_err();
+        assert_eq!(e.code, "kiosk_managed_config_invalid");
+        let calc = app(
+            "name = \"Calc\"\nexec = \"/usr/bin/gnome-calculator\"\nmanaged_config = \"files/a.json\"",
+        );
+        assert_eq!(code(check("x", &calc)), "kiosk_managed_config_invalid");
+    }
+
+    #[test]
+    fn managed_config_source_rules() {
+        let map = check_managed_config(br#"{"a":1}"#).unwrap();
+        assert!(map.contains_key("a"));
+        assert!(check_managed_config(b"[1]").is_err());
+        assert!(check_managed_config(b"{").is_err());
+        assert!(check_managed_config(&[0xff]).is_err());
+        assert!(check_managed_config(b"null").is_err());
+        // Exactly 64 KiB: a valid object padded with spaces.
+        let mut full = br#"{"a":1}"#.to_vec();
+        full.resize(MAX_MANAGED_CONFIG_BYTES, b' ');
+        assert!(check_managed_config(&full).is_ok());
+        full.push(b' ');
+        let why = check_managed_config(&full).unwrap_err();
+        assert!(why.contains("64 KiB"), "{why}");
+    }
+
+    #[test]
+    fn device_attributes_and_managed_config_start_at_the_start_page() {
+        assert!(uses_start_page(&web("device_attributes = true")));
+        assert!(uses_start_page(&web("managed_config = \"files/x.json\"")));
+        assert!(!uses_start_page(&web("")));
+        assert!(!uses_start_page(&web("device_attributes = false")));
+    }
+
+    #[test]
+    fn device_attributes_and_managed_config_are_features() {
+        use crate::{FEATURE_KIOSK_DEVICE_ATTRIBUTES, FEATURE_KIOSK_MANAGED_CONFIG};
+        let used = |extra: &str| {
+            features_used(&parse(&format!(
+                "[group.apps.kiosk.x]\nname = \"X\"\nurl = \"https://x.example/\"\n{extra}"
+            )))
+        };
+        let u = used("device_attributes = true");
+        assert!(u.contains(&FEATURE_KIOSK_DEVICE_ATTRIBUTES), "{u:?}");
+        assert!(!u.contains(&FEATURE_KIOSK_MANAGED_CONFIG), "{u:?}");
+        let u = used("managed_config = \"files/x.json\"");
+        assert!(u.contains(&FEATURE_KIOSK_MANAGED_CONFIG), "{u:?}");
+        assert!(!u.contains(&FEATURE_KIOSK_DEVICE_ATTRIBUTES), "{u:?}");
+        assert_eq!(used("device_attributes = false"), [FEATURE_KIOSK]);
+        assert_eq!(FEATURE_KIOSK_DEVICE_ATTRIBUTES, "kiosk_device_attributes");
+        assert_eq!(FEATURE_KIOSK_MANAGED_CONFIG, "kiosk_managed_config");
     }
 
     #[test]

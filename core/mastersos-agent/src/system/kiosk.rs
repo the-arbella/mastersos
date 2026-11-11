@@ -164,6 +164,8 @@ pub fn deb_kiosk_apps(
                 user_agent: None,
                 platform: None,
                 inject: None,
+                device_attributes: false,
+                managed_config: None,
                 extensions: vec![],
                 chrome_policy: toml::Table::new(),
                 login_screen: ready.is_some(),

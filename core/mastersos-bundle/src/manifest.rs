@@ -1528,6 +1528,28 @@ pub struct KioskApp {
     /// app's sites before any of their own scripts ([`FEATURE_KIOSK_INJECT`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inject: Option<String>,
+    /// Only for web apps (not PWA): `true` lets the app's sites read the Device's serial number,
+    /// asset tag, location and directory id through the Device Attributes API
+    /// ([`FEATURE_KIOSK_DEVICE_ATTRIBUTES`]).
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            description = "Only for web apps without pwa: true lets the app's sites read the Device's serial number, asset tag, location and device id. Default false."
+        )
+    )]
+    pub device_attributes: bool,
+    /// Only for web apps (not PWA): a `files/….json` file in the bundle (a JSON object, at most
+    /// 64 KiB) that the app's sites read as their managed configuration
+    /// ([`FEATURE_KIOSK_MANAGED_CONFIG`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            description = "Only for web apps without pwa: a files/<name>.json file in the bundle (a JSON object, at most 64 KiB) the app's sites read as their managed configuration. Not secret."
+        )
+    )]
+    pub managed_config: Option<String>,
     /// Chrome extensions force-installed in the session (web / PWA apps).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extensions: Vec<KioskExtension>,
@@ -1807,6 +1829,11 @@ pub const FEATURE_KIOSK_INJECT: &str = "kiosk_inject";
 /// See [`FEATURE_UPDATE_MIRROR`]: `[config.apps.deb]` and `ubuntu_mirror` (design
 /// docs/specs/2026-11-10-deb-apps-design.md §4.1).
 pub const FEATURE_DEB_APPS: &str = "deb_apps";
+/// See [`FEATURE_UPDATE_MIRROR`]: `device_attributes = true` in a kiosk app (design
+/// docs/specs/2026-11-10-kiosk-managed-apis-design.md §3.1).
+pub const FEATURE_KIOSK_DEVICE_ATTRIBUTES: &str = "kiosk_device_attributes";
+/// See [`FEATURE_UPDATE_MIRROR`]: `managed_config` in a kiosk app (same design §3.1).
+pub const FEATURE_KIOSK_MANAGED_CONFIG: &str = "kiosk_managed_config";
 /// See [`FEATURE_UPDATE_MIRROR`]: `asset_id` or `location` in a `[[device]]` (design
 /// docs/specs/2026-11-10-kiosk-managed-apis-design.md §3.2).
 pub const FEATURE_DEVICE_ANNOTATIONS: &str = "device_annotations";
@@ -1929,6 +1956,12 @@ pub fn features_used(m: &Manifest) -> Vec<&'static str> {
     }
     if kiosk_apps().any(|a| a.inject.is_some()) {
         out.push(FEATURE_KIOSK_INJECT);
+    }
+    if kiosk_apps().any(|a| a.device_attributes) {
+        out.push(FEATURE_KIOSK_DEVICE_ATTRIBUTES);
+    }
+    if kiosk_apps().any(|a| a.managed_config.is_some()) {
+        out.push(FEATURE_KIOSK_MANAGED_CONFIG);
     }
     let deb_used = |a: &Apps| !a.deb.is_empty() || a.ubuntu_mirror.is_some();
     if defaults.is_some_and(|d| deb_used(&d.apps)) || m.configs.iter().any(|c| deb_used(&c.apps)) {

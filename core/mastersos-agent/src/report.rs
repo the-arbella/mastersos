@@ -27,6 +27,8 @@ const MAX_RESULTS: usize = 200;
 /// inject script) and the exam extension takes its exit (design docs/specs/2026-11-06-kiosk-platform-inject-design.md).
 /// `deb_apps`: `[config.apps.deb]` and `ubuntu_mirror` (docs/specs/2026-11-10-deb-apps-design.md; the device side is built in later tasks).
 /// `device_annotations`: `asset_id` and `location` of a `[[device]]` (annotations only; the agent reads them with the kiosk device attributes later).
+/// `kiosk_device_attributes`, `kiosk_managed_config`: the platform extension's `managed.js` answers the Device Attributes
+/// API and `getManagedConfiguration` (design docs/specs/2026-11-10-kiosk-managed-apis-design.md; the device side is built in later tasks).
 /// `oidc_idp_hint`: the `login` step hands `[school.oidc] idp_hint` to the sign-in card (`login-browser/card.json`).
 pub const SUPPORTED_FEATURES: &[&str] = &[
     mastersos_bundle::FEATURE_UPDATE_MIRROR,
@@ -44,6 +46,8 @@ pub const SUPPORTED_FEATURES: &[&str] = &[
     mastersos_bundle::FEATURE_KIOSK_INJECT,
     mastersos_bundle::FEATURE_DEB_APPS,
     mastersos_bundle::FEATURE_DEVICE_ANNOTATIONS,
+    mastersos_bundle::FEATURE_KIOSK_DEVICE_ATTRIBUTES,
+    mastersos_bundle::FEATURE_KIOSK_MANAGED_CONFIG,
 ];
 
 /// 机器的硬件与系统身份。
@@ -368,7 +372,9 @@ mod tests {
                 "kiosk_platform",
                 "kiosk_inject",
                 "deb_apps",
-                "device_annotations"
+                "device_annotations",
+                "kiosk_device_attributes",
+                "kiosk_managed_config"
             ]
         );
         assert_eq!(r.manifest_features, SUPPORTED_FEATURES);
@@ -390,6 +396,8 @@ mod tests {
             mastersos_bundle::FEATURE_KIOSK_INJECT,
             mastersos_bundle::FEATURE_DEB_APPS,
             mastersos_bundle::FEATURE_DEVICE_ANNOTATIONS,
+            mastersos_bundle::FEATURE_KIOSK_DEVICE_ATTRIBUTES,
+            mastersos_bundle::FEATURE_KIOSK_MANAGED_CONFIG,
         ];
         assert!(SUPPORTED_FEATURES.iter().all(|f| all.contains(f)));
     }
