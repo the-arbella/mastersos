@@ -22,35 +22,55 @@
   const proto = Managed && Managed.prototype;
   if (!proto) return;
   if (window.isSecureContext === false) return; // [SecureContext]
-  if (!navigator.managed) return; // Chrome changed: do not invent it
+  // The one instance a page can get (read once; the brand check is identity against it, not instanceof).
+  const instance = navigator.managed;
+  if (!instance) return; // Chrome changed: do not invent it
+
+  // Page globals the methods use, captured now so that later page replacements change nothing.
   const DOMEx = window.DOMException;
+  const TypeErr = window.TypeError;
+  const PromiseCtor = window.Promise;
+  const promiseResolve = PromiseCtor.resolve.bind(PromiseCtor);
+  const promiseReject = PromiseCtor.reject.bind(PromiseCtor);
+  const defineProperty = Object.defineProperty;
+  const hasOwn = Object.prototype.hasOwnProperty;
+  const arrayFrom = Array.from;
+  const jsonParse = JSON.parse;
+  const jsonStringify = JSON.stringify;
+  const toStr = String;
+  const iteratorSym = Symbol.iterator;
+  const call = Function.prototype.call.bind(Function.prototype.call);
+  const arrayIncludes = Array.prototype.includes;
+  const wmHas = WeakMap.prototype.has;
+  const wmGet = WeakMap.prototype.get;
+  const wmSet = WeakMap.prototype.set;
 
   // --- native-looking toString ---------------------------------------------------------------------------------
   const nativeToString = Function.prototype.toString;
   const disguised = new WeakMap();
   const toString = {
     toString() {
-      return disguised.has(this) ? disguised.get(this) : nativeToString.call(this);
+      return call(wmHas, disguised, this) ? call(wmGet, disguised, this) : call(nativeToString, this);
     },
   }.toString;
-  disguised.set(toString, nativeToString.call(nativeToString));
-  Object.defineProperty(Function.prototype, "toString", {
+  call(wmSet, disguised, toString, call(nativeToString, nativeToString));
+  defineProperty(Function.prototype, "toString", {
     value: toString,
     writable: true,
     configurable: true,
     enumerable: false,
   });
   const as = (fn) => {
-    disguised.set(fn, `function ${fn.name}() { [native code] }`);
+    call(wmSet, disguised, fn, `function ${fn.name}() { [native code] }`);
     return fn;
   };
   // Same descriptor as a native WebIDL operation.
   const install = (name, fn) =>
-    Object.defineProperty(proto, name, { value: as(fn), writable: true, enumerable: true, configurable: true });
+    defineProperty(proto, name, { value: as(fn), writable: true, enumerable: true, configurable: true });
 
-  const rejected = (name, message) => Promise.reject(new DOMEx(message, name));
-  const typeError = (message) => Promise.reject(new TypeError(message));
-  const isManaged = (self) => self instanceof Managed;
+  const rejected = (name, message) => promiseReject(new DOMEx(message, name));
+  const typeError = (message) => promiseReject(new TypeErr(message));
+  const isManaged = (self) => self === instance;
 
   // --- device attributes -----------------------------------------------------------------------------------------
   if (DATA.device_methods) {
@@ -61,7 +81,7 @@
       if (
         fp &&
         typeof fp.features === "function" &&
-        fp.features().includes("device-attributes") &&
+        call(arrayIncludes, fp.features(), "device-attributes") &&
         !fp.allowsFeature("device-attributes")
       ) {
         return rejected("NotAllowedError", "Permissions-Policy: device-attributes are disabled.");
@@ -74,7 +94,7 @@
         );
       }
       const v = device[field];
-      return Promise.resolve(typeof v === "string" ? v : null);
+      return promiseResolve(typeof v === "string" ? v : null);
     };
     install("getDirectoryId", {
       getDirectoryId() {
@@ -106,7 +126,6 @@
   // --- managed configuration ---------------------------------------------------------------------------------------
   const managed = DATA.managed;
   if (managed && typeof managed === "object" && typeof proto.getManagedConfiguration === "function") {
-    const hasOwn = Object.prototype.hasOwnProperty;
     install("getManagedConfiguration", {
       getManagedConfiguration(keys) {
         if (!isManaged(this)) return typeError("Illegal invocation");
@@ -116,20 +135,21 @@
         // WebIDL sequence<DOMString>: an object with Symbol.iterator, each item converted with String().
         let list;
         try {
-          if (keys === null || (typeof keys !== "object" && typeof keys !== "function") || typeof keys[Symbol.iterator] !== "function") {
+          if (keys === null || (typeof keys !== "object" && typeof keys !== "function") || typeof keys[iteratorSym] !== "function") {
             return typeError("Failed to execute 'getManagedConfiguration' on 'NavigatorManagedData': The provided value cannot be converted to a sequence.");
           }
-          list = Array.from(keys, (k) => String(k));
+          list = call(arrayFrom, Array, keys, (k) => toStr(k));
         } catch (e) {
-          return Promise.reject(e);
+          return promiseReject(e);
         }
         const out = {};
-        for (const k of list) {
-          if (!hasOwn.call(managed, k)) continue;
-          const value = JSON.parse(JSON.stringify(managed[k])); // a fresh copy each call (the data came from JSON)
-          Object.defineProperty(out, k, { value, writable: true, enumerable: true, configurable: true });
+        for (let i = 0; i < list.length; i++) {
+          const k = list[i];
+          if (!call(hasOwn, managed, k)) continue;
+          const value = jsonParse(jsonStringify(managed[k])); // a fresh copy each call (the data came from JSON)
+          defineProperty(out, k, { value, writable: true, enumerable: true, configurable: true });
         }
-        return Promise.resolve(out);
+        return promiseResolve(out);
       },
     }.getManagedConfiguration);
   }

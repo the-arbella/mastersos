@@ -179,6 +179,71 @@ describe("getManagedConfiguration", () => {
   });
 });
 
+describe("brand check and captured globals", () => {
+  it("rejects TypeError for an object that merely inherits the prototype, even with Symbol.hasInstance", async () => {
+    const { w } = on({ v: 1, device_methods: true, device: DEVICE, managed: { a: 1 } });
+    const proto = w.NavigatorManagedData.prototype;
+    w.eval(`Object.defineProperty(NavigatorManagedData, Symbol.hasInstance, { value: () => true });`);
+    const fake = w.Object.create(proto);
+    for (const p of [proto.getHostname.call(fake), proto.getManagedConfiguration.call(fake, ["a"])]) {
+      expect(p).toBeInstanceOf(w.Promise);
+      const r = await settle(p);
+      expect(r.err).toBeInstanceOf(w.TypeError);
+      expect(r.err.message).toBe("Illegal invocation");
+    }
+  });
+
+  it("keeps working after the page replaces JSON, Promise and friends", async () => {
+    const { w, managed } = on({ v: 1, device_methods: true, device: DEVICE, managed: { a: { b: 1 } } });
+    const RealPromise = w.Promise;
+    w.eval(`
+      const boom = () => { throw new Error("page stub used"); };
+      JSON.parse = boom; JSON.stringify = boom;
+      Promise = class extends Promise { constructor() { boom(); } };
+      Promise.resolve = boom; Promise.reject = boom;
+      Array.from = boom; Object.defineProperty = boom;
+      Array.prototype.includes = boom; WeakMap.prototype.has = boom; WeakMap.prototype.get = boom;
+      Object.prototype.hasOwnProperty = boom; String = boom;
+    `);
+    const p1 = managed.getHostname();
+    expect(p1).toBeInstanceOf(RealPromise);
+    await expect(p1).resolves.toBe("lab-pc-7");
+    const p2 = managed.getManagedConfiguration(["a"]);
+    expect(p2).toBeInstanceOf(RealPromise);
+    await expect(p2).resolves.toEqual({ a: { b: 1 } });
+    expect((await settle(managed.getManagedConfiguration(5))).err).toBeInstanceOf(w.TypeError);
+    expect(w.Function.prototype.toString.call(managed.getHostname)).toBe("function getHostname() { [native code] }");
+  });
+});
+
+describe("with chromeos.js in the same window", () => {
+  const CHROMEOS = repoFile("kiosk-platform/chromeos.js");
+  const LINUX_UA =
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36";
+  for (const order of ["chromeos first", "managed first"]) {
+    it(`toString reads native everywhere (${order})`, () => {
+      const { w } = page({ v: 1, device_methods: true, device: DEVICE });
+      w.eval(`
+        Object.defineProperty(Navigator.prototype, "userAgent", { get: (function () { return ${JSON.stringify(LINUX_UA)}; }).bind(null), configurable: true, enumerable: true });
+      `);
+      const runManaged = () => w.eval(source({ v: 1, device_methods: true, device: DEVICE }));
+      if (order === "chromeos first") {
+        w.eval(CHROMEOS);
+        runManaged();
+      } else {
+        runManaged();
+        w.eval(CHROMEOS);
+      }
+      expect(w.navigator.userAgent).toMatch(/CrOS/);
+      const ts = w.Function.prototype.toString;
+      const getter = w.Object.getOwnPropertyDescriptor(w.Navigator.prototype, "userAgent").get;
+      expect(ts.call(ts)).toBe("function toString() { [native code] }");
+      expect(ts.call(getter)).toMatch(/\{ \[native code\] \}$/);
+      expect(ts.call(w.NavigatorManagedData.prototype.getHostname)).toBe("function getHostname() { [native code] }");
+    });
+  }
+});
+
 describe("looks native", () => {
   it("length, descriptors and toString match native methods", () => {
     const { w } = on({ v: 1, device_methods: true, device: DEVICE, managed: { a: 1 } });
