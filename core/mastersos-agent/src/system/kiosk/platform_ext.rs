@@ -6,12 +6,14 @@
 //! so the exam extension (in every web kiosk session) keeps only `nativeMessaging`, `storage` and NWEA's hosts:
 //!
 //! - `manifest.json`: MV3; `tabs` (reload the start page after install), and with `platform` also
-//!   `declarativeNetRequest` and host permissions on the app's hosts (the request header rule); static content scripts
-//!   on the app's hosts, all `document_start`, in this order: `chromeos.js` (MAIN, all frames) with `platform`;
-//!   `managed.js` (MAIN, all frames) with `platform`, `device_attributes` or `managed_config` (no permission of its
-//!   own); `relay.js` (isolated, top frame) and `inject.js` (MAIN, all frames) with `inject`. Static content scripts are
-//!   the only ones sure to run before the page's scripts. No web-accessible resources: pages cannot open the start
-//!   page.
+//!   `declarativeNetRequest` and host permissions on the app's hosts (the request header rule); static content scripts,
+//!   all `document_start`, in this order: `chromeos.js` (MAIN, all frames) with `platform`; `managed.js` (MAIN, all
+//!   frames) with `platform`, `device_attributes` or `managed_config`; `relay.js` (isolated, top frame) and `inject.js`
+//!   (MAIN, all frames) with `inject`. They match every allowed host and its subdomains, except `managed.js`: it
+//!   matches only the exact origin of the app's `url` (`https://<host>[:port]/*`; no subdomains, no other `allow`
+//!   host), as ChromeOS gives these values to the kiosk app's origin only, and it also checks `location.origin` against
+//!   `DATA.origin`. It has no permission of its own. Static content scripts are the only ones sure to run before the
+//!   page's scripts. No web-accessible resources: pages cannot open the start page.
 //! - `background.js`, `start.html`, `start.js`, `relay.js`, `chromeos.js`: `kiosk-platform/` of this repository, built
 //!   into the agent; `config.js`: [`kiosk::platform_config`]; `inject.js`: the bundle's script inside
 //!   `kiosk-platform/inject-wrapper.js` (it gets `mastersos.exit()`); `managed.js`: `kiosk-platform/managed.js` with
@@ -137,7 +139,7 @@ pub fn prepare(
         hostname: hostname(root),
         serial: ident.serial.clone(),
     };
-    let managed = kiosk::managed_values(app, &values, managed);
+    let managed = kiosk::managed_values(app, &values, managed).map_err(|e| anyhow!(e.message))?;
     let config = kiosk::platform_config(app, exam_id).map_err(|e| anyhow!(e.message))?;
     let (_, hosts) = kiosk::start_hosts(app).map_err(|e| anyhow!(e.message))?;
     let key = app_key(var_dir, id)?;
@@ -383,8 +385,16 @@ fn manifest_json(parts: &Parts) -> Result<Vec<u8>> {
         m["host_permissions"] = serde_json::json!(matches);
         scripts.push(main("chromeos.js"));
     }
-    if parts.managed.is_some() {
-        scripts.push(main("managed.js"));
+    if let Some(data) = parts.managed {
+        // Only the url's own origin (design §5): no subdomains, no other allowed host gets the values.
+        let origin = data
+            .get("origin")
+            .and_then(serde_json::Value::as_str)
+            .filter(|o| o.starts_with("https://"))
+            .ok_or_else(|| anyhow!("the managed values have no origin"))?;
+        let mut s = main("managed.js");
+        s["matches"] = serde_json::json!([format!("{origin}/*")]);
+        scripts.push(s);
     }
     if parts.script.is_some() {
         // relay.js first: it must be listening when the wrapper in inject.js posts its channel
@@ -796,7 +806,9 @@ mod tests {
     }
 
     /// An app with only `inject` gets no managed.js: its extension is byte for byte what it was before managed.js
-    /// existed (the digest computed by the code before that change).
+    /// existed (the digest computed by the code before that change). When background.js, start.html, start.js,
+    /// relay.js, inject-wrapper.js or `kiosk::platform_config` change on purpose, recompute the value and write it
+    /// here again.
     #[test]
     fn inject_only_digest_is_unchanged() {
         let k = key();
@@ -830,8 +842,9 @@ mod tests {
     }
 
     fn device_data() -> serde_json::Value {
-        serde_json::json!({"v": 1, "device_methods": true, "device": {"asset_id": "A-1", "location": "Room 2",
-            "directory_id": "dev-1", "hostname": "lab-07", "serial": null}})
+        serde_json::json!({"v": 1, "origin": "https://home.testnav.com", "device_methods": true,
+            "device": {"asset_id": "A-1", "location": "Room 2", "directory_id": "dev-1", "hostname": "lab-07",
+                "serial": null}})
     }
 
     #[test]
@@ -861,6 +874,15 @@ mod tests {
         assert_eq!(cs[1]["all_frames"], true);
         assert_eq!(cs[1]["match_origin_as_fallback"], true);
         assert_eq!(cs[1]["run_at"], "document_start");
+        // managed.js only on the url's own origin; the others on every allowed host and its subdomains
+        assert_eq!(
+            cs[1]["matches"],
+            serde_json::json!(["https://home.testnav.com/*"])
+        );
+        let all = serde_json::json!(["https://testnav.com/*", "https://*.testnav.com/*"]);
+        for i in [0, 2, 3] {
+            assert_eq!(cs[i]["matches"], all, "{}", names[i]);
+        }
         // no permission of its own: the same as platform alone
         let alone = build(&parts(&k, &hosts, &cfg, true, None)).unwrap();
         let (_, m_alone) = manifest_of(&alone);
@@ -900,11 +922,27 @@ mod tests {
     }
 
     #[test]
+    fn managed_js_needs_an_origin() {
+        let k = key();
+        let hosts = vec!["testnav.com".to_string()];
+        let cfg = config();
+        for bad in [
+            serde_json::json!({"v": 1, "device_methods": true}),
+            serde_json::json!({"v": 1, "origin": "", "device_methods": true}),
+            serde_json::json!({"v": 1, "origin": 5, "device_methods": true}),
+        ] {
+            let mut a = parts(&k, &hosts, &cfg, true, None);
+            a.managed = Some(&bad);
+            assert!(build(&a).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn managed_js_escapes_what_could_end_a_script() {
         let k = key();
         let hosts = vec!["testnav.com".to_string()];
         let cfg = config();
-        let data = serde_json::json!({"v": 1, "device_methods": false,
+        let data = serde_json::json!({"v": 1, "origin": "https://home.testnav.com", "device_methods": false,
             "managed": {"note": "</script><script>alert(1)</script>", "sep": "a\u{2028}b\u{2029}c"}});
         let mut a = parts(&k, &hosts, &cfg, false, None);
         a.managed = Some(&data);
@@ -921,7 +959,8 @@ mod tests {
     fn managed_js_keeps_a_proto_key_as_data() {
         // an object literal would make "__proto__" the prototype; JSON.parse keeps it an own key
         let managed = kiosk::check_managed_config(br#"{"__proto__": {"x": 1}}"#).unwrap();
-        let data = serde_json::json!({"v": 1, "device_methods": false, "managed": managed});
+        let data = serde_json::json!({"v": 1, "origin": "https://home.testnav.com", "device_methods": false,
+            "managed": managed});
         let k = key();
         let hosts = vec!["testnav.com".to_string()];
         let cfg = config();
@@ -1004,7 +1043,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             prepared_data(&p).unwrap(),
-            serde_json::json!({"v": 1, "device_methods": true,
+            serde_json::json!({"v": 1, "origin": "https://home.testnav.com", "device_methods": true,
                 "device": {"asset_id": "A-1", "location": "Room 2", "directory_id": "dev-1",
                     "hostname": "lab-07", "serial": "PF2ABC12"},
                 "managed": {"server": "https://x.example/"}})
@@ -1035,7 +1074,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             prepared_data(&p).unwrap(),
-            serde_json::json!({"v": 1, "device_methods": true})
+            serde_json::json!({"v": 1, "origin": "https://home.testnav.com", "device_methods": true})
         );
         // inject only: no managed.js
         std::fs::write(bundle.join("files/a.js"), b"1;\n").unwrap();
@@ -1051,6 +1090,30 @@ mod tests {
         )
         .unwrap();
         assert_eq!(prepared_data(&p), None);
+    }
+
+    #[test]
+    fn prepare_gives_managed_js_the_url_origin_only() {
+        let (_t, bundle, var, root) = prepare_dirs(Some("lab-07\n"), None);
+        for (extra_url, origin) in [
+            ("https://home.testnav.com/", "https://home.testnav.com"),
+            (
+                "https://Home.TestNav.COM:8443/start",
+                "https://home.testnav.com:8443",
+            ),
+        ] {
+            let app: KioskApp = toml::from_str(&format!(
+                "name = \"TestNav\"\nurl = \"{extra_url}\"\nallow = [\"act.org\", \"cdn.example\"]\ndevice_attributes = true"
+            ))
+            .unwrap();
+            let p = prepare(&bundle, &var, &root, "testnav", &app, EXAM, None, &ident()).unwrap();
+            assert_eq!(prepared_data(&p).unwrap()["origin"], origin);
+            let (_, m) = manifest_of(&p);
+            let cs = m["content_scripts"].as_array().unwrap();
+            assert_eq!(cs.len(), 1);
+            assert_eq!(cs[0]["js"][0], "managed.js");
+            assert_eq!(cs[0]["matches"], serde_json::json!([format!("{origin}/*")]));
+        }
     }
 
     #[test]

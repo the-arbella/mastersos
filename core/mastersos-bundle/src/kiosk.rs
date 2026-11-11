@@ -231,19 +231,22 @@ pub struct DeviceValues {
 
 /// The `DATA` of the platform extension's `managed.js` (design §4, §5): `None` when the app writes
 /// none of `platform`, `device_attributes` and `managed_config` (no `managed.js`). Otherwise
-/// `{"v":1,"device_methods":…}`, with `"device"` (all five values, `null` where there is none)
+/// `{"v":1,"origin":…,"device_methods":…}` (`origin`: [`url_origin`], the only origin
+/// `managed.js` acts on), with `"device"` (all five values, `null` where there is none)
 /// when `device_attributes = true`, and `"managed"` (`managed`, the checked `managed_config`
 /// file) when there is one. The five methods are there with `platform` or `device_attributes`.
 pub fn managed_values(
     app: &KioskApp,
     device: &DeviceValues,
     managed: Option<Map<String, Value>>,
-) -> Option<Value> {
+) -> Result<Option<Value>, KioskError> {
     if app.platform.is_none() && !app.device_attributes && app.managed_config.is_none() {
-        return None;
+        return Ok(None);
     }
     let mut data = Map::new();
     data.insert("v".into(), json!(1));
+    let (url, _) = start_hosts(app)?;
+    data.insert("origin".into(), json!(url_origin(url)?));
     data.insert(
         "device_methods".into(),
         json!(app.platform.is_some() || app.device_attributes),
@@ -263,7 +266,32 @@ pub fn managed_values(
     if let Some(m) = managed {
         data.insert("managed".into(), Value::Object(m));
     }
-    Some(Value::Object(data))
+    Ok(Some(Value::Object(data)))
+}
+
+/// The origin of an app's `url` as `location.origin` prints it: `https://<host>` with the host
+/// lowercased, plus `:<port>` unless the port is 443 (design §5: the managed values are for this
+/// origin only). `url` failing the rules is `kiosk_url_not_https`.
+pub fn url_origin(u: &str) -> Result<String, KioskError> {
+    let host = url_host(u)?;
+    let authority = https_url(u)
+        .unwrap_or("")
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("");
+    let port = match authority.rsplit_once(':') {
+        Some((_, p)) if !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) => p,
+        _ => return Ok(format!("https://{host}")),
+    };
+    match port.parse::<u16>() {
+        Ok(443) => Ok(format!("https://{host}")),
+        Ok(n) => Ok(format!("https://{host}:{n}")),
+        Err(_) => fail(
+            "kiosk_url_not_https",
+            "url",
+            format!("url {u:?} has port {port} that is not a port number (1-65535)"),
+        ),
+    }
 }
 
 /// A web app's `url` and the hosts its disguise and inject script apply to: the allowlist's hosts
@@ -2112,20 +2140,28 @@ url = "https://test.mapnwea.org/"
     #[test]
     fn managed_values_only_for_the_three_keys() {
         // neither platform, device_attributes nor managed_config: no managed.js (inject alone included)
-        assert_eq!(managed_values(&web(""), &values(), None), None);
+        assert_eq!(managed_values(&web(""), &values(), None).unwrap(), None);
         assert_eq!(
-            managed_values(&web("inject = \"files/a.js\""), &values(), None),
+            managed_values(&web("inject = \"files/a.js\""), &values(), None).unwrap(),
             None
         );
         // platform only: the device methods, without values or a managed configuration
-        let d = managed_values(&web("platform = \"chromeos\""), &values(), None).unwrap();
-        assert_eq!(d, json!({"v": 1, "device_methods": true}));
-        // device_attributes: all five values, null where there is none
-        let d = managed_values(&web("device_attributes = true"), &values(), None).unwrap();
+        let d = managed_values(&web("platform = \"chromeos\""), &values(), None)
+            .unwrap()
+            .unwrap();
         assert_eq!(
             d,
-            json!({"v": 1, "device_methods": true, "device": {"asset_id": "A-1", "location": null,
-                "directory_id": "dev-1", "hostname": "lab-07", "serial": null}})
+            json!({"v": 1, "origin": "https://test.mapnwea.org", "device_methods": true})
+        );
+        // device_attributes: all five values, null where there is none
+        let d = managed_values(&web("device_attributes = true"), &values(), None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            d,
+            json!({"v": 1, "origin": "https://test.mapnwea.org", "device_methods": true,
+                "device": {"asset_id": "A-1", "location": null, "directory_id": "dev-1",
+                    "hostname": "lab-07", "serial": null}})
         );
         // managed_config: the object as it is, no device methods
         let mut m = Map::new();
@@ -2135,10 +2171,46 @@ url = "https://test.mapnwea.org/"
             &values(),
             Some(m.clone()),
         )
+        .unwrap()
         .unwrap();
         assert_eq!(
             d,
-            json!({"v": 1, "device_methods": false, "managed": Value::Object(m)})
+            json!({"v": 1, "origin": "https://test.mapnwea.org", "device_methods": false,
+                "managed": Value::Object(m)})
         );
+        // the origin is the url's, as location.origin prints it
+        let d = managed_values(
+            &app("name = \"n\"\nurl = \"https://Home.TestNav.COM:8443/start?x=1\"\ndevice_attributes = true"),
+            &values(),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(d["origin"], "https://home.testnav.com:8443");
+    }
+
+    #[test]
+    fn url_origin_is_what_location_origin_prints() {
+        for (url, origin) in [
+            ("https://home.testnav.com/", "https://home.testnav.com"),
+            ("https://home.testnav.com", "https://home.testnav.com"),
+            ("https://Home.TestNav.COM/A/b", "https://home.testnav.com"),
+            ("https://a.org:443/", "https://a.org"),
+            ("https://a.org:0443/", "https://a.org"),
+            ("https://a.org:8443/x", "https://a.org:8443"),
+            ("https://a.org:08443", "https://a.org:8443"),
+            ("https://a.org?q=1", "https://a.org"),
+            ("https://a.org:8443#f", "https://a.org:8443"),
+        ] {
+            assert_eq!(url_origin(url).unwrap(), origin, "{url}");
+        }
+        for bad in [
+            "http://a.org/",
+            "https://a.org:65536/",
+            "https://u@a.org/",
+            "https://*.a.org/",
+        ] {
+            assert!(url_origin(bad).is_err(), "{bad}");
+        }
     }
 }

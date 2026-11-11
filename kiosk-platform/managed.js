@@ -1,7 +1,10 @@
 // Managed APIs, MAIN world, document_start (design docs/specs/2026-11-10-kiosk-managed-apis-design.md §1 and §4).
 // A static content script of the app's platform extension (built by the agent for a kiosk app that writes platform,
-// device_attributes or managed_config), on that app's hosts only. It makes navigator.managed behave as it does in a
-// ChromeOS kiosk, following Chromium's implementation (blink modules/managed_device, chrome/browser/device_api):
+// device_attributes or managed_config). Like ChromeOS, which gives these to the kiosk app's own origin only
+// (IsEqualToKioskOrigin), it runs only on the exact origin of the app's url: the manifest matches nothing else (no
+// subdomains, no other allow hosts), and DATA.origin is checked against location.origin read at startup; on any other
+// origin it does nothing at all. There it makes navigator.managed behave as it does in a ChromeOS kiosk, following
+// Chromium's implementation (blink modules/managed_device, chrome/browser/device_api):
 //   - five device attribute methods on NavigatorManagedData.prototype (they do not exist on Linux Chrome):
 //     getDirectoryId(), getHostname(), getSerialNumber(), getAnnotatedAssetId(), getAnnotatedLocation(); each resolves
 //     a string, or null when there is no value. Preflight failures are rejected promises, never synchronous throws:
@@ -12,11 +15,14 @@
 // length and toString() match native methods. Nothing here is about attestation or tokens (design, bottom line).
 (() => {
   "use strict";
+  // @@MASTERSOS_MANAGED@@
+  // Only the app's own origin gets anything (the manifest's matches say the same; this is the second gate).
+  const pageOrigin = location.origin;
+  if (typeof DATA !== "object" || DATA === null || pageOrigin !== DATA.origin) return;
+
   const MARK = Symbol.for("mastersos.platform.managed");
   if (window[MARK]) return;
   Object.defineProperty(window, MARK, { __proto__: null, value: true });
-
-  // @@MASTERSOS_MANAGED@@
 
   const Managed = window.NavigatorManagedData;
   const proto = Managed && Managed.prototype;
