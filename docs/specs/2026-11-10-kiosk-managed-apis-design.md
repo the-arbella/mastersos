@@ -80,7 +80,7 @@ Verified Access、`enterprise.platformKeys` 不在本文，也不在「以后」
 
 - **平台扩展：** 伪装设计 §3.4 的生成条件从「写了 `platform` 或 `inject`」扩成「写了 `platform`、`inject`、`device_attributes`
   或 `managed_config`」。新文件 `kiosk-platform/managed.js`（编进 agent），内容脚本：MAIN 世界、`document_start`、所有框架、
-  `match_origin_as_fallback`，`matches` 同 `chromeos.js`（应用的主机）。不加权限：值在包里，不需要 `host_permissions`、
+  `match_origin_as_fallback`，`matches` **只有应用 `url` 自己的源**（`https://<url 的主机>/*`，不带 `*.` 子域名，不含 `allow` 里的其它主机）。不加权限：值在包里，不需要 `host_permissions`、
   `nativeMessaging` 或 `storage`。
 - **值怎么到页面：** MAIN 世界的内容脚本读不到扩展里的 `config.js`（那是起始页与后台用的）。所以照 `inject-wrapper.js` 的做法：
   `managed.js` 里有一行标记，agent 生成平台扩展时把它换成一个 JSON 字面量（`serde_json` 序列化，再把 `<`、U+2028、U+2029
@@ -109,7 +109,10 @@ Verified Access、`enterprise.platformKeys` 不在本文，也不在「以后」
 - **序列号对本机所有账号可见。** 平台扩展的 CRX 是 0644（伪装设计 §3.4），生成的 `managed.js` 在里面。Linux 上 `product_serial` 本来只有
   root 读得到，开了 `device_attributes` 后，本机任何账号都能从 CRX 里的 `managed.js` 读到序列号（以及资产编号、位置、device_id）。我的判断：这些值
   贴在机器底面、也在控制台里，不是秘密，可以接受；manifest-spec 写明 `managed_config` 里不许放秘密（与 `inject` 同一条）。
-- 值只给应用的主机：内容脚本的 `matches` 就是应用的主机，别的网站在锁定会话里本来就打不开（URL 放行名单）。
+- **值只给应用 `url` 自己的源**（照 ChromeOS：设备属性只给 kiosk 应用的源，Chromium 的 `IsEqualToKioskOrigin`）。`allow` 里的其它主机
+  （CDN、统计、第三方服务）与子域名都拿不到，上面也没有这五个方法。两道关：`managed.js` 的 `matches` 只写这个源；`DATA`
+  带着这个源（`"origin"`），`managed.js` 在 `location.origin` 不等于它时什么都不做。（2026-11-11 自动安全审查指出最初的实现用了
+  整个放行名单加子域名，已改。）
 - 不做任何证明：没有 `getDeviceToken`、`challengeKey` 这类东西，`managed.js` 也不留这种入口。
 
 ## 6. 测试
