@@ -56,7 +56,7 @@ Verified Access、`enterprise.platformKeys` 不在本文，也不在「以后」
 
 | 键 | 类型 | 缺省 | 说明 |
 |---|---|---|---|
-| `device_attributes` | 布尔 | `false` | 这个应用的主机能用五个设备属性方法（对应 ChromeOS 的 `DeviceAttributesAllowedForOrigins`）。`false` 时（平台扩展存在的前提下）方法仍在、一律 reject `UnknownError` 加「没被授予 device-attributes 权限」的那句，与 ChromeOS kiosk 里没被放行的源一样（§1） |
+| `device_attributes` | 布尔 | `false` | 这个应用的主机能用五个设备属性方法（对应 ChromeOS 的 `DeviceAttributesAllowedForOrigins`）。`false` 时：写了 `platform = "chromeos"` 的应用上方法仍在、一律 reject `UnknownError` 加「没被授予 device-attributes 权限」的那句，与 ChromeOS kiosk 里没被放行的源一样（§1）；没写 `platform` 的应用上方法不存在，与 Linux 上原样的 Chrome 一样 |
 | `managed_config` | 字符串 | 没有 | `files/<名>.json`：UTF-8 的 JSON，顶层是对象，至多 64 KiB（**我的取值**）。与 Google 管理控制台里贴的 JSON 同一格式 |
 
 - 两个键与 `platform`、`inject` 一样，只用于 `url` 应用、不与 `pwa = true` 同时写（理由同伪装设计 §1）。
