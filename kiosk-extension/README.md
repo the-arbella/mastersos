@@ -13,7 +13,7 @@
 | `background.js` | service worker：收到自己内容脚本的恰好 `{cmd:"exit"}`，`chrome.runtime.connectNative("org.mastersos.kiosk_exit")` 发 `{"cmd":"exit"}`；`{cmd:"help-…"}` 各变成一条 `chrome.runtime.sendNativeMessage("org.mastersos.support", …)`（下「Get help」）；别的扩展发来的恰好 `{cmd:"exit"}`（`onMessageExternal`）只在发送方是托管配置 `platform_extension` 里那个 id 时才连退出宿主（下「平台扩展」）；装上（`install`）时重新加载 `MOCK_TAB_PATTERNS` 的标签页 |
 | `mock/nwea/page.js` | **弃用**（改用 `inject` 与 `examples/kiosk-inject/nwea.js`）。NWEA 的 mock env，MAIN 世界、`document_start`：`isKioskChromium`、`extVersion`、`kioskChromiumExit`、UA 后缀、拦 F5 等 |
 | `mock/nwea/relay.js` | 隔离世界、`document_start`：只接 `page.js` 在页面脚本之前发的第一条 `MASTERSOS_NWEA_EXIT_PORT` 通道，把通道上的 `"exit"`（只有 `kioskChromiumExit()` 发得出）转成 `{cmd:"exit"}` |
-| `tests/` | vitest + jsdom（`environment: "jsdom"`、`globals: true`），没有自己的 package，见下「测试」；也测 `../kiosk-platform/` 与 `../examples/kiosk-inject/` |
+| `tests/` | vitest + jsdom（`environment: "jsdom"`、`globals: true`），没有自己的 package，见下「测试」；也测 `../kiosk-platform/`（`platform-chromeos.test.js`；`platform-managed.test.js` 测 `managed.js`：`navigator.managed` 的设备属性与托管配置，测试里自己把标记行换成 `const DATA = …;`）与 `../examples/kiosk-inject/` |
 
 ## 行为
 
