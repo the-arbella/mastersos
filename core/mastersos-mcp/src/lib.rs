@@ -544,6 +544,31 @@ mod tests {
     }
 
     #[test]
+    fn api_paths_are_joined_under_a_server_url_with_a_path() {
+        let seg = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        for server in [
+            "https://cloud.example/org/example/devices",
+            "https://cloud.example/org/example/devices/",
+        ] {
+            let api = Api::new(server, "tok").unwrap();
+            assert_eq!(
+                api.url(&seg(&["v1", "drafts"]), &[]).as_str(),
+                "https://cloud.example/org/example/devices/v1/drafts",
+                "{server}"
+            );
+        }
+        // A query on the address is dropped, one asked for is kept, an id cannot leave its segment.
+        let api = Api::new("https://cloud.example/org/example/devices?x=1", "tok").unwrap();
+        let u = api.url(&seg(&["v1", "a/../b"]), &[("after".into(), "2".into())]);
+        assert_eq!(
+            u.as_str(),
+            "https://cloud.example/org/example/devices/v1/a%2F..%2Fb?after=2"
+        );
+        // The check accepts it as a server address.
+        assert!(check_server("https://cloud.example/org/example/devices").is_ok());
+    }
+
+    #[test]
     fn token_kind_matches_the_command() {
         let f = Path::new("/x/token");
         let ai = who("ai:assistant", &["read", "draft"]);

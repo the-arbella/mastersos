@@ -80,13 +80,38 @@ impl std::fmt::Debug for Api {
     }
 }
 
-/// `host[:port]` of a server URL (an explicit non-default port only), as pins record it.
+/// `host[:port]` of a server URL (an explicit non-default port only).
 fn host_of(url: &reqwest::Url) -> String {
     let host = url.host_str().unwrap_or_default();
     match url.port() {
         Some(p) => format!("{host}:{p}"),
         None => host.to_owned(),
     }
+}
+
+/// What a pin records for a server: `host[:port]` plus the path without a trailing `/`. Several
+/// organisations can share one host and differ only by path (`https://h/org/a/devices`, `https://h/org/b/devices`);
+/// each has its own version chain, so the path is part of the key. A server without a path keeps the plain `host[:port]`.
+fn server_key(url: &reqwest::Url) -> String {
+    format!("{}{}", host_of(url), url.path().trim_end_matches('/'))
+}
+
+/// The pin file name (without `.toml`): `host[_port]`, then `+<segment>` for every path segment, each segment
+/// percent-encoded down to `[A-Za-z0-9.-]` (`+` and `_` cannot appear in a host or be confused with a port). A server
+/// without a path gets the same name as before paths were part of the key.
+fn pin_file_name(url: &reqwest::Url) -> String {
+    let mut name = host_of(url).replace(':', "_");
+    for seg in url.path().split('/').filter(|s| !s.is_empty()) {
+        name.push('+');
+        for b in seg.bytes() {
+            if b.is_ascii_alphanumeric() || b == b'.' || b == b'-' {
+                name.push(b as char);
+            } else {
+                name.push_str(&format!("%{b:02X}"));
+            }
+        }
+    }
+    name
 }
 
 /// The pin file name (without `.toml`) for a server address, the same as [`Api::pin_name`]; no
@@ -97,7 +122,7 @@ pub fn pin_name_for(server: &str) -> Result<String> {
     if url.host_str().is_none() {
         bail!("the server address has no host: {server}");
     }
-    Ok(host_of(&url).replace(':', "_"))
+    Ok(pin_file_name(&url))
 }
 
 impl Api {
@@ -136,14 +161,14 @@ impl Api {
         Api::new(server, token)
     }
 
-    /// `主机[:端口]`，记在 pin 里。
+    /// `主机[:端口][/路径]`，记在 pin 里（同一台主机上不同机构只差路径，各有各的版本链）。
     pub fn host(&self) -> String {
-        host_of(&self.base)
+        server_key(&self.base)
     }
 
-    /// pin 的文件名（不含 `.toml`）：主机名，带端口时是 `主机_端口`。
+    /// pin 的文件名（不含 `.toml`）：主机名，带端口时是 `主机_端口`，路径的每一段接 `+段`。
     pub fn pin_name(&self) -> String {
-        self.host().replace(':', "_")
+        pin_file_name(&self.base)
     }
 
     fn url(&self, segments: &[&str]) -> reqwest::Url {
@@ -1459,6 +1484,53 @@ mod tests {
             assert_eq!(pin_name_for(server).unwrap(), api.pin_name(), "{server}");
         }
         assert!(pin_name_for("not a url").is_err());
+    }
+
+    #[test]
+    fn api_paths_are_joined_under_a_server_url_with_a_path() {
+        for server in [
+            "https://cloud.example/org/example/devices",
+            "https://cloud.example/org/example/devices/",
+        ] {
+            let api = Api::new(server, "tok".into()).unwrap();
+            assert_eq!(
+                api.url(&["v1", "keys"]).as_str(),
+                "https://cloud.example/org/example/devices/v1/keys",
+                "{server}"
+            );
+        }
+    }
+
+    #[test]
+    fn pins_are_keyed_by_host_and_path() {
+        let a = Api::new("https://cloud.example/org/a/devices", "t".into()).unwrap();
+        let a2 = Api::new("https://Cloud.example/org/a/devices/", "t".into()).unwrap();
+        let b = Api::new("https://cloud.example/org/b/devices", "t".into()).unwrap();
+        let bare = Api::new("https://cloud.example/", "t".into()).unwrap();
+        let port = Api::new("https://cloud.example:8443", "t".into()).unwrap();
+        let port_path = Api::new("https://cloud.example/8443", "t".into()).unwrap();
+        // Same server, spelled differently: one pin. Two organisations on one host: two pins.
+        assert_eq!(a.pin_name(), a2.pin_name());
+        assert_eq!(a.host(), a2.host());
+        assert_ne!(a.pin_name(), b.pin_name());
+        assert_ne!(a.host(), b.host());
+        assert_eq!(a.host(), "cloud.example/org/a/devices");
+        assert_eq!(a.pin_name(), "cloud.example+org+a+devices");
+        // A server without a path keeps the name pins had before, and a path is never read as a port.
+        assert_eq!(bare.pin_name(), "cloud.example");
+        assert_eq!(bare.host(), "cloud.example");
+        assert_eq!(port.pin_name(), "cloud.example_8443");
+        assert_ne!(port.pin_name(), port_path.pin_name());
+        // The name is one safe file name whatever the path holds.
+        let odd = Api::new("https://cloud.example/o%2Fx/..%5C/a b", "t".into()).unwrap();
+        assert!(odd
+            .pin_name()
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._-+%".contains(c)));
+        assert_eq!(
+            pin_name_for("https://cloud.example/org/a/devices").unwrap(),
+            a.pin_name()
+        );
     }
 
     #[test]

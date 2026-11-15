@@ -444,7 +444,9 @@ async fn setup(
     ai_token_file: Option<PathBuf>,
 ) -> Result<ExitCode, OpError> {
     let server = server.ok_or_else(|| {
-        OpError::Failed("setup needs --server https://cloud.arbellalabs.com/org/<organisation>/devices".into())
+        OpError::Failed(
+            "setup needs --server https://cloud.arbellalabs.com/org/<organisation>/devices".into(),
+        )
     })?;
     check_server(&server).map_err(|e| OpError::Failed(e.to_string()))?;
     let dir = config_dir()?;
