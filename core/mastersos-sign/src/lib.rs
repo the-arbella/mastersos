@@ -1502,6 +1502,38 @@ mod tests {
     }
 
     #[test]
+    fn a_host_only_pin_stays_the_pin_of_the_host_only_server() {
+        use crate::chain::{load_pin, pin_path, recorded_digest, Pin};
+        let dir = tempfile::tempdir().unwrap();
+        // A pin as written before paths were part of the key: file `<host>.toml`, `host = "<host>"`.
+        let old = "host = \"cloud.example\"\nversion = 3\ndigest_hex = \"d3\"\ntrust = []\n";
+        let old_file = dir.path().join("cloud.example.toml");
+        std::fs::write(&old_file, old).unwrap();
+
+        // The host-only address still finds it, and its recorded key is what the check compares.
+        let host_only = Api::new("https://cloud.example", "t".into()).unwrap();
+        assert_eq!(pin_path(dir.path(), &host_only), old_file);
+        let pin: Pin = load_pin(&old_file).unwrap().unwrap();
+        assert_eq!(pin.host, host_only.host());
+        assert_eq!(
+            recorded_digest(dir.path(), "https://cloud.example/", 3).unwrap(),
+            Some("d3".to_owned())
+        );
+
+        // An organisation under a path on the same host does not pick it up: its own file does not
+        // exist yet (first use), its key differs, and the old file is left as it was.
+        let org = Api::new("https://cloud.example/org/a/devices", "t".into()).unwrap();
+        assert_ne!(pin_path(dir.path(), &org), old_file);
+        assert!(load_pin(&pin_path(dir.path(), &org)).unwrap().is_none());
+        assert_ne!(pin.host, org.host());
+        assert_eq!(
+            recorded_digest(dir.path(), "https://cloud.example/org/a/devices", 3).unwrap(),
+            None
+        );
+        assert_eq!(std::fs::read_to_string(&old_file).unwrap(), old);
+    }
+
+    #[test]
     fn pins_are_keyed_by_host_and_path() {
         let a = Api::new("https://cloud.example/org/a/devices", "t".into()).unwrap();
         let a2 = Api::new("https://Cloud.example/org/a/devices/", "t".into()).unwrap();
