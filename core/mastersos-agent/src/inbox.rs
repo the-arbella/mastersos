@@ -687,6 +687,42 @@ mod tests {
             .collect()
     }
 
+    /// The server address of an organisation has a path (`https://host/org/<organisation>/devices`): every device
+    /// request is joined under it, and none goes to the host root.
+    #[tokio::test]
+    async fn requests_are_joined_under_a_server_url_with_a_path() {
+        let srv = MockServer::start().await;
+        let root = "/org/example/devices";
+        Mock::given(method("GET"))
+            .and(path(format!("{root}/v1/inbox")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(InboxPage {
+                messages: vec![],
+                last_seq: 0,
+            }))
+            .expect(1)
+            .mount(&srv)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("{root}/v1/status")))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&srv)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("{root}/v1/heartbeat")))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&srv)
+            .await;
+        // A trailing slash on the address changes nothing.
+        let f = fetcher(&format!("{}{root}/", srv.uri()));
+        assert_eq!(f.base(), format!("{}{root}", srv.uri()));
+        f.inbox(&cred(), 0, true).await.unwrap();
+        f.heartbeat().await.unwrap();
+        f.report(&status(), Some(&cred()), true).await.unwrap();
+        // `.expect(1)` is checked when the server drops; anything sent to the host root would have been a 404 above.
+    }
+
     #[tokio::test]
     async fn inbox_dedups_by_seq() {
         let m = machine(true);

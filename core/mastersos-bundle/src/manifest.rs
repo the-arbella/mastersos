@@ -521,7 +521,7 @@ pub struct School {
     /// The OS update channel: `stable` or `beta`.
     #[serde(default = "default_channel")]
     pub update_channel: String,
-    /// School cache address (`http://` / `https://` plus a directory, same layout as `os.khundavid.com`).
+    /// School cache address (`http://` / `https://` plus a directory, same layout as `os.arbellalabs.com`).
     /// Devices try it first and fall back to the official source when it is unreachable. Updates are
     /// signed, so the cache is not trusted.
     #[serde(default)]

@@ -377,7 +377,7 @@ ssh mastersos@198.51.100.21 'cd ~/mastersos-image && ./build.sh 20261012.1 --pro
 | 环境变量 | 作用 |
 |---|---|
 | `MASTERSOS_SNAPSHOT` | Ubuntu 快照（`snapshot.ubuntu.com`），默认当天 `YYYYMMDDT000000Z`。同一提交 + 同一快照 → 同一组包（`jq .packages` 一致；不要求字节一致） |
-| `MASTERSOS_UPDATE_BASE` | 更新源的根，transfer 里的 `@BASE@` 换成它（通道目录 `stable/`、`beta/` 在它下面）。正式镜像默认 `https://os.khundavid.com`（Ruling 23），可覆盖，但必须是 `https://<域名>/…`（不收 http、IP、localhost），`build.sh` 与 `mkosi.finalize` 都拒绝；lab 默认构建机的 `http://192.0.2.99/mastersos`。`tests/check-tree.sh` 第 4、10 条保证仓库里进正式镜像的树不写死任何 URL |
+| `MASTERSOS_UPDATE_BASE` | 更新源的根，transfer 里的 `@BASE@` 换成它（通道目录 `stable/`、`beta/` 在它下面）。正式镜像默认 `https://os.arbellalabs.com`（Ruling 23），可覆盖，但必须是 `https://<域名>/…`（不收 http、IP、localhost），`build.sh` 与 `mkosi.finalize` 都拒绝；lab 默认构建机的 `http://192.0.2.99/mastersos`。`tests/check-tree.sh` 第 4、10 条保证仓库里进正式镜像的树不写死任何 URL |
 | `MASTERSOS_BROKEN` | `userspace`（健康检查一直失败）/ `initrd`（initrd 里加一个必然失败的单元）/ `bad-shim`（`/usr/lib/mastersos/esp/BOOTX64.EFI` 换成测试 CA 重签的 shim，ESP 不动；4b Task 22），只给回滚与 shim 证书链试验做坏版本，只许 lab |
 | `MASTERSOS_KIOSK_EXT_SRC` | 考试扩展的源码，默认仓库里的 `../kiosk-extension`，其次构建机上 `sync.sh` 同步的 `~/mastersos-kiosk-extension` |
 | `MASTERSOS_KEYS` | lab 的钥匙目录，默认 `~/mastersos-keys`；`--profile lab` 用它下面的 `lab/`，`lab-local/` 也在这里（`keyset.sh`）。正式构建的私钥只从 tmpfs 读（`MASTERSOS_RELEASE_KEYS`，默认 `/run/mastersos-release-keys`，先 `keys-load.sh`，见下「钥匙」） |

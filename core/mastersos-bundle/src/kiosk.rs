@@ -1846,7 +1846,7 @@ url = "https://test.mapnwea.org/"
             " file:///usr/lib/mastersos/kiosk-ext/updates.xml",
             "file:///usr/lib/mastersos/kiosk-ext/updates.xml ",
             "http:///usr/lib/mastersos/kiosk-ext/updates.xml",
-            "http://os.khundavid.com/usr/lib/mastersos/kiosk-ext/updates.xml",
+            "http://os.arbellalabs.com/usr/lib/mastersos/kiosk-ext/updates.xml",
         ] {
             assert!(with(url).check().is_err(), "{url}");
         }
@@ -1858,25 +1858,25 @@ url = "https://test.mapnwea.org/"
     fn exam_extension_check() {
         let ok = ExamExtension {
             id: "abcdefghijklmnopabcdefghijklmnop".into(),
-            update_url: "https://os.khundavid.com/chrome/updates.xml".into(),
+            update_url: "https://os.arbellalabs.com/chrome/updates.xml".into(),
         };
         assert_eq!(ok.check(), Ok(()));
         for (id, url) in [
             (
                 "abcdefghijklmnopabcdefghijklmnoq",
-                "https://os.khundavid.com/u.xml",
+                "https://os.arbellalabs.com/u.xml",
             ),
-            ("abcdefghijklmnop", "https://os.khundavid.com/u.xml"),
+            ("abcdefghijklmnop", "https://os.arbellalabs.com/u.xml"),
             (
                 "ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP",
-                "https://os.khundavid.com/u.xml",
+                "https://os.arbellalabs.com/u.xml",
             ),
-            ("", "https://os.khundavid.com/u.xml"),
-            (ok.id.as_str(), "http://os.khundavid.com/u.xml"),
-            (ok.id.as_str(), "https://user@os.khundavid.com/u.xml"),
+            ("", "https://os.arbellalabs.com/u.xml"),
+            (ok.id.as_str(), "http://os.arbellalabs.com/u.xml"),
+            (ok.id.as_str(), "https://user@os.arbellalabs.com/u.xml"),
             (ok.id.as_str(), "https://localhost/u.xml"),
             (ok.id.as_str(), "https://10.0.0.1/u.xml"),
-            (ok.id.as_str(), "https://os.khundavid.com/u \"x\".xml"),
+            (ok.id.as_str(), "https://os.arbellalabs.com/u \"x\".xml"),
             (ok.id.as_str(), ""),
         ] {
             let e = ExamExtension {

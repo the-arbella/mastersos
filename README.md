@@ -354,18 +354,18 @@ S=mastersos-sign
 # --out 是目录时文件名为 <学校>-school-key-<钥匙码>.kit
 $S school-key new --out /Volumes/USB --school myschool
 # 登记学校钥匙与它的磁盘解锁收件人（要管理网站「Tokens」页给的钥匙 token，60 分钟有效）；已登记过的只提示、不报错，中途失败可以原样再跑
-$S register --server https://<slug>.os.khundavid.com --token-file keys.token --school-key /Volumes/USB/myschool-school-key-11d903eb.kit --label "IT 的第一把"
+$S register --server https://cloud.arbellalabs.com/org/<organisation>/devices --token-file keys.token --school-key /Volumes/USB/myschool-school-key-11d903eb.kit --label "IT 的第一把"
 # 批准一个等待批准的上传（<id> 是等待批准的上传的编号）：先核对这把钥匙是本校登记过的，不是就退出 1
-$S sign --server https://<slug>.os.khundavid.com --token-file draft.token --school-key <文件> --pending <id>
+$S sign --server https://cloud.arbellalabs.com/org/<organisation>/devices --token-file draft.token --school-key <文件> --pending <id>
 # 只验链，不签名
-$S verify --server https://<slug>.os.khundavid.com --token-file draft.token
+$S verify --server https://cloud.arbellalabs.com/org/<organisation>/devices --token-file draft.token
 # 装机前核对装机文件：它的受信钥匙与 min_version 要等于本地验证过的最新版
-$S seed-check --server https://<slug>.os.khundavid.com --token-file draft.token seed.toml
+$S seed-check --server https://cloud.arbellalabs.com/org/<organisation>/devices --token-file draft.token seed.toml
 # 每月确认（心跳）：版本与摘要取自本地验证过的最新版，--days 取 1 到 31，默认 30。本机时钟要准，与服务端差 10 分钟以上会被拒。
 # mastersos publish --school-key 每次发布都顺带做，长期没发布时管理网站会提醒，这条命令只留给进阶用途
-$S heartbeat --server https://<slug>.os.khundavid.com --token-file draft.token --school-key <文件> --days 30
+$S heartbeat --server https://cloud.arbellalabs.com/org/<organisation>/devices --token-file draft.token --school-key <文件> --days 30
 # 读一台电脑托管的磁盘恢复码：取回密文、在本机用学校钥匙解开（token 要管理网站「Tokens」页给的恢复 token，60 分钟有效，服务端每次都留审计）
-$S escrow-read --server https://<slug>.os.khundavid.com --token-file recovery.token --school-key <文件> --device <device_id>
+$S escrow-read --server https://cloud.arbellalabs.com/org/<organisation>/devices --token-file recovery.token --school-key <文件> --device <device_id>
 ```
 
 `keygen` 与 `restore-from-paper`（旧的 PKCS#8 钥匙与纸面备份）、`--key` 仍可用，但不在帮助里。

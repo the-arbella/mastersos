@@ -363,7 +363,7 @@ mod tests {
     #[test]
     fn cloud_seed_requires_fetch_token() {
         let cloud = Seed {
-            server_url: "https://alpha.os.khundavid.com".into(),
+            server_url: "https://cloud.arbellalabs.com/org/alpha/devices".into(),
             trust: vec![key()],
             fetch_token: None,
             group: None,
@@ -404,7 +404,7 @@ mod tests {
     #[test]
     fn seed_roundtrips_wifi_and_school_name() {
         let mut seed = Seed {
-            server_url: "https://eis.os.khundavid.com".into(),
+            server_url: "https://cloud.arbellalabs.com/org/eis/devices".into(),
             trust: vec![key()],
             fetch_token: Some("tok".into()),
             group: None,
@@ -508,7 +508,7 @@ mod tests {
     fn seed_roundtrips_it_account_and_redacts() {
         let hash = "$y$j9T$saltsaltsalt$0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef./";
         let mut seed = Seed {
-            server_url: "https://eis.os.khundavid.com".into(),
+            server_url: "https://cloud.arbellalabs.com/org/eis/devices".into(),
             trust: vec![key()],
             fetch_token: Some("tok".into()),
             group: Some("staff".into()),

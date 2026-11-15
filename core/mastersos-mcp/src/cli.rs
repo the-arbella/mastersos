@@ -27,7 +27,7 @@ const EXIT_CODES: &str = "Exit codes: 0 success; 1 failure (network, token, the 
 )]
 pub struct Cli {
     // The defaults name the settings folder the way this platform writes it (spec 2026-11-04 §4.7)
-    /// Admin server address, for example https://school.os.khundavid.com
+    /// Admin server address, for example https://cloud.arbellalabs.com/org/<organisation>/devices
     #[cfg_attr(
         not(windows),
         doc = "(default: `server` in ~/.config/mastersos/config.toml)"
@@ -72,7 +72,7 @@ pub struct Cli {
 enum Cmd {
     /// Connect this computer to a school's admin server: paste the token from the Command line page; it is checked, then saved with the server address
     Connect {
-        /// The admin server address, for example https://school.os.khundavid.com
+        /// The admin server address, for example https://cloud.arbellalabs.com/org/<organisation>/devices
         server_url: String,
     },
     /// Save --server, --token-file and --ai-token-file to config.toml in the settings folder, then test the connection
@@ -338,7 +338,7 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
     let cfg = load_config()?;
     let server = server.or(cfg.server).ok_or_else(|| {
         OpError::Failed(
-            "No server address: run `mastersos setup --server https://<school>.os.khundavid.com` first, or pass --server"
+            "No server address: run `mastersos setup --server https://cloud.arbellalabs.com/org/<organisation>/devices` first, or pass --server"
                 .into(),
         )
     })?;
@@ -444,7 +444,9 @@ async fn setup(
     ai_token_file: Option<PathBuf>,
 ) -> Result<ExitCode, OpError> {
     let server = server.ok_or_else(|| {
-        OpError::Failed("setup needs --server https://<school>.os.khundavid.com".into())
+        OpError::Failed(
+            "setup needs --server https://cloud.arbellalabs.com/org/<organisation>/devices".into(),
+        )
     })?;
     check_server(&server).map_err(|e| OpError::Failed(e.to_string()))?;
     let dir = config_dir()?;

@@ -24,7 +24,7 @@ your own file tools, run `mastersos check` and `mastersos diff`, and hand the re
 2. Two tokens, in two files (the folder is `~/.config/mastersos/` on macOS and Linux, `%APPDATA%\mastersos\` on Windows):
    - **IT's own token**, for the command line (`init`, `pull`, `publish`, `logo upload`, `devices`, `keys list`): an API
      token with read and draft scopes from the admin site's **Command line** page. IT runs
-     `mastersos connect https://<school>.os.khundavid.com` (the school's own host) and pastes it; `connect` checks it
+     `mastersos connect https://cloud.arbellalabs.com/org/<organisation>/devices` (the organisation's device server address) and pastes it; `connect` checks it
      and saves it, readable only by IT, together with the server address. `init`, `pull` and `publish` refuse an AI token.
    - **The AI token**, only for `mastersos mcp`: a school admin creates it on the school's admin page, **AI tools**. It
      expires in 30, 90 or 180 days, reads Devices and status, and cannot download the Settings bundle or sign. It is
