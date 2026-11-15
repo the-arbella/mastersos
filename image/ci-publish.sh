@@ -11,7 +11,7 @@
 # Environment:
 #   MASTERSOS_OS_BUCKET     the S3 bucket behind the update source (a secret of the release environment)
 #   MASTERSOS_OS_CDN        its CloudFront distribution id (a secret too)
-#   MASTERSOS_UPDATE_BASE   the update source, default https://os.khundavid.com (build.sh's release default)
+#   MASTERSOS_UPDATE_BASE   the update source, default https://os.arbellalabs.com (build.sh's release default)
 #   MASTERSOS_PUBLISH_ROOT  where the temporary root goes, default $RUNNER_TEMP/mastersos-release
 #   AWS credentials in the environment (configure-aws-credentials with the publish role); the release keys loaded
 #   (keys-load.sh, through ci-load-release-keys.py). For promote also GH_TOKEN and GITHUB_REPOSITORY (gh release).
@@ -39,7 +39,7 @@ promote)
 *) die "unknown step '$step'" ;;
 esac
 
-base=${MASTERSOS_UPDATE_BASE:-https://os.khundavid.com}
+base=${MASTERSOS_UPDATE_BASE:-https://os.arbellalabs.com}
 
 # The release assets are what promote later publishes to installer/ with this root's key: they must carry a signature from
 # the same key (made here, while the build's keys are loaded), so nobody who can edit a GitHub Release can get other bytes

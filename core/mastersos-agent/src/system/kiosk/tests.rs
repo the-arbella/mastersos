@@ -14,7 +14,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 
 const EXAM_ID: &str = "abcdefghijklmnopabcdefghijklmnop";
-const EXAM_URL: &str = "https://os.khundavid.com/chrome/updates.xml";
+const EXAM_URL: &str = "https://os.arbellalabs.com/chrome/updates.xml";
 
 /// 配置：`kiosk` 是 `[group.apps.kiosk.*]` 的 TOML（旧形状）。
 fn grp(kiosk: &str) -> mastersos_bundle::Config {
@@ -878,9 +878,9 @@ fn exam_extension_missing_skips_web_apps_only() {
     for bad in [
         None,
         Some("not json"),
-        Some(r#"{"id": "short", "update_url": "https://os.khundavid.com/u.xml"}"#),
+        Some(r#"{"id": "short", "update_url": "https://os.arbellalabs.com/u.xml"}"#),
         Some(
-            &format!(r#"{{"id": "{EXAM_ID}", "update_url": "http://os.khundavid.com/u.xml"}}"#)[..],
+            &format!(r#"{{"id": "{EXAM_ID}", "update_url": "http://os.arbellalabs.com/u.xml"}}"#)[..],
         ),
         Some(&format!(r#"{{"id": "{EXAM_ID}", "update_url": "file:///var/tmp/updates.xml"}}"#)[..]),
     ] {

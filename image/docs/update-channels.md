@@ -32,7 +32,7 @@ MastersOS 的系统更新是 systemd-sysupdate 从一个**纯静态目录**下�
 **每棵根先声明自己**（`publish.sh`/`promote.sh` 没有它就拒绝）：
 
 ```
-base=https://os.khundavid.com              # 就是正式镜像构建时的 MASTERSOS_UPDATE_BASE（正式默认值，Ruling 23）
+base=https://os.arbellalabs.com              # 就是正式镜像构建时的 MASTERSOS_UPDATE_BASE（正式默认值，Ruling 23）
 lab=no                                     # 只有试验网的根写 yes
 ```
 
@@ -54,13 +54,17 @@ VM 161 的试验网根 `/var/www/html/mastersos/mastersos-root.conf` 是 `base=h
 装不上。lab 构建的 `.pcrpkey` 若是正式的那把（用错了钥匙）同样拒绝，反之亦然。4b 之前 lab 根上由正式 gpg 签的版本
 已全部删掉（2026-10-14；试验机随即从 lab U 盘重装）。
 
-正式更新源是 `https://os.khundavid.com`（S3，Ruling 23）：`build.sh` 正式 profile 的 `MASTERSOS_UPDATE_BASE` 默认就是它。
+正式更新源是 `https://os.arbellalabs.com`（S3，Ruling 23）：`build.sh` 正式 profile 的 `MASTERSOS_UPDATE_BASE` 默认就是它。
 S3 的桶与 CDN 见 `infra/`（计划 5 Task 1），同步见下一节；校内缓存不在计划 5。
+
+2026-11-15 起默认值是 `os.arbellalabs.com`（同一个桶、同样的目录结构）。旧名 `https://os.khundavid.com` 继续提供**完全相同的内容**：
+2026-11-15 之前构建的机器镜像里写着旧地址，它们照常从旧名更新，装上下一版镜像就换成新地址，不需要任何额外操作。
+旧名保留到所有机器都更新之后，最晚到 2027-09-12。
 
 ### 正式更新源：本地根镜像到 S3（计划 5 Task 3，裁定 4、5）
 
 **本地根是唯一的真相，S3 是它的镜像。** 正式根在 VM 161 的 `/srv/mastersos/release`（`MASTERSOS_PUBLISH_ROOT`），
-`mastersos-root.conf` 除 `base=https://os.khundavid.com`、`lab=no` 之外多两个键：
+`mastersos-root.conf` 除 `base=https://os.arbellalabs.com`、`lab=no` 之外多两个键：
 
 ```
 mirror_s3=s3://<桶>
@@ -115,7 +119,7 @@ mirror_cdn=<CloudFront DistributionId>
 - `<base>` 是构建时的 `MASTERSOS_UPDATE_BASE`，由 `mkosi.finalize` 换进 transfer 的 `@BASE@`。
   **正式镜像只收 `https://<域名>/…`**（`build.sh` 与 `mkosi.finalize` 都拒绝 http、IP、localhost）；
   试验网（lab profile）默认是构建机 VM 161 的 nginx `http://192.0.2.99/mastersos`。仓库里进正式镜像
-  的树不写死任何 URL（`tests/check-tree.sh` 第 4、10 条）。正式更新源是 `https://os.khundavid.com`
+  的树不写死任何 URL（`tests/check-tree.sh` 第 4、10 条）。正式更新源是 `https://os.arbellalabs.com`
   （S3，Ruling 23；`build.sh` 正式 profile 的默认值）。脚本只产出目录树；往 S3 的同步见上面「正式更新源」（`sync-s3.sh`）；校内缓存见下面「校内缓存」一节。
 - sysupdate 用 `/usr/lib/systemd/import-pubring.pgp`（仓库 `keys/import-pubring.pgp`，二进制 keyring；
   文件名写成 `.gpg` 会 `DOWNLOAD INVALID`）验 `SHA256SUMS.gpg`，再按 `SHA256SUMS` 验每个文件。
@@ -159,7 +163,7 @@ part of it that it changes from the S3 mirror (`image/ci-publish.sh`), checks it
 ## School cache (plan 5 Task 12)
 
 A school can run an HTTP cache of the update source. Any HTTP service that proxies or mirrors
-`os.khundavid.com` works, as long as it keeps the same layout (`<root>/stable/`, `<root>/beta/`); for example
+`os.arbellalabs.com` works, as long as it keeps the same layout (`<root>/stable/`, `<root>/beta/`); for example
 nginx with `proxy_cache`:
 
 ```nginx
@@ -167,7 +171,7 @@ proxy_cache_path /var/cache/mastersos-os levels=1:2 keys_zone=mastersos:10m max_
 server {
     listen 80;
     location /mastersos/ {
-        proxy_pass https://os.khundavid.com/;
+        proxy_pass https://os.arbellalabs.com/;
         proxy_cache mastersos;
         proxy_cache_valid 200 1h;
         proxy_ssl_server_name on;
@@ -286,7 +290,7 @@ systemd-boot 都按 systemd 的版本比较排序（`20261012.10` > `20261012.9`
 image/lab/sync.sh                                   # Mac → VM 161
 ssh -J lab-host mastersos@192.0.2.99
 cd ~/mastersos-image
-./build.sh 20261012.5 [--profile lab]                      # 正式镜像默认更新源 https://os.khundavid.com
+./build.sh 20261012.5 [--profile lab]                      # 正式镜像默认更新源 https://os.arbellalabs.com
 ./publish.sh 20261012.5 beta                               # 先发 beta
 ./publish.sh 20261012.5 chrome                             # 考试扩展变了（或第一次发）就紧跟着发，再 sync-s3（见下）
 # …… beta 机器验过 ……
@@ -295,10 +299,10 @@ cd ~/mastersos-image
 
 **第一次正式发布的顺序**（计划 9 终审 minor 4）：`publish.sh <v> chrome` 只收已经在 beta 或 stable 里的构建，所以第一次正式发布时
 `chrome/` 一定晚于 `beta/` 出现。beta 机器下载新镜像、重启之后，锁定会话的 Chrome 就按 `kiosk-ext.json` 去
-`https://os.khundavid.com/chrome/updates.xml` 要考试扩展——那时 `chrome/` 还不在，网页 / PWA 的锁定会话**没有「退出」按钮**
+`https://os.arbellalabs.com/chrome/updates.xml` 要考试扩展——那时 `chrome/` 还不在，网页 / PWA 的锁定会话**没有「退出」按钮**
 （只剩 Alt+F4 ×6 或电源键）。所以：`publish.sh <v> beta` 之后**同一次操作里**接着 `publish.sh <v> chrome` 与 `sync-s3.sh`，
 在 beta 机器下一次重启之前让 `/chrome/updates.xml` 能取到（机器约 6 小时查一次更新、下次开机才生效，时间是够的，只是别隔天）；
-发完 `curl -s https://os.khundavid.com/chrome/updates.xml` 核对 `appid` 是 `docs/keys.md` 里正式的扩展 id。之后扩展没变的版本不用再发
+发完 `curl -s https://os.arbellalabs.com/chrome/updates.xml` 核对 `appid` 是 `docs/keys.md` 里正式的扩展 id。之后扩展没变的版本不用再发
 `chrome`；变了（`manifest.json` 的 `version` 调高了）也照这个顺序。
 
 `publish.sh <version> <stable|beta>`：

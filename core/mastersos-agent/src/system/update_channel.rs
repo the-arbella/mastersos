@@ -449,12 +449,12 @@ mod tests {
 
     #[test]
     fn with_mirror_only_changes_source_root() {
-        let t = "[Transfer]\nVerify=yes\n\n[Source]\nPath=https://os.khundavid.com/@CHANNEL@/\nMatchPattern=x\n\n[Target]\nPath=auto\n";
+        let t = "[Transfer]\nVerify=yes\n\n[Source]\nPath=https://os.arbellalabs.com/@CHANNEL@/\nMatchPattern=x\n\n[Target]\nPath=auto\n";
         let out = with_mirror(t, "http://10.0.0.5:8080/os/").unwrap();
         assert_eq!(
             diff_lines(t, &out),
             vec![(
-                "Path=https://os.khundavid.com/@CHANNEL@/".to_string(),
+                "Path=https://os.arbellalabs.com/@CHANNEL@/".to_string(),
                 "Path=http://10.0.0.5:8080/os/@CHANNEL@/".to_string()
             )]
         );

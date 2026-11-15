@@ -7,7 +7,7 @@
 #
 # 环境变量：
 #   MASTERSOS_SNAPSHOT     Ubuntu 快照（YYYYMMDDTHHMMSSZ）；默认当天 00:00:00 UTC——同一天的构建用同一组包
-#   MASTERSOS_UPDATE_BASE  更新源的根（通道目录 stable/、beta/ 在它下面）。正式镜像默认 https://os.khundavid.com
+#   MASTERSOS_UPDATE_BASE  更新源的根（通道目录 stable/、beta/ 在它下面）。正式镜像默认 https://os.arbellalabs.com
 #                       （Ruling 23），可覆盖，但只收 https://<域名>/…：build.sh 与 finalize 都拒绝 http、IP 与 localhost；
 #                       lab 默认是构建机上的 nginx http://192.0.2.99/mastersos
 #   MASTERSOS_KEYS         lab 的钥匙目录，默认 ~/mastersos-keys：--profile lab 用 lab/ 下的 db.key/crt（Secure Boot 与 verity）、
@@ -82,7 +82,7 @@ snapshot=${MASTERSOS_SNAPSHOT:-$(date -u +%Y%m%dT000000Z)}
 if [ "$profile" = lab ]; then
 	base=${MASTERSOS_UPDATE_BASE:-http://192.0.2.99/mastersos}
 else
-	base=${MASTERSOS_UPDATE_BASE:-https://os.khundavid.com}
+	base=${MASTERSOS_UPDATE_BASE:-https://os.arbellalabs.com}
 	host=${base#https://}
 	host=${host%%[:/]*}
 	if [[ $base != https://* ]] || [ -z "$host" ] || [[ $host =~ ^[0-9.]+$ ]] || [ "$host" = localhost ]; then
