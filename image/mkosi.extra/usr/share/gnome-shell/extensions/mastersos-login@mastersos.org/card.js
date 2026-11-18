@@ -26,6 +26,9 @@ const CARD_INSET = 5;
 // Chrome draws its own title bar in --app mode; the card crops that strip off the window.
 const TITLE_BAR = 37;
 const IDLE_CANCEL_MS = 3 * 60 * 1000;
+// However busy the person is, a card that has not signed anyone in after this long closes: the card may open any https
+// page the sign-in pages lead to (card_navigation "open"), and it is not a browser to stay in.
+const CARD_LIFETIME_S = 10 * 60;
 const WINDOW_TIMEOUT_S = 30;
 // The way out from the keyboard. Focus is inside Chrome, so only a compositor-level grab sees it, and a grab swallows the
 // key: plain Esc belongs to the page (open lists, dialogs), Ctrl+Esc is unused by Chrome and web pages never get it.
@@ -83,6 +86,12 @@ export class LoginCard {
         this._setStatus(this._text.opening, true);
         this._watchWindows();
         this._watchIdle();
+        this._lifetimeId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, CARD_LIFETIME_S, () => {
+            this._lifetimeId = 0;
+            log('mastersos-login: the card was open too long, closing it');
+            this._cancelled();
+            return GLib.SOURCE_REMOVE;
+        });
         this._windowTimeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, WINDOW_TIMEOUT_S, () => {
             this._windowTimeoutId = 0;
             this._failed();
@@ -110,6 +119,10 @@ export class LoginCard {
         if (this._windowTimeoutId) {
             GLib.source_remove(this._windowTimeoutId);
             this._windowTimeoutId = 0;
+        }
+        if (this._lifetimeId) {
+            GLib.source_remove(this._lifetimeId);
+            this._lifetimeId = 0;
         }
         if (this._idleWatch) {
             global.backend.get_core_idle_monitor().remove_watch(this._idleWatch);

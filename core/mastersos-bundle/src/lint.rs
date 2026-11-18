@@ -498,6 +498,7 @@ pub fn feature_path(m: &Manifest, feature: &str) -> String {
         FEATURE_SCHOOL_ID => Some("school.id".to_owned()),
         FEATURE_OIDC_CARD => Some("school.oidc".to_owned()),
         FEATURE_OIDC_IDP_HINT => Some("school.oidc.idp_hint".to_owned()),
+        FEATURE_OIDC_CARD_NAVIGATION => Some("school.oidc.card_navigation".to_owned()),
         FEATURE_CONFIG => Some("config".to_owned()),
         FEATURE_KIOSK => layers()
             .find(|(_, empty, _)| !empty)
@@ -2936,6 +2937,10 @@ config = "a"
         assert_eq!(
             feature_path(&m, crate::FEATURE_OIDC_IDP_HINT),
             "school.oidc.idp_hint"
+        );
+        assert_eq!(
+            feature_path(&m, crate::FEATURE_OIDC_CARD_NAVIGATION),
+            "school.oidc.card_navigation"
         );
         assert_eq!(feature_path(&m, "nope"), "school");
     }

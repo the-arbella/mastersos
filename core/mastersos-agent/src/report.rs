@@ -30,6 +30,8 @@ const MAX_RESULTS: usize = 200;
 /// `kiosk_device_attributes`, `kiosk_managed_config`: the platform extension's `managed.js` answers the Device Attributes
 /// API and `getManagedConfiguration` (design docs/specs/2026-11-10-kiosk-managed-apis-design.md).
 /// `oidc_idp_hint`: the `login` step hands `[school.oidc] idp_hint` to the sign-in card (`login-browser/card.json`).
+/// `oidc_card_navigation`: the `login` step writes an open or a listed card policy, and `signin-import` hands over what
+/// that card could reach.
 pub const SUPPORTED_FEATURES: &[&str] = &[
     mastersos_bundle::FEATURE_UPDATE_MIRROR,
     mastersos_bundle::FEATURE_ESCROW_RECIPIENTS,
@@ -48,6 +50,7 @@ pub const SUPPORTED_FEATURES: &[&str] = &[
     mastersos_bundle::FEATURE_DEVICE_ANNOTATIONS,
     mastersos_bundle::FEATURE_KIOSK_DEVICE_ATTRIBUTES,
     mastersos_bundle::FEATURE_KIOSK_MANAGED_CONFIG,
+    mastersos_bundle::FEATURE_OIDC_CARD_NAVIGATION,
 ];
 
 /// 机器的硬件与系统身份。
@@ -374,7 +377,8 @@ mod tests {
                 "deb_apps",
                 "device_annotations",
                 "kiosk_device_attributes",
-                "kiosk_managed_config"
+                "kiosk_managed_config",
+                "oidc_card_navigation"
             ]
         );
         assert_eq!(r.manifest_features, SUPPORTED_FEATURES);
@@ -398,6 +402,7 @@ mod tests {
             mastersos_bundle::FEATURE_DEVICE_ANNOTATIONS,
             mastersos_bundle::FEATURE_KIOSK_DEVICE_ATTRIBUTES,
             mastersos_bundle::FEATURE_KIOSK_MANAGED_CONFIG,
+            mastersos_bundle::FEATURE_OIDC_CARD_NAVIGATION,
         ];
         assert!(SUPPORTED_FEATURES.iter().all(|f| all.contains(f)));
     }

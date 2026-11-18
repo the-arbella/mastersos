@@ -162,3 +162,15 @@ A 在邮箱框里输入 B，卡片的 URL 带 `login_hint=B`，A 在学校页面
 ## 在 VM 上验收
 
 见实施时给出的步骤：同一 VM 上依次验证正常登录、首次登录、Chrome 已开着、输错邮箱再换人登录、取消后换人登录、访客。
+
+## 2026-11-18 修订：卡片默认放开跳转（David 批准）
+
+为什么：只放行 issuer 和 `card_hosts` 太死板。重定向链里的中间站、iframe 形式的人机验证（reCAPTCHA、Turnstile）、上游身份系统的其他主机都要事先列全，漏一个就登录不了；以后签发方是 cloud、背后接 Google 和各校的身份系统，就更列不全。而卡片挡住的“免登录上网”，访客登录本来就能做（除了锁定的设备，那里不显示卡片）。
+
+改成：
+
+- `[school.oidc] card_navigation`：`"open"`（默认）或 `"listed"`（原来的严格名单）。新特性 `oidc_card_navigation`；旧镜像拒绝写了它的版本，自己的卡片始终按 `listed`。
+- open 卡片的策略：`URLBlocklist` 是 `https` 以外的协议（`login::OPEN_CARD_BLOCKLIST`：`http`、`file`、`ftp`、`chrome`、`chrome-untrusted`、`chrome-extension`、`chrome-search`、`devtools`、`view-source`、`javascript`），`URLAllowlist` 是 issuer 和回调地址（更具体的过滤器优先，所以 `http` 的 issuer 和 `127.0.0.1:48123` 照样能开）。`about:`、`data:`、`blob:` 的框架不挡，登录页和人机验证会用到。两种卡片都加 `DefaultSearchProviderEnabled: false`。
+- 卡片仍是 `--app` 窗口，没有地址栏和标签页；登录界面关掉它开出的任何别的窗口（Ctrl+N、Ctrl+T、`target=_blank`、右键“在新窗口打开”都会开出带地址栏的窗口，一出现就被关掉）。人能去的只有页面链接或跳转到的地方，以及把一段网址文字拖进窗口。
+- 新增总时长上限：卡片打开 10 分钟还没登录成功就关闭（`CARD_LIFETIME_S`），与原来的 3 分钟无操作关闭并存。
+- 交接：`signin-import` 读同一份策略，`URLBlocklist` 不含 `*` 就是 open 卡片（`cookies::card_hosts` 返回 `CardHosts::Any`）：卡片每次从空配置开始，里面的 cookie 都来自这一次登录，所以全部交给本人；只限本主机的 cookie 任何主机都收，域 cookie 只收有可注册域名、本身不是公共后缀的域（`cookies::any_site_allowed`），IP 上不收域 cookie。策略缺失或读不懂时按 listed 处理（名单为空就什么都不交）。上表“卡片的 Chrome 被攻破”一行对 listed 卡片照旧；open 卡片被攻破时，能做的也只是往本人的桌面 Chrome 里多放几个网站的 cookie，等同于本人在桌面上打开过那些网站。

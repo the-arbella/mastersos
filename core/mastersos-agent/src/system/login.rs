@@ -18,7 +18,8 @@
 //!   patched broker then lets only named users through while the file is missing), and when the file cannot be written
 //!   the drop-in names only the administrators ([`render_broker_conf_admins_only`]), never `ALL`.
 //! - The login screen's sign-in card (image: `mastersos-login-browser.service`) runs Chrome with a policy of its own:
-//!   [`render_login_browser_policy`] allows only the issuer's origin, the signed `card_hosts` and the broker's redirect. It is written next to the
+//!   [`render_login_browser_policy`] allows any `https` page by default (`card_navigation = "open"`), or only the issuer's
+//!   origin, the signed `card_hosts` and the broker's redirect (`"listed"`). It is written next to the
 //!   broker drop-in and removed with it; the unit does not start without the file. With `[school.oidc] idp_hint` the step
 //!   also writes [`LOGIN_CARD_FILE`] ([`render_login_card`]) for the login screen's extension, which adds the hint to the
 //!   authorization URL.
@@ -48,7 +49,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use mastersos_bundle::{
-    checks, kiosk, Config, ItemResult, Lock, LoginMethod, Oidc, School, Seed, IT_ACCOUNT_USER,
+    checks, kiosk, CardNavigation, Config, ItemResult, Lock, LoginMethod, Oidc, School, Seed,
+    IT_ACCOUNT_USER,
 };
 use serde::{Deserialize, Serialize};
 
@@ -676,24 +678,57 @@ pub fn card_host_url_filter(host: &str) -> Option<String> {
         .map(|()| format!("https://.{host}:443"))
 }
 
-/// The sign-in card's Chrome policy: everything is blocked except the identity provider, the signed `card_hosts` and the
-/// redirect back to the broker, and nothing a website could use to leave the card (downloads, new windows, printing, file dialogs, developer
-/// tools, extensions) is available. `None` when the issuer gives no filter ([`issuer_url_filter`]).
+/// What an open card ([`CardNavigation::Open`]) blocks: every scheme but `https` (plain `http` included; the issuer as
+/// written and the broker's redirect are allowed by name, and a more specific filter wins), so neither a page nor a
+/// dropped link reaches local files or the browser's own pages. `about:`, `data:` and `blob:` frames stay usable: sign-in
+/// pages and captchas build frames from them. Never `"*"`: that is how `signin-import` tells a listed card from an open
+/// one ([`crate::signin_handoff::cookies::card_hosts`]).
+pub const OPEN_CARD_BLOCKLIST: &[&str] = &[
+    "http://*",
+    "file://*",
+    "ftp://*",
+    "chrome://*",
+    "chrome-untrusted://*",
+    "chrome-extension://*",
+    "chrome-search://*",
+    "devtools://*",
+    "view-source:*",
+    "javascript://*",
+];
+
+/// The sign-in card's Chrome policy. The card is a `--app` window without an address bar, and the login screen closes any
+/// other window it opens, so a person can only follow what the pages link or redirect to:
+///
+/// - [`CardNavigation::Open`] (the default): any `https` page ([`OPEN_CARD_BLOCKLIST`]), the issuer as written and the
+///   redirect back to the broker; an upstream provider, a captcha or a help page just work.
+/// - [`CardNavigation::Listed`]: everything is blocked except the identity provider, the signed `card_hosts` and the
+///   redirect.
+///
+/// Either way nothing a website could use to leave the card (downloads, new windows, printing, file dialogs, developer
+/// tools, extensions, a search engine for selected text) is available. `None` when the issuer gives no filter
+/// ([`issuer_url_filter`]).
 pub fn render_login_browser_policy(oidc: &Oidc) -> Option<String> {
     let mut allow = vec![issuer_url_filter(&oidc.issuer)?];
-    for filter in oidc
-        .card_hosts
-        .iter()
-        .filter_map(|h| card_host_url_filter(h))
-    {
-        if !allow.contains(&filter) {
-            allow.push(filter);
+    let block: Vec<&str> = match oidc.navigation() {
+        CardNavigation::Open => OPEN_CARD_BLOCKLIST.to_vec(),
+        CardNavigation::Listed => {
+            for filter in oidc
+                .card_hosts
+                .iter()
+                .filter_map(|h| card_host_url_filter(h))
+            {
+                if !allow.contains(&filter) {
+                    allow.push(filter);
+                }
+            }
+            vec!["*"]
         }
-    }
+    };
     allow.push(LOGIN_REDIRECT_FILTER.into());
     let policy = serde_json::json!({
-        "URLBlocklist": ["*"],
+        "URLBlocklist": block,
         "URLAllowlist": allow,
+        "DefaultSearchProviderEnabled": false,
         "DownloadRestrictions": 3,
         "DeveloperToolsAvailability": 2,
         "PrintingEnabled": false,
@@ -2939,9 +2974,54 @@ client_id = "laptops"
         }
     }
 
+    fn listed(o: Oidc) -> Oidc {
+        Oidc {
+            card_navigation: Some(CardNavigation::Listed),
+            ..o
+        }
+    }
+
+    #[test]
+    fn open_card_policy_blocks_other_schemes_only() {
+        for o in [
+            oidc("https://sso.school.ac.th/x"),
+            Oidc {
+                card_navigation: Some(CardNavigation::Open),
+                card_hosts: vec!["cdn.school.ac.th".into()],
+                ..oidc("https://sso.school.ac.th/x")
+            },
+        ] {
+            let text = render_login_browser_policy(&o).unwrap();
+            let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(v["URLBlocklist"], serde_json::json!(OPEN_CARD_BLOCKLIST));
+            assert_eq!(
+                v["URLAllowlist"],
+                serde_json::json!(["https://.sso.school.ac.th:443", "127.0.0.1:48123/callback"]),
+                "card_hosts change nothing on an open card"
+            );
+            assert_eq!(v["DefaultSearchProviderEnabled"], false);
+            assert_eq!(v["DownloadRestrictions"], 3);
+            assert_eq!(v["DeveloperToolsAvailability"], 2);
+            assert_eq!(v["AllowFileSelectionDialogs"], false);
+            assert_eq!(v["DefaultPopupsSetting"], 2);
+            // signin-import tells the two apart by this
+            assert_eq!(
+                crate::signin_handoff::cookies::card_hosts(&text),
+                crate::signin_handoff::cookies::CardHosts::Any
+            );
+        }
+        assert!(!OPEN_CARD_BLOCKLIST.contains(&"*"));
+        assert!(OPEN_CARD_BLOCKLIST.iter().all(|f| !f.starts_with("https")));
+        // a lab issuer on plain http is still reachable: its own filter is in the allowlist
+        let text = render_login_browser_policy(&oidc("http://10.0.0.5:5556")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["URLAllowlist"][0], "http://10.0.0.5:5556");
+    }
+
     #[test]
     fn card_policy_allows_only_the_idp_and_the_redirect() {
-        let text = render_login_browser_policy(&oidc("https://sso.school.ac.th/x")).unwrap();
+        let text =
+            render_login_browser_policy(&listed(oidc("https://sso.school.ac.th/x"))).unwrap();
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(v["URLBlocklist"], serde_json::json!(["*"]));
         assert_eq!(
@@ -2953,7 +3033,16 @@ client_id = "laptops"
         assert_eq!(v["AllowFileSelectionDialogs"], false);
         assert_eq!(v["PrintingEnabled"], false);
         assert_eq!(v["ExtensionInstallBlocklist"], serde_json::json!(["*"]));
+        assert_eq!(v["DefaultSearchProviderEnabled"], false);
+        assert!(matches!(
+            crate::signin_handoff::cookies::card_hosts(&text),
+            crate::signin_handoff::cookies::CardHosts::Listed(_)
+        ));
         assert_eq!(render_login_browser_policy(&oidc("https://*")), None);
+        assert_eq!(
+            render_login_browser_policy(&listed(oidc("https://*"))),
+            None
+        );
     }
 
     #[test]
@@ -2965,7 +3054,7 @@ client_id = "laptops"
                 "not a host".into(),
                 "https://evil.org".into(),
             ],
-            ..oidc("https://sso.school.ac.th")
+            ..listed(oidc("https://sso.school.ac.th"))
         };
         let text = render_login_browser_policy(&o).unwrap();
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();

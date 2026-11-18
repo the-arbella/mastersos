@@ -1,5 +1,5 @@
 //! Chrome's cookie database for the sign-in handoff (docs/specs/2026-11-05-browser-signin-handoff-design.md): read the card's
-//! rows, keep the identity provider's, turn session cookies into ones that last [`SESSION_LIFETIME`], and merge them into the
+//! rows, keep the ones the card's policy allows ([`card_hosts`]), turn session cookies into ones that last [`SESSION_LIFETIME`], and merge them into the
 //! user's database or create one with Chrome's own schema. Runs as the user (`signin-import`), never as root.
 //!
 //! The card's database comes from the login screen's browser and is untrusted: it is opened read-only and immutable, with
@@ -250,6 +250,64 @@ pub fn allowed_hosts(policy_json: &str) -> Vec<String> {
     out
 }
 
+/// Which of the card's cookies are handed over, as the card's Chrome policy says ([`card_hosts`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CardHosts {
+    /// `card_navigation = "listed"`: the card could open only these hosts ([`allowed_hosts`]), so only their cookies go
+    /// ([`host_allowed`]).
+    Listed(Vec<String>),
+    /// `card_navigation = "open"`: the card could open any `https` page, and its profile was empty when it started, so every
+    /// cookie in it came from this sign-in: any site's go, never one on a public suffix ([`any_site_allowed`]).
+    Any,
+}
+
+impl CardHosts {
+    /// Whether a cookie with this `host_key` is handed over.
+    pub fn admits(&self, host_key: &str) -> bool {
+        match self {
+            CardHosts::Listed(hosts) => host_allowed(host_key, hosts),
+            CardHosts::Any => any_site_allowed(host_key),
+        }
+    }
+}
+
+/// Reads the card's Chrome policy (`mastersos-login.json`): an open card is one whose `URLBlocklist` is a list without
+/// `"*"` (the `login` step writes `["*"]` for a listed card and a list of schemes for an open one). Anything else, a policy
+/// that is missing or unreadable included, is a listed card with the hosts of its `URLAllowlist`, possibly none.
+pub fn card_hosts(policy_json: &str) -> CardHosts {
+    let open = serde_json::from_str::<serde_json::Value>(policy_json)
+        .ok()
+        .and_then(|v| v.get("URLBlocklist").and_then(|l| l.as_array()).cloned())
+        .is_some_and(|list| !list.iter().any(|e| e.as_str() == Some("*")));
+    if open {
+        CardHosts::Any
+    } else {
+        CardHosts::Listed(allowed_hosts(policy_json))
+    }
+}
+
+/// Whether an open card's cookie with this `host_key` is handed over: a host-only cookie of any host, a domain cookie
+/// (`.school.ac.th`) only for a domain that has a registrable domain on the Public Suffix List and is not a public suffix
+/// itself (never `.ac.th`, `.co.th`, `.github.io` or an unknown top-level domain), and never a domain cookie on an IP
+/// address. Chrome refuses those itself; the card's database is untrusted all the same.
+pub fn any_site_allowed(host_key: &str) -> bool {
+    let key = host_key.to_ascii_lowercase();
+    let (domain, key) = match key.strip_prefix('.') {
+        Some(k) => (true, k.to_string()),
+        None => (false, key),
+    };
+    if key.is_empty() || key.starts_with('.') {
+        return false;
+    }
+    if !domain {
+        return true;
+    }
+    if is_ip(&key) || psl::suffix_str(&key) == Some(key.as_str()) {
+        return false;
+    }
+    psl::domain_str(&key).is_some()
+}
+
 fn is_ip(host: &str) -> bool {
     host.parse::<std::net::IpAddr>().is_ok()
 }
@@ -299,9 +357,9 @@ fn col(cookies: &Cookies, name: &str) -> Result<usize> {
         .with_context(|| format!("the cookies table has no {name} column"))
 }
 
-/// Keeps the rows of `hosts` ([`host_allowed`]) that have not expired at `now_unix` and makes session cookies persistent,
-/// expiring [`SESSION_LIFETIME`] after `now_unix`.
-pub fn prepare(cookies: &mut Cookies, hosts: &[String], now_unix: i64) -> Result<Prepared> {
+/// Keeps the rows `hosts` admits ([`CardHosts::admits`]) that have not expired at `now_unix` and makes session cookies
+/// persistent, expiring [`SESSION_LIFETIME`] after `now_unix`.
+pub fn prepare(cookies: &mut Cookies, hosts: &CardHosts, now_unix: i64) -> Result<Prepared> {
     let host = col(cookies, "host_key")?;
     let persistent = col(cookies, "is_persistent")?;
     let has_expires = col(cookies, "has_expires")?;
@@ -314,7 +372,7 @@ pub fn prepare(cookies: &mut Cookies, hosts: &[String], now_unix: i64) -> Result
         let Value::Text(h) = &row[host] else {
             bail!("host_key is not text");
         };
-        if !host_allowed(h, hosts) {
+        if !hosts.admits(h) {
             p.foreign += 1;
             continue;
         }
@@ -514,6 +572,63 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn card_hosts_from_the_card_policy() {
+        let listed = r#"{"URLBlocklist":["*"],"URLAllowlist":["https://.auth.school.ac.th:443","127.0.0.1:48123/callback"]}"#;
+        assert_eq!(
+            card_hosts(listed),
+            CardHosts::Listed(vec!["auth.school.ac.th".into()])
+        );
+        let open = r#"{"URLBlocklist":["http://*","file://*"],"URLAllowlist":["https://.auth.school.ac.th:443","127.0.0.1:48123/callback"]}"#;
+        assert_eq!(card_hosts(open), CardHosts::Any);
+        // Anything that is not plainly an open card hands over no more than the listed hosts.
+        for p in [
+            "",
+            "not json",
+            "{}",
+            "[]",
+            r#"{"URLBlocklist":"http://*"}"#,
+            r#"{"URLBlocklist":["http://*","*"]}"#,
+        ] {
+            assert!(matches!(card_hosts(p), CardHosts::Listed(_)), "{p}");
+        }
+        assert_eq!(card_hosts(""), CardHosts::Listed(vec![]));
+    }
+
+    #[test]
+    fn any_site_matching() {
+        for ok in [
+            "accounts.google.com",
+            ".google.com",
+            ".accounts.google.com",
+            "challenges.cloudflare.com",
+            ".school.ac.th",
+            ".school.github.io",
+            "10.0.0.5",
+            "co.th",
+        ] {
+            assert!(any_site_allowed(ok), "{ok}");
+            assert!(CardHosts::Any.admits(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            ".",
+            "..com",
+            ".com",
+            ".ac.th",
+            ".co.th",
+            ".github.io",
+            ".org",
+            ".example",
+            ".10.0.0.5",
+            ".[fd00::1]",
+        ] {
+            assert!(!any_site_allowed(bad), "{bad}");
+        }
+        assert!(any_site_allowed(".EVIL.example"));
+        assert!(!CardHosts::Listed(hosts()).admits("accounts.google.com"));
+    }
+
+    #[test]
     fn host_matching() {
         let h = hosts();
         assert!(host_allowed("auth.school.ac.th", &h));
@@ -585,7 +700,7 @@ pub(crate) mod tests {
             ],
         );
         let mut c = read_card(&p).unwrap();
-        let got = prepare(&mut c, &hosts(), NOW).unwrap();
+        let got = prepare(&mut c, &CardHosts::Listed(hosts()), NOW).unwrap();
         assert_eq!(
             got,
             Prepared {
@@ -629,7 +744,7 @@ pub(crate) mod tests {
             .unwrap();
         drop(conn);
         let mut c = read_card(&card).unwrap();
-        prepare(&mut c, &hosts(), NOW).unwrap();
+        prepare(&mut c, &CardHosts::Listed(hosts()), NOW).unwrap();
         assert_eq!(merge_into(&user, &c).unwrap(), 1);
         let rows = rows_of(&user);
         assert_eq!(rows.len(), 2);
@@ -651,7 +766,7 @@ pub(crate) mod tests {
             .execute("UPDATE meta SET value = '25' WHERE key = 'version'", [])
             .unwrap();
         let mut c = read_card(&card).unwrap();
-        prepare(&mut c, &hosts(), NOW).unwrap();
+        prepare(&mut c, &CardHosts::Listed(hosts()), NOW).unwrap();
         let e = merge_into(&user, &c).unwrap_err();
         assert!(format!("{e:#}").contains("version 25"), "{e:#}");
         assert_eq!(rows_of(&user).len(), 1, "untouched");
@@ -663,7 +778,7 @@ pub(crate) mod tests {
         let card = d.path().join("card");
         chrome_db(&card, &[("auth.school.ac.th", "sessions", false, 0)]);
         let mut c = read_card(&card).unwrap();
-        prepare(&mut c, &hosts(), NOW).unwrap();
+        prepare(&mut c, &CardHosts::Listed(hosts()), NOW).unwrap();
         assert!(create_new(d.path(), "Cookies", &c).unwrap());
         let made = d.path().join("Cookies");
         let back = read_card(&made).unwrap();

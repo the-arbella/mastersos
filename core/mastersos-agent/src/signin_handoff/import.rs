@@ -2,7 +2,7 @@
 //! `mastersos-signin-import.service` at the start of a desktop session (the unit's condition is the placeholder `pam-session`
 //! leaves). Waits up to [`WAIT`] for the placeholder `<uid>` in [`super::HANDOFF_DIR`] to become this user's non-empty
 //! database, reads it, empties it (it is used once, whatever happens next) and, when the user's Chrome is not running,
-//! merges the identity provider's cookies into the profile or creates the profile's cookie database
+//! merges the card's cookies ([`super::cookies::card_hosts`]: every site's for an open card, the listed hosts' otherwise) into the profile or creates the profile's cookie database
 //! ([`super::cookies`]).
 
 use std::os::fd::OwnedFd;
@@ -33,7 +33,7 @@ pub struct ImportEnv<'a> {
     pub uid: u32,
     /// The browser's user data directory (`~/`[`CHROME_USER_DATA`]).
     pub user_data: PathBuf,
-    /// The card's Chrome policy (the identity provider's hosts).
+    /// The card's Chrome policy: open or listed, and the listed hosts ([`cookies::card_hosts`]).
     pub policy: PathBuf,
     pub wait: Duration,
     pub poll: Duration,
@@ -139,7 +139,7 @@ pub fn import(env: &ImportEnv) -> Result<Imported> {
     if browser_running(&env.user_data, env.alive) {
         return Ok(Imported::BrowserRunning);
     }
-    let hosts = cookies::allowed_hosts(&read_policy(&env.policy));
+    let hosts = cookies::card_hosts(&read_policy(&env.policy));
     let p = cookies::prepare(&mut card, &hosts, env.now_unix)?;
     if p.kept == 0 {
         return Ok(Imported::Empty);
@@ -342,6 +342,20 @@ mod tests {
         assert_eq!(mode & 0o777, 0o700);
         // used once: the next run finds an empty file
         assert_eq!(t.run(&dead), Imported::Nothing);
+    }
+
+    #[test]
+    fn an_open_card_hands_over_every_site() {
+        let t = T::new();
+        fs::write(
+            &t.policy,
+            r#"{"URLBlocklist":["http://*","file://*"],"URLAllowlist":["https://.auth.school.ac.th:443","127.0.0.1:48123/callback"]}"#,
+        )
+        .unwrap();
+        t.deliver_card();
+        assert_eq!(t.run(&dead), Imported::Created(2));
+        let hosts: Vec<_> = rows_of(&t.user_db()).into_iter().map(|r| r.0).collect();
+        assert_eq!(hosts, ["auth.school.ac.th", "tracker.example"]);
     }
 
     #[test]
