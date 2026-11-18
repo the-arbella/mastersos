@@ -600,7 +600,7 @@ impl Default for School {
 
 /// `[school.oidc]`: the OpenID Connect provider Devices sign in with (authorization code on the
 /// login screen). `client_secret` and `card_hosts` are [`FEATURE_OIDC_CARD`], `idp_hint` is
-/// [`FEATURE_OIDC_IDP_HINT`].
+/// [`FEATURE_OIDC_IDP_HINT`], `card_navigation` is [`FEATURE_OIDC_CARD_NAVIGATION`].
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -614,9 +614,10 @@ pub struct Oidc {
     /// Device holds it, so it is not a secret in any real sense.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_secret: Option<String>,
-    /// Hostnames the sign-in page may load from besides the issuer: the provider's other hosts,
-    /// its CDN, the school's upstream provider. Each is an exact `https` host; subdomains are not
-    /// included. At most 20.
+    /// Hostnames the sign-in card may open besides the issuer when [`Oidc::card_navigation`] is
+    /// [`CardNavigation::Listed`]: the provider's other hosts, the school's upstream provider.
+    /// Each is an exact `https` host; subdomains are not included. At most 20. With
+    /// [`CardNavigation::Open`] (the default) they change nothing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub card_hosts: Vec<String>,
     /// The upstream provider an identity broker (Rauthy, for one) should go straight to: the
@@ -624,6 +625,31 @@ pub struct Oidc {
     /// provider choice. 1 to 64 of `A-Z a-z 0-9 _ -` ([`FEATURE_OIDC_IDP_HINT`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idp_hint: Option<String>,
+    /// Where the sign-in card may go ([`FEATURE_OIDC_CARD_NAVIGATION`]); left out means
+    /// [`CardNavigation::Open`]. Read it through [`Oidc::navigation`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card_navigation: Option<CardNavigation>,
+}
+
+impl Oidc {
+    /// The sign-in card's navigation rule, [`CardNavigation::Open`] when left out.
+    pub fn navigation(&self) -> CardNavigation {
+        self.card_navigation.unwrap_or_default()
+    }
+}
+
+/// `[school.oidc] card_navigation`: which pages the sign-in card (the login screen's browser
+/// window, which has no address bar and closes any other window) may open.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum CardNavigation {
+    /// Any `https` page, plus the issuer as written and the broker's redirect: whatever the
+    /// provider's sign-in pages link or redirect to (an upstream provider, a captcha, a CDN).
+    #[default]
+    Open,
+    /// Only the issuer, `card_hosts` and the broker's redirect.
+    Listed,
 }
 
 /// What a Device using a Config gets: the Config as written laid over `[defaults]`
@@ -1818,6 +1844,9 @@ pub const FEATURE_CONFIG_CHANNEL: &str = "config_update_channel";
 /// See [`FEATURE_UPDATE_MIRROR`]: `idp_hint` in `[school.oidc]` (the sign-in card asks an
 /// identity broker for the school's upstream provider).
 pub const FEATURE_OIDC_IDP_HINT: &str = "oidc_idp_hint";
+/// See [`FEATURE_UPDATE_MIRROR`]: `card_navigation` in `[school.oidc]` (which pages the sign-in
+/// card may open). An OS that predates it keeps every card `listed`, whatever the settings say.
+pub const FEATURE_OIDC_CARD_NAVIGATION: &str = "oidc_card_navigation";
 /// See [`FEATURE_UPDATE_MIRROR`]: the Device reads `format = 2` (Defaults, `drop`, the IT account,
 /// the school logo and name); the same string as [`format_feature`]`(2)`.
 pub const FEATURE_FORMAT_2: &str = "format_2";
@@ -1944,6 +1973,9 @@ pub fn features_used(m: &Manifest) -> Vec<&'static str> {
     }
     if s.oidc.as_ref().is_some_and(|o| o.idp_hint.is_some()) {
         out.push(FEATURE_OIDC_IDP_HINT);
+    }
+    if s.oidc.as_ref().is_some_and(|o| o.card_navigation.is_some()) {
+        out.push(FEATURE_OIDC_CARD_NAVIGATION);
     }
     let kiosk_apps = || {
         defaults
@@ -2899,6 +2931,48 @@ mod tests {
         // Without the hint the provider serializes as before.
         let plain = toml::to_string(&with("").school.oidc).unwrap();
         assert!(!plain.contains("idp_hint"), "{plain}");
+    }
+
+    #[test]
+    fn oidc_card_navigation_is_a_feature_of_its_own() {
+        let with = |extra: &str| {
+            let text = example().replacen(
+                "client_id = \"mastersos\" }",
+                &format!("client_id = \"mastersos\"{extra} }}"),
+                1,
+            );
+            Manifest::parse(&text).unwrap()
+        };
+        let plain = with("");
+        let o = plain.school.oidc.as_ref().unwrap();
+        assert_eq!(o.card_navigation, None);
+        assert_eq!(o.navigation(), CardNavigation::Open);
+        assert!(!features_used(&plain).contains(&FEATURE_OIDC_CARD_NAVIGATION));
+        let text = toml::to_string(&plain.school.oidc).unwrap();
+        assert!(!text.contains("card_navigation"), "{text}");
+        for (value, want) in [
+            ("open", CardNavigation::Open),
+            ("listed", CardNavigation::Listed),
+        ] {
+            let m = with(&format!(", card_navigation = \"{value}\""));
+            let o = m.school.oidc.as_ref().unwrap();
+            assert_eq!(o.navigation(), want);
+            let used = features_used(&m);
+            assert!(used.contains(&FEATURE_OIDC_CARD_NAVIGATION), "{used:?}");
+            assert!(!used.contains(&FEATURE_OIDC_CARD), "{used:?}");
+            let text = toml::to_string(&m.school.oidc).unwrap();
+            assert!(
+                text.contains(&format!("card_navigation = \"{value}\"")),
+                "{text}"
+            );
+        }
+        assert!(Manifest::parse(&example().replacen(
+            "client_id = \"mastersos\" }",
+            "client_id = \"mastersos\", card_navigation = \"closed\" }",
+            1
+        ))
+        .is_err());
+        assert_eq!(FEATURE_OIDC_CARD_NAVIGATION, "oidc_card_navigation");
     }
 
     const SCHOOL_A: &str = "0192f3a4-5b6c-7d8e-9f00-112233445566";

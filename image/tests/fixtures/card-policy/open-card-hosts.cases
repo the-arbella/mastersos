@@ -1,0 +1,12 @@
+# Open card that also carries card_hosts (kept as a fallback); no Device blocks.
+allow https://sso.school.ac.th/oauth/v2/authorize?client_id=x
+allow https://cdn.school.ac.th/app.js
+allow https://accounts.google.com/signin
+allow https://tiktok.com/
+allow http://127.0.0.1:48123/callback?code=x&state=y
+block http://example.org/
+block file:///etc/passwd
+block chrome://settings/
+block chrome://version/
+block chrome://flags/
+block chrome://policy/

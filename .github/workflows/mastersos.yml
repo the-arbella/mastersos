@@ -147,6 +147,8 @@ jobs:
       - run: bash image/tests/help-model-test.sh
       # The sign-in card's authorization URL: [school.oidc] idp_hint added to it (card-url.js)
       - run: bash image/tests/card-url-test.sh
+      # The sign-in card's Chrome policy (the agent's fixtures) in the runner's real Chrome: what the card may open
+      - run: sudo env "PATH=$PATH" bash image/tests/card-policy-chrome-test.sh
       # 正式私钥只从 tmpfs 读（keyset_priv release）与 key-leak-check.py；ceremony-test.sh 要 root 与 loop 设备，只 shellcheck、不在这里跑
       - run: bash image/tests/keyset-test.sh
       - run: bash image/tests/health-check-test.sh

@@ -9,3 +9,11 @@ suites:
     cpus: 8
     timeout: 30m
     paths: [core/**, image/keys/**]
+  card-chrome:
+    setup: d=$HOME/.cache/mastersos-card-chrome && rm -rf $d && mkdir -p $d && curl -fsSL -o $d/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && dpkg-deb -x $d/chrome.deb $d/root
+    setup_key: [.labtest.yml]
+    run: CHROME=$HOME/.cache/mastersos-card-chrome/root/opt/google/chrome/chrome bash image/tests/card-policy-chrome-test.sh
+    mem: 1.5G
+    cpus: 2
+    timeout: 10m
+    paths: [image/tests/card-policy-chrome-test.*, image/tests/fixtures/card-policy/**]

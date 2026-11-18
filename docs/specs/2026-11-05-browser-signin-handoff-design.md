@@ -162,3 +162,20 @@ A 在邮箱框里输入 B，卡片的 URL 带 `login_hint=B`，A 在学校页面
 ## 在 VM 上验收
 
 见实施时给出的步骤：同一 VM 上依次验证正常登录、首次登录、Chrome 已开着、输错邮箱再换人登录、取消后换人登录、访客。
+
+## 2026-11-18 修订：卡片默认放开跳转（David 批准）
+
+为什么：只放行 issuer 和 `card_hosts` 太死板。重定向链里的中间站、iframe 形式的人机验证（reCAPTCHA、Turnstile）、上游身份系统的其他主机都要事先列全，漏一个就登录不了；以后签发方是 cloud、背后接 Google 和各校的身份系统，就更列不全。
+
+改成：
+
+- `[school.oidc] card_navigation`：`"open"`（默认）或 `"listed"`（原来的严格名单）。新特性 `oidc_card_navigation`；旧镜像拒绝写了它的版本，自己的卡片始终按 `listed`。
+- 卡片策略的 `URLBlocklist` 总以 `"*"`、`"chrome://*"` 开头（`login::CARD_BLOCKLIST`），不认得的协议一律打不开（白名单写法，不是列举要挡的协议）。`"chrome://*"` 要单独写：真 Chrome 测试发现 `"*"` 不覆盖 Chrome 自己的页面，原来的 listed 卡片也能打开 `chrome://settings/`（Chrome 158）。open 卡片的 `URLAllowlist` 是 `"https://*"`（`login::OPEN_CARD_FILTER`）、issuer 和回调地址：`"https://*"` 与 `"*"` 一样不限主机，Chrome 平局时白名单优先；issuer 与回调地址更具体，所以 `http` 的 issuer 和 `127.0.0.1:48123` 照样能开。
+- 设备自己的过滤照样生效：卡片用的是自己的策略目录，不读设备的 `chrome_policy`，所以 open 卡片把设备 Config 的 `chrome_policy` `URLBlocklist`（字符串条目，最多 1000 条）追加到 `URLBlocklist`，它们比 `"https://*"` 具体，挡得住。设备的 `URLBlocklist` 含 `"*"`（桌面只放行名单）时卡片按 `listed`，不然卡片会比桌面还宽。种子阶段还没有 Config，不追加。设备 `URLAllowlist` 里的例外不带进卡片：卡片在这一点上比桌面严。
+- 两种卡片都关默认搜索引擎（`DefaultSearchProviderEnabled: false`）。
+- 卡片仍是 `--app` 窗口，没有地址栏和标签页；登录界面关掉它开出的任何别的窗口（Ctrl+N、Ctrl+T、`target=_blank`、右键“在新窗口打开”都会开出带地址栏的窗口，一出现就被关掉）。人能去的只有页面链接或跳转到的地方，以及把一段网址文字拖进窗口。
+- 新增总时长上限：卡片打开 10 分钟还没登录成功就关闭（`CARD_LIFETIME_S`），与原来的 3 分钟无操作关闭并存。
+- 交接：`signin-import` 读同一份策略，`URLAllowlist` 里有 `"https://*"` 就是 open 卡片（`cookies::card_hosts` 返回 `CardHosts::Any`）：卡片每次从空配置开始，里面的 cookie 都来自这一次登录，所以全部交给本人；只限本主机的 cookie 任何主机都收，域 cookie 只收有可注册域名、本身不是公共后缀的域（`cookies::any_site_allowed`），IP 上不收域 cookie；**每条最长 12 小时**（会话 cookie 本来就是，持久 cookie 的期限也截到 12 小时）。策略缺失或读不懂时按 listed 处理（名单为空就什么都不交）。
+
+剩下的风险（open 卡片）：在共用设备上，A 可以先在卡片里填 B 的邮箱，把网址拖进窗口去登录 A 自己的第三方账号，再把设备交给 B 输入口令。B 的桌面 Chrome 就会带着 A 的那个第三方会话（login CSRF）。12 小时上限把它限制在一个上学日内；listed 卡片只交身份系统的 cookie，B 一登录就覆盖了，没有这个问题。要彻底去掉，可以只交 issuer 与身份系统的 cookie（但那就交不了 Google 这类上游），或者用 listed。上表“卡片的 Chrome 被攻破”一行对 listed 卡片照旧。
+- 验证：`image/tests/card-policy-chrome-test.sh` 在真 Chrome 里检查 agent 生成的五份卡片策略（open、http issuer、带 `card_hosts` 的 open、listed、设备 `URLBlocklist` 含 `*`），共 67 条导航用例；fixture 由 agent 的 `card_policy_fixtures_match_the_code` 保证与代码一致，同一测试也核对交接把每份认成 open 还是 listed。卡片的 10 分钟上限只有静态检查（check-tree 80），真实行为在 VM 重验证清单里。

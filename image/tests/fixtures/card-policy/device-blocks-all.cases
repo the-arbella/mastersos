@@ -1,0 +1,15 @@
+# Open card on a Device whose URLBlocklist is "*": the card is listed.
+allow https://sso.school.ac.th/oauth/v2/authorize?client_id=x
+allow https://cdn.school.ac.th/app.js
+allow http://127.0.0.1:48123/callback?code=x&state=y
+block https://accounts.google.com/signin
+block https://x.cdn.school.ac.th/
+block https://school.ac.th/
+block https://sso.school.ac.th:8443/
+block http://sso.school.ac.th/
+block http://127.0.0.1:48123/other
+block file:///etc/passwd
+block chrome://settings/
+block chrome://version/
+block chrome://flags/
+block chrome://policy/

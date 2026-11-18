@@ -233,7 +233,8 @@ with PKCE and the fixed redirect `http://127.0.0.1:48123/callback`.
 | `issuer` | string | required in `[school.oidc]` | `https://` (or `http://`) URL; no spaces, control characters or any of ``# ; " ' ` \`` | `issuer = "https://sso.school.ac.th"` | Google (`https://accounts.google.com`) is allowed but untried on Devices; it needs `allowed_domains` (`public_idp_without_allowed_domains`). |
 | `client_id` | string | required in `[school.oidc]` | non-empty; same character limits as `issuer` | `client_id = "mastersos"` | The client registered with the provider for MastersOS Devices. |
 | `client_secret` | string | optional; no secret | 1 to 512 printable ASCII characters; same character limits as `issuer`, and no `%` | — | Only for a provider that requires one even for a desktop app. Every Device holds it, so it protects nothing; do not reuse a real secret here. Devices whose OS predates this key reject the whole Version (see `feature_unsupported`, feature `oidc_card`). |
-| `card_hosts` | list of strings | optional; only the issuer's host | lowercase hostnames with at least two labels; no scheme, port, path, wildcard or IP address; none twice; at most 20 | `card_hosts = ["cdn.school.ac.th"]` | Hosts the sign-in page may load from besides the issuer, for example a CDN or an upstream provider. Each is reached over `https` on port 443, and its subdomains are not included. Leave it out when the provider serves everything from the issuer. Feature `oidc_card`, like `client_secret`. |
+| `card_hosts` | list of strings | optional; only the issuer's host | lowercase hostnames with at least two labels; no scheme, port, path, wildcard or IP address; none twice; at most 20 | `card_hosts = ["sso.school.ac.th"]` | Only with `card_navigation = "listed"`: the hosts the sign-in card may open besides the issuer, for example an upstream provider. Each is reached over `https` on port 443, and its subdomains are not included. With `"open"` they change nothing. Feature `oidc_card`, like `client_secret`. |
+| `card_navigation` | string | `"open"` | `"open"`, `"listed"` | `card_navigation = "listed"` | Which pages the sign-in card may open. `open`: any `https` page the sign-in pages link or redirect to (an upstream provider, a captcha, a help page), except what the Device's own `chrome_policy` `URLBlocklist` blocks. `listed`: only the issuer and `card_hosts`; a Device whose `URLBlocklist` contains `"*"` always gets a listed card. See [The sign-in card](#the-sign-in-card). Devices whose OS predates this key reject the whole Version (feature `oidc_card_navigation`) and keep the card `listed`. |
 | `idp_hint` | string | optional; none | 1 to 64 of `A-Z a-z 0-9 _ -` | `idp_hint = "school-sso"` | Only when `issuer` is a broker in front of the school's SSO: the broker's id for that upstream provider. Feature `oidc_idp_hint`. |
 
 ```toml check=ok
@@ -256,8 +257,7 @@ config = "standard"
 A school on Google Workspace may point Devices straight at Google: register a Desktop app OAuth
 client in the school's Google Cloud project and fill in its client id and secret. `allowed_domains`
 is required with Google (`public_idp_without_allowed_domains`), otherwise any Google account in the
-world could sign in. This path has not yet been tried on Devices; `card_hosts` may need Google's
-other sign-in hosts.
+world could sign in. This path has not yet been tried on Devices.
 
 ```toml check=ok
 [school]
@@ -283,14 +283,14 @@ When `issuer` is an identity broker (such as Rauthy) that offers several upstrea
 sign-in card would first show the broker's provider choice. With `idp_hint`, the card adds
 `idp_hint=<value>` to the sign-in URL and the broker goes straight to that provider; a broker that
 does not know the value shows its usual page. Use the id the broker gives the school's upstream
-provider, and list the upstream provider's hosts in `card_hosts`. Devices whose OS predates the
-key reject the whole Version (`feature_unsupported`, feature `oidc_idp_hint`).
+provider; with `card_navigation = "listed"`, also list the upstream provider's hosts in
+`card_hosts`. Devices whose OS predates the key reject the whole Version (`feature_unsupported`,
+feature `oidc_idp_hint`).
 
 ```toml check=ok
 [school.oidc]
 issuer = "https://auth.example.org/auth/v1"
 client_id = "mastersos"
-card_hosts = ["sso.school.ac.th"]
 idp_hint = "school-sso"
 
 [[config]]
@@ -304,6 +304,45 @@ name = "Unassigned"
 config = "standard"
 ```
 <!-- /prompt:omit -->
+
+#### The sign-in card
+
+A school account signs in on the login screen in the **sign-in card**: the provider's sign-in page
+in a locked-down Chrome window. The window has no address bar and no tabs, the login screen closes
+any other window it opens, and it cannot download, print, open files, use developer tools or
+extensions, or search for selected text. It starts with an empty profile every time and closes
+after 3 minutes without input, or 10 minutes after it opened, whichever comes first.
+
+With `card_navigation = "open"` (the default) the card follows whatever the sign-in pages link or
+redirect to over `https`, so an upstream provider, a captcha or a CDN needs no setting. The
+Device's own `URLBlocklist` (in its Config's `chrome_policy`) applies in the card as well, so a
+person who follows links further than the sign-in reaches nothing the Device blocks. A Device
+whose `URLBlocklist` contains `"*"` (only listed sites on the desktop) gets a listed card. With
+`"listed"` the card opens only the issuer and `card_hosts`; a page it may not open shows Chrome's
+"blocked" page.
+
+After a successful sign-in, the cookies the card collected are handed to that person's own Chrome
+on the desktop, so the provider's websites open already signed in: with `"listed"` only those of
+the issuer and `card_hosts`; with `"open"` those of every site the card reached, each lasting at
+most 12 hours.
+
+```toml check=ok
+[school.oidc]
+issuer = "https://sso.school.ac.th"
+client_id = "mastersos"
+card_navigation = "listed"
+card_hosts = ["login.partner.example.org"]
+
+[[config]]
+id = "standard"
+name = "Standard"
+login_methods = ["sso"]
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "standard"
+```
 
 The seed downloaded from the console also carries the latest published `[school.oidc]`, so a school
 that uses SSO has it on a new Device before the first settings pull. If the `default` Config allows
@@ -2345,7 +2384,7 @@ with Configs counts as using it, `wifi_ext`: any `[[school.wifi]]`, or a Wi-Fi e
 `wpa3_only` (either value), `eap` or an enterprise key, or `oidc_card`: `client_secret` or
 `card_hosts` in `[school.oidc]`, or `support`: `[config.support]` or `support` in `[defaults]`, or
 `config_update_channel`: `update_channel` in `[defaults]` or a `[[config]]`, or `oidc_idp_hint`:
-`idp_hint` in `[school.oidc]`, or `deb_apps`: `apps.deb` or `ubuntu_mirror` in `[defaults]` or a `[[config]]`, or `device_annotations`: `asset_id` or `location` in a `[[device]]`, or `kiosk_platform`, `kiosk_inject`, `kiosk_device_attributes`, `kiosk_managed_config`: the kiosk app keys `platform`, `inject`, `device_attributes = true` and `managed_config`),
+`idp_hint` in `[school.oidc]`, or `oidc_card_navigation`: `card_navigation` in `[school.oidc]`, or `deb_apps`: `apps.deb` or `ubuntu_mirror` in `[defaults]` or a `[[config]]`, or `device_annotations`: `asset_id` or `location` in a `[[device]]`, or `kiosk_platform`, `kiosk_inject`, `kiosk_device_attributes`, `kiosk_managed_config`: the kiosk app keys `platform`, `inject`, `device_attributes = true` and `managed_config`),
 and some Devices seen in the last 30 days have not reported that they understand it.
 
 <!-- prompt:omit -->
