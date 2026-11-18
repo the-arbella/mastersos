@@ -685,6 +685,11 @@ pub fn card_host_url_filter(host: &str) -> Option<String> {
 /// ([`crate::signin_handoff::cookies::card_hosts`]).
 pub const OPEN_CARD_FILTER: &str = "https://*";
 
+/// What every card's `URLBlocklist` starts with: everything (`"*"`, so an unknown scheme never opens) and Chrome's own pages,
+/// which `"*"` does not cover (found by `image/tests/card-policy-chrome-test.sh` on Chrome 158: `chrome://settings/`
+/// opened under `["*"]` alone).
+pub const CARD_BLOCKLIST: &[&str] = &["*", "chrome://*"];
+
 /// The most entries of the Device's own `URLBlocklist` an open card takes over.
 pub const MAX_CARD_DEVICE_BLOCKS: usize = 1000;
 
@@ -726,23 +731,27 @@ pub fn render_login_browser_policy(
     device_blocks: Option<&[String]>,
 ) -> Option<String> {
     let mut allow = vec![issuer_url_filter(&oidc.issuer)?];
-    let mut block = vec!["*".to_string()];
-    match (oidc.navigation(), device_blocks) {
-        (CardNavigation::Open, Some(device)) => {
-            allow.insert(0, OPEN_CARD_FILTER.into());
-            block.extend(device.iter().filter(|e| e.as_str() != "*").cloned());
+    // The signed card_hosts go in either way: an open card does not need them, but a school that lists its upstream
+    // provider keeps signing in even if a Chrome ever stopped honouring OPEN_CARD_FILTER.
+    for filter in oidc
+        .card_hosts
+        .iter()
+        .filter_map(|h| card_host_url_filter(h))
+    {
+        if !allow.contains(&filter) {
+            allow.push(filter);
         }
-        _ => {
-            for filter in oidc
-                .card_hosts
+    }
+    let mut block: Vec<String> = CARD_BLOCKLIST.iter().map(|e| e.to_string()).collect();
+    if let (CardNavigation::Open, Some(device)) = (oidc.navigation(), device_blocks) {
+        allow.insert(0, OPEN_CARD_FILTER.into());
+        block.extend(
+            device
                 .iter()
-                .filter_map(|h| card_host_url_filter(h))
-            {
-                if !allow.contains(&filter) {
-                    allow.push(filter);
-                }
-            }
-        }
+                .filter(|e| !block.contains(e))
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
     }
     allow.push(LOGIN_REDIRECT_FILTER.into());
     let policy = serde_json::json!({
@@ -3027,15 +3036,16 @@ client_id = "laptops"
         ] {
             let text = render_login_browser_policy(&o, NO_DEVICE_BLOCKS).unwrap();
             let v: serde_json::Value = serde_json::from_str(&text).unwrap();
-            assert_eq!(v["URLBlocklist"], serde_json::json!(["*"]));
+            assert_eq!(v["URLBlocklist"], serde_json::json!(CARD_BLOCKLIST));
+            let mut want = vec!["https://*", "https://.sso.school.ac.th:443"];
+            if !o.card_hosts.is_empty() {
+                want.push("https://.cdn.school.ac.th:443");
+            }
+            want.push("127.0.0.1:48123/callback");
             assert_eq!(
                 v["URLAllowlist"],
-                serde_json::json!([
-                    "https://*",
-                    "https://.sso.school.ac.th:443",
-                    "127.0.0.1:48123/callback"
-                ]),
-                "card_hosts change nothing on an open card"
+                serde_json::json!(want),
+                "an open card keeps the signed card_hosts as a fallback"
             );
             assert_eq!(v["DefaultSearchProviderEnabled"], false);
             assert_eq!(v["DownloadRestrictions"], 3);
@@ -3063,7 +3073,7 @@ client_id = "laptops"
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(
             v["URLBlocklist"],
-            serde_json::json!(["*", "facebook.com", "tiktok.com"])
+            serde_json::json!(["*", "chrome://*", "facebook.com", "tiktok.com"])
         );
         assert_eq!(v["URLAllowlist"][0], "https://*");
         assert_eq!(
@@ -3077,7 +3087,7 @@ client_id = "laptops"
         };
         let text = render_login_browser_policy(&o, None).unwrap();
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(v["URLBlocklist"], serde_json::json!(["*"]));
+        assert_eq!(v["URLBlocklist"], serde_json::json!(CARD_BLOCKLIST));
         assert_eq!(
             v["URLAllowlist"],
             serde_json::json!([
@@ -3090,6 +3100,69 @@ client_id = "laptops"
             crate::signin_handoff::cookies::card_hosts(&text),
             crate::signin_handoff::cookies::CardHosts::Listed(_)
         ));
+    }
+
+    /// The card policies `image/tests/card-policy-chrome-test.sh` loads into a real Chrome, each next to a hand-written
+    /// `<name>.cases` (`allow <url>` / `block <url>`). The files must equal what this code renders; with
+    /// `MASTERSOS_UPDATE_FIXTURES=1` the test writes them instead (then read the diff).
+    fn card_policy_fixtures() -> Vec<(&'static str, String)> {
+        let sso = || oidc("https://sso.school.ac.th");
+        let render =
+            |o: &Oidc, blocks: Option<&[String]>| render_login_browser_policy(o, blocks).unwrap();
+        let blocks = vec!["tiktok.com".to_string(), "example.net/blocked".to_string()];
+        let cdn = |o: Oidc| Oidc {
+            card_hosts: vec!["cdn.school.ac.th".into()],
+            ..o
+        };
+        vec![
+            ("open", render(&sso(), Some(&blocks))),
+            (
+                "open-http-issuer",
+                render(&oidc("http://127.0.0.5:5556"), NO_DEVICE_BLOCKS),
+            ),
+            ("open-card-hosts", render(&cdn(sso()), NO_DEVICE_BLOCKS)),
+            ("listed", render(&cdn(listed(sso())), NO_DEVICE_BLOCKS)),
+            ("device-blocks-all", render(&cdn(sso()), None)),
+        ]
+    }
+
+    #[test]
+    fn card_policy_fixtures_match_the_code() {
+        let dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../image/tests/fixtures/card-policy");
+        let update = std::env::var_os("MASTERSOS_UPDATE_FIXTURES").is_some();
+        for (name, text) in card_policy_fixtures() {
+            let f = dir.join(format!("{name}.json"));
+            let text = format!("{text}\n");
+            if update {
+                fs::create_dir_all(&dir).unwrap();
+                fs::write(&f, &text).unwrap();
+            }
+            let on_disk = fs::read_to_string(&f).unwrap_or_else(|e| {
+                panic!(
+                    "{}: {e} (MASTERSOS_UPDATE_FIXTURES=1 writes it)",
+                    f.display()
+                )
+            });
+            assert_eq!(
+                on_disk,
+                text,
+                "{} is stale (MASTERSOS_UPDATE_FIXTURES=1 rewrites it)",
+                f.display()
+            );
+            assert!(
+                dir.join(format!("{name}.cases")).exists(),
+                "{name}.cases is missing"
+            );
+            // signin-import reads the same file: open fixtures hand over every site, the others only their hosts
+            let open = name.starts_with("open");
+            assert_eq!(
+                crate::signin_handoff::cookies::card_hosts(&text)
+                    == crate::signin_handoff::cookies::CardHosts::Any,
+                open,
+                "{name}"
+            );
+        }
     }
 
     #[test]
@@ -3129,7 +3202,10 @@ client_id = "laptops"
         assert_eq!(out, vec![ok(ITEM)]);
         let v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(card_policy(root.path())).unwrap()).unwrap();
-        assert_eq!(v["URLBlocklist"], serde_json::json!(["*", "tiktok.com"]));
+        assert_eq!(
+            v["URLBlocklist"],
+            serde_json::json!(["*", "chrome://*", "tiktok.com"])
+        );
         assert_eq!(v["URLAllowlist"][0], "https://*");
     }
 
@@ -3141,7 +3217,7 @@ client_id = "laptops"
         )
         .unwrap();
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(v["URLBlocklist"], serde_json::json!(["*"]));
+        assert_eq!(v["URLBlocklist"], serde_json::json!(CARD_BLOCKLIST));
         assert_eq!(
             v["URLAllowlist"],
             serde_json::json!(["https://.sso.school.ac.th:443", "127.0.0.1:48123/callback"])

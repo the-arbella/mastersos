@@ -1,0 +1,10 @@
+# Open card whose issuer is plain http on an IP (a lab provider).
+allow http://127.0.0.5:5556/auth?client_id=x
+allow https://accounts.google.com/signin
+allow http://127.0.0.1:48123/callback?code=x&state=y
+block http://127.0.0.5:5557/
+block http://127.0.0.6:5556/
+block http://example.org/
+block file:///etc/passwd
+block chrome://settings/
+block chrome://version/
