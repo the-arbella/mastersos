@@ -349,7 +349,7 @@ mod tests {
         let t = T::new();
         fs::write(
             &t.policy,
-            r#"{"URLBlocklist":["http://*","file://*"],"URLAllowlist":["https://.auth.school.ac.th:443","127.0.0.1:48123/callback"]}"#,
+            r#"{"URLBlocklist":["*"],"URLAllowlist":["https://*","https://.auth.school.ac.th:443","127.0.0.1:48123/callback"]}"#,
         )
         .unwrap();
         t.deliver_card();

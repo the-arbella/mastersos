@@ -6,7 +6,7 @@
 
 - 学校账号在本机**没有密码**，没有离线登录，也不用手机扫码或设备码。每次登录、每次解锁都走完整验证；学校开了两步验证就每次都要做。
 - 卡片里的 Chrome 每次都是一次性配置，不留登录状态。没有地址栏和标签页，登录界面关掉它开出的任何别的窗口；3 分钟没有操作或打开满 10 分钟就自动关闭。
-- 默认（`card_navigation = "open"`）卡片能打开登录页链接或跳转到的任何 `https` 页面（上游身份系统、人机验证、CDN 都不用配置）；`"listed"` 时只放行 issuer 和 `card_hosts`。
+- 默认（`card_navigation = "open"`）卡片能打开登录页链接或跳转到的任何 `https` 页面（上游身份系统、人机验证、CDN 都不用配置），设备 Config 的 `chrome_policy` `URLBlocklist` 在卡片里同样生效；`"listed"` 时只放行 issuer 和 `card_hosts`。
 - 设计：`docs/superpowers/specs/2026-11-01-mastersos-login-screen-design.md`。
 
 MastersOS 只认标准 OIDC，判断账号一律看 `email`，不写任何一家身份系统的专用逻辑。差异全部收在下面的配置项里。
@@ -81,7 +81,7 @@ card_navigation = "listed"
 | `issuer`、`client_id` | 必填，agent 写进 `/etc/authd/oidc/broker.conf.d/10-mastersos.conf`（0600），broker 读镜像自带的骨架 `/etc/authd/oidc/broker.conf` 再叠这个 drop-in |
 | `client_secret` | 只给桌面应用也要求带 secret 的身份系统。每台机器都有一份，它不算机密，不要拿真正的机密来填。1 到 512 个可打印 ASCII 字符，不含空格与 `% # ; " ' ` \` |
 | `card_hosts` | 只在 `card_navigation = "listed"` 时有用：issuer 之外卡片能打开的主机，逐个写完整主机名，最多 20 个。没有通配符，子域名不算在内。留空表示只放行 issuer。`"open"` 时写了也不起作用 |
-| `card_navigation` | `"open"`（默认）：卡片能打开任何 `https` 页面，挡掉其他协议（`http`、`file`、`chrome` 等；issuer 本身和回调地址按名字放行）。`"listed"`：只放行 issuer、`card_hosts` 和回调地址。旧镜像不认得这个键，会拒绝整个版本，自己的卡片始终按 `listed` |
+| `card_navigation` | `"open"`（默认）：卡片能打开任何 `https` 页面，其他协议都挡（issuer 本身和回调地址按名字放行），设备自己的 `URLBlocklist` 照样挡；设备的 `URLBlocklist` 含 `"*"` 时卡片按 `listed`。`"listed"`：只放行 issuer、`card_hosts` 和回调地址。旧镜像不认得这个键，会拒绝整个版本，自己的卡片始终按 `listed` |
 | `idp_hint` | 只在 issuer 是身份代理（例如 Rauthy）、背后接着学校自己的 SSO 时用：填代理里那个上游身份系统的 id，1 到 64 个 `A-Z a-z 0-9 _ -`。卡片在授权地址后加 `idp_hint=<值>`，代理直接跳到上游、不显示选择页；代理不认得的值照常显示选择页。`listed` 时上游的主机要写进 `card_hosts` |
 
 写进机器的 broker 配置只有这几行（没有 `extra_scopes`）：
@@ -95,11 +95,11 @@ client_id = 394475630609104899
 allowed_users = ALL
 ```
 
-卡片 Chrome 的策略由 agent 写：`/var/lib/mastersos-public/login-browser/policies/mastersos-login.json`。`open` 时 `URLBlocklist` 是 `https` 以外的协议（`OPEN_CARD_BLOCKLIST`，绝不含 `*`），`URLAllowlist` 是 issuer 和回调地址；`listed` 时 `URLBlocklist` 是 `["*"]`，名单是 issuer、`card_hosts` 和回调地址，其余全部挡掉。两种都关掉默认搜索引擎（右键菜单里没有“用 Google 搜索”）。登录后的交接（`signin-import`）按同一份策略判断交哪些 cookie：`URLBlocklist` 不含 `*` 就是 open 卡片，交全部（公共后缀上的域 cookie 除外），否则只交名单里的主机。过滤器钉死协议、主机（前导点关掉子域名匹配）与端口，默认端口也写出来，例如 `https://.sso.school.ac.th:443`；`card_hosts` 一律是 `https` 的 443。没配 SSO 就删掉策略文件，单元（`ConditionPathExists=`）也就起不来。
+卡片 Chrome 的策略由 agent 写：`/var/lib/mastersos-public/login-browser/policies/mastersos-login.json`。`URLBlocklist` 总以 `"*"` 开头（不认得的协议一律打不开）。`open` 时 `URLAllowlist` 是 `"https://*"`（`OPEN_CARD_FILTER`）、issuer 和回调地址，`URLBlocklist` 再追加设备 Config 的 `chrome_policy` `URLBlocklist`（更具体的过滤器优先，所以设备屏蔽的网站照样打不开）；`listed` 时名单是 issuer、`card_hosts` 和回调地址，其余全部挡掉。两种都关掉默认搜索引擎（右键菜单里没有“用 Google 搜索”）。登录后的交接（`signin-import`）按同一份策略判断交哪些 cookie：`URLAllowlist` 里有 `"https://*"` 就是 open 卡片，交全部（公共后缀上的域 cookie 除外），每条最长 12 小时；否则只交名单里的主机。过滤器钉死协议、主机（前导点关掉子域名匹配）与端口，默认端口也写出来，例如 `https://.sso.school.ac.th:443`；`card_hosts` 一律是 `https` 的 443。没配 SSO 就删掉策略文件，单元（`ConditionPathExists=`）也就起不来。
 
 `idp_hint` 不进 Chrome 的策略目录：agent 把它写到旁边的 `/var/lib/mastersos-public/login-browser/card.json`（`{"idp_hint": "..."}`，没有这个键或没配 SSO 就删掉），登录界面扩展的 `card.js` 每次打开卡片时读它，经 `card-url.js` 把参数加到 authd 给的授权地址末尾（只加给 `https` 地址、只加一次，`state`、PKCE、`login_hint` 原样不动），再写进 `mastersos-login-url`。authd 不用改。
 
-种子（`seed.toml`）带同样的 `oidc`，新机器在第一个设置包到达前就能登录。**带这几个新键（`client_secret`、`card_hosts`、`idp_hint`）的种子，旧镜像解析不了**：用到它们的学校要用不早于这一版的安装盘。
+种子（`seed.toml`）带同样的 `oidc`，新机器在第一个设置包到达前就能登录。**带这几个新键（`client_secret`、`card_hosts`、`idp_hint`、`card_navigation`）的种子，旧镜像解析不了**：用到它们的学校要用不早于这一版的安装盘。
 
 ## 证书：只认公网信任的
 

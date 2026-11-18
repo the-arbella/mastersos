@@ -257,7 +257,8 @@ pub enum CardHosts {
     /// ([`host_allowed`]).
     Listed(Vec<String>),
     /// `card_navigation = "open"`: the card could open any `https` page, and its profile was empty when it started, so every
-    /// cookie in it came from this sign-in: any site's go, never one on a public suffix ([`any_site_allowed`]).
+    /// cookie in it came from this sign-in: any site's go, never one on a public suffix ([`any_site_allowed`]), and none
+    /// lasts longer than [`SESSION_LIFETIME`] ([`prepare`]).
     Any,
 }
 
@@ -271,14 +272,17 @@ impl CardHosts {
     }
 }
 
-/// Reads the card's Chrome policy (`mastersos-login.json`): an open card is one whose `URLBlocklist` is a list without
-/// `"*"` (the `login` step writes `["*"]` for a listed card and a list of schemes for an open one). Anything else, a policy
-/// that is missing or unreadable included, is a listed card with the hosts of its `URLAllowlist`, possibly none.
+/// Reads the card's Chrome policy (`mastersos-login.json`): an open card is one whose `URLAllowlist` holds
+/// [`crate::system::login::OPEN_CARD_FILTER`] (`"https://*"`; a listed card's entries always pin a host). Anything else, a
+/// policy that is missing or unreadable included, is a listed card with the hosts of its `URLAllowlist`, possibly none.
 pub fn card_hosts(policy_json: &str) -> CardHosts {
     let open = serde_json::from_str::<serde_json::Value>(policy_json)
         .ok()
-        .and_then(|v| v.get("URLBlocklist").and_then(|l| l.as_array()).cloned())
-        .is_some_and(|list| !list.iter().any(|e| e.as_str() == Some("*")));
+        .and_then(|v| v.get("URLAllowlist").and_then(|l| l.as_array()).cloned())
+        .is_some_and(|list| {
+            list.iter()
+                .any(|e| e.as_str() == Some(crate::system::login::OPEN_CARD_FILTER))
+        });
     if open {
         CardHosts::Any
     } else {
@@ -358,7 +362,8 @@ fn col(cookies: &Cookies, name: &str) -> Result<usize> {
 }
 
 /// Keeps the rows `hosts` admits ([`CardHosts::admits`]) that have not expired at `now_unix` and makes session cookies
-/// persistent, expiring [`SESSION_LIFETIME`] after `now_unix`.
+/// persistent, expiring [`SESSION_LIFETIME`] after `now_unix`. From an open card ([`CardHosts::Any`]) no cookie lasts
+/// longer than that.
 pub fn prepare(cookies: &mut Cookies, hosts: &CardHosts, now_unix: i64) -> Result<Prepared> {
     let host = col(cookies, "host_key")?;
     let persistent = col(cookies, "is_persistent")?;
@@ -384,6 +389,11 @@ pub fn prepare(cookies: &mut Cookies, hosts: &CardHosts, now_unix: i64) -> Resul
         } else if !matches!(row[expires], Value::Integer(t) if t > now) {
             p.expired += 1;
             continue;
+        } else if *hosts == CardHosts::Any && matches!(row[expires], Value::Integer(t) if t > until)
+        {
+            // An open card may have been led to any site before the person who signed in got the keyboard: whatever it
+            // collected lasts no longer than the session cookies do.
+            row[expires] = Value::Integer(until);
         }
         cookies.rows.push(row);
     }
@@ -578,7 +588,7 @@ pub(crate) mod tests {
             card_hosts(listed),
             CardHosts::Listed(vec!["auth.school.ac.th".into()])
         );
-        let open = r#"{"URLBlocklist":["http://*","file://*"],"URLAllowlist":["https://.auth.school.ac.th:443","127.0.0.1:48123/callback"]}"#;
+        let open = r#"{"URLBlocklist":["*","tiktok.com"],"URLAllowlist":["https://*","https://.auth.school.ac.th:443","127.0.0.1:48123/callback"]}"#;
         assert_eq!(card_hosts(open), CardHosts::Any);
         // Anything that is not plainly an open card hands over no more than the listed hosts.
         for p in [
@@ -586,8 +596,9 @@ pub(crate) mod tests {
             "not json",
             "{}",
             "[]",
-            r#"{"URLBlocklist":"http://*"}"#,
-            r#"{"URLBlocklist":["http://*","*"]}"#,
+            r#"{"URLBlocklist":["http://*"]}"#,
+            r#"{"URLAllowlist":"https://*"}"#,
+            r#"{"URLAllowlist":["https://*.example"]}"#,
         ] {
             assert!(matches!(card_hosts(p), CardHosts::Listed(_)), "{p}");
         }
@@ -723,6 +734,52 @@ pub(crate) mod tests {
         assert_eq!(s[11], Value::Integer(1), "has_expires");
         assert_eq!(s[7], Value::Integer(chrome_time(NOW + 12 * 3600)));
         assert_eq!(c.rows[1][7], Value::Integer(later()), "own expiry kept");
+    }
+
+    #[test]
+    fn prepare_from_an_open_card_caps_every_cookie() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("card");
+        let soon = chrome_time(NOW + 3600);
+        chrome_db(
+            &p,
+            &[
+                ("auth.school.ac.th", "sessions", false, 0),
+                ("tracker.example", "long", true, later()),
+                ("tracker.example", "short", true, soon),
+                ("tracker.example", "old", true, chrome_time(NOW - 10)),
+            ],
+        );
+        let mut c = read_card(&p).unwrap();
+        let got = prepare(&mut c, &CardHosts::Any, NOW).unwrap();
+        assert_eq!(
+            got,
+            Prepared {
+                kept: 3,
+                sessions: 1,
+                foreign: 0,
+                expired: 1
+            }
+        );
+        let until = chrome_time(NOW + 12 * 3600);
+        let by_name = |n: &str| {
+            c.rows
+                .iter()
+                .find(|r| r[3] == Value::Text(n.into()))
+                .unwrap()[7]
+                .clone()
+        };
+        assert!(
+            later() > until,
+            "the fixture's later() outlasts a school day"
+        );
+        assert_eq!(by_name("sessions"), Value::Integer(until));
+        assert_eq!(by_name("long"), Value::Integer(until), "capped");
+        assert_eq!(
+            by_name("short"),
+            Value::Integer(soon),
+            "a shorter expiry stays"
+        );
     }
 
     #[test]

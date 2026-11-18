@@ -234,7 +234,7 @@ with PKCE and the fixed redirect `http://127.0.0.1:48123/callback`.
 | `client_id` | string | required in `[school.oidc]` | non-empty; same character limits as `issuer` | `client_id = "mastersos"` | The client registered with the provider for MastersOS Devices. |
 | `client_secret` | string | optional; no secret | 1 to 512 printable ASCII characters; same character limits as `issuer`, and no `%` | — | Only for a provider that requires one even for a desktop app. Every Device holds it, so it protects nothing; do not reuse a real secret here. Devices whose OS predates this key reject the whole Version (see `feature_unsupported`, feature `oidc_card`). |
 | `card_hosts` | list of strings | optional; only the issuer's host | lowercase hostnames with at least two labels; no scheme, port, path, wildcard or IP address; none twice; at most 20 | `card_hosts = ["sso.school.ac.th"]` | Only with `card_navigation = "listed"`: the hosts the sign-in card may open besides the issuer, for example an upstream provider. Each is reached over `https` on port 443, and its subdomains are not included. With `"open"` they change nothing. Feature `oidc_card`, like `client_secret`. |
-| `card_navigation` | string | `"open"` | `"open"`, `"listed"` | `card_navigation = "listed"` | Which pages the sign-in card may open. `open`: any `https` page the sign-in pages link or redirect to (an upstream provider, a captcha, a help page). `listed`: only the issuer and `card_hosts`. See [The sign-in card](#the-sign-in-card). Devices whose OS predates this key reject the whole Version (feature `oidc_card_navigation`) and keep the card `listed`. |
+| `card_navigation` | string | `"open"` | `"open"`, `"listed"` | `card_navigation = "listed"` | Which pages the sign-in card may open. `open`: any `https` page the sign-in pages link or redirect to (an upstream provider, a captcha, a help page), except what the Device's own `chrome_policy` `URLBlocklist` blocks. `listed`: only the issuer and `card_hosts`; a Device whose `URLBlocklist` contains `"*"` always gets a listed card. See [The sign-in card](#the-sign-in-card). Devices whose OS predates this key reject the whole Version (feature `oidc_card_navigation`) and keep the card `listed`. |
 | `idp_hint` | string | optional; none | 1 to 64 of `A-Z a-z 0-9 _ -` | `idp_hint = "school-sso"` | Only when `issuer` is a broker in front of the school's SSO: the broker's id for that upstream provider. Feature `oidc_idp_hint`. |
 
 ```toml check=ok
@@ -314,14 +314,17 @@ extensions, or search for selected text. It starts with an empty profile every t
 after 3 minutes without input, or 10 minutes after it opened, whichever comes first.
 
 With `card_navigation = "open"` (the default) the card follows whatever the sign-in pages link or
-redirect to over `https`, so an upstream provider, a captcha or a CDN needs no setting. A person
-could follow links further than the sign-in, but no further than a guest session already allows.
-With `"listed"` the card opens only the issuer and `card_hosts`; a page it may not open shows
-Chrome's "blocked" page.
+redirect to over `https`, so an upstream provider, a captcha or a CDN needs no setting. The
+Device's own `URLBlocklist` (in its Config's `chrome_policy`) applies in the card as well, so a
+person who follows links further than the sign-in reaches nothing the Device blocks. A Device
+whose `URLBlocklist` contains `"*"` (only listed sites on the desktop) gets a listed card. With
+`"listed"` the card opens only the issuer and `card_hosts`; a page it may not open shows Chrome's
+"blocked" page.
 
 After a successful sign-in, the cookies the card collected are handed to that person's own Chrome
-on the desktop, so the provider's websites open already signed in: with `"open"` all of them,
-with `"listed"` only those of the issuer and `card_hosts`.
+on the desktop, so the provider's websites open already signed in: with `"listed"` only those of
+the issuer and `card_hosts`; with `"open"` those of every site the card reached, each lasting at
+most 12 hours.
 
 ```toml check=ok
 [school.oidc]

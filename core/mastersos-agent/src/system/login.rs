@@ -18,8 +18,9 @@
 //!   patched broker then lets only named users through while the file is missing), and when the file cannot be written
 //!   the drop-in names only the administrators ([`render_broker_conf_admins_only`]), never `ALL`.
 //! - The login screen's sign-in card (image: `mastersos-login-browser.service`) runs Chrome with a policy of its own:
-//!   [`render_login_browser_policy`] allows any `https` page by default (`card_navigation = "open"`), or only the issuer's
-//!   origin, the signed `card_hosts` and the broker's redirect (`"listed"`). It is written next to the
+//!   [`render_login_browser_policy`] allows any `https` page by default (`card_navigation = "open"`) except what the
+//!   Device's own `URLBlocklist` blocks, or only the issuer's origin, the signed `card_hosts` and the broker's redirect
+//!   (`"listed"`, and any card on a Device whose `URLBlocklist` is `"*"`). It is written next to the
 //!   broker drop-in and removed with it; the unit does not start without the file. With `[school.oidc] idp_hint` the step
 //!   also writes [`LOGIN_CARD_FILE`] ([`render_login_card`]) for the login screen's extension, which adds the hint to the
 //!   authorization URL.
@@ -678,40 +679,60 @@ pub fn card_host_url_filter(host: &str) -> Option<String> {
         .map(|()| format!("https://.{host}:443"))
 }
 
-/// What an open card ([`CardNavigation::Open`]) blocks: every scheme but `https` (plain `http` included; the issuer as
-/// written and the broker's redirect are allowed by name, and a more specific filter wins), so neither a page nor a
-/// dropped link reaches local files or the browser's own pages. `about:`, `data:` and `blob:` frames stay usable: sign-in
-/// pages and captchas build frames from them. Never `"*"`: that is how `signin-import` tells a listed card from an open
-/// one ([`crate::signin_handoff::cookies::card_hosts`]).
-pub const OPEN_CARD_BLOCKLIST: &[&str] = &[
-    "http://*",
-    "file://*",
-    "ftp://*",
-    "chrome://*",
-    "chrome-untrusted://*",
-    "chrome-extension://*",
-    "chrome-search://*",
-    "devtools://*",
-    "view-source:*",
-    "javascript://*",
-];
+/// The `URLAllowlist` entry that makes a card open: every `https` page. Chrome lets the allowlist win a tie with the
+/// blocklist's `"*"` (both name any host), and any more specific `URLBlocklist` entry still beats it. A listed card never
+/// has it (its entries pin a host), which is how `signin-import` tells the two apart
+/// ([`crate::signin_handoff::cookies::card_hosts`]).
+pub const OPEN_CARD_FILTER: &str = "https://*";
+
+/// The most entries of the Device's own `URLBlocklist` an open card takes over.
+pub const MAX_CARD_DEVICE_BLOCKS: usize = 1000;
+
+/// The Device's own web filter, as the open card keeps it: the string entries of its Config's `chrome_policy`
+/// `URLBlocklist`, at most [`MAX_CARD_DEVICE_BLOCKS`]. `None` when that list blocks everything (`"*"`): such a Device
+/// allows only listed sites on its desktop, so its card stays listed too.
+pub fn card_device_blocks(chrome_policy: &toml::Table) -> Option<Vec<String>> {
+    let list = match chrome_policy.get("URLBlocklist") {
+        Some(toml::Value::Array(a)) => a,
+        _ => return Some(Vec::new()),
+    };
+    let mut out: Vec<String> = Vec::new();
+    for e in list.iter().filter_map(|v| v.as_str()) {
+        if e.trim() == "*" {
+            return None;
+        }
+        if !e.is_empty() && !out.iter().any(|o| o == e) && out.len() < MAX_CARD_DEVICE_BLOCKS {
+            out.push(e.to_string());
+        }
+    }
+    Some(out)
+}
 
 /// The sign-in card's Chrome policy. The card is a `--app` window without an address bar, and the login screen closes any
-/// other window it opens, so a person can only follow what the pages link or redirect to:
+/// other window it opens, so a person can only follow what the pages link or redirect to. Everything is blocked
+/// (`URLBlocklist` `"*"`, so an unknown scheme never opens), and the `URLAllowlist` lets through:
 ///
-/// - [`CardNavigation::Open`] (the default): any `https` page ([`OPEN_CARD_BLOCKLIST`]), the issuer as written and the
-///   redirect back to the broker; an upstream provider, a captcha or a help page just work.
-/// - [`CardNavigation::Listed`]: everything is blocked except the identity provider, the signed `card_hosts` and the
-///   redirect.
+/// - [`CardNavigation::Open`] (the default): any `https` page ([`OPEN_CARD_FILTER`]), the issuer as written and the
+///   redirect back to the broker; an upstream provider, a captcha or a help page just work. The Device's own
+///   `URLBlocklist` (`device_blocks`, see [`card_device_blocks`]) is added to the blocklist, so the card opens no site the
+///   Device's guest session could not. `None` for `device_blocks` (a Device that blocks everything) keeps the card listed.
+/// - [`CardNavigation::Listed`]: only the identity provider, the signed `card_hosts` and the redirect.
 ///
 /// Either way nothing a website could use to leave the card (downloads, new windows, printing, file dialogs, developer
 /// tools, extensions, a search engine for selected text) is available. `None` when the issuer gives no filter
 /// ([`issuer_url_filter`]).
-pub fn render_login_browser_policy(oidc: &Oidc) -> Option<String> {
+pub fn render_login_browser_policy(
+    oidc: &Oidc,
+    device_blocks: Option<&[String]>,
+) -> Option<String> {
     let mut allow = vec![issuer_url_filter(&oidc.issuer)?];
-    let block: Vec<&str> = match oidc.navigation() {
-        CardNavigation::Open => OPEN_CARD_BLOCKLIST.to_vec(),
-        CardNavigation::Listed => {
+    let mut block = vec!["*".to_string()];
+    match (oidc.navigation(), device_blocks) {
+        (CardNavigation::Open, Some(device)) => {
+            allow.insert(0, OPEN_CARD_FILTER.into());
+            block.extend(device.iter().filter(|e| e.as_str() != "*").cloned());
+        }
+        _ => {
             for filter in oidc
                 .card_hosts
                 .iter()
@@ -721,9 +742,8 @@ pub fn render_login_browser_policy(oidc: &Oidc) -> Option<String> {
                     allow.push(filter);
                 }
             }
-            vec!["*"]
         }
-    };
+    }
     allow.push(LOGIN_REDIRECT_FILTER.into());
     let policy = serde_json::json!({
         "URLBlocklist": block,
@@ -876,20 +896,28 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
         }
     }
     let policy = bundle_policy(ctx, env);
-    apply(env, &policy, ctx.school.oidc.as_ref(), problems)
+    apply(
+        env,
+        &policy,
+        ctx.school.oidc.as_ref(),
+        Some(&ctx.config.chrome_policy),
+        problems,
+    )
 }
 
 fn run_seed(seed: &Seed, env: &mut Env) -> Vec<ItemResult> {
     let policy = seed_policy(seed, env);
-    apply(env, &policy, seed.oidc.as_ref(), Vec::new())
+    apply(env, &policy, seed.oidc.as_ref(), None, Vec::new())
 }
 
-/// 写策略、按需写或删 broker 配置、broker 配置变了（或上次重启没成）就重启 authd。
+/// 写策略、按需写或删 broker 配置、broker 配置变了（或上次重启没成）就重启 authd。`device_blocks` 是设备 Config 的
+/// `chrome_policy`（种子阶段没有）：open 卡片带上它的 `URLBlocklist`（[`card_device_blocks`]）。
 /// 回报里不带用户名与邮箱（只有域名与 OIDC 的格式错误）。
 fn apply(
     env: &mut Env,
     policy: &LoginPolicy,
     oidc: Option<&Oidc>,
+    device_blocks: Option<&toml::Table>,
     mut problems: Vec<String>,
 ) -> Vec<ItemResult> {
     let written = match policy_json(policy) {
@@ -948,7 +976,11 @@ fn apply(
         Ok(changed) => env.sys.broker_restart_pending |= changed,
         Err(e) => problems.push(format!("broker registration: {e:#}")),
     }
-    let browser_policy = valid_oidc.and_then(render_login_browser_policy);
+    let device_blocks = device_blocks
+        .map(card_device_blocks)
+        .unwrap_or(Some(Vec::new()));
+    let browser_policy =
+        valid_oidc.and_then(|o| render_login_browser_policy(o, device_blocks.as_deref()));
     if let Err(e) = sync_login_browser(env.paths, browser_policy.as_deref()) {
         problems.push(format!("sign-in card policy: {e:#}"));
     }
@@ -2981,8 +3013,10 @@ client_id = "laptops"
         }
     }
 
+    const NO_DEVICE_BLOCKS: Option<&[String]> = Some(&[]);
+
     #[test]
-    fn open_card_policy_blocks_other_schemes_only() {
+    fn open_card_policy_allows_https_only() {
         for o in [
             oidc("https://sso.school.ac.th/x"),
             Oidc {
@@ -2991,12 +3025,16 @@ client_id = "laptops"
                 ..oidc("https://sso.school.ac.th/x")
             },
         ] {
-            let text = render_login_browser_policy(&o).unwrap();
+            let text = render_login_browser_policy(&o, NO_DEVICE_BLOCKS).unwrap();
             let v: serde_json::Value = serde_json::from_str(&text).unwrap();
-            assert_eq!(v["URLBlocklist"], serde_json::json!(OPEN_CARD_BLOCKLIST));
+            assert_eq!(v["URLBlocklist"], serde_json::json!(["*"]));
             assert_eq!(
                 v["URLAllowlist"],
-                serde_json::json!(["https://.sso.school.ac.th:443", "127.0.0.1:48123/callback"]),
+                serde_json::json!([
+                    "https://*",
+                    "https://.sso.school.ac.th:443",
+                    "127.0.0.1:48123/callback"
+                ]),
                 "card_hosts change nothing on an open card"
             );
             assert_eq!(v["DefaultSearchProviderEnabled"], false);
@@ -3010,18 +3048,98 @@ client_id = "laptops"
                 crate::signin_handoff::cookies::CardHosts::Any
             );
         }
-        assert!(!OPEN_CARD_BLOCKLIST.contains(&"*"));
-        assert!(OPEN_CARD_BLOCKLIST.iter().all(|f| !f.starts_with("https")));
         // a lab issuer on plain http is still reachable: its own filter is in the allowlist
-        let text = render_login_browser_policy(&oidc("http://10.0.0.5:5556")).unwrap();
+        let text =
+            render_login_browser_policy(&oidc("http://10.0.0.5:5556"), NO_DEVICE_BLOCKS).unwrap();
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(v["URLAllowlist"][0], "http://10.0.0.5:5556");
+        assert_eq!(v["URLAllowlist"][1], "http://10.0.0.5:5556");
+    }
+
+    #[test]
+    fn open_card_keeps_the_device_blocklist() {
+        let blocks = vec!["facebook.com".to_string(), "tiktok.com".to_string()];
+        let text =
+            render_login_browser_policy(&oidc("https://sso.school.ac.th"), Some(&blocks)).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            v["URLBlocklist"],
+            serde_json::json!(["*", "facebook.com", "tiktok.com"])
+        );
+        assert_eq!(v["URLAllowlist"][0], "https://*");
+        assert_eq!(
+            crate::signin_handoff::cookies::card_hosts(&text),
+            crate::signin_handoff::cookies::CardHosts::Any
+        );
+        // A Device that blocks everything on its desktop gets a listed card.
+        let o = Oidc {
+            card_hosts: vec!["cdn.school.ac.th".into()],
+            ..oidc("https://sso.school.ac.th")
+        };
+        let text = render_login_browser_policy(&o, None).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["URLBlocklist"], serde_json::json!(["*"]));
+        assert_eq!(
+            v["URLAllowlist"],
+            serde_json::json!([
+                "https://.sso.school.ac.th:443",
+                "https://.cdn.school.ac.th:443",
+                "127.0.0.1:48123/callback"
+            ])
+        );
+        assert!(matches!(
+            crate::signin_handoff::cookies::card_hosts(&text),
+            crate::signin_handoff::cookies::CardHosts::Listed(_)
+        ));
+    }
+
+    #[test]
+    fn device_blocks_from_chrome_policy() {
+        let t = |text: &str| card_device_blocks(&toml::from_str::<toml::Table>(text).unwrap());
+        assert_eq!(t(""), Some(vec![]));
+        assert_eq!(
+            t("URLBlocklist = \"facebook.com\""),
+            Some(vec![]),
+            "not a list"
+        );
+        assert_eq!(
+            t("URLBlocklist = [\"facebook.com\", 3, \"\", \"facebook.com\", \"x.th\"]"),
+            Some(vec!["facebook.com".to_string(), "x.th".to_string()])
+        );
+        assert_eq!(t("URLBlocklist = [\"facebook.com\", \"*\"]"), None);
+        assert_eq!(t("URLBlocklist = [\" * \"]"), None);
+        let many = format!(
+            "URLBlocklist = [{}]",
+            (0..MAX_CARD_DEVICE_BLOCKS + 5)
+                .map(|i| format!("\"h{i}.th\""))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        assert_eq!(t(&many).unwrap().len(), MAX_CARD_DEVICE_BLOCKS);
+    }
+
+    #[test]
+    fn card_policy_follows_the_device_config() {
+        let root = tmp_root();
+        let r = FakeRunner::new();
+        let mut sys = SysState::default();
+        let school = school_with(Some(oidc("https://sso.school.ac.th")));
+        let mut g = sso_group();
+        g.chrome_policy = toml::from_str("URLBlocklist = [\"tiktok.com\"]").unwrap();
+        let out = run_bundle(root.path(), &school, &g, &r, &mut sys);
+        assert_eq!(out, vec![ok(ITEM)]);
+        let v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(card_policy(root.path())).unwrap()).unwrap();
+        assert_eq!(v["URLBlocklist"], serde_json::json!(["*", "tiktok.com"]));
+        assert_eq!(v["URLAllowlist"][0], "https://*");
     }
 
     #[test]
     fn card_policy_allows_only_the_idp_and_the_redirect() {
-        let text =
-            render_login_browser_policy(&listed(oidc("https://sso.school.ac.th/x"))).unwrap();
+        let text = render_login_browser_policy(
+            &listed(oidc("https://sso.school.ac.th/x")),
+            NO_DEVICE_BLOCKS,
+        )
+        .unwrap();
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(v["URLBlocklist"], serde_json::json!(["*"]));
         assert_eq!(
@@ -3038,9 +3156,12 @@ client_id = "laptops"
             crate::signin_handoff::cookies::card_hosts(&text),
             crate::signin_handoff::cookies::CardHosts::Listed(_)
         ));
-        assert_eq!(render_login_browser_policy(&oidc("https://*")), None);
         assert_eq!(
-            render_login_browser_policy(&listed(oidc("https://*"))),
+            render_login_browser_policy(&oidc("https://*"), NO_DEVICE_BLOCKS),
+            None
+        );
+        assert_eq!(
+            render_login_browser_policy(&listed(oidc("https://*")), NO_DEVICE_BLOCKS),
             None
         );
     }
@@ -3056,7 +3177,7 @@ client_id = "laptops"
             ],
             ..listed(oidc("https://sso.school.ac.th"))
         };
-        let text = render_login_browser_policy(&o).unwrap();
+        let text = render_login_browser_policy(&o, NO_DEVICE_BLOCKS).unwrap();
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(
             v["URLAllowlist"],
