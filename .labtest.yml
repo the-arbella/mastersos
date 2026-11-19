@@ -23,3 +23,10 @@ suites:
     cpus: 4
     timeout: 20m
     paths: [image/patches/authd-oidc/**, image/tests/authd-oidc-patch-test.sh, image/mkosi.build]
+  image-tests:
+    # The synced tree has no .git; check-tree reads `git ls-files`, so it runs in a throwaway repo over a copy.
+    run: bash image/tests/login-people-test.sh && t=$(mktemp -d) && trap 'rm -rf -- "$t"' EXIT && cp -a . "$t" && cd "$t" && git init -q && git add -A && bash image/tests/check-tree.sh
+    mem: 1G
+    cpus: 2
+    timeout: 20m
+    paths: [image/**, skills/**, tools/**, core/**, .github/**, docs/**]

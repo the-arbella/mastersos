@@ -229,13 +229,6 @@ The profile is for an issuer that names every person itself (a MastersOS issuer)
 - The broker deletes `<login_name>.json` at the start of every `NewSession` (login or unlock), so a login whose facts could not be fetched never hands over an earlier login's. The facts never decide the login: nothing in this step can deny it.
 - The reader is `pam-session` (user layer, Plan B): it reads the file, deletes it, and ignores one older than 120 s. A missing, error or stale file means no facts: fact conditions never match, rules without fact conditions (`admin`, `device_group`, `kind`, `user`) still apply in order, and `[user] fallback` applies when none matches (user-layer design §5). Facts the reader cannot take, for instance an `org_role`, a class `role` or an `age_band` outside the values the design lists (§2.1), count as no facts too. This reader is Plan B's work; the broker only writes the file.
 
-**`login_domain`**
-
-- `[school.oidc] login_domain` (optional): the domain the login screen completes a bare username with. It must be lowercase, a valid domain and one of `allowed_domains`; otherwise the agent leaves it out of `branding.json`.
-- The screen's extension completes a typed name that has no `@`, is a plain username (`[a-z0-9._-]{1,64}`, not a hidden system name) and is not a local account to `<name>@<login_domain>` (lowercased), when Enter is pressed. A local account with exactly that name keeps precedence.
-- While such a name is typed the people list below the entry preselects nobody, so Enter takes the completion and not a more recent `bobby@...` or someone whose name starts with `bob`. It preselects a person only when that person is exactly the name: a local account (any case, so `Alice` picks a local `alice` while the list is up; after Escape put the list away Enter completes `Alice` instead), or `<name>@<login_domain>` itself. A person chosen with the arrow keys or the mouse is always taken. Nothing is completed until the computer's accounts have loaded (in the first seconds the list of accounts is empty and a local name would otherwise go to the school's page).
-- The agent writes `login_domain` into `branding.json` only while `sso` is one of the Device's login methods (the same policy the broker drop-in is written from). With no `login_domain`, a typed name without `@` is a local account as before.
-
 ## 用户看到的流程
 
 1. 登录页的用户列表点头像，或输入完整邮箱（打名字时框下就给出 “名字@学校域名”，选中即填好地址）。broker 由登录页扩展代选：有 `@` 走学校，没有走本机账号。

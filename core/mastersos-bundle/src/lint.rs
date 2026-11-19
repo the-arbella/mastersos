@@ -590,7 +590,6 @@ pub fn feature_path(m: &Manifest, feature: &str) -> String {
         FEATURE_OIDC_CARD => Some("school.oidc".to_owned()),
         FEATURE_OIDC_IDP_HINT => Some("school.oidc.idp_hint".to_owned()),
         FEATURE_OIDC_CARD_NAVIGATION => Some("school.oidc.card_navigation".to_owned()),
-        FEATURE_OIDC_LOGIN_DOMAIN => Some("school.oidc.login_domain".to_owned()),
         FEATURE_OIDC_MASTERSOS_CLAIMS => Some("school.oidc.mastersos_claims".to_owned()),
         FEATURE_FORMAT_3 => Some("format".to_owned()),
         FEATURE_CONFIG => Some("config".to_owned()),

@@ -222,7 +222,6 @@ admin_users = ["it.admin@school.ac.th"]
 [school.oidc]
 issuer = "https://sso.school.ac.th"
 client_id = "mastersos"
-login_domain = "school.ac.th"
 mastersos_claims = true
 
 [device_defaults]
@@ -419,7 +418,6 @@ with PKCE and the fixed redirect `http://127.0.0.1:48123/callback`.
 | `card_hosts` | list of strings | optional; only the issuer's host | lowercase hostnames with at least two labels; no scheme, port, path, wildcard or IP address; none twice; at most 20 | `card_hosts = ["sso.school.ac.th"]` | Only with `card_navigation = "listed"`: the hosts the sign-in card may open besides the issuer, for example an upstream provider. Each is reached over `https` on port 443, and its subdomains are not included. With `"open"` they change nothing. Feature `oidc_card`, like `client_secret`. |
 | `card_navigation` | string | `"open"` | `"open"`, `"listed"` | `card_navigation = "listed"` | Which pages the sign-in card may open. `open`: any `https` page the sign-in pages link or redirect to (an upstream provider, a captcha, a help page), except what the Device's own `chrome_policy` `URLBlocklist` blocks. `listed`: only the issuer and `card_hosts`; a Device whose `URLBlocklist` contains `"*"` always gets a listed card. See [The sign-in card](#the-sign-in-card). Devices whose OS predates this key reject the whole Version (feature `oidc_card_navigation`) and keep the card `listed`. |
 | `idp_hint` | string | optional; none | 1 to 64 of `A-Z a-z 0-9 _ -` | `idp_hint = "school-sso"` | Only when `issuer` is a broker in front of the school's SSO: the broker's id for that upstream provider. Feature `oidc_idp_hint`. |
-| `login_domain` | string | optional; none | lowercase letters, digits, `.` and `-`, like an `allowed_domains` entry; must be one of `allowed_domains` | `login_domain = "students.school.ac.th"` | On the login screen an entry without `@` that is not a local account on the Device is read as `<entry>@<login_domain>`, so young children type only their user name; a local account with that exact name keeps precedence (`login_domain_not_allowed`). Feature `oidc_login_domain`. |
 | `mastersos_claims` | boolean | `false` | `true`, `false` | `mastersos_claims = true` | `true`: the issuer follows the MastersOS issuer profile: the Device asks for the school's organisation (needs `[school] id`, `mastersos_claims_without_school_id`), takes the user name from `login_name` and reads the facts that `[[assign]]` rules use. `false`: a plain OIDC issuer; no facts, the user name comes from `email`. Feature `oidc_mastersos_claims`. |
 
 ```toml check=ok
@@ -1091,8 +1089,7 @@ key or an unknown value of an enumerated condition (such as `kind = ["teacher"]`
 `mastersos_claims = true` are `facts_without_mastersos_claims`. Other checks of the user layer:
 `user_fallback_missing`, `user_config_unreached`, `user_config_terminal`,
 `script_apply_in_user_config`, `script_login_in_device_config`, `deb_kiosk_in_user_config`,
-`deb_not_kiosk_in_device_config`, `user_deb_conflict`, `login_domain_not_allowed` and
-`mastersos_claims_without_school_id`.
+`deb_not_kiosk_in_device_config`, `user_deb_conflict` and `mastersos_claims_without_school_id`.
 
 The entry-level rules of a Config apply to the user layer at `user_defaults.…` and
 `user_config.<id>.…`: `web_app_invalid`, `web_app_not_https`, `icon_invalid`, the `deb_*` codes,
@@ -3121,7 +3118,7 @@ with Configs counts as using it, `wifi_ext`: any `[[school.wifi]]`, or a Wi-Fi e
 `wpa3_only` (either value), `eap` or an enterprise key, or `oidc_card`: `client_secret` or
 `card_hosts` in `[school.oidc]`, or `support`: `[config.support]` or `support` in `[defaults]`, or
 `config_update_channel`: `update_channel` in `[defaults]` or a `[[config]]`, or `oidc_idp_hint`:
-`idp_hint` in `[school.oidc]`, or `oidc_card_navigation`: `card_navigation` in `[school.oidc]`, or `deb_apps`: `apps.deb` or `ubuntu_mirror` in `[defaults]` or a `[[config]]`, or `device_annotations`: `asset_id` or `location` in a `[[device]]`, or `kiosk_platform`, `kiosk_inject`, `kiosk_device_attributes`, `kiosk_managed_config`: the kiosk app keys `platform`, `inject`, `device_attributes = true` and `managed_config`, or `format_3`: `format = 3`, or `oidc_login_domain`: `login_domain` in `[school.oidc]`, or `oidc_mastersos_claims`: `mastersos_claims = true` in `[school.oidc]`),
+`idp_hint` in `[school.oidc]`, or `oidc_card_navigation`: `card_navigation` in `[school.oidc]`, or `deb_apps`: `apps.deb` or `ubuntu_mirror` in `[defaults]` or a `[[config]]`, or `device_annotations`: `asset_id` or `location` in a `[[device]]`, or `kiosk_platform`, `kiosk_inject`, `kiosk_device_attributes`, `kiosk_managed_config`: the kiosk app keys `platform`, `inject`, `device_attributes = true` and `managed_config`, or `format_3`: `format = 3`, or `oidc_mastersos_claims`: `mastersos_claims = true` in `[school.oidc]`),
 and some Devices seen in the last 30 days have not reported that they understand it.
 
 <!-- prompt:omit -->
@@ -4165,42 +4162,6 @@ config = "standard"
 serial = "9JK4LM2"
 group = "default"
 locked = { message = "This Device was reported lost. Please bring it to the IT office in Building A. This Device was reported lost. Please bring it to the IT office in Building A. This Device was reported lost. Please bring it to the IT office in Building A. This Device was reported lost. Please bring it to the IT office in Building A. This Device was reported lost. Please bring it to the IT office in Building A. This Device was reported lost. Please bring it to the IT office in Building A. This Device was reported lost. Please bring it to the IT office in Building A." }
-```
-<!-- /prompt:omit -->
-
-### `login_domain_not_allowed`
-
-**Level:** error. **Meaning:** `school.oidc.login_domain` is not one of `allowed_domains` (compared ignoring case). Any format.
-
-<!-- prompt:omit -->
-**Why:** the rule is that `login_domain` must be one of `school.allowed_domains`.
-<!-- /prompt:omit -->
-
-**How to fix:** add the domain to `allowed_domains`, or change `login_domain` to one of them.
-
-<!-- prompt:omit -->
-```toml check=login_domain_not_allowed
-format = 3
-
-[school]
-oidc = { issuer = "https://sso.school.ac.th", client_id = "mastersos", login_domain = "students.school.ac.th" }
-allowed_domains = ["school.ac.th"]
-
-[[device_config]]
-id = "classroom"
-name = "Classroom laptops"
-
-[[group]]
-id = "default"
-name = "Unassigned"
-config = "classroom"
-
-[[user_config]]
-id = "student"
-name = "Students"
-
-[user]
-fallback = "student"
 ```
 <!-- /prompt:omit -->
 

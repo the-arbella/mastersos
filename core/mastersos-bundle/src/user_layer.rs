@@ -1237,31 +1237,11 @@ fn bad(code: &'static str, message: String, path: String) -> Lint {
 }
 
 /// The `check` errors of the user layer design (§2.1) that `validate_all` adds: the
-/// `[school.oidc]` keys `login_domain` and `mastersos_claims` (every format), then for a
+/// `[school.oidc]` key `mastersos_claims` (every format), then for a
 /// `format = 3` text the fallback, the user config ids and references, the rules, which layer
 /// may hold which scripts and .deb apps, and .deb ids that clash on one Group.
 pub fn validate_user_layer(m: &Manifest, out: &mut Vec<Lint>) {
     if let Some(o) = &m.school.oidc {
-        if let Some(d) = &o.login_domain {
-            // Compared as the Device compares a login's domain with allowed_domains.
-            if !m
-                .school
-                .allowed_domains
-                .iter()
-                .any(|a| a.eq_ignore_ascii_case(d))
-            {
-                out.push(
-                    bad(
-                        "login_domain_not_allowed",
-                        format!(
-                            "school.oidc.login_domain {d:?} is not in allowed_domains: login_domain must be one of school.allowed_domains; add it to allowed_domains or change it."
-                        ),
-                        "school.oidc.login_domain".into(),
-                    )
-                    .param("domain", d),
-                );
-            }
-        }
         if o.mastersos_claims && m.school.id.is_none() {
             out.push(bad(
                 "mastersos_claims_without_school_id",
@@ -2751,10 +2731,10 @@ mod tests {
             .any(|l| l.code == code && l.path.as_deref() == Some(path))
     }
 
-    fn v3_example_with_login_domain_and_claims() -> String {
+    fn v3_example_with_claims() -> String {
         v3_edit(
             OIDC_END,
-            "client_id = \"mastersos\", login_domain = \"school.ac.th\", mastersos_claims = true }",
+            "client_id = \"mastersos\", mastersos_claims = true }",
         )
     }
 
@@ -2865,9 +2845,9 @@ mod tests {
             "{w:?}"
         );
         // With the issuer profile on, the rules on facts can match.
-        let w = warnings_of(&v3_example_with_login_domain_and_claims());
+        let w = warnings_of(&v3_example_with_claims());
         assert_eq!(codes(&w), ["user_config_terminal"], "{w:?}");
-        assert!(errors_of(&v3_example_with_login_domain_and_claims()).is_empty());
+        assert!(errors_of(&v3_example_with_claims()).is_empty());
     }
 
     #[test]
@@ -3093,39 +3073,14 @@ mod tests {
     }
 
     #[test]
-    fn login_domain_not_allowed() {
-        only_error(
-            &v3_edit(
-                OIDC_END,
-                "client_id = \"mastersos\", login_domain = \"kids.school.ac.th\" }",
-            ),
-            "login_domain_not_allowed",
-            "school.oidc.login_domain",
+    fn login_domain_is_an_unknown_key() {
+        // Removed (user layer design §2.5): the login screen's domain suggestions cover it.
+        let text = v3_edit(
+            OIDC_END,
+            "client_id = \"mastersos\", login_domain = \"school.ac.th\" }",
         );
-        // Compared ignoring ASCII case, as a login's domain is.
-        assert!(errors_of(&v3_edit(
-            OIDC_END,
-            "client_id = \"mastersos\", login_domain = \"School.ac.th\" }"
-        ))
-        .is_empty());
-        // Every format.
-        let v2 = crate::testutil::spec_example();
-        assert!(v2.contains(OIDC_END));
-        let v2 = v2.replacen(
-            OIDC_END,
-            "client_id = \"mastersos\", login_domain = \"kids.school.ac.th\" }",
-            1,
-        );
-        let v = Manifest::parse(&v2)
-            .unwrap()
-            .validate_all(&crate::testutil::spec_example_present());
-        assert_eq!(codes(&v), ["login_domain_not_allowed"], "{v:?}");
-        // A malformed login_domain is oidc_invalid (the lint of every [school.oidc] key).
-        let w = warnings_of(&v3_edit(
-            OIDC_END,
-            "client_id = \"mastersos\", login_domain = \"School.ac.th\" }",
-        ));
-        assert!(has_lint(&w, "oidc_invalid", "school.oidc"), "{w:?}");
+        let err = Manifest::parse(&text).unwrap_err().to_string();
+        assert!(err.contains("unknown field `login_domain`"), "{err}");
     }
 
     #[test]
@@ -3175,7 +3130,7 @@ mod tests {
             "{w:?}"
         );
         // With the issuer profile, none.
-        let w = warnings_of(&v3_example_with_login_domain_and_claims());
+        let w = warnings_of(&v3_example_with_claims());
         assert!(!codes(&w).contains(&"facts_without_mastersos_claims"));
     }
 
@@ -3216,28 +3171,20 @@ mod tests {
     }
 
     #[test]
-    fn features_report_format3_login_domain_and_claims() {
-        let m = Manifest::parse(&v3_example_with_login_domain_and_claims()).unwrap();
+    fn features_report_format3_and_claims() {
+        let m = Manifest::parse(&v3_example_with_claims()).unwrap();
         let f = features_used(&m);
         assert!(
-            f.contains(&FEATURE_FORMAT_3)
-                && f.contains(&FEATURE_OIDC_LOGIN_DOMAIN)
-                && f.contains(&FEATURE_OIDC_MASTERSOS_CLAIMS),
+            f.contains(&FEATURE_FORMAT_3) && f.contains(&FEATURE_OIDC_MASTERSOS_CLAIMS),
             "{f:?}"
         );
-        assert_eq!(FEATURE_OIDC_LOGIN_DOMAIN, "oidc_login_domain");
         assert_eq!(FEATURE_OIDC_MASTERSOS_CLAIMS, "oidc_mastersos_claims");
         let plain = features_used(&Manifest::parse(&v3_example()).unwrap());
         assert!(plain.contains(&FEATURE_FORMAT_3));
-        assert!(!plain.contains(&FEATURE_OIDC_LOGIN_DOMAIN));
         assert!(!plain.contains(&FEATURE_OIDC_MASTERSOS_CLAIMS));
         let v2 = features_used(&Manifest::parse(&crate::testutil::spec_example()).unwrap());
         assert!(!v2.contains(&FEATURE_FORMAT_3));
         // Where each is written, for the lints about Devices that do not know it.
-        assert_eq!(
-            crate::feature_path(&m, FEATURE_OIDC_LOGIN_DOMAIN),
-            "school.oidc.login_domain"
-        );
         assert_eq!(
             crate::feature_path(&m, FEATURE_OIDC_MASTERSOS_CLAIMS),
             "school.oidc.mastersos_claims"
@@ -3250,20 +3197,14 @@ mod tests {
     fn mastersos_claims_defaults_false_and_is_omitted() {
         let o: Oidc = toml::from_str("issuer = \"https://i.org\"\nclient_id = \"c\"").unwrap();
         assert!(!o.mastersos_claims);
-        assert_eq!(o.login_domain, None);
         let text = toml::to_string(&o).unwrap();
-        assert!(
-            !text.contains("mastersos_claims") && !text.contains("login_domain"),
-            "{text}"
-        );
+        assert!(!text.contains("mastersos_claims"), "{text}");
         let o = Oidc {
             mastersos_claims: true,
-            login_domain: Some("school.ac.th".into()),
             ..o
         };
         let text = toml::to_string(&o).unwrap();
         assert!(text.contains("mastersos_claims = true"), "{text}");
-        assert!(text.contains("login_domain = \"school.ac.th\""), "{text}");
         assert_eq!(toml::from_str::<Oidc>(&text).unwrap(), o);
     }
 

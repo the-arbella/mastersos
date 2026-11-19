@@ -20,24 +20,29 @@ function matches(p, q) {
     return UNSPACED.test(real) && real.includes(q);
 }
 
-// Typing someone's whole user name or name signs that person in, not a more recent "Bobby" for "bob". With a login domain,
-// a bare username is also exactly the school account it completes to: "bob" is "bob@<login_domain>".
-const exact = (p, q, loginDomain) => {
+// Typing someone's whole user name or name signs that person in, not a more recent "Bobby" for "bob". Text without '@' is
+// also exactly a school account whose part before the '@' it is, at one of the school domains: "bob" is
+// bob@<school domain>. 2: the whole user name (a local "bob" first); 1: the real name or the part before the '@'; 0: neither.
+const exact = (p, q, domains = []) => {
     const user = p.userName.toLowerCase();
-    if (user === q || (p.realName || '').toLowerCase() === q)
-        return true;
-    return typeof loginDomain === 'string' && !!loginDomain && !q.includes('@') && user === `${q}@${loginDomain.toLowerCase()}`;
+    if (user === q)
+        return 2;
+    if ((p.realName || '').toLowerCase() === q)
+        return 1;
+    const at = user.indexOf('@');
+    return !q.includes('@') && at > 0 && user.slice(0, at) === q &&
+        (domains ?? []).some(d => typeof d === 'string' && d.toLowerCase() === user.slice(at + 1)) ? 1 : 0;
 };
 
 // people: [{userName, realName, loginTime}]. Nothing before the first character; an exact match, then the most recent
-// sign-in first. loginDomain (optional): the school's login domain, see exact.
-export function matchPeople(people, query, loginDomain = null) {
+// sign-in first. domains: the school domains (see exact).
+export function matchPeople(people, query, domains = []) {
     const q = (query ?? '').trim().toLowerCase();
     if (!q)
         return {shown: [], more: false};
     const found = people
         .filter(p => !HIDDEN(p.userName) && matches(p, q))
-        .sort((a, b) => (exact(b, q, loginDomain) - exact(a, q, loginDomain)) || (b.loginTime - a.loginTime) ||
+        .sort((a, b) => (exact(b, q, domains) - exact(a, q, domains)) || (b.loginTime - a.loginTime) ||
             (a.realName || '').localeCompare(b.realName || ''));
     return {shown: found.slice(0, LIMIT), more: found.length > LIMIT};
 }
@@ -62,40 +67,23 @@ export function suggestDomains(query, domains, taken = []) {
         .slice(0, LIMIT);
 }
 
-// A bare username (no '@') that is not a local account on this computer is a school account: <username>@<login_domain>.
-// Null when the text is not a plain username, there is no login domain, it is a hidden local name, or a local account has
-// exactly this name (that account keeps precedence). A case variant of a local name ("Alice" with a local "alice") is not
-// refused here: while the list is up, preselect picks the local person first (an exact match, case-insensitive), so this
-// is not reached; after Escape put the list away, Enter takes what was typed and this completes it to alice@<login_domain>.
-export function expandLoginName(typed, loginDomain, localNames) {
-    const name = (typed ?? '').trim();
-    const lower = name.toLowerCase();
-    if (typeof loginDomain !== 'string' || !loginDomain)
-        return null;
-    if (name.includes('@') || !/^[a-z0-9._-]{1,64}$/.test(lower) || HIDDEN(lower))
-        return null;
-    if ((localNames ?? []).includes(name))
-        return null;
-    return `${lower}@${loginDomain}`;
-}
-
-// The person Enter signs in without arrow keys: none while an address is being typed (it may be someone new). With a login
-// domain, a bare username that expandLoginName would complete is a user name, not a real name: only a person whose user
-// name is exactly that text (a local account, any case) or <text>@<login_domain> is preselected, else nobody and Enter
-// takes the completion. So "bob" never signs in a more recent "bobby@...", nor someone whose real name is exactly "Bob".
-// localNames null means the local accounts are not known yet: no completion, the old rule. Without a login domain, or for
-// text that does not complete, the old rule: the first person shown (matchPeople puts exact matches first).
-export function preselect(query, shown, loginDomain = null, localNames = null) {
-    const q = (query ?? '').trim().toLowerCase();
-    if (!shown.length || (query ?? '').includes('@'))
+// The person Enter signs in without arrow keys: none while an address is being typed (it may be someone new). With school
+// domains, a name that could be the part before the '@' never preselects a school account whose part before the '@' it
+// only starts: "bob" is not a more recent bobby@<school domain>, whose sign-in the school's page would refuse for bob; the
+// school addresses bob@<domain> are offered under the people instead (suggestDomains). A person found by real name ("lee"
+// for "Bobby Lee") and a local account are preselected as before.
+export function preselect(query, shown, domains = []) {
+    const t = (query ?? '').trim();
+    if (!shown.length || t.includes('@'))
         return -1;
-    if (localNames && expandLoginName(query, loginDomain, localNames) !== null) {
-        const completed = `${q}@${loginDomain.toLowerCase()}`;
-        return shown.findIndex(p => {
-            const user = p.userName.toLowerCase();
-            return user === q || user === completed;
-        });
-    }
+    const first = shown[0];
+    const q = t.toLowerCase();
+    const user = first.userName.toLowerCase();
+    const at = user.indexOf('@');
+    const local = at > 0 ? user.slice(0, at) : null;
+    if (domains?.length && LOCAL_PART.test(t) && local !== null && local !== q && local.startsWith(q) &&
+        !exact(first, q, domains))
+        return -1;
     return 0;
 }
 
