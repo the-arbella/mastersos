@@ -338,3 +338,27 @@ Expected:
 - After sign-out `mastersos.json` is the neutral baseline. Chrome shows the person's config policy during the session (item 2 screenshots).
 
 Screenshots: `47-chrome-policy-dirs.png`.
+
+## C1. Issuer profile end to end (patch 0007; blocked until the issuer is live)
+
+Image built from master with a test school, `school.oidc.mastersos_claims = true`, the issuer's test organisation and two accounts: (a) a login name on the school's login domain, (b) a login name equal to the person's own email. The school's login domain is in `allowed_domains`.
+
+1. On the greeter, type only the user name of account (a). The list under the entry offers `<name>@<domain>` for each school domain; click the right one, sign in with the email code. Expect a session; `getent passwd <login_name>` exists.
+2. Sign in with account (b) by its full address.
+3. An account of another organisation is refused before grant: the greeter shows the refusal, and `getent passwd` has no entry for it.
+4. During sign-in, `/run/mastersos/facts/<login_name>.json` appears (file 0600, directory 0700) and is gone once the session opens (consumed by `pam-session`); the report item names the matched rule's user config.
+5. Lock the screen and unlock: the broker deletes and rewrites the facts file; the session's user config does not change.
+6. A school with `mastersos_claims = false` still signs in by email, and fact rules never match (fallback or a non-fact rule).
+
+## C2. Greeter at runtime (the GJS code only has pure-function tests)
+
+1. With `bob@<domain>` and a more recent `bobby@<domain>` in the user list, typing `bob` preselects Bob; with only `bobby`, nothing is preselected and `bob@<domain>` suggestions show.
+2. Typing a surname (for example `lee`) preselects the person with that real name.
+3. Right after the greeter starts (user list still loading), typing a local account name does not send it to school sign-in.
+4. Refusal text for "not a member of this school" is the not-allowed message.
+
+## C3. A real image build
+
+`image/build.sh` succeeds: `mkosi.build` runs the broker's `TestMastersOS` tests as root in the chroot with the expected pass count, and the patch list check accepts 0001-0007.
+
+Screenshots for every item: new numbers, never overwritten; list their paths in the results.
