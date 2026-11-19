@@ -175,3 +175,40 @@ test('a bare name is offered at every school domain, and Enter alone takes it as
     // A bare name nobody on this computer has: nobody preselected, so Enter takes the typed name (a local account).
     assert.equal(preselect('alice', matchPeople([], 'alice').shown), -1);
 });
+
+test('an exact user name before the @ wins over a prefix match', () => {
+    const D = ['school.example', 'students.example'];
+    const bobby = person('bobby@school.example', 'Bobby Lee', 9);
+    const bob = person('bob@school.example', 'Bob Stone', 1);
+    const r = matchPeople([bobby, bob], 'bob', D);
+    assert.deepEqual(names(r), ['bob@school.example', 'bobby@school.example']);
+    assert.equal(r.shown[preselect('bob', r.shown, D)].userName, 'bob@school.example');
+    assert.equal(r.shown[preselect('Bob', matchPeople([bobby, bob], 'Bob', D).shown, D)].userName, 'bob@school.example');
+    // Only at a school domain: another domain's bob is a prefix match like any other.
+    const other = person('bob@other.example', 'Bob Other', 1);
+    assert.deepEqual(names(matchPeople([bobby, other], 'bob', D)), ['bobby@school.example', 'bob@other.example']);
+});
+
+test('a bare name that only starts a school account preselects nobody and offers the school addresses', () => {
+    const D = ['school.example', 'students.example'];
+    const bobby = person('bobby@school.example', 'Bobby Lee', 9);
+    const r = matchPeople([bobby], 'bob', D);
+    assert.deepEqual(names(r), ['bobby@school.example']);
+    assert.equal(preselect('bob', r.shown, D), -1);
+    assert.deepEqual(suggestDomains('bob', D, r.shown.map(p => p.userName)), ['bob@school.example', 'bob@students.example']);
+    // Without school domains, the old rule.
+    assert.equal(preselect('bob', matchPeople([bobby], 'bob').shown), 0);
+});
+
+test('a local account named exactly as typed still wins', () => {
+    const D = ['school.example'];
+    const people = [person('bobby@school.example', 'Bobby Lee', 9), person('bob@school.example', 'Bob Stone', 5),
+        person('bob', 'Bob Local', 1)];
+    const r = matchPeople(people, 'bob', D);
+    assert.equal(r.shown[0].userName, 'bob');
+    assert.equal(r.shown[preselect('bob', r.shown, D)].userName, 'bob');
+    // A local account that the text only starts is preselected as before.
+    const local = [person('bobby', 'Bobby Local', 9)];
+    assert.equal(preselect('bob', matchPeople(local, 'bob', D).shown, D), 0);
+});
+

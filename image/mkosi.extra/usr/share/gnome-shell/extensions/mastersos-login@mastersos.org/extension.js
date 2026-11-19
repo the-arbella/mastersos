@@ -825,8 +825,8 @@ export default class MastersosLoginExtension extends Extension {
         const name = typed.trim();
         if (this._dialog?._userManager?.list_users().some(u => u.get_user_name() === name))
             return null;
-        const found = matchPeople(this._people(), typed);
-        const i = preselect(typed, found.shown);
+        const found = matchPeople(this._people(), typed, this._domains);
+        const i = preselect(typed, found.shown, this._domains);
         return i >= 0 ? found.shown[i].userName : null;
     }
 
@@ -846,11 +846,11 @@ export default class MastersosLoginExtension extends Extension {
 
     // People first, then the school addresses; Enter without the arrow keys only ever takes a person.
     _showMatches(text) {
-        const found = matchPeople(this._people(), text);
+        const found = matchPeople(this._people(), text, this._domains);
         this._shown = found.shown;
         this._more = found.more;
         this._addresses = suggestDomains(text, this._domains, found.shown.map(p => p.userName));
-        this._sel = preselect(text, found.shown);
+        this._sel = preselect(text, found.shown, this._domains);
         this._renderMatches();
     }
 
