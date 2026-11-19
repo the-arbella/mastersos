@@ -68,15 +68,21 @@ export function suggestDomains(query, domains, taken = []) {
 }
 
 // The person Enter signs in without arrow keys: none while an address is being typed (it may be someone new). With school
-// domains, a name that could be the part before the '@' never preselects a school account it only starts: "bob" is not
-// a more recent bobby@<school domain>, whose sign-in the school's page would refuse for bob; the school addresses
-// bob@<domain> are offered under the people instead (suggestDomains). A local account is preselected as before.
+// domains, a name that could be the part before the '@' never preselects a school account whose part before the '@' it
+// only starts: "bob" is not a more recent bobby@<school domain>, whose sign-in the school's page would refuse for bob; the
+// school addresses bob@<domain> are offered under the people instead (suggestDomains). A person found by real name ("lee"
+// for "Bobby Lee") and a local account are preselected as before.
 export function preselect(query, shown, domains = []) {
     const t = (query ?? '').trim();
     if (!shown.length || t.includes('@'))
         return -1;
     const first = shown[0];
-    if (domains?.length && LOCAL_PART.test(t) && first.userName.includes('@') && !exact(first, t.toLowerCase(), domains))
+    const q = t.toLowerCase();
+    const user = first.userName.toLowerCase();
+    const at = user.indexOf('@');
+    const local = at > 0 ? user.slice(0, at) : null;
+    if (domains?.length && LOCAL_PART.test(t) && local !== null && local !== q && local.startsWith(q) &&
+        !exact(first, q, domains))
         return -1;
     return 0;
 }
