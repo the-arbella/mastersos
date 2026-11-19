@@ -784,6 +784,8 @@ fn lint_user_apps(
 /// What one session gets: a user config with `[user_defaults]` laid under it (format 3), or the
 /// profile a format 1/2 Config implies ([`UserConfig::implied`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct UserConfig {
     /// The user config's id (a format 1/2 Config's id).
     pub id: String,
@@ -802,6 +804,10 @@ pub struct UserConfig {
     /// Non-kiosk .deb apps shown in the Dash, keyed by app id.
     pub deb: BTreeMap<String, DebApp>,
     /// Chrome managed policies.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "serde_json::Map<String, serde_json::Value>")
+    )]
     pub chrome_policy: toml::Table,
     /// Scripts run as the person at sign-in.
     pub login_scripts: Vec<Script>,
@@ -989,14 +995,18 @@ pub fn install_union(m: &Manifest, group_id: &str) -> (Vec<String>, BTreeMap<Str
 }
 
 /// What the Devices of `group` get: [`effective_config`] of its Config; for format 3 also the
-/// install union (`apps.flatpak`, and the union's .deb apps next to the device's own, the device
-/// entry winning on an id clash). `None` when the Group's Config is missing.
+/// install union (`apps.flatpak`, and the union's .deb apps next to the device's own kiosk
+/// ones, the device entry winning on an id clash). `None` when the Group's Config is missing.
 pub fn effective_device_config(m: &Manifest, group: &Group) -> Option<Config> {
     let mut config = effective_config(m, m.config(&group.config)?);
     if m.user_layer.is_some() {
         let (flatpak, mut deb) = install_union(m, &group.id);
         config.apps.flatpak = flatpak;
-        deb.extend(std::mem::take(&mut config.apps.deb));
+        deb.extend(
+            std::mem::take(&mut config.apps.deb)
+                .into_iter()
+                .filter(|(_, a)| a.kiosk),
+        );
         config.apps.deb = deb;
     }
     Some(config)
@@ -1110,6 +1120,21 @@ mod tests {
     }
 
     #[test]
+    fn drop_allow_undoes_a_default_allow() {
+        let m = Manifest::parse(&v3_text(
+            "[user_defaults]\nallow = [\"terminal\", \"settings\"]\n\
+             [[user_config]]\nid = \"a\"\nname = \"A\"\n\
+             [[user_config]]\nid = \"b\"\nname = \"B\"\ndrop.allow = [\"terminal\"]\n",
+        ))
+        .unwrap();
+        assert_eq!(user_config(&m, "a").unwrap().caps.len(), 2);
+        assert_eq!(
+            user_config(&m, "b").unwrap().caps,
+            Caps::from([Capability::Settings])
+        );
+    }
+
+    #[test]
     fn home_default_follows_preset() {
         let m = Manifest::parse(&v3_text(
             "[[user_config]]\nid = \"l\"\nname = \"L\"\nallow = [\"file_manager\"]\n\
@@ -1166,6 +1191,7 @@ mod tests {
         );
         assert_eq!(teacher.caps.len(), 6);
         assert_eq!(teacher.id, "teacher");
+        assert_eq!(teacher.name, eff("teacher").name);
         assert_eq!(teacher.web, eff("teacher").apps.web);
         assert_eq!(teacher.flatpak, eff("teacher").apps.flatpak);
         assert_eq!(teacher.chrome_policy, eff("teacher").chrome_policy);
@@ -1288,13 +1314,14 @@ mod tests {
                 "name = \"C\"\n",
                 &format!(
                     "name = \"C\"\napps.deb.zoom = {}\n",
-                    deb("Device", "https://x.example/d.deb")
+                    "{ name = \"Device\", url = \"https://x.example/d.deb\", kiosk = true }"
                 ),
             ),
         )
         .unwrap();
         let c = m.effective_of_group("default").unwrap();
         assert_eq!(c.apps.deb["zoom"].name, "Device");
+        assert!(c.apps.deb["zoom"].kiosk);
     }
 
     #[test]

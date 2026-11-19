@@ -29,7 +29,8 @@ pub enum GroupSource {
 pub struct Selection<'a> {
     pub group: &'a Group,
     /// What the Devices of `group` get: the Config it names laid over `[defaults]`
-    /// ([`effective_device_config`]).
+    /// ([`effective_device_config`]); for format 3 the Config also carries the install union
+    /// of the user configs the Group can reach.
     pub config: Config,
     pub source: GroupSource,
     pub lock: Option<&'a Lock>,
