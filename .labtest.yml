@@ -29,4 +29,4 @@ suites:
     mem: 1G
     cpus: 2
     timeout: 20m
-    paths: [image/**, skills/**, tools/**]
+    paths: [image/**, skills/**, tools/**, core/**, .github/**, docs/**]
