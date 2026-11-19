@@ -150,11 +150,11 @@ pub struct VisibleApps {
 
 /// 锁住的会话里覆盖成 `/bin/false` 的 D-Bus 激活（文件名；总线名是去掉 `.service` 的部分）。Chrome 的「在文件夹中
 /// 显示」走 `org.freedesktop.FileManager1`，快捷设置里的齿轮走 `org.gnome.Settings`（Ruling 7）。
-pub const DBUS_OVERRIDES: &[&str] = &[
-    "org.gnome.Nautilus.service",
-    "org.freedesktop.FileManager1.service",
-    "org.gnome.Settings.service",
-];
+pub const DBUS_OVERRIDES: &[&str] = &[NAUTILUS_SERVICE, FILE_MANAGER1_SERVICE, SETTINGS_SERVICE];
+/// The entries of [`DBUS_OVERRIDES`]: the file manager's two (lifted together by `file_manager`) and the settings'.
+pub const NAUTILUS_SERVICE: &str = "org.gnome.Nautilus.service";
+pub const FILE_MANAGER1_SERVICE: &str = "org.freedesktop.FileManager1.service";
+pub const SETTINGS_SERVICE: &str = "org.gnome.Settings.service";
 
 /// The extensions the locked sessions turn on: exactly those of the image's session mode
 /// (`/usr/share/gnome-shell/modes/mastersos.json`, design 2026-11-10; a test reads that file and compares). The locked

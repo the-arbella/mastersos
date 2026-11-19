@@ -31,7 +31,7 @@ use mastersos_bundle::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{config_dir_name, is_config_dir, read_active, NEUTRAL_DIR};
+use super::{active_marker, config_dir_name, is_config_dir, NEUTRAL_DIR};
 use crate::apply::{is_not_found, ApplyContext};
 use crate::deb_apps;
 use crate::deb_apps::status::PublicApp;
@@ -60,6 +60,8 @@ pub const SESSION_DB: &str = "mastersos-session";
 pub const SESSION_LINK: &str = "session";
 /// The parts of a config's `public_dir` directory.
 pub const XDG_SUB: &str = "xdg";
+/// The public [`STATE_SUB`]: traversable, not listable; the config dirs in it decide who reads them.
+pub const PUBLIC_STATE_MODE: u32 = 0o711;
 pub const SCRIPTS_SUB: &str = "login-scripts";
 
 /// The dconf database name of a config directory: `mastersos-<d>` (keyfiles in `mastersos-<d>.d`).
@@ -169,6 +171,10 @@ fn render_all(ctx: &ApplyContext, m: &Manifest, env: &mut Env) -> Vec<ItemResult
     let public =
         deb_apps::status::read_public(&paths.public_dir.join(deb_apps::status::PUBLIC_NAME));
     let neutral = neutral();
+    // The signed-in session's config dir keeps its mode (the switch opened it) and is never removed. A marker that
+    // exists but cannot be read keeps every dir this round.
+    let active = active_marker(&paths.root).map(|a| a.map(|a| a.dir).filter(|d| is_config_dir(d)));
+    let active_dir = active.as_ref().ok().cloned().flatten();
     let mut index = BTreeMap::new();
     let mut dconf_changed = false;
     {
@@ -176,7 +182,16 @@ fn render_all(ctx: &ApplyContext, m: &Manifest, env: &mut Env) -> Vec<ItemResult
         let mut dl = Downloads::new(sys, desktop::icon_key(&lists));
         for c in &configs {
             let dir = config_dir_name(&c.id);
-            let r = render_one(ctx, paths, c, &dir, &kiosk, &public, &mut dl);
+            let r = render_one(
+                ctx,
+                paths,
+                c,
+                &dir,
+                active_dir.as_deref(),
+                &kiosk,
+                &public,
+                &mut dl,
+            );
             dconf_changed |= r.dconf_changed;
             out.push(item(&item_of(&c.id), r));
             index.insert(
@@ -188,20 +203,38 @@ fn render_all(ctx: &ApplyContext, m: &Manifest, env: &mut Env) -> Vec<ItemResult
                 },
             );
         }
-        let r = render_one(ctx, paths, &neutral, NEUTRAL_DIR, &kiosk, &public, &mut dl);
+        let r = render_one(
+            ctx,
+            paths,
+            &neutral,
+            NEUTRAL_DIR,
+            None,
+            &kiosk,
+            &public,
+            &mut dl,
+        );
         dconf_changed |= r.dconf_changed;
         errs.extend(r.errs.into_iter().map(|e| format!("neutral: {e}")));
     }
     let mut keep: BTreeSet<String> = index.values().map(|r| r.dir.clone()).collect();
     keep.insert(NEUTRAL_DIR.into());
-    if let Some(a) = read_active(&paths.root).filter(|a| is_config_dir(&a.dir)) {
-        keep.insert(a.dir);
-    }
-    if let Err(e) = remove_unreachable(paths, &keep) {
-        errs.push(format!("removing user configs no longer used: {e:#}"));
+    match &active {
+        Ok(a) => {
+            keep.extend(a.iter().cloned());
+            if let Err(e) = remove_unreachable(paths, &keep) {
+                errs.push(format!("removing user configs no longer used: {e:#}"));
+            }
+        }
+        Err(e) => errs.push(format!(
+            "the signed-in session's marker cannot be read ({e:#}); kept every user config this round"
+        )),
     }
     sys.dconf_update_pending |= dconf_changed;
     if let Err(e) = desktop::dconf_update(runner, sys) {
+        errs.push(format!("dconf: {e:#}"));
+    }
+    // `dconf update` writes the compiled databases world-readable; only the switch may publish one.
+    if let Err(e) = close_databases(paths, &keep) {
         errs.push(format!("dconf: {e:#}"));
     }
     // The index last: it names only directories rendered above.
@@ -270,11 +303,13 @@ fn staging_dir(paths: &SysPaths) -> Result<OwnedFd> {
 
 /// Renders `c` into the config directory `dir`. Each part that fails is reported and the others still run; a
 /// Chrome policy that cannot be rendered leaves no policy file, so that the switch to this config fails (closed).
+#[allow(clippy::too_many_arguments)]
 fn render_one(
     ctx: &ApplyContext,
     paths: &SysPaths,
     c: &UserConfig,
     dir: &str,
+    active_dir: Option<&str>,
     kiosk: &[String],
     public: &BTreeMap<String, PublicApp>,
     dl: &mut Downloads,
@@ -285,8 +320,8 @@ fn render_one(
     }
     let lifted = |cap: Capability| c.caps.contains(&cap);
     let pdir = match public_dir(paths)
-        .and_then(|p| sub(&p, STATE_SUB, 0o755))
-        .and_then(|s| sub(&s, dir, 0o755))
+        .and_then(|p| sub(&p, STATE_SUB, PUBLIC_STATE_MODE))
+        .and_then(|s| config_dir(&s, dir, active_dir))
     {
         Ok(d) => d,
         Err(e) => {
@@ -355,11 +390,48 @@ fn render_one(
     let (keyfile, lockfile) =
         desktop::render_session_dconf(&session, &webapps, kiosk, &debs, &flatpaks);
     let keydir = format!("{DCONF_DB_DIR}/{}.d", db_name(dir));
-    match desktop::write_dconf(&paths.root, &keydir, &keyfile, &lockfile) {
+    let written = desktop::write_dconf(&paths.root, &keydir, &keyfile, &lockfile).and_then(|c| {
+        let d = safefs::open_dir(&paths.root, Path::new(&keydir), false)?;
+        safefs::set_mode(&d, 0o700)?;
+        Ok(c)
+    });
+    match written {
         Ok(changed) => r.dconf_changed = changed,
         Err(e) => r.errs.push(format!("dconf: {e:#}")),
     }
     r
+}
+
+/// The public config dir `dir` under the public [`STATE_SUB`] `parent`, created when missing. Its mode: 0755 for
+/// [`NEUTRAL_DIR`] (nothing in it is private; the greeter and boot state use it); 0700 for a user config, so that a
+/// signed-in person cannot read the other configs' scripts and settings, except that the signed-in session's own
+/// dir (`active_dir`) keeps 0755 when the switch has opened it. A re-render never opens a dir.
+fn config_dir(parent: &OwnedFd, dir: &str, active_dir: Option<&str>) -> Result<OwnedFd> {
+    let d = safefs::open_dir_at(parent, Path::new(dir), true)?;
+    let open = dir == NEUTRAL_DIR || (active_dir == Some(dir) && mode_of(&d)? == 0o755);
+    let mode = if open { 0o755 } else { 0o700 };
+    safefs::set_mode(&d, mode)?;
+    Ok(d)
+}
+
+fn mode_of(fd: &OwnedFd) -> Result<u32> {
+    let st = rustix::fs::fstat(fd).map_err(std::io::Error::from)?;
+    Ok(st.st_mode & 0o7777)
+}
+
+/// Makes each existing compiled database `mastersos-<d>` of the dirs `dirs` 0600.
+fn close_databases(paths: &SysPaths, dirs: &BTreeSet<String>) -> Result<()> {
+    let Some(db) = open_existing(&paths.root, DCONF_DB_DIR)? else {
+        return Ok(());
+    };
+    for d in dirs {
+        if let Some(f) = safefs::open_file_at(&db, &db_name(d))? {
+            rustix::fs::fchmod(&f, rustix::fs::Mode::from_raw_mode(0o600))
+                .map_err(std::io::Error::from)
+                .with_context(|| format!("making {} root-only", db_name(d)))?;
+        }
+    }
+    Ok(())
 }
 
 /// The policy file of `c` and its staging copy; on a render error both are removed.
@@ -396,13 +468,10 @@ fn write_overrides(
     let lifted = |cap: Capability| c.caps.contains(&cap);
     let mut dbus = Vec::new();
     if !lifted(Capability::FileManager) {
-        dbus.extend([
-            "org.gnome.Nautilus.service",
-            "org.freedesktop.FileManager1.service",
-        ]);
+        dbus.extend([desktop::NAUTILUS_SERVICE, desktop::FILE_MANAGER1_SERVICE]);
     }
     if !lifted(Capability::Settings) {
-        dbus.push("org.gnome.Settings.service");
+        dbus.push(desktop::SETTINGS_SERVICE);
     }
     desktop::write_dbus_overrides(xdg, &dbus)?;
     if lifted(Capability::AllApps) {
@@ -433,7 +502,7 @@ fn remove_index(paths: &SysPaths) -> Result<()> {
 fn remove_unreachable(paths: &SysPaths, keep: &BTreeSet<String>) -> Result<()> {
     let gone = |name: &str| is_config_dir(name) && !keep.contains(name);
     let state = state_dir(paths)?;
-    let public = public_dir(paths).and_then(|p| sub(&p, STATE_SUB, 0o755))?;
+    let public = public_dir(paths).and_then(|p| sub(&p, STATE_SUB, PUBLIC_STATE_MODE))?;
     for d in [&state, &public] {
         for name in safefs::list_at(d)? {
             if gone(&name) {

@@ -68,9 +68,20 @@ pub enum ActiveState {
 
 /// The marker under `root` (the system root); `None` when it is missing or cannot be read or parsed.
 pub fn read_active(root: &Path) -> Option<Active> {
-    let dir = crate::safefs::open_dir(root, Path::new(RUN_DIR), false).ok()?;
-    let bytes = crate::safefs::read_at(&dir, ACTIVE_FILE).ok()??;
-    serde_json::from_slice(&bytes).ok()
+    active_marker(root).ok().flatten()
+}
+
+/// The marker under `root`: `Ok(None)` when there is none, an error when one exists but cannot be read or parsed.
+pub fn active_marker(root: &Path) -> anyhow::Result<Option<Active>> {
+    let dir = match crate::safefs::open_dir(root, Path::new(RUN_DIR), false) {
+        Ok(d) => d,
+        Err(e) if crate::apply::is_not_found(&e) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    match crate::safefs::read_at(&dir, ACTIVE_FILE)? {
+        None => Ok(None),
+        Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+    }
 }
 
 /// Whether `name` is a config dir name this layer writes: [`NEUTRAL_DIR`] or the shape of [`config_dir_name`].

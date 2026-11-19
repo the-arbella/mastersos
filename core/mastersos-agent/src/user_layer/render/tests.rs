@@ -3,7 +3,7 @@ use crate::apply::Phase;
 use crate::runner::FakeRunner;
 use crate::system::tests::{paths, test_ident, test_seed, tmp_root};
 use crate::system::SysState;
-use crate::user_layer::{ActiveState, ACTIVE_FILE, RUN_DIR};
+use crate::user_layer::{read_active, ActiveState, ACTIVE_FILE, RUN_DIR};
 use mastersos_bundle::testutil::spec_example_v3;
 use mastersos_bundle::{select, ALL_CAPS};
 use std::fs;
@@ -414,11 +414,103 @@ fn format2_bundle_renders_nothing() {
 fn index_is_root_only() {
     let root = root();
     render(root.path(), &v3());
-    let mode = |p: PathBuf| fs::metadata(p).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode(var(root.path()).join(INDEX_FILE)), 0o600);
     assert_eq!(mode(var(root.path())), 0o700);
     assert_eq!(mode(staging(root.path())), 0o700);
-    assert_eq!(mode(public(root.path())), 0o755);
+    assert_eq!(mode(public(root.path())), 0o711);
+}
+
+fn mode(p: PathBuf) -> u32 {
+    fs::metadata(&p)
+        .unwrap_or_else(|e| panic!("{}: {e}", p.display()))
+        .permissions()
+        .mode()
+        & 0o777
+}
+
+fn write_marker(root: &Path, dir: &str) {
+    let active = crate::user_layer::Active {
+        uid: 60001,
+        user: "pupil".into(),
+        user_config: "teacher".into(),
+        dir: dir.into(),
+        caps: Caps::new(),
+        state: ActiveState::Open,
+        reason: None,
+        opened_at: 0,
+        seen: true,
+    };
+    fs::create_dir_all(root.join(RUN_DIR)).unwrap();
+    fs::write(
+        root.join(RUN_DIR).join(ACTIVE_FILE),
+        serde_json::to_vec(&active).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn config_dirs_are_root_only() {
+    let root = root();
+    let (teacher, primary) = (config_dir_name("teacher"), config_dir_name("primary"));
+    // what `dconf update` leaves: world-readable compiled databases
+    fs::create_dir_all(db(root.path())).unwrap();
+    for d in [teacher.as_str(), NEUTRAL_DIR] {
+        let f = db(root.path()).join(db_name(d));
+        fs::write(&f, "gvdb").unwrap();
+        fs::set_permissions(&f, fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    render(root.path(), &v3());
+    assert_eq!(mode(public(root.path())), 0o711);
+    for d in [&teacher, &primary] {
+        assert_eq!(mode(public(root.path()).join(d)), 0o700, "{d}");
+        assert_eq!(
+            mode(db(root.path()).join(format!("{}.d", db_name(d)))),
+            0o700,
+            "{d}"
+        );
+    }
+    assert_eq!(mode(public(root.path()).join(NEUTRAL_DIR)), 0o755);
+    assert_eq!(mode(db(root.path()).join(db_name(&teacher))), 0o600);
+    assert_eq!(mode(db(root.path()).join(db_name(NEUTRAL_DIR))), 0o600);
+}
+
+#[test]
+fn active_dir_stays_open_across_rerender() {
+    let root = root();
+    render(root.path(), &v3());
+    let (teacher, primary) = (config_dir_name("teacher"), config_dir_name("primary"));
+    // the switch opened teacher's dir for the signed-in session; primary was opened by mistake
+    for d in [&teacher, &primary] {
+        fs::set_permissions(
+            public(root.path()).join(d),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    write_marker(root.path(), &teacher);
+    let (out, _) = render(root.path(), &v3());
+    ok_item(&out, ITEM);
+    assert_eq!(mode(public(root.path()).join(&teacher)), 0o755);
+    assert_eq!(mode(public(root.path()).join(&primary)), 0o700);
+}
+
+#[test]
+fn unreadable_marker_keeps_every_dir() {
+    let root = root();
+    let old = config_dir_name("old");
+    fs::create_dir_all(var(root.path()).join(&old)).unwrap();
+    fs::create_dir_all(root.path().join(RUN_DIR)).unwrap();
+    fs::write(root.path().join(RUN_DIR).join(ACTIVE_FILE), "not json").unwrap();
+    let (out, _) = render(root.path(), &v3());
+    let main = out.iter().find(|r| r.item == ITEM).unwrap();
+    assert!(!main.ok, "{main:?}");
+    assert!(var(root.path()).join(&old).exists());
+    assert!(var(root.path()).join(INDEX_FILE).exists());
+    // without the marker the dir goes
+    fs::remove_file(root.path().join(RUN_DIR).join(ACTIVE_FILE)).unwrap();
+    let (out, _) = render(root.path(), &v3());
+    ok_item(&out, ITEM);
+    assert!(!var(root.path()).join(&old).exists());
 }
 
 #[test]
