@@ -144,7 +144,7 @@ Steps:
 3. Unlock A normally with A's credentials; then try tty3 (item 14 covers tty).
 
 Expected:
-- B is refused with "Someone is still signed in on this device. They need to sign out first, or restart the device.", in the system language (gettext `mastersos-system`); the other person is not named; no admin override.
+- B is refused with "Someone is still signed in on this device. They need to sign out first, or restart the device.", in the system language (gettext `mastersos-system`); the other person is not named; no admin override. Caveat: an account whose uid cannot be looked up at that moment (for example a first-time SSO account not yet known to NSS) gets the unavailable message instead ("This device could not get your session ready. ..."); record which one B saw.
 - A's unlock works, the session is the same (same `active.json`, uid, `opened_at` unchanged), no config switch.
 
 Screenshots: `19-busy-refused-en.png`, `20-busy-refused-translated.png`, `21-unlock-ok.png`.

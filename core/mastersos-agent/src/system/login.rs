@@ -418,14 +418,16 @@ pub fn decide(
         return Decision::Allow;
     }
     // One human session at a time (user layer design §4.7): another uid's marker (open or closing) refuses with the busy
-    // message; a closing marker of the same uid and a marker that cannot be read refuse with the unavailable one (nobody
-    // else is known to be signed in); no admin override. The marker itself is the gate, not the policy: state on disk
+    // message; a closing marker of the same uid, a marker that cannot be read and a uid that cannot be looked up refuse
+    // with the unavailable one (nobody else is known to be signed in); no admin override. The marker itself is the gate, not the policy: state on disk
     // with a policy that is not format 3 (or none) fails closed, because pam-session guards only GDM and this is the only
     // gate of tty login, sshd and su. Without a marker (the only case of a Device that never used the user layer) nothing
     // changes. `user_layer_on` is true whenever a marker exists, so this is its busy part.
     let refusal = match marker {
         Marker::Absent => None,
         Marker::Unreadable => Some(DENY_SESSION_UNAVAILABLE),
+        // Without a uid it cannot be told that the person is someone else (pam-session's rule too)
+        Marker::Present(_) if uid.is_none() => Some(DENY_SESSION_UNAVAILABLE),
         Marker::Present(a) if uid != Some(a.uid) => Some(DENY_SESSION_BUSY),
         Marker::Present(a) if a.state != crate::user_layer::ActiveState::Open => {
             Some(DENY_SESSION_UNAVAILABLE)
@@ -1880,7 +1882,6 @@ client_id = "laptops"
                 for (user, uid) in [
                     ("alice", Some(1001)),
                     ("alice@school.ac.th", Some(20000)),
-                    ("alice@school.ac.th", None),
                     ("guest", Some(1999)),
                 ] {
                     if user == "guest" && svc != GDM {
@@ -1892,6 +1893,12 @@ client_id = "laptops"
                         "{svc} {user} {state:?}"
                     );
                 }
+                // a uid that cannot be looked up: it cannot be told that this is another person (as pam-session)
+                assert_eq!(
+                    busy_for(svc, &p, "alice@school.ac.th", None, Marker::Present(&a)),
+                    Decision::Deny(DENY_SESSION_UNAVAILABLE),
+                    "{svc} {state:?}"
+                );
             }
         }
         // an unreadable marker fails closed, but names nobody as signed in
