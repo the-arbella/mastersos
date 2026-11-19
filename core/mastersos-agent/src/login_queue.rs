@@ -675,7 +675,7 @@ pub fn current_results<'a>(
         .collect()
 }
 
-/// 以 `uid` 的身份跑一次 [`run_login_scripts`]（`hashes` 只需这个 uid 的键）。Under the user layer (a `session` link
+/// Runs [`run_login_scripts`] once as `uid` (`hashes` needs only this uid's key). Under the user layer (a `session` link
 /// next to `session_dir`, [`SESSION_EXPORT_DIR`]) only the session's set runs, and only when the session is `uid`'s
 /// ([`session_set`]): every login unless its mode is `full` (or for the guest, always). Otherwise nothing runs.
 pub fn run_batch(

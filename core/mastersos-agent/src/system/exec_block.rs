@@ -350,8 +350,9 @@ pub fn session_mode_locked(public_dir: &Path) -> bool {
     }
 }
 
-/// 盘上的模式：`Some(true)` 挡住了东西（`learning`、旧的 `browser`，或只放开了一部分）、`Some(false)` 什么都没挡（`full`，
-/// 或旧的 `desktop`）；`var_dir` 或文件不存在、内容读不懂都是 `None`。不建目录。
+/// The mode on disk: `Some(true)` when something is blocked (`learning`, the old `browser`, or only part lifted),
+/// `Some(false)` when nothing is (`full`, or the old `desktop`); `None` when `var_dir` or the file is missing or its
+/// content cannot be read. Creates no directory.
 pub fn read_mode(paths: &SysPaths) -> Result<Option<bool>> {
     Ok(read_parsed(paths)?.map(|m| match m {
         Some(l) => !targets_for(&l).is_empty(),

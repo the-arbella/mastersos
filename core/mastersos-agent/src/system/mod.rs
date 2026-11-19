@@ -55,7 +55,9 @@ pub const WRITE_ROOTS: &[&str] = &[
     "/var/lib/mastersos-public",
     "/etc/dconf/db/mastersos.d",
     "/etc/dconf/db/mastersos.d/locks",
-    // The user layer (format 3): per user config `mastersos-<dir>.d/` keyfiles and their compiled `mastersos-<dir>`.
+    // The user layer (format 3): the switched-in session database `mastersos-session` (the per-config keyfiles and
+    // compiled databases live root-only in /var/lib/mastersos-system/user-layer), and the first layout's leftovers it
+    // removes.
     "/etc/dconf/db",
     // The user layer's dconf profile `user` (format 3 only), over the image's /usr/share/dconf/profile/user.
     "/etc/dconf/profile",

@@ -108,7 +108,7 @@ pub(crate) struct Downloads<'a> {
 
 impl<'a> Downloads<'a> {
     /// The download state of one round. `key` names the web app lists of the round: the remembered failures are
-    /// cleared when it changes (复审 T13 发现 6).
+    /// cleared when it changes.
     pub(crate) fn new(sys: &'a mut SysState, key: String) -> Self {
         if sys.icon_failures.key != key {
             sys.icon_failures = IconFailures {
