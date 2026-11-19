@@ -13,6 +13,7 @@ pub mod kiosk;
 pub mod kit;
 pub mod lint;
 pub mod manifest;
+pub mod migrate;
 pub mod push;
 pub mod secret_ref;
 pub mod seed;
