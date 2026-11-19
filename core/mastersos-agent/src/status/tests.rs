@@ -898,6 +898,9 @@ mod job {
             kiosk_users: vec![],
             it_account: false,
             it_account_uid: None,
+            local_users_admin: false,
+            user_layer: false,
+            mastersos_claims: false,
         };
         login::write_policy(&lab.paths, &policy).unwrap();
         // What the lock step wrote (it runs its own batched `dconf update`).

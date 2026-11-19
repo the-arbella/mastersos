@@ -56,6 +56,14 @@ pub const STAGING_SUB: &str = ".mastersos-staging";
 pub const DCONF_DB_DIR: &str = "etc/dconf/db";
 /// The compiled dconf database of the current session (switched in by Task 4; never has a `.d` directory).
 pub const SESSION_DB: &str = "mastersos-session";
+/// The dconf profile of user sessions under the user layer (relative to the system root): it takes precedence over the
+/// image's `/usr/share/dconf/profile/user` (`user-db:user`, `system-db:mastersos`), which format 1/2 Devices keep using.
+/// Written by the switch once [`SESSION_DB`] exists (a profile naming a missing database makes every dconf client warn),
+/// removed with the rest of this layer's state under format 1/2.
+pub const PROFILE_DIR: &str = "etc/dconf/profile";
+pub const PROFILE_FILE: &str = "user";
+pub const SESSION_PROFILE: &str =
+    "user-db:user\nsystem-db:mastersos-session\nsystem-db:mastersos\n";
 /// The symlink in `public_dir` to the current session's config directory (Task 4).
 pub const SESSION_LINK: &str = "session";
 /// The parts of a config's `public_dir` directory.
@@ -67,6 +75,12 @@ pub const SCRIPTS_SUB: &str = "login-scripts";
 /// The dconf database name of a config directory: `mastersos-<d>` (keyfiles in `mastersos-<d>.d`).
 pub fn db_name(dir: &str) -> String {
     format!("mastersos-{dir}")
+}
+
+/// The compiled dconf database of the config directory `dir` (root 0600), which the switch copies to [`SESSION_DB`].
+/// The one place that names it; `_var_dir` is where it will live once it moves out of `/etc/dconf/db`.
+pub fn compiled_db(root: &Path, _var_dir: &Path, dir: &str) -> std::path::PathBuf {
+    root.join(DCONF_DB_DIR).join(db_name(dir))
 }
 
 /// The configuration of a session without a user config: everything blocked, no apps, the baseline Chrome policy.
@@ -560,6 +574,10 @@ fn remove_state(paths: &SysPaths) -> Result<bool> {
         dirs.insert(index.neutral.dir);
     }
     dirs.insert(NEUTRAL_DIR.into());
+    // The profile first: it must never name a database that is gone.
+    if let Some(profile) = open_existing(&paths.root, PROFILE_DIR)? {
+        safefs::remove_at(&profile, PROFILE_FILE)?;
+    }
     if let Some(db) = open_existing(&paths.root, DCONF_DB_DIR)? {
         for d in dirs.iter().filter(|d| is_config_dir(d)) {
             safefs::remove_tree_at(&db, &format!("{}.d", db_name(d)))?;

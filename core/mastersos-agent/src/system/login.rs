@@ -184,6 +184,18 @@ pub struct LoginPolicy {
     /// or not created yet): no exception.
     #[serde(default)]
     pub it_account_uid: Option<u32>,
+    /// Local accounts are administrators on this Device (`local_users_admin` of the settings); the user layer's rule
+    /// condition `admin` counts them. Old files lack it (= false).
+    #[serde(default)]
+    pub local_users_admin: bool,
+    /// The settings are format 3 (they have a user layer): `pam-session` switches each human session to the user config
+    /// its rules choose ([`crate::user_layer::switch`]). Old files lack it (= false: nothing is switched).
+    #[serde(default)]
+    pub user_layer: bool,
+    /// `school.oidc.mastersos_claims`: the issuer hands over facts at login, read only for school accounts. Old files
+    /// lack it (= false: no facts file is ever looked at).
+    #[serde(default)]
+    pub mastersos_claims: bool,
 }
 
 /// 一个锁定应用的账号：`pam-session` 与 `ephemeral-cleanup` 据此造 [`super::ephemeral::kiosk`]（`name` 是账号的名字，
@@ -253,6 +265,9 @@ pub const DENY_KIOSK_SEAT_UNKNOWN: &str =
     "暂时查不到这台电脑上的其他会话，请稍候再试或举手找老师 / Could not check for other sessions on this computer; try again shortly or ask a teacher";
 pub const DENY_KIOSK_UNKNOWN: &str =
     "这个锁定应用已不在这台电脑的设置里 / This app is no longer set up on this computer";
+/// Another person's session (any human account) is still signed in, or this Device could not switch the session to a
+/// user config: one human session at a time (user layer design §4.7, §4.9). Never names the other person.
+pub const DENY_SESSION_BUSY: &str = "Someone is still signed in on this device. They need to sign out first, or restart the device.";
 pub const DENY_DOMAIN: &str =
     "这个账号的域名不允许登录这台电脑 / Accounts from this domain cannot sign in on this computer";
 
@@ -297,7 +312,7 @@ pub(crate) fn user_name_ok(user: &str) -> bool {
 }
 
 /// 管理员比较不区分大小写，但只折叠 ASCII（与 `checks::admin_user` 一致；开尔文符号 K 不算 k）。
-fn is_admin(p: &LoginPolicy, user: &str) -> bool {
+pub(crate) fn is_admin(p: &LoginPolicy, user: &str) -> bool {
     p.admin_users.iter().any(|a| a.eq_ignore_ascii_case(user))
 }
 
@@ -469,6 +484,10 @@ pub fn policy_from_bundle(school: &School, config: &Config, lock: Option<&Lock>)
         kiosk_users: kiosk_users(config),
         it_account: super::it_account::wanted(config.it_account.as_ref()).is_some(),
         it_account_uid: None,
+        local_users_admin: config.local_users_admin,
+        // set by `bundle_policy`, which sees the whole settings
+        user_layer: false,
+        mastersos_claims: school.oidc.as_ref().is_some_and(|o| o.mastersos_claims),
     }
 }
 
@@ -520,6 +539,9 @@ pub fn policy_from_seed(seed: &Seed) -> LoginPolicy {
         kiosk_users: Vec::new(),
         it_account: super::it_account::wanted(seed.it_account.as_ref()).is_some(),
         it_account_uid: None,
+        local_users_admin: false,
+        user_layer: false,
+        mastersos_claims: false,
     }
 }
 
@@ -828,6 +850,9 @@ pub(super) fn fail_closed(p: &LoginPolicy) -> LoginPolicy {
         kiosk_users: p.kiosk_users.clone(),
         it_account: p.it_account,
         it_account_uid: p.it_account_uid,
+        local_users_admin: p.local_users_admin,
+        user_layer: p.user_layer,
+        mastersos_claims: p.mastersos_claims,
     };
     if policy_json(&f).is_err() {
         f.kiosk_users.clear();
@@ -853,6 +878,7 @@ pub fn step() -> Step {
 pub fn bundle_policy(ctx: &ApplyContext, env: &Env) -> LoginPolicy {
     let mut p = policy_from_bundle(ctx.school, ctx.config, ctx.lock);
     p.it_account_uid = owner_uid(env, p.it_account);
+    p.user_layer = ctx.user_layer().is_some();
     p
 }
 
@@ -1358,6 +1384,9 @@ client_id = "laptops"
             kiosk_users: vec![],
             it_account: false,
             it_account_uid: None,
+            local_users_admin: false,
+            user_layer: false,
+            mastersos_claims: false,
         }
     }
 
@@ -1738,6 +1767,32 @@ client_id = "laptops"
         let p = policy_from_bundle(&m.school, &m.effective_of_group("a").unwrap(), None);
         assert!(p.from_bundle);
         assert!(fail_closed(&p).from_bundle, "管理员放得下：仍是包里的名单");
+    }
+
+    /// The user layer's fields: from the settings; absent from files written by older agents (= false).
+    #[test]
+    fn bundle_policy_carries_the_user_layer_fields() {
+        let mut m = mastersos_bundle::Manifest::parse(
+            "version = 1\n[school]\noidc = { issuer = \"https://sso.x.th\", client_id = \"c\" }\n[[group]]\nid = \"a\"\nname = \"a\"\nlocal_users_admin = true\n",
+        )
+        .unwrap();
+        let p = policy_from_bundle(&m.school, &m.effective_of_group("a").unwrap(), None);
+        assert!(p.local_users_admin);
+        assert!(!p.mastersos_claims);
+        assert!(
+            !p.user_layer,
+            "set by bundle_policy from the whole settings"
+        );
+        m.school.oidc.as_mut().unwrap().mastersos_claims = true;
+        let p = policy_from_bundle(&m.school, &m.effective_of_group("a").unwrap(), None);
+        assert!(p.mastersos_claims);
+        let f = fail_closed(&p);
+        assert!(f.local_users_admin && f.mastersos_claims);
+        let seed = policy_from_seed(&seed(SEED_OIDC));
+        assert!(!seed.local_users_admin && !seed.user_layer && !seed.mastersos_claims);
+        let old = br#"{"methods":["sso"],"locked":false}"#;
+        let p: LoginPolicy = serde_json::from_slice(old).unwrap();
+        assert!(!p.local_users_admin && !p.user_layer && !p.mastersos_claims);
     }
 
     #[test]
@@ -2464,6 +2519,9 @@ client_id = "laptops"
                 .collect(),
             it_account: true,
             it_account_uid: Some(59999),
+            local_users_admin: false,
+            user_layer: false,
+            mastersos_claims: false,
         };
         assert!(p.admin_users.iter().all(|a| checks::admin_user(a).is_ok()));
         assert!(p

@@ -607,6 +607,20 @@ fn format3_device_steps_leave_the_session_alone() {
     assert!(!sys.dconf_update_pending);
 }
 
+/// Format 3 removes the login scripts a format 1/2 bundle exported: the session's set replaces them.
+#[test]
+fn format3_removes_the_legacy_login_script_export() {
+    let root = root();
+    let r = FakeRunner::new();
+    let mut sys = SysState::default();
+    run_step_with(crate::login_queue::step(), root.path(), &v2(), &r, &mut sys);
+    let legacy = paths(root.path()).public_dir.join("login-scripts");
+    assert!(legacy.join("index.json").exists());
+    let out = run_step_with(crate::login_queue::step(), root.path(), &v3(), &r, &mut sys);
+    assert!(out.is_empty());
+    assert!(!legacy.exists());
+}
+
 #[test]
 fn locks_follow_capabilities() {
     let caps = |cs: &[Capability]| cs.iter().copied().collect::<Caps>();

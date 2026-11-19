@@ -305,6 +305,9 @@ mod tests {
             kiosk_users: vec![],
             it_account: false,
             it_account_uid: None,
+            local_users_admin: false,
+            user_layer: false,
+            mastersos_claims: false,
         };
         assert_eq!(lock_text(&p), None, "not locked");
         p.locked = true;

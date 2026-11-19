@@ -500,6 +500,8 @@ struct Login {
     queue: PathBuf,
     /// 导出的 login 脚本（`<root>/var/lib/mastersos-public/login-scripts`）。
     export: PathBuf,
+    /// The session's login scripts under the user layer (`<root>/var/lib/mastersos-public/session/login-scripts`).
+    session_export: PathBuf,
     /// 最近登录记录（`<root>/var/lib/mastersos-system/homes/last-login.json`，Task 19）。
     last_login: PathBuf,
     runner: Arc<dyn Runner>,
@@ -800,6 +802,7 @@ impl Agent {
             login: Login {
                 queue: cfg_root_join(&cfg_root, login_queue::QUEUE_DIR),
                 export: cfg_root_join(&cfg_root, login_queue::EXPORT_DIR),
+                session_export: cfg_root_join(&cfg_root, login_queue::SESSION_EXPORT_DIR),
                 last_login: cfg_root_join(&cfg_root, crate::homes::LAST_LOGIN),
                 runner: Arc::new(RealRunner),
                 pending: BTreeSet::new(),
@@ -1042,27 +1045,41 @@ impl Agent {
             .collect();
         for uid in ready {
             self.login.pending.remove(&uid);
-            let (export, runner, config) = (
+            let (export, session_export, runner, config) = (
                 self.login.export.clone(),
+                self.login.session_export.clone(),
                 self.login.runner.clone(),
                 config.clone(),
             );
             let hashes = login_queue::hashes_of(&self.state.login_script_hashes, uid);
             let h = self.login.tasks.spawn_blocking(move || {
-                login_queue::run_batch(uid, &config, &export, hashes, runner.as_ref())
+                login_queue::run_batch(
+                    uid,
+                    &config,
+                    &export,
+                    &session_export,
+                    hashes,
+                    runner.as_ref(),
+                )
             });
             self.login.running.insert(h.id(), uid);
         }
     }
 
-    /// The Config the current bundle picks for this machine (None without a bundle).
+    /// The Config the current bundle picks for this machine (None without a bundle). Under the user layer (format 3)
+    /// its login scripts are those of every user config reachable on this Device, so that the recorded hashes and
+    /// results of the session's scripts are kept.
     fn login_config(&self) -> Option<mastersos_bundle::Config> {
         let b = self.bundle.as_deref()?;
-        Some(
-            select(&b.manifest, &self.machine.ident, self.seed.group.as_deref())
-                .config
-                .clone(),
-        )
+        let sel = select(&b.manifest, &self.machine.ident, self.seed.group.as_deref());
+        let mut config = sel.config.clone();
+        if b.manifest.user_layer.is_some() {
+            config.scripts.extend(login_queue::user_layer_login_scripts(
+                &b.manifest,
+                &sel.group.id,
+            ));
+        }
+        Some(config)
     }
 
     /// 一个人的 login 脚本跑完：按 uid 合并哈希、记结果、去掉清单里已没有的脚本的哈希、保存；再看还有没有等着的人。

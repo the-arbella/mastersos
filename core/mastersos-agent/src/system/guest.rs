@@ -25,7 +25,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use anyhow::{bail, Result};
-use mastersos_bundle::{ItemResult, Seed};
+use mastersos_bundle::{HomeMode, ItemResult, Seed};
 
 use super::ephemeral::{
     self, account, remove_named, reset_password, run_dir, session_open, wait_slice_gone, Ephemeral,
@@ -37,6 +37,7 @@ use super::{failed, ok, Env, Step};
 use crate::apply::ApplyContext;
 use crate::runner::{run_ok, Cmd, RealRunner, Runner};
 use crate::safefs;
+use crate::user_layer::switch::OpenOutcome;
 
 pub const GUEST_USER: &str = login::GUEST_USER;
 pub const GUEST_UID: u32 = 1999;
@@ -180,6 +181,9 @@ pub enum SessionAction {
     DenyEphemeral(&'static str),
     /// 其他用户：进登录队列。
     Enqueue(String),
+    /// The close_session of a human account (the guest included) under the user layer (`LoginPolicy::user_layer`): mark
+    /// the session closing and wake the agent ([`crate::user_layer::switch::on_close`]). Never fails the logout.
+    Close(String),
 }
 
 /// The session GDM is about to start, for open_session only: `XDG_SESSION_DESKTOP` from the PAM environment when the
@@ -256,6 +260,7 @@ pub fn session_action(
             "open_session" if GUEST_SERVICES.contains(&service) => {
                 SessionAction::EphemeralOpen(ephemeral::guest())
             }
+            "close_session" if user_layer(policy) => SessionAction::Close(user.to_string()),
             "close_session" => SessionAction::Ignore,
             _ => SessionAction::DenyEphemeral(login::DENY_GUEST_SERVICE),
         };
@@ -287,11 +292,24 @@ pub fn session_action(
             _ => SessionAction::DenyEphemeral(login::DENY_KIOSK),
         };
     }
-    if pam_type == "open_session" {
-        SessionAction::Enqueue(user.to_string())
-    } else {
-        SessionAction::Ignore
+    match pam_type {
+        "open_session" => SessionAction::Enqueue(user.to_string()),
+        "close_session" if user_layer(policy) => SessionAction::Close(user.to_string()),
+        _ => SessionAction::Ignore,
     }
+}
+
+/// The installed login policy is format 3: human sessions get a user config (design §4.3).
+fn user_layer(policy: Option<&LoginPolicy>) -> bool {
+    policy.is_some_and(|p| p.user_layer)
+}
+
+/// Prints the refusal `msg` to stdout (pam_exec's `stdout`: GDM shows it) and fails the PAM call.
+fn deny(msg: &str) -> ExitCode {
+    let mut out = std::io::stdout().lock();
+    let _ = writeln!(out, "{msg}");
+    let _ = out.flush();
+    ExitCode::FAILURE
 }
 
 /// 复审 I2：kiosk 账号因为会话不对被拒（[`login::DENY_KIOSK_SESSION`]）时，GDM 可能已经把选的会话记进
@@ -452,6 +470,9 @@ fn env_str(name: &str) -> String {
 
 /// `mastersos-agent pam-session`（PAM 的 session 段最前面，root）。访客开会话失败退出 1 并把 [`DENY_BUSY`] 打到
 /// stdout；其他情况永远退出 0（登录队列失败不挡登录）。不 panic、不建 tokio 运行时、不往 stderr 打日志之外的事。
+/// Under the user layer (format 3) an open_session of a human account (the guest after `session_open`) first switches
+/// the session to its user config ([`crate::user_layer::switch::on_open`]); a refusal exits 1 with
+/// [`login::DENY_SESSION_BUSY`]. Their close_session marks the session closing ([`SessionAction::Close`]), exit 0.
 pub fn pam_session_main() -> ExitCode {
     // 只有 root（PAM 里的 gdm-session-worker 经 pam_exec）调它才算数：PAM_* 环境变量谁都能伪造，普通用户自己跑它
     // 什么都不许做——不拿标记、不复制、不拉起清理、不进登录队列（提交安全审查：授权）
@@ -496,23 +517,41 @@ pub fn pam_session_main() -> ExitCode {
     );
     match action {
         SessionAction::Ignore => ExitCode::SUCCESS,
-        SessionAction::DenyEphemeral(msg) => {
-            let mut out = std::io::stdout().lock();
-            let _ = writeln!(out, "{msg}");
-            let _ = out.flush();
-            ExitCode::FAILURE
+        SessionAction::DenyEphemeral(msg) => deny(msg),
+        SessionAction::Close(user) => {
+            // Never fails the logout: an unknown uid only means there is nothing of ours to mark.
+            match login::lookup_uid_checked(&user) {
+                Some(uid) => crate::user_layer::switch::on_close(Path::new("/"), uid, &RealRunner),
+                None => eprintln!(
+                    "mastersos-agent pam-session: {user}: no uid; the user layer's session is not marked closing"
+                ),
+            }
+            ExitCode::SUCCESS
         }
         SessionAction::Enqueue(user) => {
-            if let Some(uid) = login::lookup_uid_checked(&user) {
-                // learning mode: tidy the home before the session starts (never fails the login). This must run
-                // before claim_from_pam (which can put files into the home), and pam-session runs before
-                // pam_mkhomedir and pam_systemd, so the home is not yet in use.
-                crate::system::home_tidy::on_login(
-                    &crate::system::SysPaths::default(),
-                    &RealRunner,
-                    &user,
-                    uid,
-                );
+            let uid = login::lookup_uid_checked(&user);
+            let paths = crate::system::SysPaths::default();
+            // Format 3: the session gets its user config before it starts; nothing of it may open without one.
+            let tidy = match (policy.as_ref().filter(|p| p.user_layer), uid) {
+                (None, _) => None,
+                (Some(_), None) => {
+                    eprintln!("mastersos-agent pam-session: {user}: no uid; user layer: denied");
+                    return deny(login::DENY_SESSION_BUSY);
+                }
+                (Some(p), Some(uid)) => {
+                    match crate::user_layer::switch::on_open(Path::new("/"), &paths, p, &user, uid)
+                    {
+                        OpenOutcome::NotUserLayer => None,
+                        OpenOutcome::Switched { home, .. } => Some(home == HomeMode::Tidy),
+                        OpenOutcome::Refused => return deny(login::DENY_SESSION_BUSY),
+                    }
+                }
+            };
+            if let Some(uid) = uid {
+                // learning mode (format 3: the user config's `home`): tidy the home before the session starts (never
+                // fails the login). This must run before claim_from_pam (which can put files into the home), and
+                // pam-session runs before pam_mkhomedir and pam_systemd, so the home is not yet in use.
+                crate::system::home_tidy::on_login(&paths, &RealRunner, &user, uid, tidy);
                 // a school account that just signed in with the card claims the card's cookies (never fails the login)
                 crate::signin_handoff::claim_from_pam(&env_str("PAM_SERVICE"), &user, uid);
                 let _ = crate::login_queue::enqueue(uid);
@@ -538,6 +577,20 @@ pub fn pam_session_main() -> ExitCode {
                     // 访客也是一次登录：叫醒 agent 拉取、跑 login 脚本（访客每次会话都跑）、发过期提示。不挡登录。
                     // 锁定应用的会话不进队列：分组的 login 脚本与过期提示不该出现在锁定会话里
                     if acct.user == GUEST_USER {
+                        // Format 3: the guest's session gets its user config too (rules with `kind = guest`)
+                        if let Some(p) = policy.as_ref().filter(|p| p.user_layer) {
+                            let paths = crate::system::SysPaths::default();
+                            let out = crate::user_layer::switch::on_open(
+                                Path::new("/"),
+                                &paths,
+                                p,
+                                GUEST_USER,
+                                GUEST_UID,
+                            );
+                            if out == OpenOutcome::Refused {
+                                return deny(login::DENY_SESSION_BUSY);
+                            }
+                        }
                         let _ = crate::login_queue::enqueue(GUEST_UID);
                     }
                     after_kiosk_open(&runner, acct.uid, &mut std::io::stderr());
@@ -1635,6 +1688,40 @@ mod tests {
         assert_eq!(
             sa("close_session", "gdm-password", "alice"),
             SessionAction::Ignore
+        );
+    }
+
+    /// Under the user layer the close_session of every human account (the guest too) marks the session closing; kiosk
+    /// accounts and other PAM types are unchanged, and without the user layer close_session stays a no-op.
+    #[test]
+    fn user_layer_close_session_of_humans_is_close() {
+        let mut p = kpol();
+        let act = |p: &LoginPolicy, t: &str, user: &str| {
+            session_action(t, "gdm-authd", user, None, true, Some(p), || Some(1900))
+        };
+        for user in ["alice", "a@school.ac.th", "guest", "itadmin"] {
+            assert_eq!(act(&p, "close_session", user), SessionAction::Ignore);
+        }
+        p.user_layer = true;
+        for user in ["alice", "a@school.ac.th", "guest", "itadmin"] {
+            assert_eq!(
+                act(&p, "close_session", user),
+                SessionAction::Close(user.into()),
+                "{user}"
+            );
+        }
+        assert_eq!(
+            act(&p, "close_session", "kiosk-nwea"),
+            SessionAction::Ignore
+        );
+        assert_eq!(
+            act(&p, "open_session", "alice"),
+            SessionAction::Enqueue("alice".into())
+        );
+        assert_eq!(act(&p, "", "alice"), SessionAction::Ignore);
+        assert_eq!(
+            act(&p, "open_session", "guest"),
+            SessionAction::EphemeralOpen(ephemeral::guest())
         );
     }
 

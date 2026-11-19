@@ -3,6 +3,7 @@
 
 pub mod facts;
 pub mod render;
+pub mod switch;
 
 use std::path::Path;
 use std::time::Duration;

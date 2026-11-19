@@ -87,6 +87,36 @@ check "full: app name" yes "$(has 'ARG --app-name=MastersOS' "$c/log/notify")"
 check "full: English first line" yes "$(has 'ARG The web browser is not installed yet.' "$c/log/notify")"
 check "full: body is the status sentence" yes "$(has "ARG $msg_net" "$c/log/notify")"
 
+# 2b. settings format 3: the session's mode behind the `session` link wins over the legacy file (always `learning` there)
+c=$tmp/c2b
+mkdir -p "$c/pub/user-layer/u-0123456789abcdef"
+ln -s user-layer/u-0123456789abcdef "$c/pub/session"
+echo learning >"$c/pub/session-mode"
+echo full >"$c/pub/user-layer/u-0123456789abcdef/session-mode"
+id -u >"$c/pub/user-layer/u-0123456789abcdef/uid"
+status_json "$c" "$msg_net" null
+check "format 3 full session: exit 0" 0 "$(run "$c")"
+check "format 3 full session: one notification" 1 "$(count "$c/log/notify")"
+check "format 3 full session: no window" 0 "$(count "$c/log/zenity")"
+
+# 2c. format 3, the session is another uid's: locked (the legacy file says full, which does not count with the link)
+c=$tmp/c2c
+mkdir -p "$c/pub/user-layer/u-0123456789abcdef"
+ln -s user-layer/u-0123456789abcdef "$c/pub/session"
+echo full >"$c/pub/session-mode"
+echo full >"$c/pub/user-layer/u-0123456789abcdef/session-mode"
+echo $(($(id -u) + 1)) >"$c/pub/user-layer/u-0123456789abcdef/uid"
+status_json "$c" "$msg_net" null
+(
+	sleep 1
+	printf '#!/bin/sh\n' >"$c/chrome"
+	chmod +x "$c/chrome"
+) &
+check "format 3 other uid: exit 0" 0 "$(run "$c")"
+wait
+check "format 3 other uid: one window (locked)" 1 "$(count "$c/log/zenity")"
+check "format 3 other uid: no notification" 0 "$(count "$c/log/notify")"
+
 # 3. no session-mode (no bundle yet): same as full
 c=$tmp/c3
 mkdir -p "$c/pub"

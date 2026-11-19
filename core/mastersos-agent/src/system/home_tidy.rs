@@ -1010,8 +1010,11 @@ fn write_result(paths: &SysPaths, t: &LastTidy) -> Result<()> {
 /// all) while the login goes on. In full mode (or without a session mode) nothing is read from the home, written
 /// or run. It starts nothing after [`LOGIN_DEADLINE`]: the worst case is that deadline, plus the runner's
 /// SIGTERM grace (5 s) for a last command that ignores SIGTERM, plus the tidy itself (bounded by entry counts).
-pub fn on_login(paths: &SysPaths, runner: &dyn Runner, user: &str, uid: u32) {
-    on_login_with(paths, runner, &RealClock, user, uid);
+///
+/// `tidy` is the decision of the user config the session got (format 3: its `home` is `tidy`); `None` (format 1/2)
+/// decides from the session mode as before ([`tidy_decision`]).
+pub fn on_login(paths: &SysPaths, runner: &dyn Runner, user: &str, uid: u32, tidy: Option<bool>) {
+    on_login_with(paths, runner, &RealClock, user, uid, tidy);
 }
 
 pub(crate) fn on_login_with(
@@ -1020,8 +1023,9 @@ pub(crate) fn on_login_with(
     clock: &dyn Clock,
     user: &str,
     uid: u32,
+    tidy: Option<bool>,
 ) {
-    if !tidy_decision(&paths.public_dir) {
+    if !tidy.unwrap_or_else(|| tidy_decision(&paths.public_dir)) {
         return;
     }
     let dl = Deadline::new(clock, LOGIN_DEADLINE);

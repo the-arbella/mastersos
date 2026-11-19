@@ -57,6 +57,8 @@ pub const WRITE_ROOTS: &[&str] = &[
     "/etc/dconf/db/mastersos.d/locks",
     // The user layer (format 3): per user config `mastersos-<dir>.d/` keyfiles and their compiled `mastersos-<dir>`.
     "/etc/dconf/db",
+    // The user layer's dconf profile `user` (format 3 only), over the image's /usr/share/dconf/profile/user.
+    "/etc/dconf/profile",
     "/etc/opt/chrome/policies/managed",
     // The user layer's staging copies of the managed policy (`.mastersos-staging/`, root 0700): on the file system
     // of `managed/` so the switch is a rename, but never inside it (Chrome reads every file of `managed/`).
