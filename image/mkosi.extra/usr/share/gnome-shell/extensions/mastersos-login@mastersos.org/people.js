@@ -20,25 +20,18 @@ function matches(p, q) {
     return UNSPACED.test(real) && real.includes(q);
 }
 
-// Typing someone's whole user name or name signs that person in, not a more recent "Bobby" for "bob". With a login domain,
-// a bare username is also exactly the school account it completes to: "bob" is "bob@<login_domain>".
-const exact = (p, q, loginDomain) => {
-    const user = p.userName.toLowerCase();
-    if (user === q || (p.realName || '').toLowerCase() === q)
-        return true;
-    return typeof loginDomain === 'string' && !!loginDomain && !q.includes('@') && user === `${q}@${loginDomain.toLowerCase()}`;
-};
+// Typing someone's whole user name or name signs that person in, not a more recent "Bobby" for "bob".
+const exact = (p, q) => p.userName.toLowerCase() === q || (p.realName || '').toLowerCase() === q;
 
 // people: [{userName, realName, loginTime}]. Nothing before the first character; an exact match, then the most recent
-// sign-in first. loginDomain (optional): the school's login domain, see exact.
-export function matchPeople(people, query, loginDomain = null) {
+// sign-in first.
+export function matchPeople(people, query) {
     const q = (query ?? '').trim().toLowerCase();
     if (!q)
         return {shown: [], more: false};
     const found = people
         .filter(p => !HIDDEN(p.userName) && matches(p, q))
-        .sort((a, b) => (exact(b, q, loginDomain) - exact(a, q, loginDomain)) || (b.loginTime - a.loginTime) ||
-            (a.realName || '').localeCompare(b.realName || ''));
+        .sort((a, b) => (exact(b, q) - exact(a, q)) || (b.loginTime - a.loginTime) || (a.realName || '').localeCompare(b.realName || ''));
     return {shown: found.slice(0, LIMIT), more: found.length > LIMIT};
 }
 
@@ -62,41 +55,9 @@ export function suggestDomains(query, domains, taken = []) {
         .slice(0, LIMIT);
 }
 
-// A bare username (no '@') that is not a local account on this computer is a school account: <username>@<login_domain>.
-// Null when the text is not a plain username, there is no login domain, it is a hidden local name, or a local account has
-// exactly this name (that account keeps precedence). A case variant of a local name ("Alice" with a local "alice") is not
-// refused here: while the list is up, preselect picks the local person first (an exact match, case-insensitive), so this
-// is not reached; after Escape put the list away, Enter takes what was typed and this completes it to alice@<login_domain>.
-export function expandLoginName(typed, loginDomain, localNames) {
-    const name = (typed ?? '').trim();
-    const lower = name.toLowerCase();
-    if (typeof loginDomain !== 'string' || !loginDomain)
-        return null;
-    if (name.includes('@') || !/^[a-z0-9._-]{1,64}$/.test(lower) || HIDDEN(lower))
-        return null;
-    if ((localNames ?? []).includes(name))
-        return null;
-    return `${lower}@${loginDomain}`;
-}
-
-// The person Enter signs in without arrow keys: none while an address is being typed (it may be someone new). With a login
-// domain, a bare username that expandLoginName would complete is a user name, not a real name: only a person whose user
-// name is exactly that text (a local account, any case) or <text>@<login_domain> is preselected, else nobody and Enter
-// takes the completion. So "bob" never signs in a more recent "bobby@...", nor someone whose real name is exactly "Bob".
-// localNames null means the local accounts are not known yet: no completion, the old rule. Without a login domain, or for
-// text that does not complete, the old rule: the first person shown (matchPeople puts exact matches first).
-export function preselect(query, shown, loginDomain = null, localNames = null) {
-    const q = (query ?? '').trim().toLowerCase();
-    if (!shown.length || (query ?? '').includes('@'))
-        return -1;
-    if (localNames && expandLoginName(query, loginDomain, localNames) !== null) {
-        const completed = `${q}@${loginDomain.toLowerCase()}`;
-        return shown.findIndex(p => {
-            const user = p.userName.toLowerCase();
-            return user === q || user === completed;
-        });
-    }
-    return 0;
+// The person Enter signs in without arrow keys: none while an address is being typed (it may be someone new).
+export function preselect(query, shown) {
+    return shown.length && !(query ?? '').includes('@') ? 0 : -1;
 }
 
 // Why the person was refused for who they are rather than for what they typed, from the broker's or the agent's English text:

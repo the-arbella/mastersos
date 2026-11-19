@@ -513,8 +513,7 @@ pub fn card_host(h: &str) -> Result<(), String> {
 /// 别的键，例如把 `allowed_users` 改成 `OWNER`），不含 INI 的注释符 `#` `;` 与引号、反斜杠；
 /// `issuer` 以 `http://` 或 `https://` 开头。`client_secret` follows the same rule, is printable
 /// ASCII without `%` (the INI parser's interpolation) and is never echoed in an error;
-/// `card_hosts` entries follow [`card_host`], none twice; `login_domain` is spelled like an
-/// [`allowed_domain`].
+/// `card_hosts` entries follow [`card_host`], none twice.
 pub fn oidc(o: &Oidc) -> Result<(), String> {
     let clean = |v: &str| {
         !v.is_empty()
@@ -558,13 +557,6 @@ pub fn oidc(o: &Oidc) -> Result<(), String> {
     }
     if let Some(h) = &o.idp_hint {
         idp_hint(h)?;
-    }
-    if let Some(d) = &o.login_domain {
-        if allowed_domain(d).is_err() {
-            return Err(format!(
-                "OIDC login_domain {d:?} must be lowercase letters, digits, . and - without @, at most {MAX_ENTRY_LEN} bytes, like an allowed_domains entry"
-            ));
-        }
     }
     Ok(())
 }

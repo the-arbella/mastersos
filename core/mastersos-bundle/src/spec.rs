@@ -164,7 +164,6 @@ pub const ISSUE_CODES: &[&str] = &[
     "legacy_shape",
     "locale_invalid",
     "lock_message_too_long",
-    "login_domain_not_allowed",
     "logo_incomplete",
     "logo_sha256_invalid",
     "logo_unknown",
