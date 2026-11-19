@@ -13,7 +13,9 @@
 //   - as a name is typed, the school addresses (name@domain for each school domain, filtered by what follows an '@') are
 //     offered in the same list as the people; an explicit pick fills in the address, typing it by hand always works.
 //   - when the school sets a login domain, a bare username that is not a local account is completed to name@login_domain
-//     on Enter (expandLoginName in people.js), so young children type only their username.
+//     on Enter (expandLoginName in people.js), so young children type only their username. Such a username preselects
+//     nobody in the list unless someone is exactly it (a local account, or name@login_domain itself), and nothing is
+//     completed before the computer's accounts are loaded.
 // Never reads passwords or tokens: everything secret stays in PAM, authd and the school's page. Reads
 // /var/lib/mastersos-public/branding/branding.json; missing, broken or empty values show nothing and never throw. New settings
 // (branding.json, the locked apps) are applied while the login screen is up (watch.js).
@@ -819,9 +821,10 @@ export default class MastersosLoginExtension extends Extension {
             prompt.updateSensitivity(false);
             const typed = prompt.getAnswer();
             const picked = this._picked ?? this._defaultPick(typed);
-            // A bare username that is no local account is a school account at the login domain.
-            const localNames = dlg._userManager?.list_users().map(u => u.get_user_name()) ?? [];
-            const expanded = picked ? null : expandLoginName(typed, this._loginDomain, localNames);
+            // A bare username that is no local account is a school account at the login domain. Never before the user
+            // manager has loaded: its list is empty then, and a local account would be sent to the school's page.
+            const localNames = this._localNames();
+            const expanded = picked || !localNames ? null : expandLoginName(typed, this._loginDomain, localNames);
             const answer = picked ?? expanded ?? typed;
             this._hideMatches();
             dlg._user = dlg._userManager.get_user(answer);
@@ -842,9 +845,17 @@ export default class MastersosLoginExtension extends Extension {
         const name = typed.trim();
         if (this._dialog?._userManager?.list_users().some(u => u.get_user_name() === name))
             return null;
-        const found = matchPeople(this._people(), typed);
-        const i = preselect(typed, found.shown);
+        const found = matchPeople(this._people(), typed, this._loginDomain);
+        const i = preselect(typed, found.shown, this._loginDomain, this._localNames());
         return i >= 0 ? found.shown[i].userName : null;
+    }
+
+    // The user names of this computer's accounts (hidden ones included), or null until the user manager has loaded them.
+    _localNames() {
+        const users = this._dialog?._userManager;
+        if (!users?.is_loaded)
+            return null;
+        return users.list_users().map(u => u.get_user_name());
     }
 
     _people() {
@@ -861,13 +872,14 @@ export default class MastersosLoginExtension extends Extension {
             }));
     }
 
-    // People first, then the school addresses; Enter without the arrow keys only ever takes a person.
+    // People first, then the school addresses; Enter without the arrow keys only ever takes a person, and none for a bare
+    // username that only starts someone's name when it completes to a school account (preselect).
     _showMatches(text) {
-        const found = matchPeople(this._people(), text);
+        const found = matchPeople(this._people(), text, this._loginDomain);
         this._shown = found.shown;
         this._more = found.more;
         this._addresses = suggestDomains(text, this._domains, found.shown.map(p => p.userName));
-        this._sel = preselect(text, found.shown);
+        this._sel = preselect(text, found.shown, this._loginDomain, this._localNames());
         this._renderMatches();
     }
 

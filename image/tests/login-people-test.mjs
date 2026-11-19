@@ -171,8 +171,9 @@ test('a bare username becomes <username>@<login_domain>', () => {
     assert.equal(expandLoginName('  bob.1_x-y  ', D, ['carol']), 'bob.1_x-y@school.example');
     // A local account with exactly that name keeps precedence.
     assert.equal(expandLoginName('alice', D, ['alice']), null);
-    // A case variant ("Alice" with a local "alice") is settled before this runs: matchPeople/preselect pick the local
-    // person (case-insensitive) and set _picked, so expandLoginName is never reached; on its own it only refuses exact names.
+    // A case variant ("Alice" with a local "alice") is not refused here: while the list is up, preselect picks the local
+    // person (an exact match, case-insensitive) and Enter signs that person in without reaching this; after Escape put the
+    // list away, Enter takes the text and this completes it. On its own it only refuses exact names.
     assert.equal(expandLoginName('Alice', D, ['alice']), 'alice@school.example');
     assert.equal(expandLoginName('alice', null, []), null);
     assert.equal(expandLoginName('alice', '', []), null);
@@ -188,4 +189,50 @@ test('a bare username becomes <username>@<login_domain>', () => {
 
 test('the broker refusing another organisation is a not-allowed refusal', () => {
     assert.equal(refusalKind('Authentication failure: this account is not a member of this school'), 'not-allowed');
+});
+
+test('a bare username is not taken by someone whose name only starts with it', () => {
+    const D = 'school.example';
+    const sso = [person('bobby@school.example', 'Bobby Lee', 9), person('carol@school.example', 'Carol Bobson', 8)];
+    const r = matchPeople(sso, 'bob', D);
+    assert.deepEqual(names(r), ['bobby@school.example', 'carol@school.example']);
+    // Nobody preselected: Enter completes the text instead.
+    assert.equal(preselect('bob', r.shown, D, []), -1);
+    assert.equal(expandLoginName('bob', D, []), 'bob@school.example');
+    // A person chosen with the arrow keys or the mouse still wins (extension.js: the pick comes before the completion).
+    // With an '@' typed, nobody as before.
+    assert.equal(preselect('bob@', matchPeople(sso, 'bob@', D).shown, D, []), -1);
+});
+
+test('a bare username is exactly the school account it completes to', () => {
+    const D = 'school.example';
+    const people = [person('bobby@school.example', 'Bobby Lee', 9), person('bob@school.example', 'Bob Stone', 1)];
+    const r = matchPeople(people, 'bob', D);
+    assert.deepEqual(names(r), ['bob@school.example', 'bobby@school.example']);
+    assert.equal(preselect('bob', r.shown, D, []), 0);
+    assert.equal(preselect('Bob', matchPeople(people, 'Bob', D).shown, D, []), 0);
+    // Another domain's bob is not this school's bob.
+    const other = [person('bob@other.example', 'Bob Other', 9)];
+    assert.equal(preselect('bob', matchPeople(other, 'bob', D).shown, D, []), -1);
+});
+
+test('an exact local name keeps precedence over the completion', () => {
+    const D = 'school.example';
+    const people = [person('bobby@school.example', 'Bobby Lee', 9), person('bob', 'Bob Stone', 1)];
+    const r = matchPeople(people, 'bob', D);
+    assert.deepEqual(names(r), ['bob', 'bobby@school.example']);
+    assert.equal(preselect('bob', r.shown, D, ['bob']), 0);
+    assert.equal(expandLoginName('bob', D, ['bob']), null);
+    // A case variant of the local name: the local person, preselected.
+    assert.equal(preselect('Bob', matchPeople(people, 'Bob', D).shown, D, ['bob']), 0);
+});
+
+test('without a login domain, or before the accounts are known, the first person is preselected as before', () => {
+    const people = [person('bobby@school.example', 'Bobby Lee', 9)];
+    const r = matchPeople(people, 'bob');
+    assert.equal(preselect('bob', r.shown), 0);
+    assert.equal(preselect('bob', r.shown, null, []), 0);
+    assert.equal(preselect('bob', r.shown, '', []), 0);
+    // The local accounts not loaded yet (null): no completion is offered, so the old rule holds.
+    assert.equal(preselect('bob', matchPeople(people, 'bob', 'school.example').shown, 'school.example', null), 0);
 });
