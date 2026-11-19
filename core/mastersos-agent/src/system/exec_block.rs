@@ -474,14 +474,24 @@ pub fn lifts_recorded(paths: &SysPaths) -> bool {
 
 /// Forgets every lift of the user layer (its format 3 state goes under format 1/2) and converges to the mode word on
 /// disk, under the lock: a blocked word mounts every stub and an open one (a format 1/2 `full` Group) lifts everything;
-/// a mode file that is not understood blocks everything; no state changes no mount. [`LIFTED_FILE`] is removed only
-/// once the mounts are right: until then [`lifts_recorded`] stays true, so the caller retries.
+/// a mode file that is not understood or cannot be read blocks everything; no state changes no mount. [`LIFTED_FILE`] is
+/// removed only once the mounts are right (never when the mode file cannot be read): until then [`lifts_recorded`] stays
+/// true, so the caller retries.
 pub fn drop_lifts(paths: &SysPaths, runner: &dyn Runner) -> Result<()> {
     let _lock = lock(&paths.root)?;
-    let target = match read_mode_word(paths)? {
-        None => None,
-        Some(Some(ModeWord::Open)) => Some(all_caps()),
-        Some(Some(ModeWord::Blocked)) | Some(None) => Some(Caps::new()),
+    let target = match read_mode_word(paths) {
+        Ok(None) => None,
+        Ok(Some(Some(ModeWord::Open))) => Some(all_caps()),
+        Ok(Some(Some(ModeWord::Blocked)) | Some(None)) => Some(Caps::new()),
+        Err(e) => {
+            // Cannot tell the mode: everything blocked, the lifts stay recorded (retried) and the failure returned
+            let blocked = ensure_set(&paths.root, runner, &Caps::new(), true);
+            let e = e.context(format!("reading {MODE_FILE}; blocked everything"));
+            return match blocked {
+                Ok(()) => Err(e),
+                Err(b) => Err(e.context(format!("{b:#}"))),
+            };
+        }
     };
     if let Some(lifted) = target {
         ensure_set(&paths.root, runner, &lifted, true)?;

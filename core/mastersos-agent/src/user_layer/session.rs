@@ -123,7 +123,9 @@ pub fn after_login(paths: &SysPaths, runner: &dyn Runner) -> Result<()> {
 /// `loginctl disable-linger`, `systemctl stop user@<uid>.service`, and only when all of them worked the marker removed.
 /// Any failure keeps the marker (logins stay refused) and is returned. An unreadable marker or logind list is an error,
 /// never "no session". A busy lock is [`WatchOutcome::Busy`]. Without a marker, a deferred format 1/2 cleanup is
-/// finished (its failure returned and retried every round).
+/// finished (its failure returned and retried every round). With a marker and a deferral, a stray lift is dropped first;
+/// its failure is returned after the session was looked at (an ended one is still torn down). A deferral whose login
+/// policy cannot be read is returned as an error, drops the lifts, and keeps an ended session's files and marker.
 pub fn watch(paths: &SysPaths, runner: &dyn Runner) -> Result<WatchOutcome> {
     watch_at(paths, runner, SystemTime::now())
 }
@@ -146,18 +148,65 @@ pub(crate) fn watch_at(
         Err(e) if switch::is_lock_busy(&e) => return Ok(WatchOutcome::Busy),
         Err(e) => return Err(e),
     };
-    let Some(mut a) = active_marker(root).context("reading the session marker")? else {
+    let Some(a) = active_marker(root).context("reading the session marker")? else {
         // Gone meanwhile: the next round looks at a deferred cleanup
         return Ok(WatchOutcome::Idle);
     };
     // A format 1/2 apply deferred its cleanup for this session: nothing may stay lifted (a lift that slipped in before
-    // the deferral is dropped within one round)
-    if exec_block::lifts_recorded(paths) && deferred_cleanup_due(paths).unwrap_or(false) {
-        exec_block::drop_lifts(paths, runner)
-            .context("dropping a lift while the settings format 1/2 cleanup waits")?;
+    // the deferral is dropped within one round). A login policy that cannot be read counts as deferred (fail closed).
+    let due = deferred_cleanup_due(paths);
+    let due_known = due.as_ref().ok().copied();
+    let mut errs: Vec<anyhow::Error> = Vec::new();
+    if let Err(e) = due {
+        errs.push(e);
     }
+    if exec_block::lifts_recorded(paths) && due_known != Some(false) {
+        if let Err(e) = exec_block::drop_lifts(paths, runner) {
+            // The session is still looked at below (an ended one is torn down; its revert keeps the marker while the
+            // lifts stay); the failure is returned after that
+            errs.push(e.context("dropping a lift while the settings format 1/2 cleanup waits"));
+        }
+    }
+    let outcome = session_round(paths, runner, now, a, before.uid, live, due_known);
+    match outcome {
+        Ok(o @ WatchOutcome::Reverted { .. }) => {
+            for e in &errs {
+                log::warn!("user layer: {e:#}");
+            }
+            Ok(o)
+        }
+        Ok(o) if errs.is_empty() => Ok(o),
+        Ok(_) => Err(join_errors(errs)),
+        Err(e) => {
+            errs.push(e);
+            Err(join_errors(errs))
+        }
+    }
+}
+
+/// One error from several, in order.
+fn join_errors(mut errs: Vec<anyhow::Error>) -> anyhow::Error {
+    if errs.len() == 1 {
+        return errs.remove(0);
+    }
+    let text: Vec<String> = errs.iter().map(|e| format!("{e:#}")).collect();
+    anyhow!("{}", text.join("; "))
+}
+
+/// The part of [`watch_at`] after the lifts: whether the session of `a` (under the marker's lock) goes on or is
+/// reverted. `due` is [`deferred_cleanup_due`], `None` when the login policy cannot be read.
+fn session_round(
+    paths: &SysPaths,
+    runner: &dyn Runner,
+    now: SystemTime,
+    mut a: Active,
+    uid: u32,
+    live: bool,
+    due: Option<bool>,
+) -> Result<WatchOutcome> {
+    let root = paths.root.as_path();
     // What logind said is about `before`'s uid; a marker that changed meanwhile waits for the next round
-    if a.uid != before.uid {
+    if a.uid != uid {
         return Ok(WatchOutcome::StillOpen);
     }
     if live {
@@ -185,7 +234,7 @@ pub(crate) fn watch_at(
             a.uid
         );
     }
-    revert(paths, runner, &a)?;
+    revert(paths, runner, &a, due)?;
     log::info!(
         "user layer: the session of {:?} is back to neutral",
         a.user_config
@@ -196,11 +245,18 @@ pub(crate) fn watch_at(
 }
 
 /// The revert of [`watch`], with the marker's lock held by the caller.
-fn revert(paths: &SysPaths, runner: &dyn Runner, a: &Active) -> Result<()> {
+/// `due` is [`deferred_cleanup_due`], `None` when the login policy cannot be read.
+fn revert(paths: &SysPaths, runner: &dyn Runner, a: &Active, due: Option<bool>) -> Result<()> {
     let mut errs: Vec<String> = Vec::new();
     // Reported after the marker is removed: a failure that leaves nothing a next session would read
     let mut after: Option<anyhow::Error> = None;
-    if deferred_cleanup_due(paths).unwrap_or(false) {
+    if due.is_none() {
+        // A deferral whose login policy cannot be read (reported by the watch): neither neutral (it would overwrite a
+        // format 1/2 Chrome policy and mode) nor the removal; the user is torn down, the marker stays, retried
+        errs.push(
+            "the deferred settings format 1/2 cleanup waits; the session's files are kept".into(),
+        );
+    } else if due == Some(true) {
         // A format 1/2 apply waited for this session: its lifts are forgotten and its files go now, instead of neutral
         // being switched in (which would overwrite the format 1/2 steps' Chrome policy and exec-block mode).
         if let Err(e) = finish_cleanup(paths, runner) {
@@ -273,8 +329,8 @@ fn idle(paths: &SysPaths, runner: &dyn Runner) -> Result<WatchOutcome> {
 
 /// Whether a deferred format 1/2 cleanup ([`render::cleanup_deferred`]) is to be done now, with the marker's lock held:
 /// only while the installed login policy is not format 3. Under format 3 the deferral is stale (a format 3 render that
-/// could not delete it): it is deleted and the session reverts as usual. A login policy that cannot be read does nothing
-/// and is an error (the watch reports it; with a marker the session reverts as usual and the error is only logged).
+/// could not delete it): it is deleted and the session reverts as usual. A login policy that cannot be read is an error:
+/// nothing is removed or switched, and with a marker the lifts are dropped and the marker kept (fail closed).
 fn deferred_cleanup_due(paths: &SysPaths) -> Result<bool> {
     if !render::cleanup_deferred(paths) {
         return Ok(false);

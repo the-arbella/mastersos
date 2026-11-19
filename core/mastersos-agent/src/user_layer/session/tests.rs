@@ -890,7 +890,11 @@ fn a_failed_drop_of_a_stray_lift_is_retried_until_it_works() {
     sim.fail_mounts
         .store(true, std::sync::atomic::Ordering::SeqCst);
     for round in 1..=2 {
-        assert!(watch_at(&p, &sim, at(T0 + round)).is_err(), "round {round}");
+        let e = watch_at(&p, &sim, at(T0 + round)).unwrap_err();
+        assert!(
+            format!("{e:#}").contains("dropping a lift"),
+            "round {round}: {e:#}"
+        );
         assert!(lifted_file(&p).exists(), "round {round}");
     }
     sim.fail_mounts
@@ -965,4 +969,117 @@ async fn monitor_settles_the_session_item_after_a_late_revert_error() {
     .await;
     shutdown.cancel();
     task.await.unwrap();
+}
+
+/// Every stub is mounted.
+fn all_blocked(p: &SysPaths) -> bool {
+    use crate::system::exec_block::tests::is_stub;
+    exec_block::TARGETS
+        .iter()
+        .filter(|t| p.root.join(t.trim_start_matches('/')).exists())
+        .all(|t| is_stub(&p.root, t))
+}
+
+/// A failing drop of a stray lift does not hold up the session's end: the revert's user teardown still runs this
+/// round, the marker stays (the lifts are not dropped), and the drop's failure is returned.
+#[test]
+fn a_failing_drop_still_tears_down_an_ended_session() {
+    let (_root, p, index, _) = setup();
+    let sim = Sim {
+        mounts: MountSim::new(&p.root),
+        sessions: Default::default(),
+        fail_mounts: false.into(),
+    };
+    let a = signed_in(&p, &index, ActiveState::Open, true);
+    exec_block::apply_lifted(&p, &sim, &a.caps).unwrap();
+    defer_cleanup(&p);
+    sim.set_sessions(&[greeter()]);
+    sim.fail_mounts
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let e = watch_at(&p, &sim, at(T0 + 1)).unwrap_err();
+    assert!(format!("{e:#}").contains("dropping a lift"), "{e:#}");
+    assert_eq!(revert_cmds(&sim.mounts.calls()), expected_revert_cmds());
+    assert!(read_active(&p.root).is_some());
+    assert!(lifted_file(&p).exists());
+}
+
+/// A deferral with a marker and a login policy that cannot be read, while the session goes on: reported, and the
+/// stray lift is dropped anyway (fail closed).
+#[test]
+fn unreadable_policy_with_a_session_drops_the_lifts_and_is_reported() {
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Open, true);
+    exec_block::apply_lifted(&p, &r, &a.caps).unwrap();
+    defer_cleanup(&p);
+    fs::write(p.var_dir.join("login/policy.json"), "not json").unwrap();
+    list(
+        &r,
+        &[
+            greeter(),
+            row("3", UID, Some("seat0"), "user", Some("active")),
+        ],
+    );
+    let e = watch_at(&p, &r, at(T0 + 1)).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("login policy cannot be read"),
+        "{e:#}"
+    );
+    assert!(!lifted_file(&p).exists());
+    assert!(all_blocked(&p));
+    assert!(read_active(&p.root).is_some());
+}
+
+/// The session ended with a deferral and a login policy that cannot be read: the user teardown runs, but neither neutral
+/// is switched in (it would overwrite the format 1/2 Chrome policy) nor are the files removed; the marker stays,
+/// the failure is returned, and the next round with a readable policy finishes the cleanup.
+#[test]
+fn unreadable_policy_at_the_revert_keeps_the_marker_and_the_files() {
+    let (_root, p, index, r) = setup();
+    signed_in(&p, &index, ActiveState::Closing, true);
+    defer_cleanup(&p);
+    let managed = p
+        .root
+        .join("etc/opt/chrome/policies/managed/mastersos.json");
+    let policy_before = fs::read(&managed).unwrap();
+    let link_before = fs::read_link(p.public_dir.join("session")).unwrap();
+    fs::write(p.var_dir.join("login/policy.json"), "not json").unwrap();
+    list(&r, &[greeter()]);
+    let e = watch_at(&p, &r, at(T0 + 1)).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("login policy cannot be read"),
+        "{e:#}"
+    );
+    assert_eq!(revert_cmds(&r.calls()), expected_revert_cmds());
+    assert!(read_active(&p.root).is_some());
+    assert_eq!(fs::read(&managed).unwrap(), policy_before);
+    assert_eq!(
+        fs::read_link(p.public_dir.join("session")).unwrap(),
+        link_before
+    );
+    assert!(p.var_dir.join(STATE_SUB).exists());
+    // readable again: finished
+    install_policy(&p, false);
+    list(&r, &[greeter()]);
+    assert_eq!(
+        watch_at(&p, &r, at(T0 + 2)).unwrap(),
+        WatchOutcome::Reverted {
+            user_config: "teacher".into()
+        }
+    );
+    assert!(!p.var_dir.join(STATE_SUB).exists());
+}
+
+/// A mode file that cannot be read (here a directory) while lifts are dropped: every stub is mounted (fail closed), the
+/// lifts stay recorded and the failure is returned.
+#[test]
+fn drop_with_an_unreadable_mode_file_blocks_everything() {
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Open, true);
+    exec_block::apply_lifted(&p, &r, &a.caps).unwrap();
+    let mode = p.var_dir.join(exec_block::MODE_FILE);
+    fs::remove_file(&mode).unwrap();
+    fs::create_dir(&mode).unwrap();
+    assert!(exec_block::drop_lifts(&p, &r).is_err());
+    assert!(all_blocked(&p));
+    assert!(lifted_file(&p).exists());
 }
