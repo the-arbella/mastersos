@@ -54,8 +54,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use mastersos_bundle::{
-    checks, kiosk, CardNavigation, Config, ItemResult, Lock, LoginMethod, Oidc, School, Seed,
-    IT_ACCOUNT_USER,
+    checks, kiosk, valid_school_id, CardNavigation, Config, ItemResult, Lock, LoginMethod, Oidc,
+    School, Seed, IT_ACCOUNT_USER,
 };
 use serde::{Deserialize, Serialize};
 
@@ -623,17 +623,9 @@ pub fn render_expected_org(oidc: &Oidc, school_id: Option<&str>) -> Option<Strin
     Some(out)
 }
 
-/// The school id when the broker can use it: a lowercase hyphenated UUID.
+/// The school id when the broker can use it: a lowercase hyphenated UUID ([`valid_school_id`]).
 fn usable_school_id(id: Option<&str>) -> Option<&str> {
-    id.filter(|id| is_lower_uuid(id))
-}
-
-fn is_lower_uuid(s: &str) -> bool {
-    s.len() == 36
-        && s.bytes().enumerate().all(|(i, b)| match i {
-            8 | 13 | 18 | 23 => b == b'-',
-            _ => b.is_ascii_digit() || (b'a'..=b'f').contains(&b),
-        })
+    id.filter(|id| valid_school_id(id))
 }
 
 /// The authd OIDC broker drop-in. The caller has passed `oidc` through `checks::oidc`. No `offline_access`: a login goes
@@ -897,6 +889,12 @@ pub fn step() -> Step {
     }
 }
 
+/// Whether the school's sign-in (SSO) is one of this Device's login methods: the broker drop-in is written only then.
+pub fn sso_on(policy: &LoginPolicy) -> bool {
+    let sso = method_name(LoginMethod::Sso);
+    policy.methods.iter().any(|m| m == sso)
+}
+
 /// [`policy_from_bundle`] with the device's own part: the recorded owner uid of `itadmin` (the `lock` step writes the same).
 pub fn bundle_policy(ctx: &ApplyContext, env: &Env) -> LoginPolicy {
     let mut p = policy_from_bundle(ctx.school, ctx.config, ctx.lock);
@@ -998,7 +996,7 @@ fn apply(
     if let Err(e) = write_policy(env.paths, &written) {
         problems.push(format!("writing the login policy failed: {e:#}"));
     }
-    let sso = policy.methods.iter().any(|m| m == "sso");
+    let sso = sso_on(policy);
     let valid_oidc = oidc.filter(|_| sso).and_then(|o| match checks::oidc(o) {
         Ok(()) => Some(o),
         Err(e) => {

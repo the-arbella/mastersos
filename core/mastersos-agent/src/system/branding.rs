@@ -26,7 +26,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use mastersos_bundle::{checks, ItemResult, Seed};
+use mastersos_bundle::{checks, Config, ItemResult, School, Seed};
 use serde::Serialize;
 
 use super::banner::{gv_text, GDM_DCONF_DIR};
@@ -141,13 +141,19 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
         logo_sha256: ctx.school.logo_sha256.as_deref(),
         icon_sha256: ctx.school.logo_icon_sha256.as_deref(),
         locale_managed: ctx.school.locale.is_some(),
-        login_domain: ctx
-            .school
-            .oidc
-            .as_ref()
-            .and_then(|o| o.login_domain.as_deref()),
+        login_domain: wanted_login_domain(ctx.school, ctx.config),
     };
     apply(&want, &ctx.seed.server_url, ctx.phase, env, &HttpFetcher)
+}
+
+/// `[school.oidc] login_domain`, only while the school's sign-in is one of this Device's login methods (the same policy
+/// the `login` step writes the broker drop-in from): without SSO the login screen completes nothing.
+fn wanted_login_domain<'a>(school: &'a School, config: &Config) -> Option<&'a str> {
+    let policy = super::login::policy_from_bundle(school, config, None);
+    if !super::login::sso_on(&policy) {
+        return None;
+    }
+    school.oidc.as_ref()?.login_domain.as_deref()
 }
 
 /// Before the first settings: only the seed's school name.
@@ -506,6 +512,32 @@ mod tests {
             },
         );
         assert!(json(&p).get("login_domain").is_none());
+    }
+
+    #[test]
+    fn login_domain_only_with_sso_among_the_login_methods() {
+        use mastersos_bundle::{LoginMethod, Oidc};
+        let school = School {
+            allowed_domains: vec![D1.into()],
+            oidc: Some(Oidc {
+                login_domain: Some(D1.into()),
+                ..Oidc::default()
+            }),
+            ..School::default()
+        };
+        let mut config = crate::system::tests::config();
+        config.login_methods = vec![LoginMethod::Local, LoginMethod::Sso];
+        assert_eq!(wanted_login_domain(&school, &config), Some(D1));
+        config.login_methods = vec![LoginMethod::Local];
+        assert_eq!(wanted_login_domain(&school, &config), None);
+        config.login_methods = vec![];
+        assert_eq!(wanted_login_domain(&school, &config), None);
+        config.login_methods = vec![LoginMethod::Sso];
+        let no_oidc = School {
+            oidc: None,
+            ..school.clone()
+        };
+        assert_eq!(wanted_login_domain(&no_oidc, &config), None);
     }
 
     #[test]
