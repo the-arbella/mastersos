@@ -233,6 +233,23 @@ pub fn manifest_schema() -> serde_json::Value {
     schema
 }
 
+/// The JSON Schema (draft 2020-12) of a `format = 3` settings file as a school writes it.
+///
+/// Derived from [`crate::V3Manifest`] the same way as [`manifest_schema`]; descriptions are the
+/// fields' doc comments, and `version` is not required.
+#[cfg(feature = "schema")]
+pub fn manifest_schema_v3() -> serde_json::Value {
+    let mut schema = serde_json::to_value(schemars::schema_for!(crate::V3Manifest))
+        .expect("a JSON Schema serializes to JSON");
+    if let Some(required) = schema
+        .get_mut("required")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        required.retain(|k| k != "version");
+    }
+    schema
+}
+
 #[cfg(all(test, feature = "schema"))]
 mod tests {
     use std::collections::BTreeSet;
@@ -460,26 +477,43 @@ mod tests {
         }
     }
 
-    #[test]
-    fn spec_documents_every_field() {
-        let schema = manifest_schema();
+    /// The reference section that documents `table` of either schema: the table's own section,
+    /// else the section of the format 2 table it shares its keys with (`[defaults.…]`, and the
+    /// `[device_defaults.…]`, `[device_config.…]`, `[user_defaults.…]` and `[user_config.…]` sub-tables
+    /// of format 3, are written like `[config.…]`).
+    fn documented_section<'a>(table: &str) -> Option<&'a str> {
+        if table.is_empty() {
+            return section(|h| h.starts_with("### ") && h.contains("Top-level keys"));
+        }
+        let own = format!("`{table}`");
+        if let Some(s) = section(|h| h.starts_with("### ") && h.contains(&own)) {
+            return Some(s);
+        }
+        let mut shared = table.to_string();
+        for from in [
+            "[defaults.",
+            "[device_defaults.",
+            "[device_config.",
+            "[user_defaults.",
+            "[user_config.",
+        ] {
+            shared = shared.replacen(from, "[config.", 1);
+        }
+        let want = format!("`{shared}`");
+        section(|h| h.starts_with("### ") && h.contains(&want))
+    }
+
+    /// Every field of `schema` has a row in the section that documents its table.
+    fn undocumented_fields(schema: &Value) -> Vec<String> {
         let mut all = Vec::new();
-        fields(&schema, &schema, "", &mut all);
+        fields(schema, schema, "", &mut all);
         assert!(
             all.len() > 50,
             "the schema walk found too few fields: {all:?}"
         );
         let mut missing = BTreeSet::new();
         for (table, key) in &all {
-            let text = if table.is_empty() {
-                section(|h| h.starts_with("### ") && h.contains("Top-level keys"))
-            } else {
-                // `[defaults]` has the keys of `[[config]]`: its sub-tables (`[[defaults.wifi]]`,
-                // `[defaults.apps]`, …) are documented by the Config ones.
-                let want = format!("`{}`", table.replacen("[defaults.", "[config.", 1));
-                section(|h| h.starts_with("### ") && h.contains(&want))
-            };
-            match text {
+            match documented_section(table) {
                 Some(t) if t.contains(&format!("| `{key}` |")) => {}
                 Some(_) => {
                     missing.insert(format!("{table} {key}: has no table row in its section"));
@@ -489,10 +523,25 @@ mod tests {
                 }
             }
         }
-        let missing: Vec<_> = missing.into_iter().collect();
+        missing.into_iter().collect()
+    }
+
+    #[test]
+    fn spec_documents_every_field() {
+        let missing = undocumented_fields(&manifest_schema());
         assert!(
             missing.is_empty(),
             "undocumented fields:\n{}",
+            missing.join("\n")
+        );
+    }
+
+    #[test]
+    fn spec_documents_every_format_3_field() {
+        let missing = undocumented_fields(&manifest_schema_v3());
+        assert!(
+            missing.is_empty(),
+            "undocumented format 3 fields:\n{}",
             missing.join("\n")
         );
     }
