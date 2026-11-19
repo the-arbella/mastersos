@@ -1,8 +1,18 @@
 diff --git a/authd-oidc-brokers/internal/broker/broker.go b/authd-oidc-brokers/internal/broker/broker.go
-index ad401ac..c74bac3 100644
+index ad401ac..2c5c1df 100644
 --- a/authd-oidc-brokers/internal/broker/broker.go
 +++ b/authd-oidc-brokers/internal/broker/broker.go
-@@ -299,6 +299,8 @@ func loadBrokerConfig(cfg Config, p provider) (Config, error) {
+@@ -134,6 +134,9 @@ type session struct {
+ 	// (set by passwordAuth before the online refresh). A device-code re-login of that same identity then
+ 	// keeps the local password instead of asking for a new one.
+ 	localPasswordVerifiedFor string
++	// MastersOS (0007): the issuer profile's claims of the ID token verified in this login, for the facts hand-off
++	// (mastersos_facts.go). Set only by a getUserInfo that succeeded with the profile on.
++	mastersosClaims mastersosIDClaims
+ 
+ 	isAuthenticating *isAuthenticatedCtx
+ }
+@@ -299,6 +302,8 @@ func loadBrokerConfig(cfg Config, p provider) (Config, error) {
  	}
  	// MastersOS (0006): the school's domains sit beside broker.conf, never in it (mastersos_domains.go).
  	parsedConfig.mastersosDomains = mastersosLoadDomains(cfg.ConfigFile)
@@ -11,7 +21,19 @@ index ad401ac..c74bac3 100644
  	cfg.userConfig = parsedConfig
  	return cfg, nil
  }
-@@ -864,6 +866,11 @@ func (b *Broker) NewSession(username, lang, mode, providerID string) (sessionID,
+@@ -777,6 +782,11 @@ func (b *Broker) NewSession(username, lang, mode, providerID string) (sessionID,
+ 	if username == "" {
+ 		return "", "", errors.New("username is required")
+ 	}
++	// MastersOS (0007): every authentication, login or unlock, starts by deleting that user's facts, so a login whose
++	// facts cannot be fetched never hands over an earlier one's (mastersos_facts.go).
++	if b.cfg.mastersosProfile.active {
++		mastersosForgetFacts(strings.ToLower(username))
++	}
+ 
+ 	sessionID = uuid.New().String()
+ 	s := session{
+@@ -864,6 +874,11 @@ func (b *Broker) NewSession(username, lang, mode, providerID string) (sessionID,
  	}
  	// Append extra scopes from config
  	scopes = append(scopes, b.cfg.extraScopes...)
@@ -23,12 +45,16 @@ index ad401ac..c74bac3 100644
  	if s.oidcServer != nil {
  		s.oauth2Config = oauth2.Config{
  			ClientID:     b.oidcCfg.ClientID,
-@@ -3141,6 +3148,12 @@ func (b *Broker) getUserInfo(ctx context.Context, session *session, token *oauth
+@@ -3141,6 +3156,16 @@ func (b *Broker) getUserInfo(ctx context.Context, session *session, token *oauth
  		err      error
  	)
  
 +	// MastersOS (0007): with the issuer profile, the verified ID token alone names the person (mastersos_profile.go);
-+	// no UserInfo endpoint fallback.
++	// no UserInfo endpoint fallback. Its claims reach the facts hand-off only if everything below succeeds.
++	var mastersosClaims mastersosIDClaims
++	if b.cfg.mastersosProfile.active {
++		session.mastersosClaims = mastersosIDClaims{}
++	}
 +	if b.cfg.mastersosProfile.active && rawIDToken == "" {
 +		return info.User{}, mastersosDenial("Authentication failure: no ID token", errors.New("the issuer profile needs an ID token"))
 +	}
@@ -36,13 +62,13 @@ index ad401ac..c74bac3 100644
  	if rawIDToken == "" {
  		claims, err = session.oidcServer.UserInfo(ctx, oauth2.StaticTokenSource(token))
  		if err != nil {
-@@ -3155,9 +3168,13 @@ func (b *Broker) getUserInfo(ctx context.Context, session *session, token *oauth
+@@ -3155,9 +3180,13 @@ func (b *Broker) getUserInfo(ctx context.Context, session *session, token *oauth
  		claims = idToken
  	}
  
 -	userInfo, err = b.provider.GetUserInfo(claims, isRefresh)
 +	if b.cfg.mastersosProfile.active {
-+		userInfo, _, err = mastersosUserInfo(b.cfg.mastersosProfile, idToken)
++		userInfo, mastersosClaims, err = mastersosUserInfo(b.cfg.mastersosProfile, idToken)
 +	} else {
 +		userInfo, err = b.provider.GetUserInfo(claims, isRefresh)
 +	}
@@ -52,6 +78,16 @@ index ad401ac..c74bac3 100644
  		// The ID token is missing a required claim. Try fetching the claims from the UserInfo endpoint.
  		log.Infof(context.Background(), "ID token is missing claim %q. Fetching claims from UserInfo endpoint.", missingClaimErr.Claim)
  		var userInfoClaims info.Claimer
+@@ -3201,6 +3230,9 @@ func (b *Broker) getUserInfo(ctx context.Context, session *session, token *oauth
+ 		userInfo.Home = filepath.Join(b.cfg.homeBaseDir, userInfo.Home)
+ 	}
+ 
++	if b.cfg.mastersosProfile.active {
++		session.mastersosClaims = mastersosClaims
++	}
+ 	return userInfo, nil
+ }
+ 
 diff --git a/authd-oidc-brokers/internal/broker/config.go b/authd-oidc-brokers/internal/broker/config.go
 index 0444556..79ff8b6 100644
 --- a/authd-oidc-brokers/internal/broker/config.go
@@ -79,6 +115,818 @@ index 20b4f5e..d2d9b3a 100644
  
  	tests := map[string]struct {
  		configType        string
+diff --git a/authd-oidc-brokers/internal/broker/mastersos_cardonly.go b/authd-oidc-brokers/internal/broker/mastersos_cardonly.go
+index 055c9fa..1aca227 100644
+--- a/authd-oidc-brokers/internal/broker/mastersos_cardonly.go
++++ b/authd-oidc-brokers/internal/broker/mastersos_cardonly.go
+@@ -91,5 +91,13 @@ func (b *Broker) finishCardLogin(session *session, authInfo *token.AuthCachedInf
+ 	if err := os.Remove(session.passwordPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+ 		log.Warningf(context.Background(), "Could not remove the old local password of user %q: %v", session.username, err)
+ 	}
++	// MastersOS (0007): after the grant, the person's facts for pam-session; they never change the answer.
++	if b.cfg.mastersosProfile.active {
++		if claims := session.mastersosClaims; claims.LoginName == authInfo.UserInfo.Name {
++			b.mastersosWriteFacts(context.Background(), session, claims, authInfo.Token)
++		} else {
++			log.Warningf(context.Background(), "Not handing over facts: the granted user %q is not the ID token's login name", authInfo.UserInfo.Name)
++		}
++	}
+ 	return access, data
+ }
+diff --git a/authd-oidc-brokers/internal/broker/mastersos_facts.go b/authd-oidc-brokers/internal/broker/mastersos_facts.go
+new file mode 100644
+index 0000000..7ab8858
+--- /dev/null
++++ b/authd-oidc-brokers/internal/broker/mastersos_facts.go
+@@ -0,0 +1,274 @@
++package broker
++
++// MastersOS carried patch (image/patches/authd-oidc/0007-mastersos-issuer-profile.patch): the facts hand-off.
++//
++// With the issuer profile on, a granted card login asks the issuer's userinfo endpoint, with this login's access token,
++// for the person's facts (scope mastersos.facts) and leaves them for pam-session in <mastersosFactsDir>/<login_name>.json,
++// mode 0600, written by rename. The file is one of
++//
++//	{"version":1,"user":"<login_name>","granted_at":<unix seconds>,"facts":{...}}
++//	{"version":1,"user":"<login_name>","granted_at":<unix seconds>,"error":"<text>"}
++//
++// facts keeps only sub, org, org_role, org_nodes, classes and age_band, as the issuer sent them; userinfo whose sub or
++// org is not the verified ID token's gives the error form, as does a failed, slow (over mastersosUserinfoTimeout) or too
++// large (over 64 KiB) answer. The error text is the broker's own: never the answer's body, never a token.
++//
++// The hand-off is consumed once: NewSession deletes the file of the user it starts for (login or unlock), so a login
++// whose facts could not be fetched never hands over an earlier login's. The facts never decide the login: nothing here
++// can deny it.
++//
++// Only a directory that is root's own (owner mastersosFactsDirUID, mode exactly 0700, not a symlink) is written to or
++// deleted from, and only under a name derived from a login_name of the checked shape, which has no '/'.
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"io/fs"
++	"net/http"
++	"os"
++	"path/filepath"
++	"syscall"
++	"time"
++
++	"github.com/canonical/authd/log"
++	"github.com/coreos/go-oidc/v3/oidc"
++	"golang.org/x/oauth2"
++)
++
++// mastersosFactsDir is created by tmpfiles (root, 0700). Package variables so that tests, running as an ordinary user,
++// can point the hand-off at their own directory and keep the userinfo timeout short.
++var (
++	mastersosFactsDir        = "/run/mastersos/facts"
++	mastersosFactsDirUID     = 0
++	mastersosUserinfoTimeout = 5 * time.Second
++)
++
++// mastersosMaxUserinfo caps the userinfo answer.
++const mastersosMaxUserinfo = 64 * 1024
++
++// mastersosFactKeys are the userinfo keys handed over.
++var mastersosFactKeys = []string{"sub", "org", "org_role", "org_nodes", "classes", "age_band"}
++
++var errMastersosUserinfoTooLarge = errors.New("userinfo response is larger than 64 KiB")
++
++// mastersosFactsError is a failed fetch: text goes into the file, err only into the log.
++type mastersosFactsError struct {
++	text string
++	err  error
++}
++
++func (e *mastersosFactsError) Error() string {
++	if e.err == nil {
++		return e.text
++	}
++	return e.text + ": " + e.err.Error()
++}
++
++type mastersosFactsFile struct {
++	Version   int                        `json:"version"`
++	User      string                     `json:"user"`
++	GrantedAt int64                      `json:"granted_at"`
++	Facts     map[string]json.RawMessage `json:"facts,omitempty"`
++	Error     string                     `json:"error,omitempty"`
++}
++
++// mastersosFactsDirCheck reports why dir must not be used: not a real directory (a symlink is not followed), not owned
++// by mastersosFactsDirUID, or a mode other than exactly 0700.
++func mastersosFactsDirCheck(dir string) error {
++	fi, err := os.Lstat(dir)
++	if err != nil {
++		return err
++	}
++	if fi.Mode() != fs.ModeDir|0o700 {
++		return fmt.Errorf("%s is not a directory of mode 0700 (%s)", dir, fi.Mode())
++	}
++	st, ok := fi.Sys().(*syscall.Stat_t)
++	if !ok || int(st.Uid) != mastersosFactsDirUID {
++		return fmt.Errorf("%s is not owned by uid %d", dir, mastersosFactsDirUID)
++	}
++	return nil
++}
++
++// mastersosForgetFacts deletes the facts file of userName, a login_name, at the start of an authentication. Anything
++// else (a name of another shape, a directory that fails the checks) deletes nothing.
++func mastersosForgetFacts(userName string) {
++	if !mastersosLoginNameValid(userName) {
++		return
++	}
++	dir := mastersosFactsDir
++	if err := mastersosFactsDirCheck(dir); err != nil {
++		log.Debugf(context.Background(), "Not deleting earlier facts of %q: %v", userName, err)
++		return
++	}
++	if err := os.Remove(filepath.Join(dir, userName+".json")); err != nil && !errors.Is(err, fs.ErrNotExist) {
++		log.Warningf(context.Background(), "Could not delete the earlier facts of %q: %v", userName, err)
++	}
++}
++
++// mastersosWriteFacts hands the facts of a granted login to pam-session. It never fails the login: every problem ends in
++// the error form, or, when the file cannot be written at all, in no file (pam-session then falls back).
++func (b *Broker) mastersosWriteFacts(ctx context.Context, session *session, claims mastersosIDClaims, t *oauth2.Token) {
++	if !mastersosLoginNameValid(claims.LoginName) {
++		log.Warningf(context.Background(), "Not handing over facts: the login name %q does not have the expected shape", claims.LoginName)
++		return
++	}
++	content := mastersosFactsFile{Version: 1, User: claims.LoginName, GrantedAt: time.Now().Unix()}
++	facts, err := mastersosFetchFacts(ctx, session, claims, t)
++	if err != nil {
++		var fe *mastersosFactsError
++		if !errors.As(err, &fe) {
++			fe = &mastersosFactsError{text: "could not get the facts", err: err}
++		}
++		log.Warningf(context.Background(), "No facts for %q: %v", claims.LoginName, fe)
++		content.Error = fe.text
++	} else {
++		content.Facts = facts
++	}
++	if err := mastersosWriteFactsFile(mastersosFactsDir, content); err != nil {
++		log.Warningf(context.Background(), "Could not hand over the facts of %q: %v", claims.LoginName, err)
++	}
++}
++
++// mastersosFetchFacts asks the userinfo endpoint with this login's access token, within mastersosUserinfoTimeout and
++// mastersosMaxUserinfo.
++func mastersosFetchFacts(ctx context.Context, session *session, claims mastersosIDClaims, t *oauth2.Token) (map[string]json.RawMessage, error) {
++	if session.oidcServer == nil {
++		return nil, &mastersosFactsError{text: "the issuer is not reachable"}
++	}
++	if t == nil || t.AccessToken == "" {
++		return nil, &mastersosFactsError{text: "the login has no access token"}
++	}
++	ctx, cancel := context.WithTimeout(ctx, mastersosUserinfoTimeout)
++	defer cancel()
++
++	base := http.DefaultTransport
++	if c, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && c != nil && c.Transport != nil {
++		base = c.Transport
++	}
++	status := 0
++	client := &http.Client{Transport: mastersosCappedTransport{base: base, status: &status}}
++
++	userInfo, err := session.oidcServer.UserInfo(oidc.ClientContext(ctx, client), oauth2.StaticTokenSource(t))
++	switch {
++	case errors.Is(err, errMastersosUserinfoTooLarge):
++		return nil, &mastersosFactsError{text: "the userinfo response is too large"}
++	case err != nil && ctx.Err() != nil:
++		return nil, &mastersosFactsError{text: "the userinfo request did not finish in time"}
++	case err != nil && status != 0 && status != http.StatusOK:
++		// go-oidc's error carries the answer's body: only the status is logged.
++		return nil, &mastersosFactsError{text: "the userinfo request failed", err: fmt.Errorf("HTTP status %d", status)}
++	case err != nil:
++		return nil, &mastersosFactsError{text: "the userinfo request failed", err: err}
++	}
++
++	var raw map[string]json.RawMessage
++	if err := userInfo.Claims(&raw); err != nil || raw == nil {
++		return nil, &mastersosFactsError{text: "the userinfo response is not a JSON object"}
++	}
++	return mastersosFactsFrom(raw, claims)
++}
++
++// mastersosFactsFrom keeps the six facts of a userinfo answer whose sub and org are the ID token's.
++func mastersosFactsFrom(raw map[string]json.RawMessage, claims mastersosIDClaims) (map[string]json.RawMessage, error) {
++	var sub, org string
++	if json.Unmarshal(raw["sub"], &sub) != nil || json.Unmarshal(raw["org"], &org) != nil ||
++		sub == "" || org == "" || sub != claims.Sub || org != claims.Org {
++		return nil, &mastersosFactsError{text: "the userinfo sub or org does not match the ID token"}
++	}
++	facts := make(map[string]json.RawMessage, len(mastersosFactKeys))
++	for _, k := range mastersosFactKeys {
++		if v, ok := raw[k]; ok {
++			facts[k] = v
++		}
++	}
++	return facts, nil
++}
++
++// mastersosWriteFactsFile writes content to dir/<user>.json by rename, after the directory checks.
++func mastersosWriteFactsFile(dir string, content mastersosFactsFile) (err error) {
++	if !mastersosLoginNameValid(content.User) {
++		return fmt.Errorf("the login name %q does not have the expected shape", content.User)
++	}
++	if err := mastersosFactsDirCheck(dir); err != nil {
++		return err
++	}
++	data, err := json.Marshal(content)
++	if err != nil {
++		return err
++	}
++
++	f, err := os.CreateTemp(dir, ".facts-*")
++	if err != nil {
++		return err
++	}
++	tmp := f.Name()
++	defer func() {
++		if err != nil {
++			_ = f.Close()
++			_ = os.Remove(tmp)
++		}
++	}()
++	if err = f.Chmod(0o600); err != nil {
++		return err
++	}
++	if _, err = f.Write(data); err != nil {
++		return err
++	}
++	if err = f.Sync(); err != nil {
++		return err
++	}
++	if err = f.Close(); err != nil {
++		return err
++	}
++	return os.Rename(tmp, filepath.Join(dir, content.User+".json"))
++}
++
++// mastersosCappedTransport makes every response body fail, instead of growing, past mastersosMaxUserinfo.
++// It records the last status in status.
++type mastersosCappedTransport struct {
++	base   http.RoundTripper
++	status *int
++}
++
++func (c mastersosCappedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
++	resp, err := c.base.RoundTrip(req)
++	if err != nil {
++		return nil, err
++	}
++	*c.status = resp.StatusCode
++	if resp.ContentLength > mastersosMaxUserinfo {
++		_ = resp.Body.Close()
++		return nil, errMastersosUserinfoTooLarge
++	}
++	resp.Body = mastersosCapBody(resp.Body)
++	return resp, nil
++}
++
++// mastersosCapBody reads at most mastersosMaxUserinfo bytes of body, and fails on one more: never a silent truncation.
++func mastersosCapBody(body io.ReadCloser) io.ReadCloser {
++	return &mastersosCappedBody{ReadCloser: body}
++}
++
++type mastersosCappedBody struct {
++	io.ReadCloser
++	n int64
++}
++
++func (c *mastersosCappedBody) Read(p []byte) (int, error) {
++	room := mastersosMaxUserinfo + 1 - c.n
++	if room <= 0 {
++		return 0, errMastersosUserinfoTooLarge
++	}
++	if int64(len(p)) > room {
++		p = p[:room]
++	}
++	n, err := c.ReadCloser.Read(p)
++	c.n += int64(n)
++	if c.n > mastersosMaxUserinfo {
++		return n, errMastersosUserinfoTooLarge
++	}
++	return n, err
++}
+diff --git a/authd-oidc-brokers/internal/broker/mastersos_facts_export_test.go b/authd-oidc-brokers/internal/broker/mastersos_facts_export_test.go
+new file mode 100644
+index 0000000..48192a1
+--- /dev/null
++++ b/authd-oidc-brokers/internal/broker/mastersos_facts_export_test.go
+@@ -0,0 +1,24 @@
++package broker
++
++// MastersOS carried patch (image/patches/authd-oidc/0007-mastersos-issuer-profile.patch): the helpers its facts tests reach.
++
++import (
++	"testing"
++	"time"
++)
++
++// SetMastersOSFacts points the facts hand-off at dir, owned by ownerUID (tests run as an ordinary user), with this
++// userinfo timeout. The previous values come back when the test ends.
++func SetMastersOSFacts(t testing.TB, dir string, ownerUID int, timeout time.Duration) {
++	t.Helper()
++	oldDir, oldUID, oldTimeout := mastersosFactsDir, mastersosFactsDirUID, mastersosUserinfoTimeout
++	t.Cleanup(func() {
++		mastersosFactsDir, mastersosFactsDirUID, mastersosUserinfoTimeout = oldDir, oldUID, oldTimeout
++	})
++	mastersosFactsDir, mastersosFactsDirUID, mastersosUserinfoTimeout = dir, ownerUID, timeout
++}
++
++// MastersOSForgetFacts deletes a user's facts file the way NewSession does.
++func MastersOSForgetFacts(userName string) {
++	mastersosForgetFacts(userName)
++}
+diff --git a/authd-oidc-brokers/internal/broker/mastersos_facts_internal_test.go b/authd-oidc-brokers/internal/broker/mastersos_facts_internal_test.go
+new file mode 100644
+index 0000000..e8ff512
+--- /dev/null
++++ b/authd-oidc-brokers/internal/broker/mastersos_facts_internal_test.go
+@@ -0,0 +1,64 @@
++package broker
++
++// MastersOS carried patch (image/patches/authd-oidc/0007-mastersos-issuer-profile.patch): the userinfo body cap and the
++// facts kept from a userinfo answer.
++
++import (
++	"bytes"
++	"encoding/json"
++	"errors"
++	"io"
++	"strings"
++	"testing"
++
++	"github.com/stretchr/testify/require"
++)
++
++// The cap is exactly 64 KiB: a body of that size is read whole, one byte more is an error (never a silent truncation).
++func TestMastersOSUserinfoBodyCap(t *testing.T) {
++	body := bytes.Repeat([]byte("x"), mastersosMaxUserinfo)
++	got, err := io.ReadAll(mastersosCapBody(io.NopCloser(bytes.NewReader(body))))
++	require.NoError(t, err)
++	require.Len(t, got, mastersosMaxUserinfo)
++
++	_, err = io.ReadAll(mastersosCapBody(io.NopCloser(bytes.NewReader(append(body, 'x')))))
++	require.True(t, errors.Is(err, errMastersosUserinfoTooLarge), "err: %v", err)
++	require.Equal(t, 64*1024, mastersosMaxUserinfo)
++}
++
++// Only the six facts are kept, with their values as the issuer sent them; sub and org must be the ID token's strings.
++func TestMastersOSFactsFromUserinfo(t *testing.T) {
++	claims := mastersosIDClaims{Sub: "alice-id", Org: testOrg, LoginName: "alice@school.example"}
++	raw := func(s string) map[string]json.RawMessage {
++		var m map[string]json.RawMessage
++		require.NoError(t, json.Unmarshal([]byte(s), &m))
++		return m
++	}
++
++	facts, err := mastersosFactsFrom(raw(`{"sub":"alice-id","org":"`+testOrg+`","org_role":"member","org_nodes":[],`+
++		`"classes":[{"id":"c","role":"student","x":1}],"age_band":null,"name":"Alice","email":"a@b"}`), claims)
++	require.NoError(t, err)
++	out, err := json.Marshal(facts)
++	require.NoError(t, err)
++	require.JSONEq(t, `{"sub":"alice-id","org":"`+testOrg+`","org_role":"member","org_nodes":[],`+
++		`"classes":[{"id":"c","role":"student","x":1}],"age_band":null}`, string(out))
++
++	facts, err = mastersosFactsFrom(raw(`{"sub":"alice-id","org":"`+testOrg+`"}`), claims)
++	require.NoError(t, err)
++	require.Len(t, facts, 2, "absent facts stay absent")
++
++	for _, bad := range []string{
++		`{"sub":"bob-id","org":"` + testOrg + `"}`,
++		`{"sub":"alice-id","org":"` + strings.ToUpper(testOrg) + `"}`,
++		`{"org":"` + testOrg + `"}`,
++		`{"sub":"alice-id"}`,
++		`{"sub":null,"org":"` + testOrg + `"}`,
++		`{"sub":["alice-id"],"org":"` + testOrg + `"}`,
++	} {
++		_, err := mastersosFactsFrom(raw(bad), claims)
++		require.Error(t, err, "userinfo %s", bad)
++	}
++
++	_, err = mastersosFactsFrom(raw(`{"sub":"","org":""}`), mastersosIDClaims{LoginName: "alice@school.example"})
++	require.Error(t, err, "empty claims never match")
++}
+diff --git a/authd-oidc-brokers/internal/broker/mastersos_facts_test.go b/authd-oidc-brokers/internal/broker/mastersos_facts_test.go
+new file mode 100644
+index 0000000..4a0d41a
+--- /dev/null
++++ b/authd-oidc-brokers/internal/broker/mastersos_facts_test.go
+@@ -0,0 +1,408 @@
++package broker_test
++
++// MastersOS carried patch (image/patches/authd-oidc/0007-mastersos-issuer-profile.patch): after a card login is granted
++// with the issuer profile on, the broker fetches the person's facts from the userinfo endpoint and leaves them for
++// pam-session in <facts dir>/<login_name>.json, consumed once: NewSession deletes the file of the user it starts for.
++// Not parallel: these tests change package settings and share the card's fixed ports.
++
++import (
++	"encoding/json"
++	"net/http"
++	"os"
++	"path/filepath"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/canonical/authd/authd-oidc-brokers/internal/broker"
++	"github.com/canonical/authd/authd-oidc-brokers/internal/testutils"
++	"github.com/stretchr/testify/require"
++)
++
++const aliceFile = "alice@school.example.json"
++
++// userinfoRecorder is a /userinfo endpoint that counts its requests and remembers their Authorization header.
++type userinfoRecorder struct {
++	mu      sync.Mutex
++	calls   int
++	auth    string
++	respond func(w http.ResponseWriter, r *http.Request)
++}
++
++func (u *userinfoRecorder) handler(w http.ResponseWriter, r *http.Request) {
++	u.mu.Lock()
++	u.calls++
++	u.auth = r.Header.Get("Authorization")
++	u.mu.Unlock()
++	u.respond(w, r)
++}
++
++func (u *userinfoRecorder) count() int {
++	u.mu.Lock()
++	defer u.mu.Unlock()
++	return u.calls
++}
++
++func respondJSON(body map[string]interface{}) func(w http.ResponseWriter, r *http.Request) {
++	return func(w http.ResponseWriter, _ *http.Request) {
++		data, _ := json.Marshal(body)
++		w.Header().Set("Content-Type", "application/json")
++		_, _ = w.Write(data)
++	}
++}
++
++func respondRaw(status int, body string) func(w http.ResponseWriter, r *http.Request) {
++	return func(w http.ResponseWriter, _ *http.Request) {
++		w.Header().Set("Content-Type", "application/json")
++		w.WriteHeader(status)
++		_, _ = w.Write([]byte(body))
++	}
++}
++
++// schoolFacts is what the issuer answers at userinfo for alice: the six facts and a key the hand-off drops.
++func schoolFacts() map[string]interface{} {
++	return map[string]interface{}{
++		"sub":       "alice-id",
++		"org":       mastersosOrg,
++		"org_role":  "member",
++		"org_nodes": []interface{}{"node-1", "node-2"},
++		"classes":   []interface{}{map[string]interface{}{"id": "class-1", "role": "student"}},
++		"age_band":  "13-17",
++		"name":      "Alice Example",
++	}
++}
++
++const schoolFactsJSON = `{"sub":"alice-id","org":"` + mastersosOrg + `","org_role":"member","org_nodes":["node-1","node-2"],` +
++	`"classes":[{"id":"class-1","role":"student"}],"age_band":"13-17"}`
++
++// newFactsDir makes a facts directory the way tmpfiles does (0700, owned by the user running the test) and points the
++// broker at it.
++func newFactsDir(t *testing.T) string {
++	t.Helper()
++	dir := filepath.Join(t.TempDir(), "facts")
++	require.NoError(t, os.Mkdir(dir, 0o700))
++	require.NoError(t, os.Chmod(dir, 0o700))
++	broker.SetMastersOSFacts(t, dir, os.Getuid(), 5*time.Second)
++	return dir
++}
++
++// factsBroker is profileBroker with the /userinfo endpoint answering through rec.
++func factsBroker(t *testing.T, claims map[string]interface{}, rec *userinfoRecorder, profile bool) *broker.Broker {
++	t.Helper()
++	return profileBroker(t, claims, func(cfg *brokerForTestConfig) {
++		cfg.customHandlers["/userinfo"] = testutils.EndpointHandler(rec.handler)
++		if profile {
++			cfg.SetMastersOSProfile(mastersosOrg)
++		}
++	})
++}
++
++// loginAlice signs alice in on the card and requires the login to be granted.
++func loginAlice(t *testing.T, b *broker.Broker) {
++	t.Helper()
++	sessionID, _ := newSessionForTests(t, b, "alice@school.example", "")
++	access, data := finishOnCard(t, b, sessionID, cardURL(t, b, sessionID))
++	require.Equal(t, broker.AuthGranted, access, "the facts never decide the login; data: %s", data)
++}
++
++// readFacts reads a facts file, checks its mode and the fields both forms share, and returns its raw content and keys.
++func readFacts(t *testing.T, path string) (string, map[string]json.RawMessage) {
++	t.Helper()
++	fi, err := os.Lstat(path)
++	require.NoError(t, err, "the facts file should be there")
++	require.True(t, fi.Mode().IsRegular(), "the facts file should be a regular file")
++	require.Equal(t, os.FileMode(0o600), fi.Mode().Perm(), "the facts file should be 0600")
++	content, err := os.ReadFile(path)
++	require.NoError(t, err)
++
++	var got map[string]json.RawMessage
++	require.NoError(t, json.Unmarshal(content, &got), "content: %s", content)
++	require.JSONEq(t, `1`, string(got["version"]))
++	require.JSONEq(t, `"alice@school.example"`, string(got["user"]))
++	var grantedAt int64
++	require.NoError(t, json.Unmarshal(got["granted_at"], &grantedAt))
++	require.InDelta(t, time.Now().Unix(), grantedAt, 5, "granted_at is the grant's time in unix seconds")
++	return string(content), got
++}
++
++// requireErrorForm checks the error form: an error text and no facts.
++func requireErrorForm(t *testing.T, path string) string {
++	t.Helper()
++	content, got := readFacts(t, path)
++	require.NotContains(t, got, "facts", "a failed fetch hands over no facts; content: %s", content)
++	var text string
++	require.NoError(t, json.Unmarshal(got["error"], &text), "content: %s", content)
++	require.NotEmpty(t, text)
++	require.Len(t, got, 4, "version, user, granted_at and error; content: %s", content)
++	return content
++}
++
++// dirNames lists a directory's entries.
++func dirNames(t *testing.T, dir string) []string {
++	t.Helper()
++	entries, err := os.ReadDir(dir)
++	require.NoError(t, err)
++	var names []string
++	for _, e := range entries {
++		names = append(names, e.Name())
++	}
++	return names
++}
++
++// oldFacts leaves alice's facts of an earlier login behind.
++func oldFacts(t *testing.T, dir string) {
++	t.Helper()
++	require.NoError(t, os.WriteFile(filepath.Join(dir, aliceFile),
++		[]byte(`{"version":1,"user":"alice@school.example","granted_at":1,"facts":{"sub":"alice-id","org_role":"old"}}`), 0o600))
++}
++
++func TestMastersOSFactsWrittenAfterGrant(t *testing.T) {
++	t.Setenv("MASTERSOS_AUTH_CODE", "1")
++	rec := &userinfoRecorder{respond: respondJSON(schoolFacts())}
++	b := factsBroker(t, schoolClaims("alice@school.example"), rec, true)
++	dir := newFactsDir(t)
++
++	loginAlice(t, b)
++
++	require.Equal(t, 1, rec.count(), "one userinfo request per login")
++	require.Equal(t, "Bearer accesstoken", rec.auth, "userinfo is asked with this login's access token")
++	require.Equal(t, []string{aliceFile}, dirNames(t, dir), "only the facts file, no temporary file left")
++	content, got := readFacts(t, filepath.Join(dir, aliceFile))
++	require.Len(t, got, 4, "version, user, granted_at and facts; content: %s", content)
++	require.NotContains(t, got, "error")
++	require.JSONEq(t, schoolFactsJSON, string(got["facts"]), "the six facts, as the issuer sent them")
++	require.NotContains(t, content, "Alice Example", "keys other than the six are dropped")
++}
++
++// Every authentication starts by deleting that user's facts: a later failure can never hand over an earlier login's.
++func TestMastersOSFactsDeletedAtNewSession(t *testing.T) {
++	t.Setenv("MASTERSOS_AUTH_CODE", "1")
++	for name, requested := range map[string]string{
++		"login":                  "alice@school.example",
++		"name typed in capitals": "Alice@School.Example",
++	} {
++		t.Run(name, func(t *testing.T) {
++			rec := &userinfoRecorder{respond: respondJSON(schoolFacts())}
++			b := factsBroker(t, schoolClaims("alice@school.example"), rec, true)
++			dir := newFactsDir(t)
++			oldFacts(t, dir)
++			require.NoError(t, os.WriteFile(filepath.Join(dir, "bob@school.example.json"), []byte(`{"version":1}`), 0o600))
++
++			newSessionForTests(t, b, requested, "")
++
++			require.NoFileExists(t, filepath.Join(dir, aliceFile), "the user's earlier facts are gone at NewSession")
++			require.FileExists(t, filepath.Join(dir, "bob@school.example.json"), "another user's facts stay")
++			require.Zero(t, rec.count(), "NewSession asks userinfo nothing")
++		})
++	}
++}
++
++func TestMastersOSUserinfoFailureWritesError(t *testing.T) {
++	t.Setenv("MASTERSOS_AUTH_CODE", "1")
++	const marker = "USERINFO-BODY-MARKER"
++	tooLarge := `{"sub":"alice-id","org":"` + mastersosOrg + `","age_band":"13-17","padding":"` + strings.Repeat("x", 70*1024) + `"}`
++	validThenSpace := `{"sub":"alice-id","org":"` + mastersosOrg + `","age_band":"13-17"}` + strings.Repeat(" ", 70*1024)
++
++	for name, tc := range map[string]struct {
++		respond func(w http.ResponseWriter, r *http.Request)
++		timeout time.Duration
++	}{
++		"status 500": {respond: respondRaw(http.StatusInternalServerError, `{"error":"`+marker+`"}`)},
++		"status 401": {respond: respondRaw(http.StatusUnauthorized, marker)},
++		"timeout": {
++			timeout: 200 * time.Millisecond,
++			respond: func(w http.ResponseWriter, r *http.Request) {
++				select {
++				case <-r.Context().Done():
++				case <-time.After(10 * time.Second):
++				}
++				respondJSON(schoolFacts())(w, r)
++			},
++		},
++		"body over 64 KiB":                    {respond: respondRaw(http.StatusOK, tooLarge)},
++		"valid object then over 64 KiB space": {respond: respondRaw(http.StatusOK, validThenSpace)},
++		"not json":                            {respond: respondRaw(http.StatusOK, marker)},
++		"not an object":                       {respond: respondRaw(http.StatusOK, `["alice-id"]`)},
++	} {
++		t.Run(name, func(t *testing.T) {
++			rec := &userinfoRecorder{respond: tc.respond}
++			b := factsBroker(t, schoolClaims("alice@school.example"), rec, true)
++			dir := newFactsDir(t)
++			if tc.timeout != 0 {
++				broker.SetMastersOSFacts(t, dir, os.Getuid(), tc.timeout)
++			}
++			oldFacts(t, dir)
++
++			start := time.Now()
++			loginAlice(t, b)
++			require.Less(t, time.Since(start), 5*time.Second, "the userinfo timeout bounds the login")
++
++			require.Equal(t, 1, rec.count())
++			content := requireErrorForm(t, filepath.Join(dir, aliceFile))
++			require.NotContains(t, content, marker, "the error never carries the userinfo body")
++			require.NotContains(t, content, "accesstoken", "the error never carries a token")
++			require.NotContains(t, content, "old", "the earlier login's facts are not reused")
++			require.Equal(t, []string{aliceFile}, dirNames(t, dir), "no temporary file left")
++		})
++	}
++}
++
++// Userinfo that names another person or organisation than the verified ID token hands over nobody's facts.
++func TestMastersOSUserinfoSubjectMismatchWritesError(t *testing.T) {
++	t.Setenv("MASTERSOS_AUTH_CODE", "1")
++	for name, change := range map[string]func(f map[string]interface{}){
++		"another sub":      func(f map[string]interface{}) { f["sub"] = "bob-id" },
++		"another org":      func(f map[string]interface{}) { f["org"] = mastersosOtherOrg },
++		"org in capitals":  func(f map[string]interface{}) { f["org"] = strings.ToUpper(mastersosOrg) },
++		"no sub":           func(f map[string]interface{}) { delete(f, "sub") },
++		"no org":           func(f map[string]interface{}) { delete(f, "org") },
++		"sub not a string": func(f map[string]interface{}) { f["sub"] = 7 },
++		"org not a string": func(f map[string]interface{}) { f["org"] = []interface{}{mastersosOrg} },
++	} {
++		t.Run(name, func(t *testing.T) {
++			f := schoolFacts()
++			f["org_role"] = "staff-of-someone-else"
++			change(f)
++			rec := &userinfoRecorder{respond: respondJSON(f)}
++			b := factsBroker(t, schoolClaims("alice@school.example"), rec, true)
++			dir := newFactsDir(t)
++
++			loginAlice(t, b)
++
++			require.Equal(t, 1, rec.count())
++			content := requireErrorForm(t, filepath.Join(dir, aliceFile))
++			require.NotContains(t, content, "staff-of-someone-else", "another person's facts are never handed over")
++		})
++	}
++}
++
++// A facts directory that is not root's own 0700 directory gets nothing, anywhere; the login is still granted.
++func TestMastersOSFactsNeverLeaveTheDirectory(t *testing.T) {
++	t.Setenv("MASTERSOS_AUTH_CODE", "1")
++	for name, setup := range map[string]func(t *testing.T, parent string) (dir, watched string, uid int){
++		"directory is a symlink": func(t *testing.T, parent string) (string, string, int) {
++			target := filepath.Join(parent, "target")
++			require.NoError(t, os.Mkdir(target, 0o700))
++			require.NoError(t, os.Chmod(target, 0o700))
++			link := filepath.Join(parent, "facts")
++			require.NoError(t, os.Symlink(target, link))
++			return link, target, os.Getuid()
++		},
++		"directory of another user": func(t *testing.T, parent string) (string, string, int) {
++			dir := filepath.Join(parent, "facts")
++			require.NoError(t, os.Mkdir(dir, 0o700))
++			require.NoError(t, os.Chmod(dir, 0o700))
++			return dir, dir, os.Getuid() + 1
++		},
++		"directory 0750": func(t *testing.T, parent string) (string, string, int) {
++			dir := filepath.Join(parent, "facts")
++			require.NoError(t, os.Mkdir(dir, 0o700))
++			require.NoError(t, os.Chmod(dir, 0o750))
++			return dir, dir, os.Getuid()
++		},
++		"directory 0777": func(t *testing.T, parent string) (string, string, int) {
++			dir := filepath.Join(parent, "facts")
++			require.NoError(t, os.Mkdir(dir, 0o700))
++			require.NoError(t, os.Chmod(dir, 0o777))
++			return dir, dir, os.Getuid()
++		},
++		"directory sticky": func(t *testing.T, parent string) (string, string, int) {
++			dir := filepath.Join(parent, "facts")
++			require.NoError(t, os.Mkdir(dir, 0o700))
++			require.NoError(t, os.Chmod(dir, 0o700|os.ModeSticky))
++			return dir, dir, os.Getuid()
++		},
++		"a regular file": func(t *testing.T, parent string) (string, string, int) {
++			dir := filepath.Join(parent, "facts")
++			require.NoError(t, os.WriteFile(dir, nil, 0o700))
++			return dir, parent, os.Getuid()
++		},
++		"missing": func(t *testing.T, parent string) (string, string, int) {
++			return filepath.Join(parent, "facts"), parent, os.Getuid()
++		},
++	} {
++		t.Run(name, func(t *testing.T) {
++			rec := &userinfoRecorder{respond: respondJSON(schoolFacts())}
++			b := factsBroker(t, schoolClaims("alice@school.example"), rec, true)
++			parent := t.TempDir()
++			dir, watched, uid := setup(t, parent)
++			before := dirNames(t, parent)
++			broker.SetMastersOSFacts(t, dir, uid, 5*time.Second)
++
++			loginAlice(t, b)
++
++			require.Equal(t, before, dirNames(t, parent), "nothing new beside the directory")
++			if watched != parent {
++				require.Empty(t, dirNames(t, watched), "nothing written inside the directory")
++			}
++		})
++	}
++}
++
++// Without the profile there is no hand-off: no userinfo request, no file written, none deleted.
++func TestMastersOSNoProfileWritesNoFacts(t *testing.T) {
++	t.Setenv("MASTERSOS_AUTH_CODE", "1")
++	rec := &userinfoRecorder{respond: respondJSON(schoolFacts())}
++	b := factsBroker(t, withEmail(schoolClaims("alice@school.example")), rec, false)
++	dir := newFactsDir(t)
++	oldFacts(t, dir)
++	before, err := os.ReadFile(filepath.Join(dir, aliceFile))
++	require.NoError(t, err)
++
++	loginAlice(t, b)
++
++	require.Zero(t, rec.count(), "no userinfo request without the profile")
++	require.Equal(t, []string{aliceFile}, dirNames(t, dir), "no file written")
++	after, err := os.ReadFile(filepath.Join(dir, aliceFile))
++	require.NoError(t, err, "no file deleted")
++	require.Equal(t, before, after)
++}
++
++// Deleting a user's facts touches only <facts dir>/<login_name>.json, and only in a directory that passes the checks.
++func TestMastersOSForgetFactsStaysInTheDirectory(t *testing.T) {
++	parent := t.TempDir()
++	dir := filepath.Join(parent, "facts")
++	require.NoError(t, os.Mkdir(dir, 0o700))
++	require.NoError(t, os.Chmod(dir, 0o700))
++	require.NoError(t, os.Mkdir(filepath.Join(dir, "a"), 0o700))
++	files := []string{
++		filepath.Join(parent, "x.json"),
++		filepath.Join(parent, "x@school.example.json"),
++		filepath.Join(dir, "a", "b@school.example.json"),
++		filepath.Join(dir, "x.json"),
++		filepath.Join(dir, "Alice@school.example.json"),
++	}
++	for _, f := range files {
++		require.NoError(t, os.WriteFile(f, []byte("{}"), 0o600))
++	}
++	broker.SetMastersOSFacts(t, dir, os.Getuid(), 5*time.Second)
++
++	for _, name := range []string{"../x", "../x@school.example", "a/b@school.example", "x", "Alice@school.example",
++		"", "/x@school.example", "..", "alice@school.example/../../x"} {
++		broker.MastersOSForgetFacts(name)
++	}
++	for _, f := range files {
++		require.FileExists(t, f, "a name that is not a login_name removes nothing")
++	}
++
++	// A login_name in a directory that fails the checks: nothing is removed either.
++	target := filepath.Join(parent, "target")
++	require.NoError(t, os.Mkdir(target, 0o700))
++	require.NoError(t, os.Chmod(target, 0o700))
++	require.NoError(t, os.WriteFile(filepath.Join(target, aliceFile), []byte("{}"), 0o600))
++	link := filepath.Join(parent, "link")
++	require.NoError(t, os.Symlink(target, link))
++	broker.SetMastersOSFacts(t, link, os.Getuid(), 5*time.Second)
++	broker.MastersOSForgetFacts("alice@school.example")
++	require.FileExists(t, filepath.Join(target, aliceFile), "a symlinked directory is not followed")
++
++	broker.SetMastersOSFacts(t, target, os.Getuid()+1, 5*time.Second)
++	broker.MastersOSForgetFacts("alice@school.example")
++	require.FileExists(t, filepath.Join(target, aliceFile), "a directory of another owner is left alone")
++
++	// The control: the same login_name in a good directory is removed.
++	broker.SetMastersOSFacts(t, target, os.Getuid(), 5*time.Second)
++	broker.MastersOSForgetFacts("alice@school.example")
++	require.NoFileExists(t, filepath.Join(target, aliceFile))
++}
 diff --git a/authd-oidc-brokers/internal/broker/mastersos_profile.go b/authd-oidc-brokers/internal/broker/mastersos_profile.go
 new file mode 100644
 index 0000000..2f058de
@@ -492,10 +1340,10 @@ index 0000000..ad1030c
 +}
 diff --git a/authd-oidc-brokers/internal/broker/mastersos_profile_test.go b/authd-oidc-brokers/internal/broker/mastersos_profile_test.go
 new file mode 100644
-index 0000000..b7b137c
+index 0000000..081de51
 --- /dev/null
 +++ b/authd-oidc-brokers/internal/broker/mastersos_profile_test.go
-@@ -0,0 +1,303 @@
+@@ -0,0 +1,306 @@
 +package broker_test
 +
 +// MastersOS carried patch (image/patches/authd-oidc/0007-mastersos-issuer-profile.patch): with the school's issuer
@@ -510,6 +1358,7 @@ index 0000000..b7b137c
 +	"path/filepath"
 +	"strings"
 +	"testing"
++	"time"
 +
 +	"github.com/canonical/authd/authd-oidc-brokers/internal/broker"
 +	"github.com/canonical/authd/authd-oidc-brokers/internal/broker/authmodes"
@@ -527,6 +1376,8 @@ index 0000000..b7b137c
 +// profile on (or leaves it off).
 +func profileBroker(t *testing.T, claims map[string]interface{}, setup func(cfg *brokerForTestConfig)) *broker.Broker {
 +	t.Helper()
++	// Granted logins hand their facts to a directory that is not there, never to the real one (the facts tests set theirs).
++	broker.SetMastersOSFacts(t, filepath.Join(t.TempDir(), "no-facts"), os.Getuid(), time.Second)
 +	var deleted []string
 +	if _, ok := claims["email"]; !ok {
 +		deleted = []string{"email", "email_verified"}
