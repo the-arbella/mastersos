@@ -573,7 +573,8 @@ fn keep_list_follows_the_rule() {
 
 mod prepare {
     use super::super::{
-        linger_off_for_students, prepare_user_manager, Deadline, Prep, LOGIN_DEADLINE,
+        linger_off_for_everyone, linger_off_for_students, prepare_user_manager, Deadline, Prep,
+        LOGIN_DEADLINE,
     };
     use super::FakeClock;
     use crate::runner::{Cmd, FakeRunner, Output, Runner};
@@ -769,6 +770,29 @@ mod prepare {
         assert_eq!(calls[1], "loginctl disable-linger 10001");
     }
 
+    /// Under the user layer administrators get no linger either (design §4.5).
+    #[test]
+    fn linger_off_for_everyone_includes_admins() {
+        let json = r#"[
+            {"uid":10001,"user":"student@school.ac.th","linger":true,"state":"lingering"},
+            {"uid":10002,"user":"Boss@school.ac.th","linger":true,"state":"lingering"},
+            {"uid":0,"user":"root","linger":true,"state":"online"},
+            {"uid":120,"user":"gdm","linger":true,"state":"online"}
+        ]"#;
+        let r = FakeRunner::new();
+        r.respond("loginctl list-users", Output::ok(json));
+        linger_off_for_everyone(&r).unwrap();
+        let calls = r.calls();
+        assert_eq!(
+            calls[1..],
+            [
+                "loginctl disable-linger 10001",
+                "loginctl disable-linger 10002"
+            ],
+            "{calls:?}"
+        );
+    }
+
     #[test]
     fn linger_off_failures_are_counted_without_ids() {
         let json = r#"[{"uid":10001,"user":"a@s.th","linger":true,"state":"lingering"}]"#;
@@ -845,7 +869,7 @@ mod login {
     fn on_login_full_mode_touches_nothing() {
         for mode in [Some("full\n"), None] {
             let (d, r) = setup(mode, "/home/me");
-            on_login(&paths(d.path()), &r, "me", uid());
+            on_login(&paths(d.path()), &r, "me", uid(), None);
             assert!(profile(&d));
             assert!(result(&d).is_none());
             assert!(!paths(d.path()).var_dir.join(RESULT_FILE).exists());
@@ -853,11 +877,25 @@ mod login {
         }
     }
 
+    /// Format 3: the user config's `home` decides, whatever the legacy session-mode file says.
+    #[test]
+    fn on_login_user_config_decides() {
+        let (d, r) = setup(Some("learning\n"), "/home/me");
+        on_login(&paths(d.path()), &r, "me", uid(), Some(false));
+        assert!(profile(&d));
+        assert!(r.calls().is_empty(), "{:?}", r.calls());
+        let (d, r) = setup(Some("full\n"), "/home/me");
+        r.respond(SHOW, Output::ok("offline\n"));
+        on_login(&paths(d.path()), &r, "me", uid(), Some(true));
+        assert!(!profile(&d));
+        assert_eq!(result(&d).unwrap().outcome, "tidied");
+    }
+
     #[test]
     fn on_login_learning_tidies() {
         let (d, r) = setup(Some("learning\n"), "/home/me");
         r.respond(SHOW, Output::ok("offline\n"));
-        on_login(&paths(d.path()), &r, "me", uid());
+        on_login(&paths(d.path()), &r, "me", uid(), None);
         assert!(!profile(&d));
         let t = result(&d).unwrap();
         assert_eq!(t.outcome, "tidied");
@@ -876,7 +914,7 @@ mod login {
     fn on_login_active_skips() {
         let (d, r) = setup(Some("learning\n"), "/home/me");
         r.respond(SHOW, Output::ok("active\n"));
-        on_login(&paths(d.path()), &r, "me", uid());
+        on_login(&paths(d.path()), &r, "me", uid(), None);
         assert!(profile(&d));
         assert_eq!(result(&d).unwrap().outcome, "skipped-active");
     }
@@ -885,7 +923,7 @@ mod login {
     fn on_login_prepare_failed() {
         let (d, r) = setup(Some("learning\n"), "/home/me");
         r.respond(SHOW, Output::fail(1, "boom"));
-        on_login(&paths(d.path()), &r, "me", uid());
+        on_login(&paths(d.path()), &r, "me", uid(), None);
         assert!(profile(&d));
         assert_eq!(result(&d).unwrap().outcome, "prepare-failed");
     }
@@ -901,7 +939,7 @@ mod login {
         ] {
             let (d, r) = setup(Some("learning\n"), field);
             r.respond(SHOW, Output::ok("offline\n"));
-            on_login(&paths(d.path()), &r, "me", uid());
+            on_login(&paths(d.path()), &r, "me", uid(), None);
             assert!(profile(&d), "{field}");
             assert_eq!(result(&d).unwrap().outcome, "not-a-home", "{field}");
         }
@@ -909,7 +947,7 @@ mod login {
         let (d, _) = setup(Some("learning\n"), "/home/me");
         let r = FakeRunner::new();
         r.respond("getent passwd", Output::fail(2, ""));
-        on_login(&paths(d.path()), &r, "me", uid());
+        on_login(&paths(d.path()), &r, "me", uid(), None);
         assert!(profile(&d));
         assert_eq!(result(&d).unwrap().outcome, "not-a-home");
     }
@@ -943,7 +981,7 @@ mod login {
         let p = paths(d.path());
         std::fs::create_dir_all(p.var_dir.parent().unwrap()).unwrap();
         std::fs::write(&p.var_dir, "not a dir").unwrap();
-        on_login(&p, &r, "me", uid());
+        on_login(&p, &r, "me", uid(), None);
         assert_eq!(std::fs::read_to_string(&p.var_dir).unwrap(), "not a dir");
         assert!(result(&d).is_none());
         // the tidy itself still ran
@@ -956,7 +994,7 @@ mod login {
             let d = learning_root();
             std::fs::create_dir_all(d.path().join("home")).unwrap();
             let r = passwd(name, &format!("/home/{name}"));
-            on_login(&paths(d.path()), &r, name, uid());
+            on_login(&paths(d.path()), &r, name, uid(), None);
             assert_eq!(result(&d).unwrap().outcome, "not-a-home", "{name:?}");
             assert!(
                 r.calls().iter().all(|c| !c.starts_with("loginctl")),
@@ -970,7 +1008,7 @@ mod login {
     fn on_login_missing_home_root_is_reported_as_io() {
         let d = learning_root();
         let r = passwd("me", "/home/me");
-        on_login(&paths(d.path()), &r, "me", uid());
+        on_login(&paths(d.path()), &r, "me", uid(), None);
         let t = result(&d).unwrap();
         assert_eq!(t.outcome, "tidied");
         assert_eq!(t.skipped, vec!["io"]);
@@ -1002,7 +1040,7 @@ mod login {
             clock: &c,
             step: Duration::from_secs(4),
         };
-        on_login_with(&paths(d.path()), &t, &c, "me", uid());
+        on_login_with(&paths(d.path()), &t, &c, "me", uid(), None);
         assert!(profile(&d));
         assert_eq!(result(&d).unwrap().outcome, "deadline");
         assert!(
@@ -1024,7 +1062,7 @@ mod login {
             clock: &c,
             step: Duration::from_secs(6),
         };
-        on_login_with(&paths(d.path()), &t, &c, "me", uid());
+        on_login_with(&paths(d.path()), &t, &c, "me", uid(), None);
         assert!(profile(&d));
         assert_eq!(result(&d).unwrap().outcome, "deadline");
     }

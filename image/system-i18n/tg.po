@@ -37,3 +37,9 @@ msgstr "%s рӯз аст, ки навсозии танзимот тасдиқ н
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "Шӯъбаи IT аз ин компютер маълумоти ташхисӣ ҷамъ меорад."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Касе ҳанӯз дар ин дастгоҳ ворид шудааст. Ӯ бояд аввал хориҷ шавад ё дастгоҳро аз нав оғоз кунед."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Ин дастгоҳ ҷаласаи шуморо омода карда натавонист. Пас аз лаҳзае дубора кӯшиш кунед ё дастгоҳро аз нав оғоз кунед."

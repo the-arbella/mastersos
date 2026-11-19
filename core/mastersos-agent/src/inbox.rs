@@ -618,6 +618,7 @@ mod tests {
             manifest_features: vec![],
             os_pending_version: None,
             quiet_since: None,
+            user_config: None,
         }
     }
 

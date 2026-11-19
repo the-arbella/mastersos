@@ -37,3 +37,9 @@ msgstr "%s दिवसांपासून सेटिंग्ज अद्�
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT या संगणकावरून निदान माहिती गोळा करत आहे."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "कोणीतरी अजूनही या डिव्हाइसवर साइन इन आहे. त्यांनी आधी साइन आउट केले पाहिजे, किंवा डिव्हाइस रीस्टार्ट करा."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "हे डिव्हाइस तुमचे सत्र तयार करू शकले नाही. थोड्या वेळाने पुन्हा प्रयत्न करा, किंवा डिव्हाइस रीस्टार्ट करा."

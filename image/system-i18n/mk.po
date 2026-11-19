@@ -37,3 +37,9 @@ msgstr "Веќе %s дена не е потврдено дека поставк�
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT собира дијагностички информации од овој компјутер."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Некој сè уште е најавен на овој уред. Прво мора да се одјави или рестартирајте го уредот."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Овој уред не можеше да ја подготви вашата сесија. Обидете се повторно за момент или рестартирајте го уредот."

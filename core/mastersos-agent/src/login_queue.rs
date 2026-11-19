@@ -61,6 +61,10 @@ const QUEUE_NAME: &str = "login-queue";
 /// 导出的 `login` 脚本（`public_dir` 下的 [`EXPORT_SUB`]）。
 pub const EXPORT_DIR: &str = "/var/lib/mastersos-public/login-scripts";
 const EXPORT_SUB: &str = "login-scripts";
+/// Under the user layer (format 3): the login scripts of the session's user config, pre-rendered with their [`INDEX`]
+/// and reached through the `session` link the switch points at the config (`crate::user_layer::switch`). When it exists
+/// the runner reads only this set ([`run_batch`]).
+pub const SESSION_EXPORT_DIR: &str = "/var/lib/mastersos-public/session/login-scripts";
 /// 导出目录里的索引：脚本路径 → 文件名与超时。
 pub const INDEX: &str = "index.json";
 /// 回报项的前缀（后面是脚本路径）。
@@ -71,7 +75,7 @@ const SIGNAL_TIMEOUT: Duration = Duration::from_secs(1);
 /// 等 `user@<uid>.service` active 最多这么久、每隔这么久看一次。
 const USER_WAIT: Duration = Duration::from_secs(30);
 const USER_POLL: Duration = Duration::from_secs(1);
-const SYSTEMCTL_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const SYSTEMCTL_TIMEOUT: Duration = Duration::from_secs(10);
 /// `systemd-run` 本身比脚本的超时多给这么久（单元由 systemd 按 RuntimeMaxSec 终止，这只是兜底）。
 const RUN_SLACK: Duration = Duration::from_secs(60);
 /// `systemd-run --wait` 在单元因 RuntimeMaxSec 被终止时的退出码（VM 实测；与脚本自己退出 1 相同，见模块文档）。
@@ -102,6 +106,13 @@ pub fn enqueue_at(root: &Path, uid: u32, runner: &dyn Runner) -> Result<()> {
         ));
     }
     // 记号写没写进去都叫醒：每次登录都立即拉取一次（spec §6.6）。
+    wake_agent(runner);
+    Ok(())
+}
+
+/// Wakes the agent (`SIGUSR1` to its main process, at most [`SIGNAL_TIMEOUT`]). A failure only writes one line to
+/// stderr: if the agent is not running it finds the queue and the user layer's marker when it next starts.
+pub fn wake_agent(runner: &dyn Runner) {
     let cmd = Cmd::new(
         "systemctl",
         &[
@@ -122,7 +133,6 @@ pub fn enqueue_at(root: &Path, uid: u32, runner: &dyn Runner) -> Result<()> {
         )),
         Err(e) => warn(&format!("waking the agent failed: {e:#}")),
     }
-    Ok(())
 }
 
 fn put(root: &Path, uid: u32) -> Result<()> {
@@ -245,6 +255,28 @@ pub fn login_scripts(config: &Config) -> impl Iterator<Item = &Script> {
     config.scripts.iter().filter(|s| s.when == When::Login)
 }
 
+/// The `login` scripts of every user config reachable on a Device of Group `group` (format 3), each path once; the
+/// session runs its own config's set ([`run_batch`]), this list only keeps their hashes and results.
+pub fn user_layer_login_scripts(m: &mastersos_bundle::Manifest, group: &str) -> Vec<Script> {
+    let mut seen = BTreeSet::new();
+    let mut out = vec![];
+    for id in mastersos_bundle::reachable_user_configs(m, group) {
+        for s in mastersos_bundle::user_config(m, &id)
+            .map(|c| c.login_scripts)
+            .unwrap_or_default()
+        {
+            // every script of a user config runs at login (`check` refuses `when = "apply"` there)
+            if seen.insert(s.path.clone()) {
+                out.push(Script {
+                    when: When::Login,
+                    ..s
+                });
+            }
+        }
+    }
+    out
+}
+
 /// 脚本的超时（秒）：没写取默认值，夹到上限（validate 已拒收超过上限的；没经过 validate 的也不溢出）。
 fn timeout_of(s: &Script) -> u64 {
     s.timeout_secs
@@ -252,7 +284,7 @@ fn timeout_of(s: &Script) -> u64 {
         .min(MAX_SCRIPT_TIMEOUT_SECS)
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, serde::Deserialize)]
 struct IndexEntry {
     file: String,
     timeout_secs: u64,
@@ -268,7 +300,20 @@ pub fn step() -> Step {
     }
 }
 
+/// Under a format 3 bundle the login scripts are the user config's, pre-rendered by the `user-layer` step: this
+/// step writes nothing and removes the export of an earlier format 1/2 bundle, which no session reads any more.
 fn run_export(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
+    if ctx.user_layer().is_some() {
+        let removed = match safefs::open_abs_dir(&env.paths.public_dir, false) {
+            Ok(p) => safefs::remove_tree_at(&p, EXPORT_SUB),
+            Err(e) if crate::apply::is_not_found(&e) => Ok(()),
+            Err(e) => Err(e),
+        };
+        if let Err(e) = removed {
+            log::warn!("removing the login scripts of the earlier settings failed: {e:#}");
+        }
+        return vec![];
+    }
     export(ctx.config, ctx.bundle_dir, env.paths)
 }
 
@@ -288,11 +333,22 @@ pub fn export(config: &Config, bundle_dir: &Path, paths: &SysPaths) -> Vec<ItemR
 }
 
 fn export_list(scripts: &[&Script], bundle_dir: &Path, paths: &SysPaths) -> Vec<ItemResult> {
-    let dir = match public_dir(paths).and_then(|p| {
+    let dir = public_dir(paths).and_then(|p| {
         let d = safefs::open_dir_at(&p, Path::new(EXPORT_SUB), true)?;
         safefs::set_mode(&d, 0o755)?;
         Ok(d)
-    }) {
+    });
+    export_into(scripts, bundle_dir, dir)
+}
+
+/// Exports `scripts` into the directory `dir` (already 0755; an error fails every script) with [`INDEX`], and
+/// removes the files of `dir` that are not needed any more. Reports only the failed scripts (`<path>`).
+pub(crate) fn export_into(
+    scripts: &[&Script],
+    bundle_dir: &Path,
+    dir: Result<std::os::fd::OwnedFd>,
+) -> Vec<ItemResult> {
+    let dir = match dir {
         Ok(d) => d,
         Err(e) => {
             return scripts
@@ -403,11 +459,121 @@ fn run_login_scripts_with(
     // The guest's home is new every session and a learning-mode home is put back to a known state every login, so
     // the scripts run every time and no hash is recorded.
     let every_login = uid == GUEST_UID || crate::system::desktop::profile(config).locked();
+    let scripts: Vec<Exported> = login_scripts(config)
+        .map(|s| Exported {
+            path: s.path.clone(),
+            file: export_dir.join(exported_name(&s.path)),
+            timeout_secs: timeout_of(s),
+        })
+        .collect();
+    run_exported(uid, &scripts, every_login, state, runner, wait)
+}
+
+/// One exported login script: its path in the bundle, the exported file and its timeout.
+struct Exported {
+    path: String,
+    file: std::path::PathBuf,
+    timeout_secs: u64,
+}
+
+/// What the session link says about a batch (format 3).
+enum SessionSet {
+    /// There is no session link: no user layer, the Config's export runs.
+    Absent,
+    /// The session is the batch's uid: its user config's login scripts, and whether its mode is `full`.
+    Mine { scripts: Vec<Exported>, full: bool },
+    /// The link exists but its session is not the batch's uid (or cannot be read): nothing runs.
+    Skip(String),
+}
+
+/// The session's set for a batch of `uid`. `session_dir` is [`SESSION_EXPORT_DIR`] (`<public>/session/login-scripts`):
+/// the link is read once and its config dir opened as an fd (no link followed after that), and everything (the `uid`
+/// file the switch writes before it points the link, the session mode, the index) is read through that fd. The scripts'
+/// files are named by the config dir, not by the link, so a later switch cannot swap them under the batch.
+fn session_set(session_dir: &Path, uid: u32) -> SessionSet {
+    use crate::user_layer::{is_config_dir, render::STATE_SUB, switch::UID_FILE};
+    let (Some(link_path), Some(sub)) = (
+        session_dir.parent(),
+        session_dir.file_name().and_then(|n| n.to_str()),
+    ) else {
+        return SessionSet::Skip(format!("malformed session dir {}", session_dir.display()));
+    };
+    let (Some(public), Some(link)) = (
+        link_path.parent(),
+        link_path.file_name().and_then(|n| n.to_str()),
+    ) else {
+        return SessionSet::Skip(format!("malformed session link {}", link_path.display()));
+    };
+    let pub_fd = match safefs::open_abs_dir(public, false) {
+        Ok(fd) => fd,
+        Err(e) if crate::apply::is_not_found(&e) => return SessionSet::Absent,
+        Err(e) => return SessionSet::Skip(format!("{}: {e:#}", public.display())),
+    };
+    let Some(target) = safefs::read_link_at(&pub_fd, link) else {
+        return match rustix::fs::statat(&pub_fd, link, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
+            Err(rustix::io::Errno::NOENT) => SessionSet::Absent,
+            _ => SessionSet::Skip(format!("{link} is not a link")),
+        };
+    };
+    let Some(d) = target
+        .strip_prefix(STATE_SUB)
+        .and_then(|t| t.strip_prefix('/'))
+        .filter(|d| is_config_dir(d))
+    else {
+        return SessionSet::Skip(format!("{link} points at {target:?}, not a user config"));
+    };
+    let cfg = match safefs::open_dir_at(&pub_fd, &Path::new(STATE_SUB).join(d), false) {
+        Ok(fd) => fd,
+        Err(e) => return SessionSet::Skip(format!("{target}: {e:#}")),
+    };
+    let read = |fd: &std::os::fd::OwnedFd, name: &str| -> Option<String> {
+        String::from_utf8(safefs::read_at(fd, name).ok()??).ok()
+    };
+    let owner = read(&cfg, UID_FILE).and_then(|t| t.trim().parse::<u32>().ok());
+    if owner != Some(uid) {
+        return SessionSet::Skip(match owner {
+            Some(o) => format!("the session is uid {o}'s"),
+            None => "the session belongs to nobody".to_string(),
+        });
+    }
+    let full = read(&cfg, crate::system::exec_block::SESSION_MODE_FILE)
+        .is_some_and(|t| t.trim().eq_ignore_ascii_case("full"));
+    let scripts_fd = match safefs::open_dir_at(&cfg, Path::new(sub), false) {
+        Ok(fd) => fd,
+        Err(e) => return SessionSet::Skip(format!("{target}/{sub}: {e:#}")),
+    };
+    let Some(bytes) = safefs::read_at(&scripts_fd, INDEX).ok().flatten() else {
+        return SessionSet::Skip(format!("{target}/{sub} has no readable {INDEX}"));
+    };
+    let Ok(index) = serde_json::from_slice::<BTreeMap<String, IndexEntry>>(&bytes) else {
+        return SessionSet::Skip(format!("{target}/{sub}/{INDEX} is malformed"));
+    };
+    let dir = public.join(STATE_SUB).join(d).join(sub);
+    let scripts = index
+        .into_iter()
+        .filter(|(_, e)| !e.file.is_empty() && !e.file.contains('/') && !e.file.starts_with('.'))
+        .map(|(path, e)| Exported {
+            path,
+            file: dir.join(&e.file),
+            timeout_secs: e.timeout_secs.min(MAX_SCRIPT_TIMEOUT_SECS),
+        })
+        .collect();
+    SessionSet::Mine { scripts, full }
+}
+
+fn run_exported(
+    uid: u32,
+    scripts: &[Exported],
+    every_login: bool,
+    state: &mut State,
+    runner: &dyn Runner,
+    wait: Duration,
+) -> Vec<ItemResult> {
     let mut out = vec![];
     // 先读出导出的内容：没导出的直接失败，这个人已经成功跑过同一内容的跳过（不出结果，也就不会因为会话没就绪而回报失败，复审 N1）
     let mut todo = vec![];
-    for s in login_scripts(config) {
-        let file = export_dir.join(exported_name(&s.path));
+    for s in scripts {
+        let file = s.file.clone();
         let Ok(bytes) = std::fs::read(&file) else {
             out.push(failed(&s.path, "this script was not exported".into()));
             continue;
@@ -435,7 +601,7 @@ fn run_login_scripts_with(
         return out;
     }
     for (s, file, key, hash) in todo {
-        let secs = timeout_of(s);
+        let secs = s.timeout_secs;
         let max = format!("RuntimeMaxSec={secs}");
         let file_s = file.to_string_lossy();
         let cmd = user_run(uid, &["--wait", "--pipe", "--collect", "-p", &max, &file_s])
@@ -509,11 +675,14 @@ pub fn current_results<'a>(
         .collect()
 }
 
-/// 以 `uid` 的身份跑一次 [`run_login_scripts`]（`hashes` 只需这个 uid 的键）。
+/// Runs [`run_login_scripts`] once as `uid` (`hashes` needs only this uid's key). Under the user layer (a `session` link
+/// next to `session_dir`, [`SESSION_EXPORT_DIR`]) only the session's set runs, and only when the session is `uid`'s
+/// ([`session_set`]): every login unless its mode is `full` (or for the guest, always). Otherwise nothing runs.
 pub fn run_batch(
     uid: u32,
     config: &Config,
     export_dir: &Path,
+    session_dir: &Path,
     hashes: BTreeMap<String, String>,
     runner: &dyn Runner,
 ) -> Batch {
@@ -521,7 +690,20 @@ pub fn run_batch(
         login_script_hashes: hashes,
         ..State::default()
     };
-    let results = run_login_scripts(uid, config, export_dir, &mut st, runner);
+    let results = match session_set(session_dir, uid) {
+        SessionSet::Mine { scripts, full } => {
+            let every_login = uid == GUEST_UID || !full;
+            run_exported(uid, &scripts, every_login, &mut st, runner, USER_WAIT)
+        }
+        SessionSet::Absent => run_login_scripts(uid, config, export_dir, &mut st, runner),
+        // Never another person's set, never the Config's: this login's scripts are skipped
+        SessionSet::Skip(why) => {
+            eprintln!(
+                "mastersos-agent: login scripts of uid {uid} skipped: {why} (the session was switched since this login)"
+            );
+            vec![]
+        }
+    };
     Batch {
         uid,
         hashes: hashes_of(&st.login_script_hashes, uid),
@@ -704,6 +886,127 @@ mod tests {
 
     fn mode(p: &Path) -> u32 {
         fs::metadata(p).unwrap().permissions().mode() & 0o7777
+    }
+
+    /// Under the user layer the session's set (through the `session` link) runs instead of the Config's; its session
+    /// mode decides whether the hashes are recorded.
+    #[test]
+    fn session_login_scripts_replace_the_configs() {
+        let g = config(&[("scripts/device.sh", None)]);
+        let ex = exported(&[("scripts/device.sh", "#!/bin/sh\n")]);
+        let public = tempfile::tempdir().unwrap();
+        let d = public.path().join("user-layer/u-0123456789abcdef");
+        fs::create_dir_all(d.join("login-scripts")).unwrap();
+        let name = exported_name("scripts/teacher.sh");
+        fs::write(d.join("login-scripts").join(&name), "#!/bin/sh\necho t\n").unwrap();
+        fs::write(
+            d.join("login-scripts").join(INDEX),
+            format!(r#"{{"scripts/teacher.sh":{{"file":"{name}","timeout_secs":60}},"scripts/bad.sh":{{"file":"../x","timeout_secs":1}}}}"#),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(
+            "user-layer/u-0123456789abcdef",
+            public.path().join("session"),
+        )
+        .unwrap();
+        fs::write(d.join("uid"), "1001\n").unwrap();
+        let session = public.path().join("session/login-scripts");
+        for (mode, recorded) in [("full\n", true), ("learning\n", false), ("", false)] {
+            fs::write(d.join("session-mode"), mode).unwrap();
+            let r = FakeRunner::new();
+            let b = run_batch(1001, &g, ex.path(), &session, BTreeMap::new(), &r);
+            let calls = runs(&r);
+            assert_eq!(calls.len(), 1, "{calls:?}");
+            // named by the config dir, not by the link
+            assert!(
+                calls[0].contains(&format!(
+                    "user-layer/u-0123456789abcdef/login-scripts/{name}"
+                )),
+                "{calls:?}"
+            );
+            assert!(calls[0].contains("RuntimeMaxSec=60"), "{calls:?}");
+            assert_eq!(b.results.len(), 1);
+            assert_eq!(b.results[0].item, "login-script:scripts/teacher.sh");
+            assert_eq!(
+                b.hashes.contains_key("1001:scripts/teacher.sh"),
+                recorded,
+                "{mode:?}"
+            );
+        }
+        // Without the link the Config's set runs as before
+        fs::remove_file(public.path().join("session")).unwrap();
+        let r = FakeRunner::new();
+        run_batch(1001, &g, ex.path(), &session, BTreeMap::new(), &r);
+        assert!(runs(&r)[0].contains(&exported_name("scripts/device.sh")));
+    }
+
+    /// The session's set runs only for the uid the session belongs to: by batch time the link may point at another
+    /// person's config (or neutral, or something malformed). Then nothing runs, neither that set nor the Config's.
+    #[test]
+    fn session_login_scripts_of_another_uid_are_skipped() {
+        let g = config(&[("scripts/device.sh", None)]);
+        let ex = exported(&[("scripts/device.sh", "#!/bin/sh\n")]);
+        let public = tempfile::tempdir().unwrap();
+        let d = public.path().join("user-layer/u-0123456789abcdef");
+        fs::create_dir_all(d.join("login-scripts")).unwrap();
+        fs::create_dir_all(public.path().join("user-layer/neutral/login-scripts")).unwrap();
+        let name = exported_name("scripts/teacher.sh");
+        fs::write(d.join("login-scripts").join(&name), "#!/bin/sh\necho t\n").unwrap();
+        fs::write(
+            d.join("login-scripts").join(INDEX),
+            format!(r#"{{"scripts/teacher.sh":{{"file":"{name}","timeout_secs":60}}}}"#),
+        )
+        .unwrap();
+        fs::write(d.join("session-mode"), "full\n").unwrap();
+        let link = public.path().join("session");
+        let session = link.join("login-scripts");
+        let point = |target: &str| {
+            let _ = fs::remove_file(&link);
+            std::os::unix::fs::symlink(target, &link).unwrap();
+        };
+        let nothing_runs = |why: &str| {
+            let r = FakeRunner::new();
+            let b = run_batch(1001, &g, ex.path(), &session, BTreeMap::new(), &r);
+            assert!(r.calls().is_empty(), "{why}: {:?}", r.calls());
+            assert!(b.results.is_empty(), "{why}");
+            assert!(b.hashes.is_empty(), "{why}");
+        };
+        point("user-layer/u-0123456789abcdef");
+        fs::write(d.join("uid"), "1002\n").unwrap();
+        nothing_runs("another person's session");
+        fs::write(d.join("uid"), "garbage").unwrap();
+        nothing_runs("an unreadable uid");
+        fs::remove_file(d.join("uid")).unwrap();
+        nothing_runs("a session of nobody");
+        point("user-layer/neutral");
+        nothing_runs("neutral");
+        point("user-layer/u-ffffffffffffffff");
+        nothing_runs("a dangling link");
+        point("/etc");
+        nothing_runs("a link out of the user layer");
+        // The same set runs once the session is the batch's uid again
+        point("user-layer/u-0123456789abcdef");
+        fs::write(d.join("uid"), "1001\n").unwrap();
+        let r = FakeRunner::new();
+        run_batch(1001, &g, ex.path(), &session, BTreeMap::new(), &r);
+        assert_eq!(runs(&r).len(), 1);
+    }
+
+    /// The hashes and results of the session's scripts are kept: the login Config lists every reachable user config's.
+    #[test]
+    fn user_layer_login_scripts_are_every_reachable_configs() {
+        let text = mastersos_bundle::testutil::spec_example_v3().replacen(
+            "id = \"teacher\"\nname = \"Teachers\"\n",
+            "id = \"teacher\"\nname = \"Teachers\"\nscripts = [{ path = \"scripts/t.sh\", when = \"login\" }]\n",
+            1,
+        );
+        let m = Manifest::parse(&text).unwrap();
+        let s = user_layer_login_scripts(&m, "default");
+        assert_eq!(s.len(), 1);
+        assert_eq!(
+            (s[0].path.as_str(), s[0].when),
+            ("scripts/t.sh", When::Login)
+        );
     }
 
     /// 队列目录建不出来（路径上有个普通文件）：返回 Ok、照样去叫醒 agent，登录不受影响。
@@ -1228,6 +1531,8 @@ mod tests {
             1001,
             &g,
             ex.path(),
+            // no session link next to it: format 1/2
+            &ex.path().join("session/login-scripts"),
             hashes_of(&all, 1001),
             &FakeRunner::new(),
         );

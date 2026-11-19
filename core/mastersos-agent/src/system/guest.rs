@@ -25,7 +25,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use anyhow::{bail, Result};
-use mastersos_bundle::{ItemResult, Seed};
+use mastersos_bundle::{HomeMode, ItemResult, Seed};
 
 use super::ephemeral::{
     self, account, remove_named, reset_password, run_dir, session_open, wait_slice_gone, Ephemeral,
@@ -37,6 +37,7 @@ use super::{failed, ok, Env, Step};
 use crate::apply::ApplyContext;
 use crate::runner::{run_ok, Cmd, RealRunner, Runner};
 use crate::safefs;
+use crate::user_layer::switch::OpenOutcome;
 
 pub const GUEST_USER: &str = login::GUEST_USER;
 pub const GUEST_UID: u32 = 1999;
@@ -180,6 +181,9 @@ pub enum SessionAction {
     DenyEphemeral(&'static str),
     /// 其他用户：进登录队列。
     Enqueue(String),
+    /// The close_session of a human account (the guest included) under the user layer (`LoginPolicy::user_layer`): mark
+    /// the session closing and wake the agent ([`crate::user_layer::switch::on_close`]). Never fails the logout.
+    Close(String),
 }
 
 /// The session GDM is about to start, for open_session only: `XDG_SESSION_DESKTOP` from the PAM environment when the
@@ -256,6 +260,7 @@ pub fn session_action(
             "open_session" if GUEST_SERVICES.contains(&service) => {
                 SessionAction::EphemeralOpen(ephemeral::guest())
             }
+            "close_session" if user_layer(policy) => SessionAction::Close(user.to_string()),
             "close_session" => SessionAction::Ignore,
             _ => SessionAction::DenyEphemeral(login::DENY_GUEST_SERVICE),
         };
@@ -287,11 +292,24 @@ pub fn session_action(
             _ => SessionAction::DenyEphemeral(login::DENY_KIOSK),
         };
     }
-    if pam_type == "open_session" {
-        SessionAction::Enqueue(user.to_string())
-    } else {
-        SessionAction::Ignore
+    match pam_type {
+        "open_session" => SessionAction::Enqueue(user.to_string()),
+        "close_session" if user_layer(policy) => SessionAction::Close(user.to_string()),
+        _ => SessionAction::Ignore,
     }
+}
+
+/// The installed login policy is format 3: human sessions get a user config (design §4.3).
+fn user_layer(policy: Option<&LoginPolicy>) -> bool {
+    policy.is_some_and(|p| p.user_layer)
+}
+
+/// Prints the refusal `msg` to stdout (pam_exec's `stdout`: GDM shows it) and fails the PAM call.
+fn deny(msg: &str) -> ExitCode {
+    let mut out = std::io::stdout().lock();
+    let _ = writeln!(out, "{msg}");
+    let _ = out.flush();
+    ExitCode::FAILURE
 }
 
 /// 复审 I2：kiosk 账号因为会话不对被拒（[`login::DENY_KIOSK_SESSION`]）时，GDM 可能已经把选的会话记进
@@ -394,54 +412,100 @@ pub fn seat_sessions_busy(
     seat: Option<&str>,
 ) -> Result<Option<String>> {
     use anyhow::Context;
-    let out = run_ok(
-        runner,
-        Cmd::new("loginctl", &["--json=short", "list-sessions"]).timeout(PAM_CMD_TIMEOUT),
-    )?;
-    let v: serde_json::Value =
-        serde_json::from_str(out.trim()).context("loginctl output is not JSON")?;
-    let rows = v.as_array().context("loginctl output is not an array")?;
-    for row in rows {
-        let o = row.as_object().context("loginctl row is not an object")?;
-        let field = |k: &str| o.get(k).and_then(|x| x.as_str());
-        let class = field("class").context("loginctl row has no class")?;
+    for s in logind_sessions(runner, PAM_CMD_TIMEOUT)? {
         // seat 栏同样要有：null、"" 与 "-" 是没有座位（ssh）；缺栏或别的类型读不懂，往拒绝的方向落
-        let on = match o.get("seat").context("loginctl row has no seat")? {
-            serde_json::Value::Null => "",
-            serde_json::Value::String(s) if s == "-" => "",
-            serde_json::Value::String(s) => s.as_str(),
-            _ => anyhow::bail!("loginctl seat field is not a string"),
-        };
+        let on = s.seat.as_deref().context("loginctl row has no seat")?;
         let same_seat = match seat {
             Some(want) => on == want,
             None => !on.is_empty(),
         };
-        if !same_seat || !class.starts_with("user") {
+        if !same_seat || !s.class.starts_with("user") {
             continue;
         }
-        let id = field("session").context("loginctl row has no session")?;
-        // systemd 259 dropped `state` from list-sessions JSON: ask logind for this one session instead of guessing
-        let state = match field("state") {
-            Some(s) => s.to_string(),
-            None => {
-                let out = run_ok(
-                    runner,
-                    Cmd::new("loginctl", &["show-session", id, "-p", "State", "--value"])
-                        .timeout(PAM_CMD_TIMEOUT),
-                )?;
-                let s = out.trim();
-                anyhow::ensure!(!s.is_empty(), "loginctl show-session {id} printed no State");
-                s.to_string()
-            }
-        };
+        let id = s.id.as_deref().context("loginctl row has no session")?;
+        let state = logind_session_state(runner, id, s.state.as_deref(), PAM_CMD_TIMEOUT)?;
         if state != "closing" {
             return Ok(Some(format!(
-                "{id} {} {class} {state}",
-                field("user").unwrap_or("?")
+                "{id} {} {} {state}",
+                s.user.as_deref().unwrap_or("?"),
+                s.class
             )));
         }
     }
     Ok(None)
+}
+
+/// One row of `loginctl --json=short list-sessions` ([`logind_sessions`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LogindSession {
+    pub id: Option<String>,
+    pub uid: Option<u32>,
+    pub user: Option<String>,
+    pub class: String,
+    /// `Some("")` for no seat (null, `""` or `"-"`); `None` when the field is missing or not a string.
+    pub seat: Option<String>,
+    /// Missing on systemd 259 and later: see [`logind_session_state`].
+    pub state: Option<String>,
+}
+
+/// The sessions logind lists (`loginctl --json=short list-sessions`, at most `timeout`). Output that is not a JSON array
+/// of objects, or a row without `class`, is an error.
+pub(crate) fn logind_sessions(
+    runner: &dyn crate::runner::Runner,
+    timeout: std::time::Duration,
+) -> Result<Vec<LogindSession>> {
+    use anyhow::Context;
+    let out = run_ok(
+        runner,
+        Cmd::new("loginctl", &["--json=short", "list-sessions"]).timeout(timeout),
+    )?;
+    let v: serde_json::Value =
+        serde_json::from_str(out.trim()).context("loginctl output is not JSON")?;
+    let rows = v.as_array().context("loginctl output is not an array")?;
+    let mut sessions = Vec::with_capacity(rows.len());
+    for row in rows {
+        let o = row.as_object().context("loginctl row is not an object")?;
+        let field = |k: &str| o.get(k).and_then(|x| x.as_str()).map(str::to_string);
+        let class = field("class").context("loginctl row has no class")?;
+        let seat = match o.get("seat") {
+            Some(serde_json::Value::Null) => Some(String::new()),
+            Some(serde_json::Value::String(s)) if s == "-" => Some(String::new()),
+            Some(serde_json::Value::String(s)) => Some(s.clone()),
+            _ => None,
+        };
+        sessions.push(LogindSession {
+            id: field("session"),
+            uid: o
+                .get("uid")
+                .and_then(|u| u.as_u64())
+                .and_then(|u| u32::try_from(u).ok()),
+            user: field("user"),
+            class,
+            seat,
+            state: field("state"),
+        });
+    }
+    Ok(sessions)
+}
+
+/// The state of session `id`: `listed` when the list had it, else (systemd 259 dropped `state` from list-sessions JSON)
+/// `loginctl show-session <id> -p State --value` (at most `timeout`); failing or empty output is an error, not a guess.
+pub(crate) fn logind_session_state(
+    runner: &dyn crate::runner::Runner,
+    id: &str,
+    listed: Option<&str>,
+    timeout: std::time::Duration,
+) -> Result<String> {
+    if let Some(s) = listed {
+        return Ok(s.to_string());
+    }
+    let out = run_ok(
+        runner,
+        Cmd::new("loginctl", &["show-session", id, "-p", "State", "--value"]).timeout(timeout),
+    )?;
+    let s = out.trim();
+    anyhow::ensure!(!s.is_empty(), "loginctl show-session {id} printed no State");
+    Ok(s.to_string())
 }
 
 fn env_str(name: &str) -> String {
@@ -452,6 +516,9 @@ fn env_str(name: &str) -> String {
 
 /// `mastersos-agent pam-session`（PAM 的 session 段最前面，root）。访客开会话失败退出 1 并把 [`DENY_BUSY`] 打到
 /// stdout；其他情况永远退出 0（登录队列失败不挡登录）。不 panic、不建 tokio 运行时、不往 stderr 打日志之外的事。
+/// Under the user layer (format 3) an open_session of a human account (the guest after `session_open`) first switches
+/// the session to its user config ([`crate::user_layer::switch::on_open`]); a refusal exits 1 with
+/// [`login::DENY_SESSION_BUSY`] or [`login::DENY_SESSION_UNAVAILABLE`]. Their close_session marks the session closing ([`SessionAction::Close`]), exit 0.
 pub fn pam_session_main() -> ExitCode {
     // 只有 root（PAM 里的 gdm-session-worker 经 pam_exec）调它才算数：PAM_* 环境变量谁都能伪造，普通用户自己跑它
     // 什么都不许做——不拿标记、不复制、不拉起清理、不进登录队列（提交安全审查：授权）
@@ -494,25 +561,42 @@ pub fn pam_session_main() -> ExitCode {
         || login::lookup_uid_checked(&user),
         &RealRunner,
     );
+    let root = Path::new("/");
+    let paths = crate::system::SysPaths::default();
+    // M2: user layer state on disk counts even when the policy cannot be read (fail closed)
+    let layer_on = crate::user_layer::user_layer_on(root, &paths, policy.as_ref());
+    let action = close_under_layer(action, &pam_type, &user, policy.as_ref(), layer_on);
+    let layer = |phase: LayerPhase| {
+        let mut out = std::io::stdout().lock();
+        user_layer_decision(
+            phase,
+            layer_on,
+            root,
+            &paths,
+            policy.as_ref(),
+            &RealRunner,
+            &mut out,
+        )
+    };
     match action {
         SessionAction::Ignore => ExitCode::SUCCESS,
-        SessionAction::DenyEphemeral(msg) => {
-            let mut out = std::io::stdout().lock();
-            let _ = writeln!(out, "{msg}");
-            let _ = out.flush();
-            ExitCode::FAILURE
+        SessionAction::DenyEphemeral(msg) => deny(msg),
+        SessionAction::Close(user) => {
+            let uid = login::lookup_uid_checked(&user);
+            exit_of(&layer(LayerPhase::Close { user: &user, uid }))
         }
         SessionAction::Enqueue(user) => {
-            if let Some(uid) = login::lookup_uid_checked(&user) {
-                // learning mode: tidy the home before the session starts (never fails the login). This must run
-                // before claim_from_pam (which can put files into the home), and pam-session runs before
-                // pam_mkhomedir and pam_systemd, so the home is not yet in use.
-                crate::system::home_tidy::on_login(
-                    &crate::system::SysPaths::default(),
-                    &RealRunner,
-                    &user,
-                    uid,
-                );
+            let uid = login::lookup_uid_checked(&user);
+            // Format 3: the session gets its user config before it starts; nothing of it may open without one.
+            let tidy = match layer(LayerPhase::Open { user: &user, uid }) {
+                LayerDecision::Proceed { tidy } => tidy,
+                d => return exit_of(&d),
+            };
+            if let Some(uid) = uid {
+                // learning mode (format 3: the user config's `home`): tidy the home before the session starts (never
+                // fails the login). This must run before claim_from_pam (which can put files into the home), and
+                // pam-session runs before pam_mkhomedir and pam_systemd, so the home is not yet in use.
+                crate::system::home_tidy::on_login(&paths, &RealRunner, &user, uid, tidy);
                 // a school account that just signed in with the card claims the card's cookies (never fails the login)
                 crate::signin_handoff::claim_from_pam(&env_str("PAM_SERVICE"), &user, uid);
                 let _ = crate::login_queue::enqueue(uid);
@@ -520,6 +604,12 @@ pub fn pam_session_main() -> ExitCode {
             ExitCode::SUCCESS
         }
         SessionAction::EphemeralOpen(acct) => {
+            // A kiosk session never starts while a user config may still be switched in (until the agent's revert)
+            if acct.user != GUEST_USER {
+                if let d @ LayerDecision::Deny = layer(LayerPhase::KioskOpen { user: &acct.user }) {
+                    return exit_of(&d);
+                }
+            }
             let runner = RealRunner;
             let procs = SystemdProcs {
                 runner: &runner,
@@ -528,7 +618,7 @@ pub fn pam_session_main() -> ExitCode {
             let env = EphemeralEnv {
                 runner: &runner,
                 procs: &procs,
-                root: Path::new("/"),
+                root,
                 uid: acct.uid,
                 mounts: &ProcMounts,
                 acct: &acct,
@@ -538,6 +628,10 @@ pub fn pam_session_main() -> ExitCode {
                     // 访客也是一次登录：叫醒 agent 拉取、跑 login 脚本（访客每次会话都跑）、发过期提示。不挡登录。
                     // 锁定应用的会话不进队列：分组的 login 脚本与过期提示不该出现在锁定会话里
                     if acct.user == GUEST_USER {
+                        // Format 3: the guest's session gets its user config too (rules with `kind = guest`)
+                        if let d @ LayerDecision::Deny = layer(LayerPhase::GuestOpen) {
+                            return exit_of(&d);
+                        }
                         let _ = crate::login_queue::enqueue(GUEST_UID);
                     }
                     after_kiosk_open(&runner, acct.uid, &mut std::io::stderr());
@@ -555,8 +649,143 @@ pub fn pam_session_main() -> ExitCode {
     }
 }
 
-/// A kiosk session just opened: enter the exam quiet now instead of waiting for the agent's poll. Never changes the
-/// PAM result; a failure only writes one line to `err`.
+/// Which `pam-session` step [`user_layer_decision`] decides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LayerPhase<'a> {
+    /// open_session of a human account (not the guest); `uid` is `None` when it cannot be looked up.
+    Open { user: &'a str, uid: Option<u32> },
+    /// open_session of the guest, after its ephemeral session was set up.
+    GuestOpen,
+    /// open_session of a kiosk account, before its ephemeral session is set up.
+    KioskOpen { user: &'a str },
+    /// close_session of a human account (the guest included).
+    Close { user: &'a str, uid: Option<u32> },
+}
+
+/// What `pam-session` does after [`user_layer_decision`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LayerDecision {
+    /// Go on with the session; `tidy` is the user config's home decision (`None`: the legacy rule).
+    Proceed { tidy: Option<bool> },
+    /// Nothing more to do: exit 0.
+    Done,
+    /// The session is refused: exit 1 (the message is already on stdout).
+    Deny,
+}
+
+impl LayerDecision {
+    /// The exit status `pam-session` ends with, or `None` when it goes on.
+    pub(crate) fn exit_status(&self) -> Option<u8> {
+        match self {
+            LayerDecision::Proceed { .. } => None,
+            LayerDecision::Done => Some(0),
+            LayerDecision::Deny => Some(1),
+        }
+    }
+}
+
+fn exit_of(d: &LayerDecision) -> ExitCode {
+    ExitCode::from(d.exit_status().unwrap_or(0))
+}
+
+/// The close_session of a human account marks the session closing also when the user layer is on only through its
+/// state (the policy is not format 3 or unreadable), so a marker never outlives its session.
+fn close_under_layer(
+    action: SessionAction,
+    pam_type: &str,
+    user: &str,
+    policy: Option<&LoginPolicy>,
+    layer_on: bool,
+) -> SessionAction {
+    match action {
+        SessionAction::Ignore
+            if pam_type == "close_session"
+                && layer_on
+                && !user_layer(policy)
+                && login::classify(user, policy) != login::UserClass::Kiosk =>
+        {
+            SessionAction::Close(user.to_string())
+        }
+        a => a,
+    }
+}
+
+/// The user layer's part of `pam-session` (format 3, or its state on disk: `layer_on`). Refusals print their message to
+/// `out` in the system language: [`login::DENY_SESSION_BUSY`] only when a marker of another uid is in the way,
+/// [`login::DENY_SESSION_UNAVAILABLE`] for every other refusal ([`switch::Refusal`]). Synchronous, no commands except
+/// gettext and waking the agent on close; never panics.
+pub(crate) fn user_layer_decision(
+    phase: LayerPhase,
+    layer_on: bool,
+    root: &Path,
+    paths: &crate::system::SysPaths,
+    policy: Option<&LoginPolicy>,
+    runner: &dyn Runner,
+    out: &mut dyn Write,
+) -> LayerDecision {
+    use crate::user_layer::switch::{self, Refusal};
+    let refuse = |why: Refusal, out: &mut dyn Write| {
+        let _ = writeln!(out, "{}", login::session_refusal(runner, root, why.msgid()));
+        let _ = out.flush();
+        LayerDecision::Deny
+    };
+    let open = |user: &str, uid: u32, out: &mut dyn Write| {
+        let Some(p) = policy.filter(|p| p.user_layer) else {
+            eprintln!(
+                "mastersos-agent pam-session: {user}: user layer state without a format 3 login policy; denied"
+            );
+            return refuse(Refusal::from_marker(root, Some(uid)), out);
+        };
+        match switch::on_open(root, paths, p, user, uid) {
+            OpenOutcome::NotUserLayer => LayerDecision::Proceed { tidy: None },
+            OpenOutcome::Switched { home, .. } => LayerDecision::Proceed {
+                tidy: Some(home == HomeMode::Tidy),
+            },
+            OpenOutcome::Refused(why) => refuse(why, out),
+        }
+    };
+    match phase {
+        LayerPhase::Close { user, uid } => {
+            // Never fails the logout: an unknown uid only means there is nothing of ours to mark.
+            match uid {
+                Some(uid) => switch::on_close(root, uid, runner),
+                None => eprintln!(
+                    "mastersos-agent pam-session: {user}: no uid; the user layer's session is not marked closing"
+                ),
+            }
+            LayerDecision::Done
+        }
+        _ if !layer_on => LayerDecision::Proceed { tidy: None },
+        LayerPhase::Open { user, uid: None } => {
+            eprintln!("mastersos-agent pam-session: {user}: no uid; user layer: denied");
+            refuse(Refusal::from_marker(root, None), out)
+        }
+        LayerPhase::Open {
+            user,
+            uid: Some(uid),
+        } => open(user, uid, out),
+        LayerPhase::GuestOpen => open(GUEST_USER, GUEST_UID, out),
+        LayerPhase::KioskOpen { user } => {
+            // A kiosk account never has a marker of its own: any marker is another person's
+            match crate::user_layer::active_marker(root) {
+                Ok(None) => LayerDecision::Proceed { tidy: None },
+                Ok(Some(_)) => {
+                    eprintln!(
+                        "mastersos-agent pam-session: {user}: a session is still signed in or being closed; user layer: denied"
+                    );
+                    refuse(Refusal::Busy, out)
+                }
+                Err(e) => {
+                    eprintln!(
+                        "mastersos-agent pam-session: {user}: the session marker cannot be read ({e:#}); user layer: denied"
+                    );
+                    refuse(Refusal::Unavailable, out)
+                }
+            }
+        }
+    }
+}
+
 fn after_kiosk_open(runner: &dyn Runner, uid: u32, err: &mut dyn Write) {
     if !ephemeral::KIOSK_UIDS.contains(&uid) {
         return;
@@ -1638,6 +1867,344 @@ mod tests {
         );
     }
 
+    /// Under the user layer the close_session of every human account (the guest too) marks the session closing; kiosk
+    /// accounts and other PAM types are unchanged, and without the user layer close_session stays a no-op.
+    #[test]
+    fn user_layer_close_session_of_humans_is_close() {
+        let mut p = kpol();
+        let act = |p: &LoginPolicy, t: &str, user: &str| {
+            session_action(t, "gdm-authd", user, None, true, Some(p), || Some(1900))
+        };
+        for user in ["alice", "a@school.ac.th", "guest", "itadmin"] {
+            assert_eq!(act(&p, "close_session", user), SessionAction::Ignore);
+        }
+        p.user_layer = true;
+        for user in ["alice", "a@school.ac.th", "guest", "itadmin"] {
+            assert_eq!(
+                act(&p, "close_session", user),
+                SessionAction::Close(user.into()),
+                "{user}"
+            );
+        }
+        assert_eq!(
+            act(&p, "close_session", "kiosk-nwea"),
+            SessionAction::Ignore
+        );
+        assert_eq!(
+            act(&p, "open_session", "alice"),
+            SessionAction::Enqueue("alice".into())
+        );
+        assert_eq!(act(&p, "", "alice"), SessionAction::Ignore);
+        assert_eq!(
+            act(&p, "open_session", "guest"),
+            SessionAction::EphemeralOpen(ephemeral::guest())
+        );
+    }
+
+    // --- the user layer's part of pam-session (Task 4 fix round 1, M2, M4, S3) ---
+
+    fn decide(
+        phase: LayerPhase,
+        layer_on: bool,
+        p: &crate::system::SysPaths,
+        policy: Option<&LoginPolicy>,
+        r: &FakeRunner,
+    ) -> (LayerDecision, String) {
+        let mut out = Vec::new();
+        let d = user_layer_decision(phase, layer_on, &p.root, p, policy, r, &mut out);
+        (d, String::from_utf8(out).unwrap())
+    }
+
+    fn busy() -> String {
+        format!("{}\n", login::DENY_SESSION_BUSY)
+    }
+
+    fn unavailable() -> String {
+        format!("{}\n", login::DENY_SESSION_UNAVAILABLE)
+    }
+
+    fn other_marker(p: &crate::system::SysPaths, state: crate::user_layer::ActiveState) {
+        use crate::user_layer::{config_dir_name, switch::write_active, Active};
+        write_active(
+            &p.root,
+            &Active {
+                uid: 2000,
+                user: "bob".into(),
+                user_config: "teacher".into(),
+                dir: config_dir_name("teacher"),
+                caps: mastersos_bundle::Caps::new(),
+                state,
+                reason: None,
+                opened_at: 1,
+                seen: true,
+                held: false,
+            },
+        )
+        .unwrap();
+    }
+
+    /// A refused open exits 1 with the busy message on stdout when another person's marker is in the way; an open
+    /// without a uid is refused with the unavailable message (who it is cannot be told).
+    #[test]
+    fn user_layer_refusal_exits_1_with_busy_on_stdout() {
+        use crate::user_layer::{read_active, switch::tests, ActiveState};
+        let (_root, p, _) = tests::rendered();
+        let pol = tests::policy();
+        other_marker(&p, ActiveState::Open);
+        let r = FakeRunner::new();
+        let open = LayerPhase::Open {
+            user: "s1@school.ac.th",
+            uid: Some(20000),
+        };
+        let (d, out) = decide(open, true, &p, Some(&pol), &r);
+        assert_eq!(d, LayerDecision::Deny);
+        assert_eq!(d.exit_status(), Some(1));
+        assert_eq!(out, busy());
+        assert_eq!(read_active(&p.root).unwrap().uid, 2000);
+        let no_uid = LayerPhase::Open {
+            user: "s1@school.ac.th",
+            uid: None,
+        };
+        let (d, out) = decide(no_uid, true, &p, Some(&pol), &r);
+        assert_eq!((d.exit_status(), out), (Some(1), unavailable()));
+        assert!(r.calls().is_empty());
+    }
+
+    /// Every refusal of pam-session that is not another person's marker gets the unavailable message, never the busy one.
+    #[test]
+    fn user_layer_refusals_without_another_person_are_unavailable() {
+        use crate::user_layer::{
+            read_active, switch, switch::tests, ActiveState, ACTIVE_FILE, RUN_DIR,
+        };
+        let open = LayerPhase::Open {
+            user: "s1@school.ac.th",
+            uid: Some(20000),
+        };
+        let r = FakeRunner::new();
+        let pol = tests::policy();
+        // the same person's session is still being closed (the revert is pending)
+        let (_root, p, _) = tests::rendered();
+        let (d, _) = decide(open, true, &p, Some(&pol), &r);
+        assert!(matches!(d, LayerDecision::Proceed { .. }), "{d:?}");
+        let mut a = read_active(&p.root).unwrap();
+        a.state = ActiveState::Closing;
+        switch::write_active(&p.root, &a).unwrap();
+        let (d, out) = decide(open, true, &p, Some(&pol), &r);
+        assert_eq!((d.exit_status(), out), (Some(1), unavailable()));
+        // the marker cannot be read
+        fs::write(p.root.join(RUN_DIR).join(ACTIVE_FILE), "{").unwrap();
+        let (d, out) = decide(open, true, &p, Some(&pol), &r);
+        assert_eq!((d.exit_status(), out), (Some(1), unavailable()));
+        // the marker's lock stays busy
+        let (_root, p, _) = tests::rendered();
+        let held = switch::lock_active(&p.root, std::time::Duration::ZERO).unwrap();
+        let (d, out) = decide(open, true, &p, Some(&pol), &r);
+        assert_eq!((d.exit_status(), out), (Some(1), unavailable()));
+        drop(held);
+        // the rules are missing
+        fs::remove_file(p.var_dir.join("user-layer/index.json")).unwrap();
+        let (d, out) = decide(open, true, &p, Some(&pol), &r);
+        assert_eq!((d.exit_status(), out), (Some(1), unavailable()));
+        // neither the chosen config nor the fallback can be switched in
+        let (_root, p, index) = tests::rendered();
+        for c in index.configs.values() {
+            fs::remove_file(
+                p.var_dir
+                    .join("user-layer")
+                    .join(&c.dir)
+                    .join("chrome.json"),
+            )
+            .unwrap();
+        }
+        let (d, out) = decide(open, true, &p, Some(&pol), &r);
+        assert_eq!((d.exit_status(), out), (Some(1), unavailable()));
+        assert!(read_active(&p.root).is_none());
+        // another person's marker: busy
+        other_marker(&p, ActiveState::Closing);
+        let (d, out) = decide(open, true, &p, Some(&pol), &r);
+        assert_eq!((d.exit_status(), out), (Some(1), busy()));
+    }
+
+    /// An open switches and goes on with the config's home decision; the close marks the session closing and wakes
+    /// the agent (exit 0).
+    #[test]
+    fn user_layer_open_then_close_marks_closing_and_wakes_the_agent() {
+        use crate::user_layer::{read_active, switch::tests, ActiveState};
+        let (_root, p, index) = tests::rendered();
+        let pol = tests::policy();
+        let r = FakeRunner::new();
+        let open = LayerPhase::Open {
+            user: "s1@school.ac.th",
+            uid: Some(20000),
+        };
+        let (d, out) = decide(open, true, &p, Some(&pol), &r);
+        let tidy = index.configs["primary"].home == HomeMode::Tidy;
+        assert_eq!(d, LayerDecision::Proceed { tidy: Some(tidy) });
+        assert_eq!(d.exit_status(), None);
+        assert!(out.is_empty());
+        assert_eq!(read_active(&p.root).unwrap().state, ActiveState::Open);
+        let close = LayerPhase::Close {
+            user: "s1@school.ac.th",
+            uid: Some(20000),
+        };
+        let (d, out) = decide(close, true, &p, Some(&pol), &r);
+        assert_eq!((d.exit_status(), out.as_str()), (Some(0), ""));
+        assert_eq!(read_active(&p.root).unwrap().state, ActiveState::Closing);
+        assert_eq!(
+            r.calls(),
+            ["systemctl --no-ask-password kill -s USR1 --kill-whom=main mastersos-agent.service"]
+        );
+    }
+
+    /// The guest's open goes through the switch: its marker and the session's uid are the guest's.
+    #[test]
+    fn user_layer_guest_open_runs_the_switch() {
+        use crate::user_layer::{read_active, switch::tests};
+        let (_root, p, _) = tests::rendered();
+        let pol = tests::policy();
+        let r = FakeRunner::new();
+        let (d, out) = decide(LayerPhase::GuestOpen, true, &p, Some(&pol), &r);
+        assert!(
+            matches!(d, LayerDecision::Proceed { tidy: Some(_) }),
+            "{d:?}"
+        );
+        assert!(out.is_empty());
+        let a = read_active(&p.root).unwrap();
+        assert_eq!((a.uid, a.user.as_str()), (GUEST_UID, GUEST_USER));
+        assert_eq!(
+            fs::read_to_string(p.public_dir.join("session/uid")).unwrap(),
+            format!("{GUEST_UID}\n")
+        );
+        // A second guest open while someone else's session is closing is refused
+        other_marker(&p, crate::user_layer::ActiveState::Closing);
+        let (d, out) = decide(LayerPhase::GuestOpen, true, &p, Some(&pol), &r);
+        assert_eq!((d, out), (LayerDecision::Deny, busy()));
+    }
+
+    /// S3: a kiosk session never starts while a marker exists (open, closing or unreadable); without one it goes on.
+    #[test]
+    fn user_layer_kiosk_open_waits_for_the_revert() {
+        use crate::user_layer::{switch::tests, ActiveState, ACTIVE_FILE, RUN_DIR};
+        let (_root, p, _) = tests::rendered();
+        let pol = tests::policy();
+        let r = FakeRunner::new();
+        let kiosk = LayerPhase::KioskOpen { user: "kiosk-nwea" };
+        let (d, out) = decide(kiosk, true, &p, Some(&pol), &r);
+        assert_eq!(
+            (d, out.as_str()),
+            (LayerDecision::Proceed { tidy: None }, "")
+        );
+        for state in [ActiveState::Open, ActiveState::Closing] {
+            other_marker(&p, state);
+            let (d, out) = decide(kiosk, true, &p, Some(&pol), &r);
+            assert_eq!((d.exit_status(), out), (Some(1), busy()));
+        }
+        fs::write(p.root.join(RUN_DIR).join(ACTIVE_FILE), "{").unwrap();
+        let (d, out) = decide(kiosk, true, &p, Some(&pol), &r);
+        assert_eq!((d.exit_status(), out), (Some(1), unavailable()));
+        // Without the user layer the kiosk check is not this step's
+        let (d, _) = decide(kiosk, false, &p, None, &r);
+        assert_eq!(d, LayerDecision::Proceed { tidy: None });
+    }
+
+    /// M2: the rules file or a marker turns the user layer on even when the policy cannot be read or is not format 3;
+    /// then opens fail closed and a human's close still marks the session closing.
+    #[test]
+    fn user_layer_state_without_a_format3_policy_fails_closed() {
+        use crate::user_layer::{read_active, switch::tests, ActiveState, ACTIVE_FILE, RUN_DIR};
+        let (_root, p, _) = tests::rendered();
+        let fmt3 = tests::policy();
+        let fmt2 = kpol();
+        // The rendered rules alone
+        assert!(crate::user_layer::user_layer_on(&p.root, &p, None));
+        assert!(crate::user_layer::user_layer_on(&p.root, &p, Some(&fmt2)));
+        assert!(crate::user_layer::user_layer_on(&p.root, &p, Some(&fmt3)));
+        let r = FakeRunner::new();
+        for policy in [None, Some(&fmt2)] {
+            let open = LayerPhase::Open {
+                user: "alice",
+                uid: Some(1500),
+            };
+            let (d, out) = decide(open, true, &p, policy, &r);
+            assert_eq!(
+                (d.exit_status(), out),
+                (Some(1), unavailable()),
+                "{policy:?}"
+            );
+            let (d, out) = decide(LayerPhase::GuestOpen, true, &p, policy, &r);
+            assert_eq!(
+                (d.exit_status(), out),
+                (Some(1), unavailable()),
+                "{policy:?}"
+            );
+        }
+        assert!(read_active(&p.root).is_none());
+        // ... and with another person's marker, busy
+        other_marker(&p, ActiveState::Open);
+        for policy in [None, Some(&fmt2)] {
+            let open = LayerPhase::Open {
+                user: "alice",
+                uid: Some(1500),
+            };
+            let (d, out) = decide(open, true, &p, policy, &r);
+            assert_eq!((d.exit_status(), out), (Some(1), busy()), "{policy:?}");
+        }
+        fs::remove_file(p.root.join(RUN_DIR).join(ACTIVE_FILE)).unwrap();
+        // A marker alone (the rules already removed)
+        fs::remove_file(p.var_dir.join("user-layer/index.json")).unwrap();
+        assert!(!crate::user_layer::user_layer_on(&p.root, &p, None));
+        assert!(!crate::user_layer::user_layer_on(&p.root, &p, Some(&fmt2)));
+        other_marker(&p, ActiveState::Open);
+        assert!(crate::user_layer::user_layer_on(&p.root, &p, None));
+        fs::write(p.root.join(RUN_DIR).join(ACTIVE_FILE), "{").unwrap();
+        assert!(crate::user_layer::user_layer_on(&p.root, &p, Some(&fmt2)));
+        other_marker(&p, ActiveState::Open);
+        // A human's close under such state becomes a close; a listed kiosk account and no state stay a no-op
+        for policy in [None, Some(&fmt2)] {
+            assert_eq!(
+                close_under_layer(SessionAction::Ignore, "close_session", "bob", policy, true),
+                SessionAction::Close("bob".into())
+            );
+        }
+        assert_eq!(
+            close_under_layer(
+                SessionAction::Ignore,
+                "close_session",
+                "kiosk-nwea",
+                Some(&fmt2),
+                true
+            ),
+            SessionAction::Ignore
+        );
+        assert_eq!(
+            close_under_layer(
+                SessionAction::Ignore,
+                "close_session",
+                "bob",
+                Some(&fmt2),
+                false
+            ),
+            SessionAction::Ignore
+        );
+        assert_eq!(
+            close_under_layer(
+                SessionAction::Ignore,
+                "open_session",
+                "bob",
+                Some(&fmt2),
+                true
+            ),
+            SessionAction::Ignore
+        );
+        let close = LayerPhase::Close {
+            user: "bob",
+            uid: Some(2000),
+        };
+        let (d, _) = decide(close, true, &p, None, &r);
+        assert_eq!(d, LayerDecision::Done);
+        assert_eq!(read_active(&p.root).unwrap().state, ActiveState::Closing);
+    }
+
     // --- 锁定应用的账号（计划 9 Task 4） ---
 
     fn kpol() -> LoginPolicy {
@@ -2428,6 +2995,7 @@ mod tests {
             quiet: &std::sync::atomic::AtomicBool::new(false),
             device: None,
             ident: &crate::system::tests::test_ident(),
+            manifest: None,
         };
         (step().run)(&ctx, &mut env)
     }

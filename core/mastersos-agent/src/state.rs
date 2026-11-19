@@ -120,10 +120,9 @@ pub struct SeedImport {
 
 /// The highest settings `format` this agent applies, distinct from
 /// [`mastersos_bundle::MAX_FORMAT`] (the highest the bundle crate parses). A bundle above it is
-/// refused by [`accept_bundle`] with [`BundleError::FormatTooNew`]: this agent does not apply the
-/// user layer of `format = 3` yet, and applying only its device layer would loosen the session.
-/// Plan B raises it to 3 when it adds `FEATURE_FORMAT_3` to `SUPPORTED_FEATURES`.
-pub const AGENT_MAX_FORMAT: u32 = 2;
+/// refused by [`accept_bundle`] with [`BundleError::FormatTooNew`]. It equals the bundle crate's
+/// maximum now that the agent applies the user layer, and `FEATURE_FORMAT_3` is reported.
+pub const AGENT_MAX_FORMAT: u32 = 3;
 
 /// This agent build, as recorded beside a refusal: the crate version and the highest bundle
 /// `format` it applies ([`AGENT_MAX_FORMAT`]).
@@ -372,7 +371,7 @@ pub enum Prior<'a> {
 /// remembered (`BundleError::OtherSchool`). After an accepted bundle ([`Prior::Accepted`]) a
 /// change of trust or escrow recipients must also be signed by a recovery kit of the current
 /// trust (`BundleError::KitRequired`): the server is not trusted to enforce R7/R8. A bundle whose
-/// `format` is above [`AGENT_MAX_FORMAT`] (or that carries a user layer) is refused with
+/// `format` is above [`AGENT_MAX_FORMAT`] is refused with
 /// `BundleError::FormatTooNew`, so a later OS takes the same version.
 pub fn accept_bundle(
     archive: &[u8],
@@ -389,7 +388,7 @@ pub fn accept_bundle(
         }
     };
     check_school(&b.manifest, remembered)?;
-    if b.manifest.format > AGENT_MAX_FORMAT || b.manifest.user_layer.is_some() {
+    if b.manifest.format > AGENT_MAX_FORMAT {
         return Err(BundleError::FormatTooNew {
             found: b.manifest.format,
             max: AGENT_MAX_FORMAT,
@@ -949,12 +948,8 @@ mod tests {
             .is_symlink());
     }
 
-    /// Ruling R13: this agent parses `format = 3` (the bundle crate reads it) but does not apply
-    /// the user layer yet, so it refuses such a bundle as too new, at runtime and at boot; the
-    /// bundle crate itself and the local check accept the same text.
-    #[test]
-    fn format3_bundle_is_refused_as_too_new() {
-        let s = signer();
+    /// A signed bundle built from the spec's format 3 example with `format` set to `format`.
+    fn v3_archive(s: &Ed25519Signer, format: i64) -> (Vec<u8>, String, TrustKey) {
         let k = s.trust_key();
         let text = mastersos_bundle::testutil::spec_example_v3();
         let mut doc: toml::Table = text.parse().unwrap();
@@ -962,22 +957,24 @@ mod tests {
             "trust".into(),
             toml::Value::Array(vec![toml::Value::try_from(&k).unwrap()]),
         );
+        doc.insert("format".into(), toml::Value::Integer(format));
         let manifest_text = toml::to_string(&doc).unwrap();
         let c = Contents {
             manifest_text: manifest_text.clone(),
             files: Default::default(),
         };
-        let archive = pack(&c, &s).unwrap();
+        (pack(&c, s).unwrap(), manifest_text, k)
+    }
+
+    #[test]
+    fn format3_bundle_is_accepted() {
+        let s = signer();
+        let (archive, manifest_text, k) = v3_archive(&s, 3);
         let trust = std::slice::from_ref(&k);
-        let b = mastersos_bundle::accept(&archive, trust, None).unwrap();
+        let b = accept_bundle(&archive, trust, None, None, None, Prior::Nothing).unwrap();
         assert_eq!(b.manifest.format, 3);
         assert!(b.manifest.user_layer.is_some());
-        assert_eq!(
-            accept_bundle(&archive, trust, None, None, None, Prior::Nothing).unwrap_err(),
-            BundleError::FormatTooNew { found: 3, max: 2 }
-        );
-        // The text itself is fine for the bundle crate and its local check.
-        mastersos_bundle::Manifest::parse(&manifest_text).unwrap();
+        // The local check accepts the same text.
         let today = chrono::NaiveDate::from_ymd_opt(2026, 11, 19).unwrap();
         let issues =
             mastersos_bundle::check::check_text(&manifest_text, &Default::default(), today).issues;
@@ -985,11 +982,22 @@ mod tests {
             issues.iter().all(|l| l.code != "format_unsupported"),
             "{issues:?}"
         );
-        // Stored (as an older agent build would have), it is not loaded at boot.
+        // Stored, it is loaded at boot.
         let d = tempfile::tempdir().unwrap();
         store_bundle(d.path(), &archive, &b).unwrap();
-        assert!(load_current(d.path(), trust, None).is_none());
-        assert!(agent_build().ends_with("/format-2"));
+        assert!(load_current(d.path(), trust, None).is_some());
+        assert!(agent_build().ends_with("/format-3"));
+    }
+
+    #[test]
+    fn format4_bundle_is_still_refused_as_too_new() {
+        let s = signer();
+        let (archive, _, k) = v3_archive(&s, 4);
+        let trust = std::slice::from_ref(&k);
+        assert_eq!(
+            accept_bundle(&archive, trust, None, None, None, Prior::Nothing).unwrap_err(),
+            BundleError::FormatTooNew { found: 4, max: 3 }
+        );
     }
 
     #[test]

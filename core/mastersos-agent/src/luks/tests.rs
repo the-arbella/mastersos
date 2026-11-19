@@ -381,6 +381,7 @@ fn current(recipients: Vec<String>) -> Arc<CurrentGroup> {
         group: m.groups.remove(0),
         config: mastersos_bundle::effective_config(&m, &m.configs[0]),
         escrow_recipients: recipients,
+        user_layer: false,
     })
 }
 

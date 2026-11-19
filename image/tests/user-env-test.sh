@@ -36,15 +36,19 @@ mkdir -p "$home/.config/environment.d"
 printf 'DCONF_PROFILE=%s/evil\nGSETTINGS_BACKEND=memory\n' "$home" >"$home/.config/environment.d/50-x.conf"
 run() { env -i HOME="$home" PATH=/usr/bin:/bin "$@"; }
 
-# The image's generators, reading the session-mode file from the test's public dir (their only path to it)
+# The image's generators, reading the session-mode files from the test's public dir (their only paths to them): the
+# legacy file and, under settings format 3, the `session` link (its session-mode and uid)
 mkdir -p "$tmp/gen" "$tmp/public"
 for g in 30-systemd-environment-d-generator 60-flatpak; do
-	l=mode_file=/var/lib/mastersos-public/session-mode
-	grep -qxF "$l" "$gens/$g" || {
-		echo "user-env-test: $g has no line $l" >&2
-		exit 1
-	}
-	sed -e "s|^mode_file=/var/lib/mastersos-public/session-mode$|mode_file=$tmp/public/session-mode|" "$gens/$g" >"$tmp/gen/$g"
+	for l in mode_file=/var/lib/mastersos-public/session-mode session_dir=/var/lib/mastersos-public/session; do
+		grep -qxF "$l" "$gens/$g" || {
+			echo "user-env-test: $g has no line $l" >&2
+			exit 1
+		}
+	done
+	sed -e "s|^mode_file=/var/lib/mastersos-public/session-mode$|mode_file=$tmp/public/session-mode|" \
+		-e "s|^session_dir=/var/lib/mastersos-public/session$|session_dir=$tmp/public/session|" \
+		"$gens/$g" >"$tmp/gen/$g"
 	chmod +x "$tmp/gen/$g"
 done
 mode() { if [ "$1" = none ]; then rm -f "$tmp/public/session-mode"; else printf '%s\n' "$1" >"$tmp/public/session-mode"; fi; }
@@ -92,6 +96,39 @@ for m in full none; do
 	mode "$m"
 	check "$m: 60-flatpak includes the user's installation" "GIO_USE_VFS=local ARGS=--print-updated-env" "$(fp)"
 done
+
+# Settings format 3: with the `session` link (to the user config's dir) its mode decides, but only for the uid in
+# session/uid; another uid, no uid file or a dangling link is locked, whatever the legacy file says (always `learning`
+# under format 3; `full` here to show it is not read).
+sd=$tmp/public/user-layer/u-0123456789abcdef
+mkdir -p "$sd"
+ln -s user-layer/u-0123456789abcdef "$tmp/public/session"
+me=$(id -u)
+mode full
+printf 'full\n' >"$sd/session-mode"
+printf '%s\n' "$me" >"$sd/uid"
+check "format 3, own full session: the user's environment.d is read" "$(run "$sysd")" "$(run "$tmp/gen/30-systemd-environment-d-generator")"
+check "format 3, own full session: 60-flatpak includes the user's installation" "GIO_USE_VFS=local ARGS=--print-updated-env" "$(fp)"
+printf 'learning\n' >"$sd/session-mode"
+check "format 3, own learning session: DCONF_PROFILE left out" no "$(has '^DCONF_PROFILE=' "$(run "$tmp/gen/30-systemd-environment-d-generator")")"
+check "format 3, own learning session: 60-flatpak asks for the system installation only" "GIO_USE_VFS=local ARGS=--print-updated-env --print-system-only" "$(fp)"
+printf 'full\n' >"$sd/session-mode"
+printf '%s\n' "$((me + 1))" >"$sd/uid"
+check "format 3, another uid's full session: DCONF_PROFILE left out" no "$(has '^DCONF_PROFILE=' "$(run "$tmp/gen/30-systemd-environment-d-generator")")"
+check "format 3, another uid's full session: 60-flatpak asks for the system installation only" "GIO_USE_VFS=local ARGS=--print-updated-env --print-system-only" "$(fp)"
+rm "$sd/uid"
+check "format 3, no uid file: DCONF_PROFILE left out" no "$(has '^DCONF_PROFILE=' "$(run "$tmp/gen/30-systemd-environment-d-generator")")"
+check "format 3, no uid file: 60-flatpak asks for the system installation only" "GIO_USE_VFS=local ARGS=--print-updated-env --print-system-only" "$(fp)"
+rm -r "$sd"
+check "format 3, dangling link: DCONF_PROFILE left out" no "$(has '^DCONF_PROFILE=' "$(run "$tmp/gen/30-systemd-environment-d-generator")")"
+rm "$tmp/public/session"
+
+# The session's xdg dir (format 3) is the first data directory, before the device's
+envd=$here/../mkosi.extra/usr/lib/environment.d/40-mastersos.conf
+dirs=$(sed -n 's/^XDG_DATA_DIRS=//p' "$envd")
+check "XDG_DATA_DIRS starts with the session's xdg dir" /var/lib/mastersos-public/session/xdg "${dirs%%:*}"
+rest=${dirs#*:}
+check "then the device's xdg dir" /var/lib/mastersos-public/xdg "${rest%%:*}"
 
 echo "user-env-test: $((n - fails))/$n"
 [ "$fails" = 0 ]

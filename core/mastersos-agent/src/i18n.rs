@@ -35,13 +35,15 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_LOCALE_CONF: u64 = 64 * 1024;
 
 /// Every msgid the agent shows. `image/tests/check-tree.sh` (rule 73) requires each in `mastersos-system.pot`.
-pub const AGENT_MSGIDS: [&str; 6] = [
+pub const AGENT_MSGIDS: [&str; 8] = [
     crate::kiosk_session::POLICY_NOT_ISOLATED,
     crate::kiosk_session::ENTER_FAILED,
     crate::kiosk_session::ENTER_CONFIRM,
     crate::login_queue::MSG_WITHHELD,
     crate::login_queue::MSG_STALE_DAYS,
     crate::upload::drain::NOTICE,
+    crate::system::login::DENY_SESSION_BUSY,
+    crate::system::login::DENY_SESSION_UNAVAILABLE,
 ];
 
 /// The gettext environment for one locale name.
@@ -128,10 +130,20 @@ pub fn gettext_cmd(locale: &Locale, msgid: &str) -> Cmd {
 
 /// `msgid` translated into `locale` (see the module documentation); `msgid` itself when that is not possible.
 pub fn text(runner: &dyn Runner, locale: Option<&Locale>, msgid: &str) -> String {
+    text_within(runner, locale, msgid, TIMEOUT)
+}
+
+/// [`text`] with its own bound on the `gettext` call (English when it runs out).
+pub fn text_within(
+    runner: &dyn Runner,
+    locale: Option<&Locale>,
+    msgid: &str,
+    timeout: Duration,
+) -> String {
     let Some(locale) = locale else {
         return msgid.to_string();
     };
-    match runner.run(&gettext_cmd(locale, msgid)) {
+    match runner.run(&gettext_cmd(locale, msgid).timeout(timeout)) {
         Ok(o) if o.code == 0 => {
             let t = o.stdout.trim_end_matches('\n');
             if t.is_empty() || t.matches("%s").count() != msgid.matches("%s").count() {

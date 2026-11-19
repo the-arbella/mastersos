@@ -1,0 +1,608 @@
+//! The switch (design `docs/specs/2026-11-19-user-layer-design.md` §4.3, §4.9): at login `pam-session` resolves the
+//! person's user config from the pre-rendered rules ([`render::Index`]) and the issuer facts, and switches the session to
+//! that config's pre-rendered files. At logout it marks the session closing and wakes the agent, which reverts to neutral.
+//!
+//! [`switch_to`] only renames files and re-points a symlink, in this order (each step tightens or keeps the strength
+//! of the one before, since every config is at least as strict as neutral in the parts switched later):
+//!
+//! 1. the managed Chrome policy: the staging copy `.mastersos-staging/<d>.json` is made again from `<var_dir>/user-layer/
+//!    <d>/chrome.json` and renamed over `managed/mastersos.json`;
+//! 2. the dconf database: the config's compiled database ([`render::compiled_db`]) is copied to `mastersos-session.tmp`
+//!    (0644) and renamed to `mastersos-session`, the first system database of the dconf profile
+//!    `/etc/dconf/profile/user` ([`render::SESSION_PROFILE`], written here once the database exists; it takes
+//!    precedence over the image's `/usr/share/dconf/profile/user`, which format 1/2 Devices keep); the replaced
+//!    database is then invalidated as `dconf update` does, so running dconf clients reopen the new one;
+//! 3. the session directory: `/var/lib/mastersos-public/session` (first in `XDG_DATA_DIRS`) is re-pointed at
+//!    `user-layer/<d>` (`session.tmp`, renamed over `session`); the session mode for the image's readers is
+//!    `session/session-mode` behind it, and whose session it is in `session/uid` ([`UID_FILE`], written before the swap;
+//!    none for neutral). The target directory is opened (0755) before, and the previous one, unless neutral, is closed
+//!    again (0700) after.
+//!
+//! No command is spawned, nothing is rendered and the bundle is not read: this runs inside PAM (root, synchronous, within
+//! `pam-session`'s 5 s budget) and must never panic.
+
+#![cfg_attr(
+    not(test),
+    deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
+)]
+
+use std::os::fd::OwnedFd;
+use std::path::Path;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use anyhow::{bail, Context, Result};
+use mastersos_bundle::{Caps, DeviceFacts, HomeMode, IssuerFacts, Kind, IT_ACCOUNT_USER};
+
+use super::facts::{take_facts, FactsOutcome};
+use super::render::{
+    self, read_index, Rendered, CHROME_FILE, POLICIES_DIR, SESSION_DB, SESSION_LINK, STAGING_SUB,
+    STATE_SUB,
+};
+use super::{active_marker, is_config_dir, Active, ActiveState, ACTIVE_FILE, NEUTRAL_DIR, RUN_DIR};
+use crate::runner::Runner;
+use crate::safefs;
+use crate::system::chrome_policy;
+use crate::system::login::{self, LoginPolicy, UserClass};
+use crate::system::SysPaths;
+
+/// The signed-in person's uid (`<uid>\n`, 0644) in the public dir of the config their session uses: the image's readers of
+/// `session/session-mode` trust it only in a user manager of this uid, and treat every other one as locked.
+pub const UID_FILE: &str = "uid";
+
+/// The lock of the session marker in [`RUN_DIR`] (root 0600): `on_open` holds it from the marker check through the marker
+/// write, `on_close` and the agent's revert (Task 6) while they change the marker, so two of them never interleave.
+pub const LOCK_FILE: &str = "active.lock";
+/// How long `pam-session` waits for [`LOCK_FILE`] before it refuses the login: well inside its 5 s budget.
+pub const LOCK_WAIT: Duration = Duration::from_secs(2);
+
+/// The temporary names of the switch, next to their targets.
+const SESSION_DB_TMP: &str = "mastersos-session.tmp";
+const SESSION_LINK_TMP: &str = "session.tmp";
+
+/// What the Device knows about `user` (uid `uid`) on a Device of Group `group`, for the rules (design §2.1). `kind`
+/// is the login classification; a kiosk account never reaches the user layer and counts as a local account. `admin`:
+/// a school account in `admin_users`, the agent's `itadmin` (by uid), or a local account where local accounts are
+/// administrators.
+pub fn device_facts<'a>(
+    policy: &LoginPolicy,
+    user: &'a str,
+    uid: u32,
+    group: &'a str,
+) -> DeviceFacts<'a> {
+    let kind = match login::classify(user, Some(policy)) {
+        UserClass::Sso => Kind::Sso,
+        UserClass::Guest => Kind::Guest,
+        UserClass::Local | UserClass::Kiosk => Kind::Local,
+    };
+    let it_admin =
+        user == IT_ACCOUNT_USER && policy.it_account && policy.it_account_uid == Some(uid);
+    let admin = match kind {
+        Kind::Sso => login::is_admin(policy, user),
+        Kind::Local => it_admin || policy.local_users_admin,
+        Kind::Guest => false,
+    };
+    DeviceFacts {
+        kind,
+        admin,
+        user,
+        device_group: group,
+    }
+}
+
+/// Switches the session to the pre-rendered config `r` (see the module documentation for the three moves and their
+/// order). `root` is the system root, `public` the public directory and `var` the agent's system state directory. `uid`
+/// is the signed-in person the config is for (`None` for neutral): it is published as [`UID_FILE`] in the config's
+/// public dir, so that the image's readers use the session's mode only in that person's own user manager. Stops at the
+/// first move that fails: the moves already made stay (each is complete on its own).
+pub fn switch_to(
+    root: &Path,
+    public: &Path,
+    var: &Path,
+    r: &Rendered,
+    uid: Option<u32>,
+) -> Result<()> {
+    let d = r.dir.as_str();
+    if !is_config_dir(d) {
+        bail!("{d:?} is not a config directory name");
+    }
+    switch_chrome(root, var, d).context("Chrome policy")?;
+    switch_dconf(root, var, d).context("dconf database")?;
+    switch_session_link(public, d, uid).context("session directory")?;
+    Ok(())
+}
+
+fn switch_chrome(root: &Path, var: &Path, d: &str) -> Result<()> {
+    let cdir = safefs::open_abs_dir(var, false)
+        .and_then(|v| safefs::open_dir_at(&v, &Path::new(STATE_SUB).join(d), false))?;
+    let Some(text) = safefs::read_at(&cdir, CHROME_FILE)? else {
+        bail!("{d} has no {CHROME_FILE}");
+    };
+    let policies = safefs::open_dir(root, Path::new(POLICIES_DIR), false)?;
+    let staging = safefs::open_dir_at(&policies, Path::new(STAGING_SUB), true)?;
+    safefs::set_mode(&staging, 0o700)?;
+    let staged = format!("{d}.json");
+    safefs::write_at(&staging, &staged, &text, 0o644)?;
+    // Created here only on a Device without it; the mode is explicit since PAM hands down any umask
+    let managed = safefs::open_dir(root, Path::new(chrome_policy::POLICY_DIR), true)?;
+    safefs::set_mode(&managed, 0o755)?;
+    rustix::fs::renameat(
+        &staging,
+        staged.as_str(),
+        &managed,
+        chrome_policy::POLICY_FILE,
+    )
+    .map_err(std::io::Error::from)
+    .with_context(|| format!("renaming {staged} to {}", chrome_policy::POLICY_FILE))?;
+    fsync(&managed)
+}
+
+fn switch_dconf(root: &Path, var: &Path, d: &str) -> Result<()> {
+    let src = render::compiled_db(root, var, d);
+    let (Some(parent), Some(name)) = (src.parent(), src.file_name().and_then(|n| n.to_str()))
+    else {
+        bail!("{} has no directory", src.display());
+    };
+    let from = safefs::open_abs_dir(parent, false)?;
+    let Some(bytes) = safefs::read_at(&from, name)? else {
+        bail!("{name} is missing (not compiled)");
+    };
+    let db = safefs::open_dir(root, Path::new(render::DCONF_DB_DIR), true)?;
+    // The database being replaced, opened before the rename so that it can be invalidated after it
+    let old = open_old_db(&db);
+    safefs::write_at(&db, SESSION_DB_TMP, &bytes, 0o644)?;
+    safefs::rename_at(&db, SESSION_DB_TMP, SESSION_DB)?;
+    // The new database is in place: a failure here only leaves running clients on the old one until they reopen it
+    if let Some(old) = old {
+        if let Err(e) = invalidate_old_db(old) {
+            eprintln!("mastersos-agent: user layer: invalidating the previous {SESSION_DB}: {e:#}");
+        }
+    }
+    // Only now that the database exists may the profile name it (unchanged after the first switch).
+    let profile = safefs::open_dir(root, Path::new(render::PROFILE_DIR), true)?;
+    safefs::set_mode(&profile, 0o755)?;
+    safefs::write_at(
+        &profile,
+        render::PROFILE_FILE,
+        render::SESSION_PROFILE.as_bytes(),
+        0o644,
+    )?;
+    Ok(())
+}
+
+/// The current [`SESSION_DB`] opened for writing (no symlink, no blocking open, never a controlling tty); `None` when
+/// there is none. Any other failure is logged and gives `None`, as `dconf update` only warns there.
+fn open_old_db(db: &OwnedFd) -> Option<OwnedFd> {
+    use rustix::fs::{openat, Mode, OFlags};
+    let flags =
+        OFlags::WRONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK;
+    match openat(db, SESSION_DB, flags, Mode::empty()) {
+        Ok(fd) => Some(fd),
+        Err(rustix::io::Errno::NOENT) => None,
+        Err(e) => {
+            eprintln!(
+                "mastersos-agent: user layer: opening {SESSION_DB} for replacement: {}",
+                std::io::Error::from(e)
+            );
+            None
+        }
+    }
+}
+
+/// Marks the replaced database `old` invalid the way `dconf update` does, so that dconf clients that still have it
+/// mapped reopen [`SESSION_DB`] (they notice nothing otherwise). dconf (GNOME/dconf at 264e6598, `bin/dconf.c`,
+/// `update_directory`) opens the old file `O_WRONLY` before writing the new one (line 852) and, once the new one is in
+/// place, writes `"\0\0\0\0\0\0\0\0"` (8 zero bytes) at its start (lines 870-874). A client's system source reopens
+/// when `gvdb_table_is_valid` is false (`engine/dconf-engine-source-system.c` lines 38-41), and that is
+/// `!!*table->data`, the first byte of the file (GNOME/gvdb `gvdb/gvdb-reader.c` lines 826-829). Only a regular
+/// file that the rename orphaned (no link left) is touched: never the new database, nor a file still linked elsewhere.
+fn invalidate_old_db(old: OwnedFd) -> Result<()> {
+    use std::os::unix::fs::FileExt;
+    let st = rustix::fs::fstat(&old).map_err(std::io::Error::from)?;
+    if rustix::fs::FileType::from_raw_mode(st.st_mode) != rustix::fs::FileType::RegularFile
+        || st.st_nlink != 0
+    {
+        return Ok(());
+    }
+    std::fs::File::from(old).write_all_at(&[0u8; 8], 0)?;
+    Ok(())
+}
+
+fn switch_session_link(public: &Path, d: &str, uid: Option<u32>) -> Result<()> {
+    let pub_fd = safefs::open_abs_dir(public, false)?;
+    let parent = safefs::open_dir_at(&pub_fd, Path::new(STATE_SUB), false)?;
+    let target = safefs::open_dir_at(&parent, Path::new(d), false)?;
+    // Whose session this is, before the link makes the dir the session's (neutral is nobody's)
+    match uid.filter(|_| d != NEUTRAL_DIR) {
+        Some(uid) => {
+            safefs::write_at(&target, UID_FILE, format!("{uid}\n").as_bytes(), 0o644)?;
+        }
+        None => safefs::remove_at(&target, UID_FILE)?,
+    }
+    safefs::set_mode(&target, 0o755)?;
+    let previous = safefs::read_link_at(&pub_fd, SESSION_LINK);
+    let link = format!("{STATE_SUB}/{d}");
+    match rustix::fs::unlinkat(&pub_fd, SESSION_LINK_TMP, rustix::fs::AtFlags::empty()) {
+        Ok(()) | Err(rustix::io::Errno::NOENT) => {}
+        Err(e) => {
+            return Err(std::io::Error::from(e))
+                .with_context(|| format!("removing {SESSION_LINK_TMP}"))
+        }
+    }
+    rustix::fs::symlinkat(link.as_str(), &pub_fd, SESSION_LINK_TMP)
+        .map_err(std::io::Error::from)
+        .with_context(|| format!("creating {SESSION_LINK_TMP}"))?;
+    safefs::rename_at(&pub_fd, SESSION_LINK_TMP, SESSION_LINK)?;
+    // The previous config's files are root-only again; a failure leaves them readable, never the session looser.
+    let prev = previous
+        .as_deref()
+        .and_then(|p| p.strip_prefix(&format!("{STATE_SUB}/")))
+        .filter(|p| is_config_dir(p) && *p != NEUTRAL_DIR && *p != d);
+    if let Some(p) = prev {
+        let closed = safefs::open_dir_at(&parent, Path::new(p), false)
+            .and_then(|fd| safefs::set_mode(&fd, 0o700));
+        if let Err(e) = closed {
+            eprintln!(
+                "mastersos-agent: user layer: closing the previous config directory {p}: {e:#}"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn fsync(dir: &OwnedFd) -> Result<()> {
+    rustix::fs::fsync(dir)
+        .map_err(std::io::Error::from)
+        .context("fsync of the directory")
+}
+
+/// What [`on_open`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpenOutcome {
+    /// The installed login policy is not format 3: nothing was read or touched.
+    NotUserLayer,
+    /// The session was switched to `user_config`; `fallback_reason` says why it is the fallback, when it is for a
+    /// reason other than the rules.
+    Switched {
+        user_config: String,
+        fallback_reason: Option<String>,
+        home: HomeMode,
+    },
+    /// The login must be refused, for the reason given.
+    Refused(Refusal),
+}
+
+/// Why [`on_open`] refused a login; each has its own message for the person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// Another person (a marker of another uid, open or closing) is still signed in: [`login::DENY_SESSION_BUSY`].
+    Busy,
+    /// The session could not be got ready and nobody else is known to be signed in (the marker cannot be read, the same
+    /// person's session is still being closed, the lock stays busy, the rules are missing, no config can be switched in,
+    /// the marker cannot be written): [`login::DENY_SESSION_UNAVAILABLE`].
+    Unavailable,
+}
+
+impl Refusal {
+    /// The msgid shown to the person (translated by the caller).
+    pub fn msgid(self) -> &'static str {
+        match self {
+            Refusal::Busy => login::DENY_SESSION_BUSY,
+            Refusal::Unavailable => login::DENY_SESSION_UNAVAILABLE,
+        }
+    }
+
+    /// The refusal for a login of `uid` (`None`: unknown) that does not get as far as the switch, from the marker under
+    /// `root`: [`Refusal::Busy`] only when a marker of another uid exists.
+    pub fn from_marker(root: &Path, uid: Option<u32>) -> Refusal {
+        match (active_marker(root), uid) {
+            (Ok(Some(a)), Some(uid)) if a.uid != uid => Refusal::Busy,
+            _ => Refusal::Unavailable,
+        }
+    }
+}
+
+/// `pam-session`'s open_session of a human account (`user`, uid `uid`): resolves the user config and switches to it,
+/// then writes the [`Active`] marker. Reads only the rules file and (for a school account, when the issuer sends facts)
+/// the facts file; never the bundle. Facts that are missing, an error or stale only disable the rules with fact
+/// conditions (design §5); a config that cannot be switched in gives the fallback, and a fallback that cannot be switched
+/// in refuses the login after a best-effort switch to neutral. Reasons go to stderr (the journal) in full; the marker
+/// (and through it the status report) gets only fixed categories and config ids, never the login name or fact values
+/// (design §4.10). A second open of the same person switches the marker's config in again.
+pub fn on_open(
+    root: &Path,
+    paths: &SysPaths,
+    policy: &LoginPolicy,
+    user: &str,
+    uid: u32,
+) -> OpenOutcome {
+    on_open_at(root, paths, policy, user, uid, SystemTime::now())
+}
+
+pub(crate) fn on_open_at(
+    root: &Path,
+    paths: &SysPaths,
+    policy: &LoginPolicy,
+    user: &str,
+    uid: u32,
+    now: SystemTime,
+) -> OpenOutcome {
+    if !policy.user_layer {
+        return OpenOutcome::NotUserLayer;
+    }
+    // `root` holds the marker and the facts (`/` in PAM), `paths` the switched files (their root is the same `/`); tests
+    // give both the same temporary root.
+    debug_assert_eq!(root, paths.root.as_path());
+    let log = |msg: &str| eprintln!("mastersos-agent pam-session: {user}: user layer: {msg}");
+    // One open at a time, from the marker check through the marker write; a busy lock refuses (fail closed).
+    let _lock = match lock_active(root, LOCK_WAIT) {
+        Ok(l) => l,
+        Err(e) => {
+            log(&format!("{e:#}; denied"));
+            return OpenOutcome::Refused(Refusal::Unavailable);
+        }
+    };
+    let switch =
+        |r: &Rendered| switch_to(&paths.root, &paths.public_dir, &paths.var_dir, r, Some(uid));
+    let refuse = |why: String| {
+        log(&format!("{why}; denied"));
+        let neutral = Rendered {
+            dir: NEUTRAL_DIR.into(),
+            caps: Caps::new(),
+            home: HomeMode::Tidy,
+        };
+        if let Err(e) = switch_to(
+            &paths.root,
+            &paths.public_dir,
+            &paths.var_dir,
+            &neutral,
+            None,
+        ) {
+            log(&format!("switching back to neutral: {e:#}"));
+        }
+        OpenOutcome::Refused(Refusal::Unavailable)
+    };
+    // Backstop of pam-check's one-session rule: another person's session, or any session being closed, is not touched.
+    match active_marker(root) {
+        Ok(None) => {}
+        Ok(Some(mut a)) if a.uid == uid && a.state == ActiveState::Open => {
+            // A second session of the same person keeps the first one's config: nothing is resolved again. Its files are
+            // switched in again, though: a revert that was only half done (neutral switched in, the marker left) must
+            // not leave the session on other files than the marker and the report name.
+            let index = read_index(&paths.var_dir);
+            let target = if a.dir == NEUTRAL_DIR {
+                index.as_ref().map(|i| (i.neutral.clone(), None))
+            } else {
+                index
+                    .as_ref()
+                    .and_then(|i| i.configs.get(&a.user_config))
+                    .filter(|r| r.dir == a.dir)
+                    .map(|r| (r.clone(), Some(uid)))
+            };
+            let Some((r, owner)) = target else {
+                return refuse(format!(
+                    "the session's user config {:?} was not rendered",
+                    a.user_config
+                ));
+            };
+            if let Err(e) = switch_to(&paths.root, &paths.public_dir, &paths.var_dir, &r, owner) {
+                return refuse(format!(
+                    "switching to the session's user config {:?} again failed: {e:#}",
+                    a.user_config
+                ));
+            }
+            // The grace of the agent's watch starts again (R9): this login is not in logind yet either, and the first
+            // session may be gone already.
+            a.opened_at = now.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+            a.seen = false;
+            if let Err(e) = write_active(root, &a) {
+                log(&format!("restarting the session's grace failed: {e:#}"));
+            }
+            let home = index
+                .and_then(|i| i.configs.get(&a.user_config).map(|r| r.home))
+                .unwrap_or(HomeMode::Keep);
+            return OpenOutcome::Switched {
+                user_config: a.user_config,
+                fallback_reason: a.reason,
+                home,
+            };
+        }
+        Ok(Some(a)) if a.uid != uid => {
+            log(&format!(
+                "a session is still signed in or closing (uid {}); denied",
+                a.uid
+            ));
+            return OpenOutcome::Refused(Refusal::Busy);
+        }
+        Ok(Some(_)) => {
+            log("this person's previous session is still being closed; denied");
+            return OpenOutcome::Refused(Refusal::Unavailable);
+        }
+        Err(e) => {
+            log(&format!(
+                "the session marker cannot be read ({e:#}); denied"
+            ));
+            return OpenOutcome::Refused(Refusal::Unavailable);
+        }
+    }
+    let Some(index) = read_index(&paths.var_dir) else {
+        return refuse("the user config rules are missing or unreadable".into());
+    };
+    let device = device_facts(policy, user, uid, &index.rules.group);
+    let mut reasons: Vec<String> = Vec::new();
+    let facts: Option<IssuerFacts> = if device.kind == Kind::Sso && policy.mastersos_claims {
+        match take_facts(root, user, now) {
+            FactsOutcome::Facts(f) => Some(f),
+            FactsOutcome::Missing => {
+                reasons.push("the issuer handed over no facts".to_string());
+                None
+            }
+            FactsOutcome::Error(e) => {
+                // The text may carry the login name or fact values: the journal only (spec §4.10)
+                log(&format!("the issuer facts are unusable: {e}"));
+                reasons.push("the issuer facts are unusable".to_string());
+                None
+            }
+            FactsOutcome::Stale => {
+                reasons.push("the issuer facts are stale".to_string());
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let chosen = index.rules.resolve(&device, facts.as_ref()).user_config;
+    let fallback = index.rules.fallback.clone();
+    let mut picked = None;
+    match index.configs.get(&chosen) {
+        Some(r) => match switch(r) {
+            Ok(()) => picked = Some((chosen.clone(), r)),
+            Err(e) => {
+                log(&format!("switching to {chosen:?} failed: {e:#}"));
+                reasons.push(format!("switching to {chosen:?} failed"));
+            }
+        },
+        None => reasons.push(format!("the user config {chosen:?} was not rendered")),
+    }
+    if picked.is_none() {
+        if !reasons.is_empty() {
+            log(&reasons.join("; "));
+        }
+        if chosen == fallback {
+            return refuse(format!("the fallback {fallback:?} cannot be switched in"));
+        }
+        let Some(r) = index.configs.get(&fallback) else {
+            return refuse(format!("the fallback {fallback:?} was not rendered"));
+        };
+        if let Err(e) = switch(r) {
+            return refuse(format!(
+                "switching to the fallback {fallback:?} failed: {e:#}"
+            ));
+        }
+        picked = Some((fallback.clone(), r));
+    }
+    let Some((user_config, r)) = picked else {
+        return refuse("no user config was switched in".into());
+    };
+    // Only a fallback that is not the rules' choice has a reason worth reporting; every reason is kept.
+    let reason = (user_config == fallback && !reasons.is_empty()).then(|| reasons.join("; "));
+    if let Some(why) = &reason {
+        log(&format!("got the fallback {fallback:?}: {why}"));
+    }
+    let active = Active {
+        uid,
+        user: user.to_string(),
+        user_config: user_config.clone(),
+        dir: r.dir.clone(),
+        caps: r.caps.clone(),
+        state: ActiveState::Open,
+        reason: reason.clone(),
+        opened_at: now.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()),
+        seen: false,
+        held: false,
+    };
+    if let Err(e) = write_active(root, &active) {
+        return refuse(format!("writing the session marker failed: {e:#}"));
+    }
+    OpenOutcome::Switched {
+        user_config,
+        fallback_reason: reason,
+        home: r.home,
+    }
+}
+
+/// `pam-session`'s close_session of a human account (uid `uid`): marks its session [`ActiveState::Closing`] (under
+/// [`LOCK_FILE`]) and wakes the agent, which reverts to neutral. Never fails the logout: problems only go to stderr. A
+/// marker of another uid is left alone.
+pub fn on_close(root: &Path, uid: u32, runner: &dyn Runner) {
+    let log = |msg: String| eprintln!("mastersos-agent pam-session: user layer: {msg}");
+    match lock_active(root, LOCK_WAIT) {
+        Err(e) => log(format!("{e:#}; the session is not marked closing")),
+        Ok(_lock) => match active_marker(root) {
+            Ok(Some(mut a)) if a.uid == uid => {
+                if a.state != ActiveState::Closing {
+                    a.state = ActiveState::Closing;
+                    if let Err(e) = write_active(root, &a) {
+                        log(format!("marking the session closing failed: {e:#}"));
+                    }
+                }
+            }
+            Ok(Some(a)) => log(format!(
+                "the session marker is for uid {}, not {uid}; left alone",
+                a.uid
+            )),
+            Ok(None) => {}
+            Err(e) => log(format!("the session marker cannot be read: {e:#}")),
+        },
+    }
+    crate::login_queue::wake_agent(runner);
+}
+
+/// Takes the exclusive `flock` on [`LOCK_FILE`] in [`RUN_DIR`] under `root` (created root 0700 / 0600 when missing),
+/// polling up to `wait`; released when the returned fd is dropped. For `pam-session` and the agent's revert (Task 6).
+pub fn lock_active(root: &Path, wait: Duration) -> Result<OwnedFd> {
+    use rustix::fs::{flock, openat, FlockOperation, Mode, OFlags};
+    let dir = safefs::open_dir(root, Path::new(RUN_DIR), true)?;
+    safefs::set_mode(&dir, 0o700)?;
+    let fd = openat(
+        &dir,
+        LOCK_FILE,
+        OFlags::CREATE | OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        Mode::from_raw_mode(0o600),
+    )
+    .map_err(std::io::Error::from)
+    .with_context(|| format!("opening {LOCK_FILE}"))?;
+    let start = Instant::now();
+    loop {
+        match flock(&fd, FlockOperation::NonBlockingLockExclusive) {
+            Ok(()) => return Ok(fd),
+            Err(e) if e == rustix::io::Errno::WOULDBLOCK => {}
+            Err(e) => {
+                return Err(std::io::Error::from(e)).with_context(|| format!("locking {LOCK_FILE}"))
+            }
+        }
+        let waited = start.elapsed();
+        if waited >= wait {
+            return Err(LockBusy { wait }.into());
+        }
+        std::thread::sleep(Duration::from_millis(50).min(wait - waited));
+    }
+}
+
+/// [`lock_active`] waited its whole time: another sign-in, sign-out or revert holds [`LOCK_FILE`].
+#[derive(Debug)]
+pub struct LockBusy {
+    pub wait: Duration,
+}
+
+impl std::fmt::Display for LockBusy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{LOCK_FILE} is still held after {} ms (another sign-in or sign-out is changing the session)",
+            self.wait.as_millis()
+        )
+    }
+}
+
+impl std::error::Error for LockBusy {}
+
+/// Whether `e` is (or wraps) a [`LockBusy`].
+pub fn is_lock_busy(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<LockBusy>().is_some()
+}
+
+/// Whether a marker exists under `root` (or cannot be read): some session is open or still being closed.
+pub fn marker_present(root: &Path) -> bool {
+    !matches!(active_marker(root), Ok(None))
+}
+
+/// Writes the marker (`<root>/`[`RUN_DIR`]`/`[`ACTIVE_FILE`], directory root 0700, file 0600).
+pub fn write_active(root: &Path, a: &Active) -> Result<()> {
+    let dir = safefs::open_dir(root, Path::new(RUN_DIR), true)?;
+    safefs::set_mode(&dir, 0o700)?;
+    safefs::write_at(&dir, ACTIVE_FILE, &serde_json::to_vec(a)?, 0o600)?;
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) mod tests;

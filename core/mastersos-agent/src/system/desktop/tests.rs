@@ -103,6 +103,7 @@ fn run_step_with(
         quiet: &std::sync::atomic::AtomicBool::new(false),
         device: None,
         ident: &crate::system::tests::test_ident(),
+        manifest: None,
     };
     let p = paths(root);
     let mut env = Env {

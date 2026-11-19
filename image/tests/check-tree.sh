@@ -850,8 +850,8 @@ fi
 	r=1
 }
 # shellcheck disable=SC2016 # 字面的 ${XDG_DATA_DIRS…}，是要找的文件内容
-grep -qxF 'XDG_DATA_DIRS=/var/lib/mastersos-public/xdg:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}' "$ex/usr/lib/environment.d/40-mastersos.conf" 2>/dev/null || {
-	bad 17 "$ex/usr/lib/environment.d/40-mastersos.conf 应把 /var/lib/mastersos-public/xdg 排在 XDG_DATA_DIRS 最前面"
+grep -qxF 'XDG_DATA_DIRS=/var/lib/mastersos-public/session/xdg:/var/lib/mastersos-public/xdg:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}' "$ex/usr/lib/environment.d/40-mastersos.conf" 2>/dev/null || {
+	bad 17 "$ex/usr/lib/environment.d/40-mastersos.conf should put /var/lib/mastersos-public/session/xdg, then /var/lib/mastersos-public/xdg, first in XDG_DATA_DIRS"
 	r=1
 }
 tf=$ex/usr/lib/tmpfiles.d/mastersos.conf
@@ -3506,6 +3506,10 @@ grep -qxE 'd /var/lib/mastersos/deb-apps 0700 root root -' "$tf" || {
 }
 grep -qxE 'd /run/mastersos 0700 root root -' "$tf" || {
 	bad 78 "$tf should create /run/mastersos at boot, mode 0700"
+	r=1
+}
+grep -qxF -- 'd /run/mastersos/user-layer 0700 root root -' "$tf" || {
+	bad 78 "$tf should have: d /run/mastersos/user-layer 0700 root root - (user-layer session state)"
 	r=1
 }
 # The image's list of /usr: without it a vendor package could cover /usr/bin/mastersos-agent (not in any dpkg list);

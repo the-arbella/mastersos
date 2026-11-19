@@ -199,7 +199,10 @@ resolves to on this Device, keeping "the card opens no site this Device's guest 
 7. **One human session at a time**: while a human session (SSO, local, guest, itadmin) is open another
    login is refused in `pam-check` with "Someone is still signed in on this device. They need to sign out
    first, or restart the device." (through i18n). Never names the person. No admin override. Lock/unlock
-   is the same session. Kiosk sessions keep today's rules.
+   is the same session. Kiosk sessions keep today's rules. That message is only for another person's
+   session; every other refusal of the user layer (the marker cannot be read, the same person's session
+   is still being closed, the session cannot be switched in, see 9) says "This device could not get your
+   session ready. Try again in a moment, or restart the device." (through i18n).
 8. **Crash / power loss**: boot always starts neutral; `/run` is tmpfs.
 9. **Failure**: if the chosen config cannot be switched in, the session gets `fallback`; if that fails
    too, the login is refused. Reported.
@@ -266,4 +269,6 @@ All of the broker's changes go in a new carried patch `image/patches/authd-oidc/
 - Agents report the feature `format_3` (the existing `format_<n>` naming); publishing a `format = 3` document is refused while a recently
   seen Device does not report it (existing gate, `manifest.rs` `features_used`).
 - An agent that supports format 3 still accepts format 1/2 documents and behaves exactly as today with
-  them (every login gets the Device's single Config).
+  them (every login gets the Device's single Config). Changing a Device from a format 3 document to a format 1/2 one removes
+  the user layer's files, but never while a person is signed in: then the removal waits and is done when
+  that session ends (its revert, instead of switching to neutral).

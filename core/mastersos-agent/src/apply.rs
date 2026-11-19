@@ -10,7 +10,9 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 
 use anyhow::{anyhow, bail, Context, Result};
-use mastersos_bundle::{Config, DeviceEntry, DeviceIdent, Group, ItemResult, Lock, School, Seed};
+use mastersos_bundle::{
+    Config, DeviceEntry, DeviceIdent, Group, ItemResult, Lock, Manifest, School, Seed,
+};
 use sha2::{Digest, Sha256};
 
 use crate::safefs;
@@ -45,6 +47,17 @@ pub struct ApplyContext<'a> {
     pub device: Option<&'a DeviceEntry>,
     /// This Device's serial number and device id.
     pub ident: &'a DeviceIdent,
+    /// The whole settings (`None` in tests that need only the Config): the user-layer steps read the format 3
+    /// user layer from it ([`ApplyContext::user_layer`]).
+    pub manifest: Option<&'a Manifest>,
+}
+
+impl<'a> ApplyContext<'a> {
+    /// The manifest when it has a format 3 user layer. Then the `user-layer` step renders the session files and the
+    /// `desktop`, `chrome_policy` and `login-scripts-export` steps keep to the device layer.
+    pub fn user_layer(&self) -> Option<&'a Manifest> {
+        self.manifest.filter(|m| m.user_layer.is_some())
+    }
 }
 
 pub trait Applier: Send + Sync {

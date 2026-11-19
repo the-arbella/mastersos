@@ -39,6 +39,7 @@ pub mod system;
 pub mod token;
 pub mod tpm;
 pub mod upload;
+pub mod user_layer;
 
 pub use apply::{Applier, ApplyContext, NullApplier, Phase, RecordingApplier};
 pub use config::AgentConfig;

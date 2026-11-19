@@ -24,9 +24,17 @@ suites:
     timeout: 20m
     paths: [image/patches/authd-oidc/**, image/tests/authd-oidc-patch-test.sh, image/mkosi.build]
   image-tests:
-    # The synced tree has no .git; check-tree reads `git ls-files`, so it runs in a throwaway repo over a copy.
-    run: bash image/tests/login-people-test.sh && t=$(mktemp -d) && trap 'rm -rf -- "$t"' EXIT && cp -a . "$t" && cd "$t" && git init -q && git add -A && bash image/tests/check-tree.sh
+    # Shell and node tests of image/ (CI's image-lint job runs the same scripts). LABTEST_ARGS picks tests by name;
+    # "msgfmt" checks every system-i18n catalogue with gettext's msgfmt unpacked by setup. The synced tree has no .git
+    # and check-tree reads `git ls-files`, so every test runs in a throwaway repo over a copy.
+    setup: d=$HOME/.cache/mastersos-gettext && rm -rf $d && mkdir -p $d && cd $d && apt-get download gettext && dpkg-deb -x gettext_*.deb root
+    setup_key: [.labtest.yml]
+    run: >-
+      g=$HOME/.cache/mastersos-gettext/root; t=$(mktemp -d) && trap 'rm -rf -- "$t"' EXIT && cp -a . "$t" && cd "$t" && git init -q && git add -A || exit 1;
+      rc=0; for n in ${LABTEST_ARGS:-check-tree login-people-test user-env-test pam-hooks-test browser-wait-test notice-lib-test msgfmt}; do
+      if [ "$n" = msgfmt ]; then for po in image/system-i18n/*.po; do LD_LIBRARY_PATH=$g/usr/lib/x86_64-linux-gnu $g/usr/bin/msgfmt --check -o /dev/null "$po" || { echo "FAIL msgfmt $po"; rc=1; }; done;
+      else bash image/tests/$n.sh || { echo "FAIL $n"; rc=1; }; fi; echo "== $n done"; done; exit $rc
     mem: 1G
-    cpus: 2
-    timeout: 20m
+    cpus: 4
+    timeout: 30m
     paths: [image/**, skills/**, tools/**, core/**, .github/**, docs/**]

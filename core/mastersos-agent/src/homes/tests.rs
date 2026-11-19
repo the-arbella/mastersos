@@ -284,6 +284,9 @@ fn write_policy(paths: &SysPaths, admins: &[&str], from_bundle: bool) {
         kiosk_users: vec![],
         it_account: false,
         it_account_uid: None,
+        local_users_admin: false,
+        user_layer: false,
+        mastersos_claims: false,
     };
     std::fs::write(
         paths.var_dir.join("login/policy.json"),

@@ -37,3 +37,9 @@ msgstr "Ekki hefur verið staðfest í %s daga að stillingarnar séu uppfærða
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "Tæknideild er að safna greiningarupplýsingum úr þessari tölvu."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Einhver er enn skráður inn á þessu tæki. Viðkomandi þarf fyrst að skrá sig út, eða endurræsa tækið."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Þetta tæki gat ekki undirbúið setuna þína. Reyndu aftur eftir smástund, eða endurræstu tækið."

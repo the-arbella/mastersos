@@ -144,18 +144,29 @@ pub fn to_json(t: &toml::Table) -> Result<serde_json::Map<String, serde_json::Va
     mastersos_bundle::kiosk::toml_table_to_json(t).map_err(anyhow::Error::msg)
 }
 
+/// Under a format 3 bundle the managed policy is the user config's, switched in at login from the copy the
+/// `user-layer` step pre-renders: this step writes nothing.
 fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
+    if ctx.user_layer().is_some() {
+        return vec![];
+    }
     vec![match apply(&env.paths.root, &ctx.config.chrome_policy) {
         Ok(()) => ok(ITEM),
         Err(e) => failed(ITEM, format!("{e:#}")),
     }]
 }
 
-fn apply(root: &Path, policy: &toml::Table) -> Result<()> {
+/// The managed policy file's text: [`baseline`] with `policy` on top (same key: `policy` wins).
+pub fn render_policy(policy: &toml::Table) -> Result<String> {
     let mut merged = baseline();
     merged.extend(to_json(policy)?);
     let mut text = serde_json::to_string_pretty(&merged)?;
     text.push('\n');
+    Ok(text)
+}
+
+fn apply(root: &Path, policy: &toml::Table) -> Result<()> {
+    let text = render_policy(policy)?;
     let dir = safefs::open_dir(root, Path::new(POLICY_DIR), true)?;
     safefs::write_at(&dir, POLICY_FILE, text.as_bytes(), 0o644)
         .with_context(|| format!("write /{POLICY_DIR}/{POLICY_FILE}"))?;
@@ -195,6 +206,7 @@ mod tests {
             quiet: &std::sync::atomic::AtomicBool::new(false),
             device: None,
             ident: &crate::system::tests::test_ident(),
+            manifest: None,
         };
         let p = paths(root);
         let r = FakeRunner::new();

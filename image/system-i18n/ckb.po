@@ -37,3 +37,9 @@ msgstr "ماوەی %s ڕۆژە پشتڕاست نەکراوەتەوە کە ڕێک
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT زانیاریی دەستنیشانکردن لەم کۆمپیوتەرە کۆدەکاتەوە."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "کەسێک هێشتا لەسەر ئەم ئامێرە چووەتە ژوورەوە. دەبێت سەرەتا بچێتە دەرەوە، یان ئامێرەکە دووبارە بکەرەوە."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "ئەم ئامێرە نەیتوانی دانیشتنەکەت ئامادە بکات. تۆزێکی تر دووبارە هەوڵ بدەرەوە، یان ئامێرەکە دووبارە پێبکەرەوە."

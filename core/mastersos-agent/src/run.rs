@@ -215,6 +215,8 @@ async fn run_resident(
         PushSource::Events(rx) => agent.push_rx = Some(rx),
         PushSource::Spawn => agent.plan_push(&shutdown),
     }
+    // Boot is neutral (spec §4.8): unless a session is open while the agent restarts
+    agent.boot_neutral().await;
     // agent 没在跑时登录的人（记号留在队列里）：照样拉取之后跑
     agent.take_logins();
     // 后台任务的第一轮就看得到本地包选中的分组（Flatpak 对账）
@@ -245,6 +247,15 @@ async fn run_resident(
         agent.job_wake.clone(),
     );
     agent.side_changed = Some(spawned.changed.clone());
+    // Lifts after a login and reverts to neutral after a logout (also a session left over from before a restart).
+    tokio::spawn(crate::user_layer::session::monitor(
+        sys_paths(&agent.cfg),
+        agent.runner.clone(),
+        agent.side.clone(),
+        spawned.changed.clone(),
+        agent.session_kick.clone(),
+        shutdown.clone(),
+    ));
     // Spawned after the jobs: it reports a failing `loginctl` among their results.
     tokio::spawn(crate::quiet::monitor(
         Arc::new(RealRunner),
@@ -445,6 +456,8 @@ pub async fn apply_local_with(
         );
     }
     agent.save();
+    // After the boot apply rendered neutral, before GDM: the files the last session switched in survived the reboot.
+    agent.boot_neutral().await;
     // Before GDM starts: the login screen says why there is no network, no settings or no browser yet.
     let (paths, has_bundle, fetch_error) = (
         sys_paths(&agent.cfg),
@@ -500,6 +513,8 @@ struct Login {
     queue: PathBuf,
     /// 导出的 login 脚本（`<root>/var/lib/mastersos-public/login-scripts`）。
     export: PathBuf,
+    /// The session's login scripts under the user layer (`<root>/var/lib/mastersos-public/session/login-scripts`).
+    session_export: PathBuf,
     /// 最近登录记录（`<root>/var/lib/mastersos-system/homes/last-login.json`，Task 19）。
     last_login: PathBuf,
     runner: Arc<dyn Runner>,
@@ -537,6 +552,9 @@ struct Agent {
     worker: Option<ApplyHandle>,
     /// 上一轮应用有失败项（被 SIGUSR1 叫醒时立即重应用）。
     last_had_failures: bool,
+    /// Wakes the user layer's session monitor ([`crate::user_layer::session::monitor`]) after the login queue was
+    /// taken: lift after a login, revert after a logout.
+    session_kick: Arc<Notify>,
     /// 后台任务的结果，回报时追加在应用结果之后。
     side: SideResults,
     /// 叫醒后台任务（主循环被叫醒时 `notify_waiters`）。
@@ -766,6 +784,7 @@ impl Agent {
             results: vec![],
             worker,
             last_had_failures: false,
+            session_kick: Arc::new(Notify::new()),
             side: Arc::new(Mutex::new(Default::default())),
             job_wake: Arc::new(Notify::new()),
             identity,
@@ -800,6 +819,7 @@ impl Agent {
             login: Login {
                 queue: cfg_root_join(&cfg_root, login_queue::QUEUE_DIR),
                 export: cfg_root_join(&cfg_root, login_queue::EXPORT_DIR),
+                session_export: cfg_root_join(&cfg_root, login_queue::SESSION_EXPORT_DIR),
                 last_login: cfg_root_join(&cfg_root, crate::homes::LAST_LOGIN),
                 runner: Arc::new(RealRunner),
                 pending: BTreeSet::new(),
@@ -891,6 +911,7 @@ impl Agent {
                 group: sel.group.clone(),
                 config: sel.config,
                 escrow_recipients: m.school.escrow_recipients.clone(),
+                user_layer: m.user_layer.is_some(),
             })
         });
         self.current.send_if_modified(|cur| {
@@ -911,6 +932,29 @@ impl Agent {
         self.save();
         if let Some(w) = &self.worker {
             w.gc(&self.cfg.state_dir);
+        }
+    }
+
+    /// Under a format 3 bundle with no session open: switch the user layer to neutral
+    /// ([`crate::user_layer::session::boot_neutral`]). Failures are logged.
+    async fn boot_neutral(&self) {
+        if !self
+            .bundle
+            .as_ref()
+            .is_some_and(|b| b.manifest.user_layer.is_some())
+        {
+            return;
+        }
+        let (paths, runner) = (sys_paths(&self.cfg), self.runner.clone());
+        match tokio::task::spawn_blocking(move || {
+            crate::user_layer::session::boot_neutral(&paths, runner.as_ref())
+        })
+        .await
+        {
+            Ok(Ok(true)) => log::info!("user layer: switched to neutral"),
+            Ok(Ok(false)) => {}
+            Ok(Err(e)) => log::warn!("user layer: switching to neutral at start: {e:#}"),
+            Err(e) => log::warn!("user layer: switching to neutral at start: {e}"),
         }
     }
 
@@ -968,6 +1012,8 @@ impl Agent {
         // 这个人刚登录过。一个小 JSON 文件，同步写；失败只记日志，不影响登录
         let uids =
             crate::homes::drain_and_record(&self.login.queue, &self.login.last_login, Utc::now());
+        // The user layer after every wake-up, also a logout's (its queue is empty): lift, or revert to neutral
+        self.session_kick.notify_one();
         if uids.is_empty() {
             return;
         }
@@ -1042,27 +1088,41 @@ impl Agent {
             .collect();
         for uid in ready {
             self.login.pending.remove(&uid);
-            let (export, runner, config) = (
+            let (export, session_export, runner, config) = (
                 self.login.export.clone(),
+                self.login.session_export.clone(),
                 self.login.runner.clone(),
                 config.clone(),
             );
             let hashes = login_queue::hashes_of(&self.state.login_script_hashes, uid);
             let h = self.login.tasks.spawn_blocking(move || {
-                login_queue::run_batch(uid, &config, &export, hashes, runner.as_ref())
+                login_queue::run_batch(
+                    uid,
+                    &config,
+                    &export,
+                    &session_export,
+                    hashes,
+                    runner.as_ref(),
+                )
             });
             self.login.running.insert(h.id(), uid);
         }
     }
 
-    /// The Config the current bundle picks for this machine (None without a bundle).
+    /// The Config the current bundle picks for this machine (None without a bundle). Under the user layer (format 3)
+    /// its login scripts are those of every user config reachable on this Device, so that the recorded hashes and
+    /// results of the session's scripts are kept.
     fn login_config(&self) -> Option<mastersos_bundle::Config> {
         let b = self.bundle.as_deref()?;
-        Some(
-            select(&b.manifest, &self.machine.ident, self.seed.group.as_deref())
-                .config
-                .clone(),
-        )
+        let sel = select(&b.manifest, &self.machine.ident, self.seed.group.as_deref());
+        let mut config = sel.config.clone();
+        if b.manifest.user_layer.is_some() {
+            config.scripts.extend(login_queue::user_layer_login_scripts(
+                &b.manifest,
+                &sel.group.id,
+            ));
+        }
+        Some(config)
     }
 
     /// 一个人的 login 脚本跑完：按 uid 合并哈希、记结果、去掉清单里已没有的脚本的哈希、保存；再看还有没有等着的人。
@@ -1118,6 +1178,7 @@ impl Agent {
                 quiet: &AtomicBool::new(false),
                 device: sel.device,
                 ident: &ident,
+                manifest: Some(m),
             })
         })
         .await
@@ -1418,6 +1479,7 @@ impl Agent {
         // read for every report: update-run writes it whenever a round installs a newer version
         r.os_pending_version = report::os_pending_version(&self.cfg.root, r.os_version.as_deref());
         r.quiet_since = self.quiet.borrow().map(|t| t.to_rfc3339());
+        r.user_config = report::active_user_config(&self.cfg.root);
         r
     }
 

@@ -37,3 +37,9 @@ msgstr "უკვე %s დღეა არ დადასტურებულ
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT განყოფილება ამ კომპიუტერიდან დიაგნოსტიკურ ინფორმაციას აგროვებს."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "ამ მოწყობილობაზე ვინმე ჯერ კიდევ შესულია. მან ჯერ უნდა გამოვიდეს, ან გადატვირთეთ მოწყობილობა."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "ამ მოწყობილობამ ვერ მოამზადა თქვენი სესია. ცოტა ხანში ისევ სცადეთ, ან გადატვირთეთ მოწყობილობა."

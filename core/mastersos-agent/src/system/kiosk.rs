@@ -141,8 +141,10 @@ pub const DEB_NOT_READY_EXEC: &str = "/usr/bin/false";
 pub fn deb_kiosk_apps(
     config: &Config,
     public: &BTreeMap<String, PublicApp>,
+    user_layer: bool,
 ) -> BTreeMap<String, KioskApp> {
-    if !desktop::profile(config).flatpaks {
+    // format 3 (`user_layer`) has these apps in every mode (user layer design §4.6)
+    if !user_layer && !desktop::profile(config).flatpaks {
         return BTreeMap::new();
     }
     config
@@ -184,7 +186,11 @@ pub fn deb_kiosk_apps(
 /// still says ready until the next round, and the login screen must not offer a session that ends at once. So does one
 /// whose program is not a regular file owned by the owner of the system root (root on a device) or is writable by its
 /// group or others: the session would run whatever someone put there.
-fn wanted_apps(config: &Config, paths: &super::SysPaths) -> BTreeMap<String, KioskApp> {
+fn wanted_apps(
+    config: &Config,
+    paths: &super::SysPaths,
+    user_layer: bool,
+) -> BTreeMap<String, KioskApp> {
     let mut public =
         deb_apps::status::read_public(&paths.public_dir.join(deb_apps::status::PUBLIC_NAME));
     for p in public.values_mut() {
@@ -197,7 +203,7 @@ fn wanted_apps(config: &Config, paths: &super::SysPaths) -> BTreeMap<String, Kio
         }
     }
     let mut apps = config.apps.kiosk.clone();
-    apps.extend(deb_kiosk_apps(config, &public));
+    apps.extend(deb_kiosk_apps(config, &public, user_layer));
     apps
 }
 
@@ -406,7 +412,7 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
         Ok(b) => b,
         Err(e) => return vec![failed(ITEM, format!("open /{PUBLIC_DIR}: {e:#}"))],
     };
-    let apps = &wanted_apps(ctx.config, env.paths);
+    let apps = &wanted_apps(ctx.config, env.paths, ctx.user_layer().is_some());
     let mut icon_failed = std::mem::take(&mut env.sys.kiosk_icon_failures);
     let mut round = Round {
         base,

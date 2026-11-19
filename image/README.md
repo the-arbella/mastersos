@@ -457,6 +457,10 @@ ssh mastersos@198.51.100.21 'cd ~/mastersos-image && ./build.sh 20261012.1 --pro
   退回去的旧 agent 拒收 `format = 2` 的包、记下它的 sha256：B 期镜像还没应用过 `format = 2` 的包时，机器留在原来的设置上；
   已经应用过的，旧 agent 手上没有能用的包，按种子的默认值运行，直到再升级。之后机器再升到 B 期镜像时**不用管**：拒收记录
   带着记下它的 agent 构建，B 期 agent 不认旧构建记的拒收，会自己重新验这份包并应用（终审 I1）；同一个 agent 构建拒收的坏包仍不重试。
+- **The same holds for `format = 3` (user configs, design `docs/specs/2026-11-19-user-layer-design.md`)**: an OS older than the
+  user layer (its agent applies at most `format = 2`) refuses `format = 3` bundles, whether it is rolled back to by hand or by
+  the automatic boot-count fallback. As above: a Device that had not applied a `format = 3` bundle yet stays on its settings;
+  one that had has no usable bundle for the older agent and runs on the seed defaults until it runs a user-layer OS again.
 - Logo 改成两份 PNG（设计 §14.1）之前的 B 期 agent（9895f79）不认 `[school] logo_icon_sha256`，把带它的包当未知字段拒收；那一版镜像没有进 beta，
   进 beta 的镜像要含这次改动。
 - **当前设置包读不出来时，IT 维修账号登不进去**：开机复验 `current.bundle` 失败、手上没有能用的设置包的机器按种子的默认值

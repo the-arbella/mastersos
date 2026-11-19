@@ -1453,6 +1453,7 @@ mod tests {
             quiet: &std::sync::atomic::AtomicBool::new(false),
             device: None,
             ident: &crate::system::tests::test_ident(),
+            manifest: None,
         })
     }
 

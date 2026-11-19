@@ -65,8 +65,17 @@ notify() {
 }
 
 # Locked unless the file is missing or reads `full` (whitespace trimmed, any case): the one rule every reader of session-mode uses
+# Settings format 3 (user layer): with the `session` link, its session-mode applies only when session/uid is this user's
+# uid; anything else is locked. "$public/session-mode" is read only without the link (format 1/2).
 mode=
-if [ -e "$public/session-mode" ]; then
+if [ -L "$public/session" ] || [ -e "$public/session" ]; then
+	mode=learning
+	owner=$(cat "$public/session/uid" 2>/dev/null) || owner=
+	if [ -n "$owner" ] && [ "$owner" = "$UID" ] && [ -e "$public/session/session-mode" ]; then
+		mode=$(tr -d '[:space:]' <"$public/session/session-mode" | tr '[:upper:]' '[:lower:]') || mode=learning
+		[ -n "$mode" ] || mode=learning
+	fi
+elif [ -e "$public/session-mode" ]; then
 	mode=$(tr -d '[:space:]' <"$public/session-mode" | tr '[:upper:]' '[:lower:]') || mode=learning
 	[ -n "$mode" ] || mode=learning
 fi

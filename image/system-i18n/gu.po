@@ -37,3 +37,9 @@ msgstr "%s દિવસથી સેટિંગ્સ અપ ટુ ડેટ �
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT આ કમ્પ્યુટરમાંથી નિદાન માહિતી એકત્ર કરી રહ્યું છે."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "કોઈ હજી પણ આ ઉપકરણ પર સાઇન ઇન છે. તેમણે પહેલા સાઇન આઉટ કરવું પડશે, અથવા ઉપકરણને રીસ્ટાર્ટ કરો."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "આ ઉપકરણ તમારું સત્ર તૈયાર કરી શક્યું નથી. થોડી વાર પછી ફરી પ્રયાસ કરો, અથવા ઉપકરણને રીસ્ટાર્ટ કરો."

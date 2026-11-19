@@ -30,6 +30,8 @@ const MAX_RESULTS: usize = 200;
 /// `kiosk_device_attributes`, `kiosk_managed_config`: the platform extension's `managed.js` answers the Device Attributes
 /// API and `getManagedConfiguration` (design docs/specs/2026-11-10-kiosk-managed-apis-design.md).
 /// `oidc_idp_hint`: the `login` step hands `[school.oidc] idp_hint` to the sign-in card (`login-browser/card.json`).
+/// `format_3`: the agent applies the device layer and the user layer of `format = 3` (docs/specs/2026-11-19-user-layer-design.md).
+/// `oidc_mastersos_claims`: `mastersos_claims = true` in `[school.oidc]` (the MastersOS issuer profile, same design §5); the login step reads it.
 /// `oidc_card_navigation`: the `login` step writes an open or a listed card policy, and `signin-import` hands over what
 /// that card could reach.
 pub const SUPPORTED_FEATURES: &[&str] = &[
@@ -51,6 +53,8 @@ pub const SUPPORTED_FEATURES: &[&str] = &[
     mastersos_bundle::FEATURE_KIOSK_DEVICE_ATTRIBUTES,
     mastersos_bundle::FEATURE_KIOSK_MANAGED_CONFIG,
     mastersos_bundle::FEATURE_OIDC_CARD_NAVIGATION,
+    mastersos_bundle::FEATURE_FORMAT_3,
+    mastersos_bundle::FEATURE_OIDC_MASTERSOS_CLAIMS,
 ];
 
 /// 机器的硬件与系统身份。
@@ -173,6 +177,7 @@ pub fn build(
         manifest_features: SUPPORTED_FEATURES.iter().map(|f| (*f).to_owned()).collect(),
         os_pending_version: None,
         quiet_since: None,
+        user_config: None,
     }
 }
 
@@ -214,6 +219,15 @@ pub fn os_pending_version(root: &std::path::Path, os_version: Option<&str>) -> O
     let text = std::str::from_utf8(&b).ok()?;
     let v = text.strip_suffix('\n').unwrap_or(text);
     (release_version(v)? > running).then(|| v.to_owned())
+}
+
+/// The user config id of the open signed-in session (`StatusReport::user_config`), from the
+/// user layer's marker under `root`. None without a marker, with an unreadable one, or while the
+/// session is closing. It is only the config id, never facts or names (user layer design §4.10).
+pub fn active_user_config(root: &std::path::Path) -> Option<String> {
+    crate::user_layer::read_active(root)
+        .filter(|a| a.state == crate::user_layer::ActiveState::Open)
+        .map(|a| a.user_config)
 }
 
 /// The latest report built, in the state directory (0600): help requests carry it in their
@@ -378,7 +392,9 @@ mod tests {
                 "device_annotations",
                 "kiosk_device_attributes",
                 "kiosk_managed_config",
-                "oidc_card_navigation"
+                "oidc_card_navigation",
+                "format_3",
+                "oidc_mastersos_claims"
             ]
         );
         assert_eq!(r.manifest_features, SUPPORTED_FEATURES);
@@ -403,6 +419,8 @@ mod tests {
             mastersos_bundle::FEATURE_KIOSK_DEVICE_ATTRIBUTES,
             mastersos_bundle::FEATURE_KIOSK_MANAGED_CONFIG,
             mastersos_bundle::FEATURE_OIDC_CARD_NAVIGATION,
+            mastersos_bundle::FEATURE_FORMAT_3,
+            mastersos_bundle::FEATURE_OIDC_MASTERSOS_CLAIMS,
         ];
         assert!(SUPPORTED_FEATURES.iter().all(|f| all.contains(f)));
     }
@@ -433,12 +451,59 @@ mod tests {
 
     /// Defaults and IT account design §15: this agent reads every `format = 2` construct.
     #[test]
-    fn supported_features_include_format_2() {
-        // Plan B (user layer) adds FEATURE_FORMAT_3 once the agent applies user configs.
-        assert!(
-            SUPPORTED_FEATURES.contains(&mastersos_bundle::FEATURE_FORMAT_2)
-                && !SUPPORTED_FEATURES.contains(&mastersos_bundle::FEATURE_FORMAT_3)
+    fn supported_features_include_format3() {
+        assert!(SUPPORTED_FEATURES.contains(&mastersos_bundle::FEATURE_FORMAT_2));
+        assert!(SUPPORTED_FEATURES.contains(&mastersos_bundle::FEATURE_FORMAT_3));
+        assert!(SUPPORTED_FEATURES.contains(&mastersos_bundle::FEATURE_OIDC_MASTERSOS_CLAIMS));
+        assert_eq!(
+            mastersos_bundle::format_feature(mastersos_bundle::MAX_FORMAT),
+            mastersos_bundle::FEATURE_FORMAT_3
         );
+    }
+
+    fn marker(state: crate::user_layer::ActiveState) -> crate::user_layer::Active {
+        crate::user_layer::Active {
+            uid: 1001,
+            user: "alice".into(),
+            user_config: "grade-7".into(),
+            dir: crate::user_layer::config_dir_name("grade-7"),
+            caps: mastersos_bundle::Caps::new(),
+            state,
+            reason: None,
+            opened_at: 0,
+            seen: false,
+            held: false,
+        }
+    }
+
+    #[test]
+    fn report_carries_active_user_config() {
+        let d = tempfile::tempdir().unwrap();
+        crate::user_layer::switch::write_active(
+            d.path(),
+            &marker(crate::user_layer::ActiveState::Open),
+        )
+        .unwrap();
+        assert_eq!(active_user_config(d.path()).as_deref(), Some("grade-7"));
+        // A closing session no longer has a config to report.
+        crate::user_layer::switch::write_active(
+            d.path(),
+            &marker(crate::user_layer::ActiveState::Closing),
+        )
+        .unwrap();
+        assert_eq!(active_user_config(d.path()), None);
+    }
+
+    #[test]
+    fn report_has_no_user_config_without_session() {
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(active_user_config(d.path()), None);
+        let now = Utc::now();
+        let r = build(&machine(), &placement(), &fetched(now), vec![], now);
+        assert_eq!(r.user_config, None);
+        // The field is absent from the JSON, so a report without a session is as before.
+        let v = serde_json::to_value(&r).unwrap();
+        assert!(v.get("user_config").is_none(), "{v}");
     }
 
     #[test]

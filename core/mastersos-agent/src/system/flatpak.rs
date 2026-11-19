@@ -222,8 +222,9 @@ pub fn reconcile(
         return (vec![], false);
     };
     let _g = FLATPAK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    // Whether this mode installs the Config's Flatpaks (config profiles design §4.4)
-    let install_mode = super::desktop::profile(&cur.config).flatpaks;
+    // Whether this mode installs the Config's Flatpaks (config profiles design §4.4); format 3 always installs the
+    // union of the user configs' apps (user layer design §4.6)
+    let install_mode = cur.user_layer || super::desktop::profile(&cur.config).flatpaks;
     let mut out = Vec::new();
     let mut wanted: Vec<String> = Vec::new();
     for id in &cur.config.apps.flatpak {

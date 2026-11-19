@@ -1,0 +1,1085 @@
+use super::*;
+use crate::runner::Output;
+use crate::system::exec_block::tests::MountSim;
+use crate::system::exec_block::{self, read_lifted};
+use crate::user_layer::render::{Index, STATE_SUB};
+use crate::user_layer::switch::tests::{assert_switched_to, rendered, session_uid};
+use crate::user_layer::switch::{switch_to, write_active};
+use crate::user_layer::{config_dir_name, read_active, ACTIVE_FILE, RUN_DIR};
+use mastersos_bundle::Capability;
+use std::fs;
+use std::time::{Duration, UNIX_EPOCH};
+
+const UID: u32 = 2001;
+const LIST: &str = "loginctl --json=short list-sessions";
+const T0: u64 = 1_800_000_000;
+
+/// A rendered root (nobody signed in: neutral, everything blocked) and a runner that simulates the bind mounts.
+fn setup() -> (tempfile::TempDir, SysPaths, Index, MountSim) {
+    let (root, p, index) = rendered();
+    let r = MountSim::new(root.path());
+    (root, p, index, r)
+}
+
+fn at(secs: u64) -> SystemTime {
+    UNIX_EPOCH + Duration::from_secs(secs)
+}
+
+/// What `pam-session` leaves after switching `UID` to the teacher config at `T0`: the switched files and the marker.
+fn signed_in(p: &SysPaths, index: &Index, state: ActiveState, seen: bool) -> Active {
+    let r = &index.configs["teacher"];
+    switch_to(&p.root, &p.public_dir, &p.var_dir, r, Some(UID)).unwrap();
+    let a = Active {
+        uid: UID,
+        user: "t1@school.ac.th".into(),
+        user_config: "teacher".into(),
+        dir: config_dir_name("teacher"),
+        caps: r.caps.clone(),
+        state,
+        reason: None,
+        opened_at: T0,
+        seen,
+        held: false,
+    };
+    write_active(&p.root, &a).unwrap();
+    a
+}
+
+/// One `loginctl --json=short list-sessions` row; `state: None` is the systemd 259 shape.
+fn row(id: &str, uid: u32, seat: Option<&str>, class: &str, state: Option<&str>) -> String {
+    let mut s = format!(
+        r#"{{"session":"{id}","uid":{uid},"user":"u{uid}","seat":{},"leader":1234,"class":"{class}","tty":null"#,
+        seat.map_or("null".to_string(), |s| format!("\"{s}\""))
+    );
+    if let Some(st) = state {
+        s.push_str(&format!(r#","state":"{st}""#));
+    }
+    s.push('}');
+    s
+}
+
+fn list(r: &MountSim, rows: &[String]) {
+    r.fake
+        .respond(LIST, Output::ok(&format!("[{}]\n", rows.join(","))));
+}
+
+fn greeter() -> String {
+    row("c1", 60578, Some("seat0"), "greeter", Some("active"))
+}
+
+fn lifted(p: &SysPaths) -> Caps {
+    read_lifted(p).unwrap().expect("exec-block state")
+}
+
+fn revert_cmds(calls: &[String]) -> Vec<String> {
+    calls
+        .iter()
+        .filter(|c| c.starts_with("loginctl disable-linger") || c.starts_with("systemctl"))
+        .cloned()
+        .collect()
+}
+
+fn expected_revert_cmds() -> Vec<String> {
+    vec![
+        format!("loginctl disable-linger {UID}"),
+        format!("systemctl stop user@{UID}.service"),
+    ]
+}
+
+/// The session is back to neutral: neutral's files, nobody's uid, everything blocked.
+fn assert_neutral(p: &SysPaths) {
+    assert_switched_to(p, NEUTRAL_DIR);
+    assert_eq!(session_uid(p), None);
+    assert_eq!(lifted(p), Caps::new());
+}
+
+#[test]
+fn lift_follows_active_caps() {
+    let (_root, p, index, r) = setup();
+    // No marker: nothing is lifted or run
+    after_login(&p, &r).unwrap();
+    assert!(r.calls().is_empty(), "{:?}", r.calls());
+    assert_eq!(read_lifted(&p).unwrap(), Some(Caps::new()));
+    // An open teacher session gets the teacher's capabilities
+    let a = signed_in(&p, &index, ActiveState::Open, false);
+    assert!(a.caps.contains(&Capability::Terminal), "{:?}", a.caps);
+    after_login(&p, &r).unwrap();
+    assert_eq!(lifted(&p), a.caps);
+    // A closing one is not lifted again
+    exec_block::apply_lifted(&p, &r, &Caps::new()).unwrap();
+    let mut closing = a.clone();
+    closing.state = ActiveState::Closing;
+    write_active(&p.root, &closing).unwrap();
+    after_login(&p, &r).unwrap();
+    assert_eq!(lifted(&p), Caps::new());
+}
+
+/// A held session (its user config was removed mid-session) gets nothing lifted until its next login.
+#[test]
+fn held_session_lifts_nothing() {
+    let (_root, p, index, r) = setup();
+    let mut a = signed_in(&p, &index, ActiveState::Open, true);
+    a.held = true;
+    write_active(&p.root, &a).unwrap();
+    assert!(!a.caps.is_empty());
+    after_login(&p, &r).unwrap();
+    assert_eq!(lifted(&p), Caps::new());
+}
+
+#[test]
+fn no_marker_is_idle_and_runs_nothing() {
+    let (_root, p, _index, r) = setup();
+    assert_eq!(watch_at(&p, &r, at(T0)).unwrap(), WatchOutcome::Idle);
+    assert!(r.calls().is_empty(), "{:?}", r.calls());
+    assert!(!p.root.join(RUN_DIR).join(ACTIVE_FILE).exists());
+}
+
+#[test]
+fn revert_on_closing() {
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Closing, false);
+    after_login(&p, &r).unwrap();
+    exec_block::apply_lifted(&p, &r, &a.caps).unwrap();
+    // The closed session is gone from logind (or still closing)
+    list(
+        &r,
+        &[
+            greeter(),
+            row("3", UID, Some("seat0"), "user", Some("closing")),
+        ],
+    );
+    assert_eq!(
+        watch_at(&p, &r, at(T0 + 1)).unwrap(),
+        WatchOutcome::Reverted {
+            user_config: "teacher".into()
+        }
+    );
+    assert_neutral(&p);
+    assert!(read_active(&p.root).is_none());
+    assert!(!p.root.join(RUN_DIR).join(ACTIVE_FILE).exists());
+    assert_eq!(revert_cmds(&r.calls()), expected_revert_cmds());
+    // Nothing left to do
+    assert_eq!(watch_at(&p, &r, at(T0 + 6)).unwrap(), WatchOutcome::Idle);
+}
+
+#[test]
+fn revert_when_logind_has_no_session() {
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Open, true);
+    exec_block::apply_lifted(&p, &r, &a.caps).unwrap();
+    // Only the greeter, another person's session and this uid's closing session and user manager
+    list(
+        &r,
+        &[
+            greeter(),
+            row("3", UID, Some("seat0"), "user", Some("closing")),
+            row("4", UID, None, "manager", Some("active")),
+            row("9", 3003, None, "user", Some("active")),
+        ],
+    );
+    assert_eq!(
+        watch_at(&p, &r, at(T0 + 5)).unwrap(),
+        WatchOutcome::Reverted {
+            user_config: "teacher".into()
+        }
+    );
+    assert_neutral(&p);
+    assert!(read_active(&p.root).is_none());
+    assert_eq!(revert_cmds(&r.calls()), expected_revert_cmds());
+}
+
+/// R9: pam-session runs before pam_systemd, so a just-opened session is not in logind yet.
+#[test]
+fn just_opened_marker_is_not_reverted() {
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Open, false);
+    exec_block::apply_lifted(&p, &r, &a.caps).unwrap();
+    for secs in [0, 1, 59] {
+        list(&r, &[greeter()]);
+        assert_eq!(
+            watch_at(&p, &r, at(T0 + secs)).unwrap(),
+            WatchOutcome::StillOpen,
+            "{secs}"
+        );
+    }
+    assert_eq!(read_active(&p.root), Some(a.clone()));
+    assert_switched_to(&p, &config_dir_name("teacher"));
+    assert_eq!(lifted(&p), a.caps);
+    assert!(revert_cmds(&r.calls()).is_empty(), "{:?}", r.calls());
+}
+
+/// R9: a login whose logind session never appeared is reverted once the grace is over.
+#[test]
+fn unseen_marker_reverted_after_grace() {
+    let (_root, p, index, r) = setup();
+    signed_in(&p, &index, ActiveState::Open, false);
+    list(&r, &[greeter()]);
+    assert_eq!(
+        watch_at(&p, &r, at(T0 + OPEN_GRACE.as_secs())).unwrap(),
+        WatchOutcome::Reverted {
+            user_config: "teacher".into()
+        }
+    );
+    assert_neutral(&p);
+    assert!(read_active(&p.root).is_none());
+}
+
+#[test]
+fn still_open_does_nothing() {
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Open, false);
+    exec_block::apply_lifted(&p, &r, &a.caps).unwrap();
+    // systemd 259: no state in the list, asked per session
+    list(&r, &[greeter(), row("5", UID, Some("seat0"), "user", None)]);
+    r.fake.respond(
+        "loginctl show-session 5 -p State --value",
+        Output::ok("active\n"),
+    );
+    // Long after the grace: the session is there, so it stays
+    assert_eq!(
+        watch_at(&p, &r, at(T0 + 3600)).unwrap(),
+        WatchOutcome::StillOpen
+    );
+    // Seen from now on
+    let mut want = a.clone();
+    want.seen = true;
+    assert_eq!(read_active(&p.root), Some(want.clone()));
+    assert_switched_to(&p, &config_dir_name("teacher"));
+    assert_eq!(lifted(&p), a.caps);
+    assert!(revert_cmds(&r.calls()).is_empty(), "{:?}", r.calls());
+    // A session with a state in the list (systemd 256)
+    list(
+        &r,
+        &[row("5", UID, Some("seat0"), "user-early", Some("online"))],
+    );
+    assert_eq!(
+        watch_at(&p, &r, at(T0 + 3605)).unwrap(),
+        WatchOutcome::StillOpen
+    );
+    assert_eq!(read_active(&p.root), Some(want));
+}
+
+/// Any step of the revert failing keeps the marker (logins stay refused); the tightening already done stays.
+#[test]
+fn revert_clears_marker_last() {
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Closing, true);
+    exec_block::apply_lifted(&p, &r, &a.caps).unwrap();
+    list(&r, &[greeter()]);
+    r.fail_on("systemctl stop");
+    let e = watch_at(&p, &r, at(T0 + 1)).unwrap_err();
+    assert!(format!("{e:#}").contains("user@"), "{e:#}");
+    assert_eq!(read_active(&p.root), Some(a.clone()));
+    assert_neutral(&p);
+    assert_eq!(revert_cmds(&r.calls()), expected_revert_cmds());
+    // Next round it works and the marker goes
+    let r2 = MountSim::new(&p.root);
+    list(&r2, &[greeter()]);
+    assert_eq!(
+        watch_at(&p, &r2, at(T0 + 6)).unwrap(),
+        WatchOutcome::Reverted {
+            user_config: "teacher".into()
+        }
+    );
+    assert!(read_active(&p.root).is_none());
+    // A failing disable-linger keeps it too; the user manager is still stopped
+    signed_in(&p, &index, ActiveState::Closing, true);
+    let r3 = MountSim::new(&p.root);
+    list(&r3, &[greeter()]);
+    r3.fail_on("loginctl disable-linger");
+    assert!(watch_at(&p, &r3, at(T0 + 11)).is_err());
+    assert!(read_active(&p.root).is_some());
+    assert_eq!(revert_cmds(&r3.calls()), expected_revert_cmds());
+    assert_neutral(&p);
+}
+
+/// A marker that cannot be read is never taken for "no session": reported, kept, nothing run.
+#[test]
+fn unreadable_marker_is_kept() {
+    let (_root, p, _index, r) = setup();
+    let f = p.root.join(RUN_DIR).join(ACTIVE_FILE);
+    fs::create_dir_all(f.parent().unwrap()).unwrap();
+    fs::write(&f, b"{not json").unwrap();
+    assert!(watch_at(&p, &r, at(T0)).is_err());
+    assert!(after_login(&p, &r).is_err());
+    assert_eq!(fs::read(&f).unwrap(), b"{not json");
+    assert!(r.calls().is_empty(), "{:?}", r.calls());
+}
+
+/// A failing or unreadable logind list is an error, not "no session".
+#[test]
+fn loginctl_failure_does_not_revert() {
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Open, true);
+    for out in [
+        Output::fail(1, "Failed to connect to bus"),
+        Output::ok("not json"),
+        Output::ok(&format!(
+            r#"[{{"session":"5","uid":{UID},"seat":"seat0"}}]"#
+        )),
+        // A user session without a uid
+        Output::ok(r#"[{"session":"5","class":"user","seat":"seat0","state":"active"}]"#),
+    ] {
+        r.fake.respond(LIST, out.clone());
+        assert!(watch_at(&p, &r, at(T0 + 3600)).is_err(), "{out:?}");
+        assert_eq!(read_active(&p.root), Some(a.clone()), "{out:?}");
+    }
+    assert!(revert_cmds(&r.calls()).is_empty(), "{:?}", r.calls());
+    assert_switched_to(&p, &config_dir_name("teacher"));
+}
+
+/// R26: a marker left behind when the settings went back to format 1/2 (whose apply removed the user layer's files and
+/// owns the exec-block mode again) is still cleared: the user manager is stopped and the marker removed, and the
+/// format 1/2 exec-block mode is left alone.
+#[test]
+fn stale_marker_after_format_change_is_cleared() {
+    let (_root, p, index, r) = setup();
+    signed_in(&p, &index, ActiveState::Closing, true);
+    fs::remove_dir_all(p.var_dir.join(STATE_SUB)).unwrap();
+    // The format 1/2 `desktop` step of a `full` Group
+    exec_block::apply(&p, &r, false).unwrap();
+    list(&r, &[greeter()]);
+    let mode_before = read_lifted(&p).unwrap();
+    assert_eq!(
+        watch_at(&p, &r, at(T0 + 1)).unwrap(),
+        WatchOutcome::Reverted {
+            user_config: "teacher".into()
+        }
+    );
+    assert!(read_active(&p.root).is_none());
+    assert_eq!(revert_cmds(&r.calls()), expected_revert_cmds());
+    assert_eq!(read_lifted(&p).unwrap(), mode_before);
+}
+
+/// Boot (spec §4.8): files switched in by the last session survive a reboot; without a marker the agent goes neutral.
+#[test]
+fn boot_without_marker_switches_to_neutral() {
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Open, true);
+    exec_block::apply_lifted(&p, &r, &a.caps).unwrap();
+    // `/run` is gone after the reboot
+    fs::remove_file(p.root.join(RUN_DIR).join(ACTIVE_FILE)).unwrap();
+    assert!(boot_neutral(&p, &r).unwrap());
+    assert_neutral(&p);
+}
+
+/// The agent restarting during a session (an update) does not touch it.
+#[test]
+fn boot_with_marker_keeps_the_session() {
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Open, true);
+    exec_block::apply_lifted(&p, &r, &a.caps).unwrap();
+    assert!(!boot_neutral(&p, &r).unwrap());
+    assert_switched_to(&p, &config_dir_name("teacher"));
+    assert_eq!(lifted(&p), a.caps);
+    assert_eq!(read_active(&p.root), Some(a));
+}
+
+/// R27: the same person still has a live session elsewhere (a tty login: pam-check lets the same uid in while the marker
+/// is open, and pam-session is only in the GDM stacks) when their GDM session closes. That session keeps its config and
+/// the marker becomes open (seen) again, so nobody else can sign in; it is reverted once logind shows none.
+#[test]
+fn closing_with_another_live_session_keeps_it() {
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Closing, false);
+    exec_block::apply_lifted(&p, &r, &a.caps).unwrap();
+    list(
+        &r,
+        &[
+            greeter(),
+            row("3", UID, Some("seat0"), "user", Some("closing")),
+            row("7", UID, None, "user", Some("active")),
+        ],
+    );
+    assert_eq!(
+        watch_at(&p, &r, at(T0 + 1)).unwrap(),
+        WatchOutcome::StillOpen
+    );
+    let mut want = a.clone();
+    want.state = ActiveState::Open;
+    want.seen = true;
+    assert_eq!(read_active(&p.root), Some(want));
+    assert_switched_to(&p, &config_dir_name("teacher"));
+    assert_eq!(lifted(&p), a.caps);
+    assert!(revert_cmds(&r.calls()).is_empty(), "{:?}", r.calls());
+    // A failing list keeps the closing marker as it is (fail closed); retried next round
+    write_active(&p.root, &a).unwrap();
+    r.fake
+        .respond(LIST, Output::fail(1, "Failed to connect to bus"));
+    assert!(watch_at(&p, &r, at(T0 + 6)).is_err());
+    assert_eq!(read_active(&p.root), Some(a.clone()));
+    assert!(revert_cmds(&r.calls()).is_empty(), "{:?}", r.calls());
+    // Once the other session is gone too: reverted
+    list(&r, &[greeter()]);
+    assert_eq!(
+        watch_at(&p, &r, at(T0 + 11)).unwrap(),
+        WatchOutcome::Reverted {
+            user_config: "teacher".into()
+        }
+    );
+    assert_neutral(&p);
+    assert!(read_active(&p.root).is_none());
+}
+
+/// After a login whose session logind already lists, the marker is seen at once (no 60 s window of refused logins
+/// should a close miss the lock); a failing list does not stop the lift.
+#[test]
+fn after_login_marks_a_listed_session_seen() {
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Open, false);
+    r.fake
+        .respond(LIST, Output::fail(1, "Failed to connect to bus"));
+    after_login(&p, &r).unwrap();
+    assert_eq!(lifted(&p), a.caps);
+    assert_eq!(read_active(&p.root), Some(a.clone()));
+    list(
+        &r,
+        &[
+            greeter(),
+            row("5", UID, Some("seat0"), "user", Some("active")),
+        ],
+    );
+    after_login(&p, &r).unwrap();
+    let mut want = a.clone();
+    want.seen = true;
+    assert_eq!(read_active(&p.root), Some(want));
+}
+
+/// A busy marker lock (a sign-in or sign-out changing the marker) is not a failure: nothing is done, next round retries.
+#[test]
+fn busy_lock_is_retried_not_failed() {
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Closing, true);
+    let held = switch::lock_active(&p.root, Duration::ZERO).unwrap();
+    list(&r, &[greeter()]);
+    assert_eq!(watch_at(&p, &r, at(T0 + 1)).unwrap(), WatchOutcome::Busy);
+    assert_eq!(read_active(&p.root), Some(a.clone()));
+    assert!(revert_cmds(&r.calls()).is_empty(), "{:?}", r.calls());
+    let mut open = a.clone();
+    open.state = ActiveState::Open;
+    write_active(&p.root, &open).unwrap();
+    let e = after_login(&p, &r).unwrap_err();
+    assert!(switch::is_lock_busy(&e), "{e:#}");
+    drop(held);
+    write_active(&p.root, &a).unwrap();
+    list(&r, &[greeter()]);
+    assert_eq!(
+        watch_at(&p, &r, at(T0 + 6)).unwrap(),
+        WatchOutcome::Reverted {
+            user_config: "teacher".into()
+        }
+    );
+}
+
+/// A runner for the monitor: the logind list is whatever `sessions` holds (every call), bind mounts are simulated and
+/// fail while `fail_mounts` is set.
+struct Sim {
+    mounts: MountSim,
+    sessions: std::sync::Mutex<String>,
+    fail_mounts: std::sync::atomic::AtomicBool,
+}
+
+impl Sim {
+    fn set_sessions(&self, rows: &[String]) {
+        *self.sessions.lock().unwrap() = format!("[{}]\n", rows.join(","));
+    }
+}
+
+impl Runner for Sim {
+    fn run(&self, cmd: &crate::runner::Cmd) -> Result<Output> {
+        let line = cmd.line();
+        if line.starts_with(LIST) {
+            return Ok(Output::ok(&self.sessions.lock().unwrap()));
+        }
+        if self.fail_mounts.load(std::sync::atomic::Ordering::SeqCst)
+            && line.contains("mount --bind")
+        {
+            return Ok(Output::fail(32, "mount: permission denied"));
+        }
+        self.mounts.run(cmd)
+    }
+}
+
+fn item_of(side: &SideResults, name: &str) -> Option<ItemResult> {
+    side.lock().unwrap().get(name).cloned()
+}
+
+/// Waits (wall clock, letting the monitor run) until `cond` holds.
+async fn eventually(what: &str, cond: impl Fn() -> bool) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while !cond() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for {what}"
+        );
+        tokio::task::yield_now().await;
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// Whether `changed` was notified since the last time it was taken.
+async fn notified(changed: &Notify) -> bool {
+    tokio::time::timeout(Duration::from_millis(1), changed.notified())
+        .await
+        .is_ok()
+}
+
+/// The monitor: a failed lift is reported and retried every round; the fallback reason is reported once lifted; a
+/// failed watch is reported and cleared once it works; both items go with the revert; `changed` only on a difference.
+#[tokio::test(start_paused = true)]
+async fn monitor_lifts_reports_and_reverts() {
+    let (_root, p, index, _) = setup();
+    let mut a = signed_in(&p, &index, ActiveState::Open, true);
+    a.reason = Some("the issuer handed over no facts".into());
+    // Only the terminal: the lift mounts the stub over the rest, which can fail
+    a.caps = [Capability::Terminal].into_iter().collect();
+    write_active(&p.root, &a).unwrap();
+    let sim = Arc::new(Sim {
+        mounts: MountSim::new(&p.root),
+        sessions: Default::default(),
+        fail_mounts: true.into(),
+    });
+    sim.set_sessions(&[
+        greeter(),
+        row("5", UID, Some("seat0"), "user", Some("active")),
+    ]);
+    let side: SideResults = Default::default();
+    let (changed, kick) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let shutdown = CancellationToken::new();
+    let task = tokio::spawn(monitor(
+        p.clone(),
+        sim.clone(),
+        side.clone(),
+        changed.clone(),
+        kick.clone(),
+        shutdown.clone(),
+    ));
+    // The lift fails: reported
+    eventually("the failed lift", || {
+        item_of(&side, SESSION_ITEM).is_some_and(|i| !i.ok)
+    })
+    .await;
+    assert!(notified(&changed).await);
+    assert_eq!(item_of(&side, REVERT_ITEM), None);
+    // Retried on the next round: lifted, the reason reported
+    sim.fail_mounts
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    tokio::time::sleep(crate::quiet::POLL + Duration::from_secs(1)).await;
+    eventually("the lift", || {
+        item_of(&side, SESSION_ITEM).is_some_and(|i| i.ok)
+    })
+    .await;
+    let it = item_of(&side, SESSION_ITEM).unwrap();
+    assert!(
+        it.detail
+            .as_deref()
+            .is_some_and(|d| d.contains("the issuer handed over no facts")),
+        "{it:?}"
+    );
+    assert_eq!(lifted(&p), a.caps);
+    assert!(notified(&changed).await);
+    // Rounds and kicks that change nothing do not notify
+    kick.notify_one();
+    tokio::time::sleep(crate::quiet::POLL * 3).await;
+    assert!(!notified(&changed).await);
+    assert_eq!(item_of(&side, SESSION_ITEM), Some(it));
+    // A watch that fails is reported ...
+    *sim.sessions.lock().unwrap() = "not json".into();
+    tokio::time::sleep(crate::quiet::POLL + Duration::from_secs(1)).await;
+    eventually("the failed watch", || {
+        item_of(&side, REVERT_ITEM).is_some_and(|i| !i.ok)
+    })
+    .await;
+    assert!(notified(&changed).await);
+    // ... and cleared with the revert once logind shows no session, together with the session's item
+    sim.set_sessions(&[greeter()]);
+    tokio::time::sleep(crate::quiet::POLL + Duration::from_secs(1)).await;
+    eventually("the revert", || read_active(&p.root).is_none()).await;
+    eventually("the items cleared", || {
+        item_of(&side, REVERT_ITEM).is_none() && item_of(&side, SESSION_ITEM).is_none()
+    })
+    .await;
+    assert!(notified(&changed).await);
+    assert_neutral(&p);
+    shutdown.cancel();
+    task.await.unwrap();
+}
+
+/// The format 1/2 cleanup was deferred for this session (R3): the revert removes this layer's files instead of switching
+/// to neutral, so the format 1/2 steps' Chrome policy is left as it is, and removes the marker.
+#[test]
+fn revert_with_deferred_cleanup_removes_the_layer() {
+    let (_root, p, index, r) = setup();
+    signed_in(&p, &index, ActiveState::Closing, true);
+    let var = p.var_dir.join(STATE_SUB);
+    defer_cleanup(&p);
+    let managed = p
+        .root
+        .join("etc/opt/chrome/policies/managed/mastersos.json");
+    let policy_before = fs::read(&managed).unwrap();
+    list(&r, &[greeter()]);
+    assert_eq!(
+        watch_at(&p, &r, at(T0 + 1)).unwrap(),
+        WatchOutcome::Reverted {
+            user_config: "teacher".into()
+        }
+    );
+    assert!(read_active(&p.root).is_none());
+    assert_eq!(revert_cmds(&r.calls()), expected_revert_cmds());
+    assert_eq!(fs::read(&managed).unwrap(), policy_before);
+    // the lifts are dropped (see deferred_revert_drops_the_lifts_and_follows_the_mode_word)
+    assert!(!lifted_file(&p).exists());
+    assert!(!var.exists());
+    assert!(!p.public_dir.join(STATE_SUB).exists());
+    assert!(fs::symlink_metadata(p.public_dir.join("session")).is_err());
+}
+
+/// Installs a login policy of settings format 3 (`user_layer`) or 1/2.
+fn install_policy(p: &SysPaths, user_layer: bool) {
+    let mut pol = crate::user_layer::switch::tests::policy();
+    pol.user_layer = user_layer;
+    let dir = p.var_dir.join("login");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("policy.json"), serde_json::to_vec(&pol).unwrap()).unwrap();
+}
+
+fn deferral(p: &SysPaths) -> std::path::PathBuf {
+    p.var_dir
+        .join(STATE_SUB)
+        .join(crate::user_layer::render::CLEANUP_DEFERRED_FILE)
+}
+
+/// What a format 1/2 apply leaves while a session is signed in (R3): its login policy and the cleanup's deferral.
+fn defer_cleanup(p: &SysPaths) {
+    install_policy(p, false);
+    fs::write(deferral(p), "").unwrap();
+}
+
+fn lifted_file(p: &SysPaths) -> std::path::PathBuf {
+    p.root
+        .join(exec_block::LOCK_DIR)
+        .join(exec_block::LIFTED_FILE)
+}
+
+/// The revert of a deferred cleanup forgets the session's lifts and converges to the mode word on disk: blocked
+/// (`browser`) mounts every stub again, open (`desktop`, a format 1/2 `full` Group) lifts everything.
+#[test]
+fn deferred_revert_drops_the_lifts_and_follows_the_mode_word() {
+    use crate::system::exec_block::tests::is_stub;
+    for open in [false, true] {
+        let (_root, p, index, r) = setup();
+        let a = signed_in(&p, &index, ActiveState::Closing, true);
+        exec_block::apply_lifted(&p, &r, &a.caps).unwrap();
+        assert!(a.caps.contains(&Capability::Terminal));
+        assert!(!is_stub(&p.root, "/usr/libexec/gnome-terminal-server"));
+        if open {
+            exec_block::write_mode(&p, false).unwrap();
+        }
+        defer_cleanup(&p);
+        list(&r, &[greeter()]);
+        assert!(matches!(
+            watch_at(&p, &r, at(T0 + 1)).unwrap(),
+            WatchOutcome::Reverted { .. }
+        ));
+        assert!(!lifted_file(&p).exists(), "open {open}");
+        assert_eq!(
+            is_stub(&p.root, "/usr/libexec/gnome-terminal-server"),
+            !open,
+            "open {open}"
+        );
+        assert_eq!(is_stub(&p.root, "/usr/bin/nautilus"), !open, "open {open}");
+    }
+}
+
+/// While the format 1/2 cleanup is deferred, a login's lift lifts nothing.
+#[test]
+fn after_login_with_deferred_cleanup_lifts_nothing() {
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Open, false);
+    assert!(!a.caps.is_empty());
+    defer_cleanup(&p);
+    list(&r, &[greeter()]);
+    after_login(&p, &r).unwrap();
+    assert_eq!(lifted(&p), Caps::new());
+}
+
+/// The deferred removal fails while the session link and the dconf profile are still there: the marker is kept (logins
+/// stay refused) and the failure is returned.
+#[test]
+fn deferred_revert_keeps_the_marker_when_the_removal_fails() {
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Closing, true);
+    defer_cleanup(&p);
+    // the profile cannot be removed (a directory where the file is)
+    let profile = p.root.join("etc/dconf/profile/user");
+    fs::remove_file(&profile).unwrap();
+    fs::create_dir_all(profile.join("x")).unwrap();
+    list(&r, &[greeter()]);
+    let e = watch_at(&p, &r, at(T0 + 1)).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("removing the user configs"),
+        "{e:#}"
+    );
+    assert_eq!(read_active(&p.root).unwrap(), a);
+    assert!(fs::symlink_metadata(p.public_dir.join("session")).is_ok());
+}
+
+/// [`MountSim`] that writes the cleanup's deferral when the logind list is asked for: after `after_login`'s first look
+/// at the deferral and before it takes the marker's lock.
+struct DeferOnList<'a> {
+    inner: &'a MountSim,
+    p: &'a SysPaths,
+}
+
+impl Runner for DeferOnList<'_> {
+    fn run(&self, cmd: &crate::runner::Cmd) -> Result<Output> {
+        if cmd.line().starts_with(LIST) {
+            fs::write(deferral(self.p), "").unwrap();
+        }
+        self.inner.run(cmd)
+    }
+}
+
+/// I1: the deferral is checked again under the marker's lock: a format 1/2 apply that deferred its cleanup after the
+/// lift's first look (here while the lift asks logind, before it takes the lock) leaves nothing lifted.
+#[test]
+fn after_login_rechecks_the_deferral_under_the_lock() {
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Open, false);
+    assert!(!a.caps.is_empty());
+    install_policy(&p, false);
+    list(&r, &[greeter()]);
+    assert!(!deferral(&p).exists());
+    after_login(&p, &DeferOnList { inner: &r, p: &p }).unwrap();
+    assert!(deferral(&p).exists());
+    assert_eq!(lifted(&p), Caps::new());
+}
+
+/// I2 (i): the deferred removal fails once the session link and the dconf profile are gone: the marker goes (the
+/// session is over and nothing reads the files), the failure is returned (reported), and the next round of the watch
+/// finishes the removal.
+#[test]
+fn deferred_revert_failure_without_session_files_is_reported_and_finished_later() {
+    let (_root, p, index, r) = setup();
+    signed_in(&p, &index, ActiveState::Closing, true);
+    defer_cleanup(&p);
+    // the public tree cannot be removed (a symlink where the directory is), the steps before it work
+    let public = p.public_dir.join(STATE_SUB);
+    let real = p.public_dir.join("user-layer-real");
+    fs::rename(&public, &real).unwrap();
+    std::os::unix::fs::symlink("user-layer-real", &public).unwrap();
+    list(&r, &[greeter()]);
+    let e = watch_at(&p, &r, at(T0 + 1)).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("removing the user configs"),
+        "{e:#}"
+    );
+    assert!(read_active(&p.root).is_none());
+    assert!(deferral(&p).exists());
+    // the next round: no marker, the deferral is finished
+    fs::remove_file(&public).unwrap();
+    assert_eq!(watch_at(&p, &r, at(T0 + 6)).unwrap(), WatchOutcome::Idle);
+    assert!(!p.var_dir.join(STATE_SUB).exists());
+}
+
+/// I2 (ii): a deferral with no marker (the apply found the lock busy and nobody signed in) is finished by the watch;
+/// a busy lock waits for the next round.
+#[test]
+fn watch_finishes_a_deferral_without_a_marker() {
+    let (_root, p, _index, r) = setup();
+    defer_cleanup(&p);
+    let held = lock_active(&p.root, Duration::ZERO).unwrap();
+    assert_eq!(watch_at(&p, &r, at(T0)).unwrap(), WatchOutcome::Busy);
+    assert!(p.var_dir.join(STATE_SUB).exists());
+    drop(held);
+    assert_eq!(watch_at(&p, &r, at(T0)).unwrap(), WatchOutcome::Idle);
+    assert!(!p.var_dir.join(STATE_SUB).exists());
+    assert!(fs::symlink_metadata(p.public_dir.join("session")).is_err());
+    assert!(!lifted_file(&p).exists());
+    // nothing left
+    assert_eq!(watch_at(&p, &r, at(T0)).unwrap(), WatchOutcome::Idle);
+}
+
+/// M3: the lifts cannot be dropped: nothing is removed, so the deferral (and its retry) stays; the failure is returned.
+#[test]
+fn failed_drop_of_the_lifts_keeps_the_deferral() {
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Closing, true);
+    exec_block::apply_lifted(&p, &r, &a.caps).unwrap();
+    defer_cleanup(&p);
+    r.fail_on("nsenter");
+    list(&r, &[greeter()]);
+    assert!(watch_at(&p, &r, at(T0 + 1)).is_err());
+    assert!(read_active(&p.root).is_some());
+    assert!(deferral(&p).exists());
+    assert!(p.var_dir.join(STATE_SUB).exists());
+    // without a marker (the watch's own retry) the same
+    fs::remove_file(p.root.join(RUN_DIR).join(ACTIVE_FILE)).unwrap();
+    assert!(watch_at(&p, &r, at(T0 + 6)).is_err());
+    assert!(deferral(&p).exists());
+    assert!(p.var_dir.join(STATE_SUB).exists());
+}
+
+/// M4: a deferral left behind under settings format 3 is stale: the revert deletes it and switches to neutral as usual,
+/// and the watch without a marker only deletes it; the format 3 state stays.
+#[test]
+fn stale_deferral_under_format3_is_dropped() {
+    let (_root, p, index, r) = setup();
+    signed_in(&p, &index, ActiveState::Closing, true);
+    defer_cleanup(&p);
+    install_policy(&p, true);
+    list(&r, &[greeter()]);
+    assert!(matches!(
+        watch_at(&p, &r, at(T0 + 1)).unwrap(),
+        WatchOutcome::Reverted { .. }
+    ));
+    assert_neutral(&p);
+    assert!(!deferral(&p).exists());
+    assert!(p.var_dir.join(STATE_SUB).join("index.json").exists());
+    fs::write(deferral(&p), "").unwrap();
+    assert_eq!(watch_at(&p, &r, at(T0 + 6)).unwrap(), WatchOutcome::Idle);
+    assert!(!deferral(&p).exists());
+    assert!(p.var_dir.join(STATE_SUB).join("index.json").exists());
+}
+
+/// A lift left while a format 1/2 apply deferred its cleanup for a session still signed in is dropped by the next
+/// round of the watch (the exec-block follows the mode word again); the session stays.
+#[test]
+fn watch_drops_a_stray_lift_while_the_cleanup_is_deferred() {
+    use crate::system::exec_block::tests::is_stub;
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Open, true);
+    exec_block::apply_lifted(&p, &r, &a.caps).unwrap();
+    assert!(!is_stub(&p.root, "/usr/libexec/gnome-terminal-server"));
+    defer_cleanup(&p);
+    list(
+        &r,
+        &[
+            greeter(),
+            row("3", UID, Some("seat0"), "user", Some("active")),
+        ],
+    );
+    assert_eq!(
+        watch_at(&p, &r, at(T0 + 1)).unwrap(),
+        WatchOutcome::StillOpen
+    );
+    assert!(!lifted_file(&p).exists());
+    assert!(is_stub(&p.root, "/usr/libexec/gnome-terminal-server"));
+    assert_eq!(read_active(&p.root).unwrap(), a);
+    assert!(deferral(&p).exists());
+}
+
+/// The stub cannot be mounted while a stray lift is dropped: the lift stays recorded and the watch fails (reported) every
+/// round until the mount works, then the lift is gone.
+#[test]
+fn a_failed_drop_of_a_stray_lift_is_retried_until_it_works() {
+    use crate::system::exec_block::tests::is_stub;
+    let (_root, p, index, _) = setup();
+    let sim = Sim {
+        mounts: MountSim::new(&p.root),
+        sessions: Default::default(),
+        fail_mounts: false.into(),
+    };
+    let a = signed_in(&p, &index, ActiveState::Open, true);
+    exec_block::apply_lifted(&p, &sim, &a.caps).unwrap();
+    defer_cleanup(&p);
+    sim.set_sessions(&[
+        greeter(),
+        row("3", UID, Some("seat0"), "user", Some("active")),
+    ]);
+    sim.fail_mounts
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    for round in 1..=2 {
+        let e = watch_at(&p, &sim, at(T0 + round)).unwrap_err();
+        assert!(
+            format!("{e:#}").contains("dropping a lift"),
+            "round {round}: {e:#}"
+        );
+        assert!(lifted_file(&p).exists(), "round {round}");
+    }
+    sim.fail_mounts
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(
+        watch_at(&p, &sim, at(T0 + 3)).unwrap(),
+        WatchOutcome::StillOpen
+    );
+    assert!(!lifted_file(&p).exists());
+    assert!(is_stub(&p.root, "/usr/libexec/gnome-terminal-server"));
+}
+
+/// A deferral with a login policy that cannot be read: nothing is done (fail closed), and the watch fails (reported)
+/// instead of looking idle.
+#[test]
+fn deferral_with_an_unreadable_policy_is_reported() {
+    let (_root, p, _index, r) = setup();
+    defer_cleanup(&p);
+    fs::write(p.var_dir.join("login/policy.json"), "not json").unwrap();
+    let e = watch_at(&p, &r, at(T0)).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("login policy cannot be read"),
+        "{e:#}"
+    );
+    assert!(p.var_dir.join(STATE_SUB).exists());
+    assert!(deferral(&p).exists());
+}
+
+/// A revert that removed the marker but could not finish the deferred cleanup: the revert item reports it and the
+/// session's item goes with the session.
+#[tokio::test(start_paused = true)]
+async fn monitor_settles_the_session_item_after_a_late_revert_error() {
+    let (_root, p, index, _) = setup();
+    let mut a = signed_in(&p, &index, ActiveState::Open, true);
+    a.reason = Some("the issuer handed over no facts".into());
+    write_active(&p.root, &a).unwrap();
+    let sim = Arc::new(Sim {
+        mounts: MountSim::new(&p.root),
+        sessions: Default::default(),
+        fail_mounts: false.into(),
+    });
+    sim.set_sessions(&[
+        greeter(),
+        row("5", UID, Some("seat0"), "user", Some("active")),
+    ]);
+    let side: SideResults = Default::default();
+    let (changed, kick) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let shutdown = CancellationToken::new();
+    let task = tokio::spawn(monitor(
+        p.clone(),
+        sim.clone(),
+        side.clone(),
+        changed.clone(),
+        kick.clone(),
+        shutdown.clone(),
+    ));
+    eventually("the fallback note", || {
+        item_of(&side, SESSION_ITEM).is_some_and(|i| i.ok)
+    })
+    .await;
+    // the format 1/2 apply deferred its cleanup; the public tree cannot be removed (a symlink where the directory is)
+    defer_cleanup(&p);
+    let public = p.public_dir.join(STATE_SUB);
+    fs::rename(&public, p.public_dir.join("user-layer-real")).unwrap();
+    std::os::unix::fs::symlink("user-layer-real", &public).unwrap();
+    sim.set_sessions(&[greeter()]);
+    tokio::time::sleep(crate::quiet::POLL + Duration::from_secs(1)).await;
+    eventually("the revert", || read_active(&p.root).is_none()).await;
+    eventually("the items settled", || {
+        item_of(&side, REVERT_ITEM).is_some_and(|i| !i.ok) && item_of(&side, SESSION_ITEM).is_none()
+    })
+    .await;
+    shutdown.cancel();
+    task.await.unwrap();
+}
+
+/// Every stub is mounted.
+fn all_blocked(p: &SysPaths) -> bool {
+    use crate::system::exec_block::tests::is_stub;
+    exec_block::TARGETS
+        .iter()
+        .filter(|t| p.root.join(t.trim_start_matches('/')).exists())
+        .all(|t| is_stub(&p.root, t))
+}
+
+/// A failing drop of a stray lift does not hold up the session's end: the revert's user teardown still runs this
+/// round, the marker stays (the lifts are not dropped), and the drop's failure is returned.
+#[test]
+fn a_failing_drop_still_tears_down_an_ended_session() {
+    let (_root, p, index, _) = setup();
+    let sim = Sim {
+        mounts: MountSim::new(&p.root),
+        sessions: Default::default(),
+        fail_mounts: false.into(),
+    };
+    let a = signed_in(&p, &index, ActiveState::Open, true);
+    exec_block::apply_lifted(&p, &sim, &a.caps).unwrap();
+    defer_cleanup(&p);
+    sim.set_sessions(&[greeter()]);
+    sim.fail_mounts
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let e = watch_at(&p, &sim, at(T0 + 1)).unwrap_err();
+    assert!(format!("{e:#}").contains("dropping a lift"), "{e:#}");
+    assert_eq!(revert_cmds(&sim.mounts.calls()), expected_revert_cmds());
+    assert!(read_active(&p.root).is_some());
+    assert!(lifted_file(&p).exists());
+}
+
+/// A deferral with a marker and a login policy that cannot be read, while the session goes on: reported, and the
+/// stray lift is dropped anyway (fail closed).
+#[test]
+fn unreadable_policy_with_a_session_drops_the_lifts_and_is_reported() {
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Open, true);
+    exec_block::apply_lifted(&p, &r, &a.caps).unwrap();
+    defer_cleanup(&p);
+    fs::write(p.var_dir.join("login/policy.json"), "not json").unwrap();
+    list(
+        &r,
+        &[
+            greeter(),
+            row("3", UID, Some("seat0"), "user", Some("active")),
+        ],
+    );
+    let e = watch_at(&p, &r, at(T0 + 1)).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("login policy cannot be read"),
+        "{e:#}"
+    );
+    assert!(!lifted_file(&p).exists());
+    assert!(all_blocked(&p));
+    assert!(read_active(&p.root).is_some());
+}
+
+/// The session ended with a deferral and a login policy that cannot be read: the user teardown runs, but neither neutral
+/// is switched in (it would overwrite the format 1/2 Chrome policy) nor are the files removed; the marker stays,
+/// the failure is returned, and the next round with a readable policy finishes the cleanup.
+#[test]
+fn unreadable_policy_at_the_revert_keeps_the_marker_and_the_files() {
+    let (_root, p, index, r) = setup();
+    signed_in(&p, &index, ActiveState::Closing, true);
+    defer_cleanup(&p);
+    let managed = p
+        .root
+        .join("etc/opt/chrome/policies/managed/mastersos.json");
+    let policy_before = fs::read(&managed).unwrap();
+    let link_before = fs::read_link(p.public_dir.join("session")).unwrap();
+    fs::write(p.var_dir.join("login/policy.json"), "not json").unwrap();
+    list(&r, &[greeter()]);
+    let e = watch_at(&p, &r, at(T0 + 1)).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("login policy cannot be read"),
+        "{e:#}"
+    );
+    assert_eq!(revert_cmds(&r.calls()), expected_revert_cmds());
+    assert!(read_active(&p.root).is_some());
+    assert_eq!(fs::read(&managed).unwrap(), policy_before);
+    assert_eq!(
+        fs::read_link(p.public_dir.join("session")).unwrap(),
+        link_before
+    );
+    assert!(p.var_dir.join(STATE_SUB).exists());
+    // readable again: finished
+    install_policy(&p, false);
+    list(&r, &[greeter()]);
+    assert_eq!(
+        watch_at(&p, &r, at(T0 + 2)).unwrap(),
+        WatchOutcome::Reverted {
+            user_config: "teacher".into()
+        }
+    );
+    assert!(!p.var_dir.join(STATE_SUB).exists());
+}
+
+/// A mode file that cannot be read (here a directory) while lifts are dropped: every stub is mounted (fail closed), the
+/// lifts stay recorded and the failure is returned.
+#[test]
+fn drop_with_an_unreadable_mode_file_blocks_everything() {
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Open, true);
+    exec_block::apply_lifted(&p, &r, &a.caps).unwrap();
+    let mode = p.var_dir.join(exec_block::MODE_FILE);
+    fs::remove_file(&mode).unwrap();
+    fs::create_dir(&mode).unwrap();
+    assert!(exec_block::drop_lifts(&p, &r).is_err());
+    assert!(all_blocked(&p));
+    assert!(lifted_file(&p).exists());
+}

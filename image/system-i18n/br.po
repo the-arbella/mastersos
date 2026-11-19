@@ -37,3 +37,9 @@ msgstr "N'eo ket bet kadarnaet abaoe %s devezh ez eo hizivaet an arventennoù. K
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "An TIC a zastum titouroù diagnostik diwar ar mikrourzhiataer-mañ."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Unan bennak a zo c'hoazh kevreet war an trevnad-mañ. Rankout a ra digevreañ da gentañ, pe adloc'hañ an trevnad."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "N'eo ket deuet an trevnad-mañ a-benn da brientiñ hoc'h estez. Klaskit en-dro a-benn ur pennadig, pe adloc'hit an trevnad."

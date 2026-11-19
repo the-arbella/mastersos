@@ -12,9 +12,21 @@
 # signs out of every session, or the machine restarts). Tested by image/tests/user-env-test.sh.
 set -euo pipefail
 mode_file=/var/lib/mastersos-public/session-mode
+# Settings format 3 (user layer): the agent points the `session` link at the signed-in person's user config, whose
+# session-mode applies only to a user manager of the uid in session/uid; any other one (a tty login, systemd-run,
+# machinectl), or no readable uid, is locked. The file above is read only without the link (format 1/2); under format 3
+# it always reads `learning` (what an older image after a rollback sees).
+session_dir=/var/lib/mastersos-public/session
 orig=/usr/lib/systemd/user-environment-generators/30-systemd-environment-d-generator
 mode=
-if [ -e "$mode_file" ]; then
+if [ -L "$session_dir" ] || [ -e "$session_dir" ]; then
+	mode=learning
+	owner=$(cat "$session_dir/uid" 2>/dev/null) || owner=
+	if [ -n "$owner" ] && [ "$owner" = "$UID" ] && [ -e "$session_dir/session-mode" ]; then
+		mode=$(tr -d '[:space:]' <"$session_dir/session-mode" | tr '[:upper:]' '[:lower:]') || mode=learning
+		[ -n "$mode" ] || mode=learning
+	fi
+elif [ -e "$mode_file" ]; then
 	mode=$(tr -d '[:space:]' <"$mode_file" | tr '[:upper:]' '[:lower:]') || mode=learning
 	[ -n "$mode" ] || mode=learning
 fi

@@ -37,3 +37,9 @@ msgstr "Instellings is al %s dae nie as op datum bevestig nie. Koppel asseblief 
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT versamel diagnostiese inligting van hierdie rekenaar af."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Iemand is nog op hierdie toestel aangemeld. Hulle moet eers afteken, of die toestel moet herbegin word."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Hierdie toestel kon nie jou sessie gereed kry nie. Probeer weer oor 'n oomblik, of herbegin die toestel."

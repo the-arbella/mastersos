@@ -37,3 +37,9 @@ msgstr "Asetusten ajantasaisuutta ei ole vahvistettu %s päivään. Yhdistä ver
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT-tuki kerää diagnostiikkatietoja tästä tietokoneesta."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Joku on yhä kirjautuneena tälle laitteelle. Hänen on ensin kirjauduttava ulos, tai käynnistä laite uudelleen."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Tämä laite ei saanut istuntoasi valmiiksi. Yritä hetken kuluttua uudelleen, tai käynnistä laite uudelleen."

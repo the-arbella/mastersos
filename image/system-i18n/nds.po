@@ -37,3 +37,9 @@ msgstr "Siet %s Daag is nich bestätigt, dat de Instellens aktuell sünd. Verbin
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT sammelt Diagnose-Infos vun dissen Reekner."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Dor is noch een op dit Reedschap anmellt. De mutt sik eerst afmellen, oder start dat Reedschap nieg."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Dit Reedschap kunn dien Törn nich klaarmaken. Versöök dat glieks noch maal, oder start dat Reedschap nieg."

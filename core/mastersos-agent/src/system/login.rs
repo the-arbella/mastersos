@@ -196,6 +196,18 @@ pub struct LoginPolicy {
     /// or not created yet): no exception.
     #[serde(default)]
     pub it_account_uid: Option<u32>,
+    /// Local accounts are administrators on this Device (`local_users_admin` of the settings); the user layer's rule
+    /// condition `admin` counts them. Old files lack it (= false).
+    #[serde(default)]
+    pub local_users_admin: bool,
+    /// The settings are format 3 (they have a user layer): `pam-session` switches each human session to the user config
+    /// its rules choose ([`crate::user_layer::switch`]). Old files lack it (= false: nothing is switched).
+    #[serde(default)]
+    pub user_layer: bool,
+    /// `school.oidc.mastersos_claims`: the issuer hands over facts at login, read only for school accounts. Old files
+    /// lack it (= false: no facts file is ever looked at).
+    #[serde(default)]
+    pub mastersos_claims: bool,
 }
 
 /// 一个锁定应用的账号：`pam-session` 与 `ephemeral-cleanup` 据此造 [`super::ephemeral::kiosk`]（`name` 是账号的名字，
@@ -228,6 +240,17 @@ impl UserClass {
             UserClass::Kiosk => "kiosk",
         }
     }
+}
+
+/// What [`decide`] knows of the user layer's session marker (read by [`pam_check_main`]).
+#[derive(Debug, Clone, Copy)]
+pub enum Marker<'a> {
+    /// No session is signed in.
+    Absent,
+    /// A marker exists but cannot be read or parsed: fails closed.
+    Unreadable,
+    /// A session is open or being closed.
+    Present(&'a crate::user_layer::Active),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -265,6 +288,14 @@ pub const DENY_KIOSK_SEAT_UNKNOWN: &str =
     "暂时查不到这台电脑上的其他会话，请稍候再试或举手找老师 / Could not check for other sessions on this computer; try again shortly or ask a teacher";
 pub const DENY_KIOSK_UNKNOWN: &str =
     "这个锁定应用已不在这台电脑的设置里 / This app is no longer set up on this computer";
+/// Another person's session (any human account of another uid) is still signed in or being closed: one human session at a
+/// time (user layer design §4.7). Only for a marker of another uid; never names the other person.
+pub const DENY_SESSION_BUSY: &str = "Someone is still signed in on this device. They need to sign out first, or restart the device.";
+/// The user layer could not get the session ready, with no other person's session in the way: the marker cannot be read,
+/// the same person's previous session is still being closed, the marker's lock stays busy, the rules are missing or
+/// unreadable, or neither the chosen config nor the fallback can be switched in (user layer design §4.7, §4.9).
+pub const DENY_SESSION_UNAVAILABLE: &str =
+    "This device could not get your session ready. Try again in a moment, or restart the device.";
 pub const DENY_DOMAIN: &str =
     "这个账号的域名不允许登录这台电脑 / Accounts from this domain cannot sign in on this computer";
 
@@ -301,7 +332,7 @@ pub fn is_system_uid(uid: u32) -> bool {
 }
 
 /// `PAM_USER` 能不能拿去判断（以及交给 `getent`）：非空、不以 `-` 开头、不含控制字符。
-fn user_name_ok(user: &str) -> bool {
+pub(crate) fn user_name_ok(user: &str) -> bool {
     !user.is_empty()
         && user.len() <= 256
         && !user.starts_with('-')
@@ -309,7 +340,7 @@ fn user_name_ok(user: &str) -> bool {
 }
 
 /// 管理员比较不区分大小写，但只折叠 ASCII（与 `checks::admin_user` 一致；开尔文符号 K 不算 k）。
-fn is_admin(p: &LoginPolicy, user: &str) -> bool {
+pub(crate) fn is_admin(p: &LoginPolicy, user: &str) -> bool {
     p.admin_users.iter().any(|a| a.eq_ignore_ascii_case(user))
 }
 
@@ -352,6 +383,7 @@ pub fn decide(
     policy: Option<&LoginPolicy>,
     user: &str,
     uid: Option<u32>,
+    marker: Marker,
 ) -> Decision {
     if !user_name_ok(user) {
         return Decision::Deny(DENY_BAD_USER);
@@ -384,6 +416,26 @@ pub fn decide(
     // 所有学校账号都绕过方式、域名与锁定（authd 0.6.1 实测从 10000 起分，S1 与 Task 8）。
     if class != UserClass::Sso && uid.is_some_and(is_system_uid) {
         return Decision::Allow;
+    }
+    // One human session at a time (user layer design §4.7): another uid's marker (open or closing) refuses with the busy
+    // message; a closing marker of the same uid, a marker that cannot be read and a uid that cannot be looked up refuse
+    // with the unavailable one (nobody else is known to be signed in); no admin override. The marker itself is the gate, not the policy: state on disk
+    // with a policy that is not format 3 (or none) fails closed, because pam-session guards only GDM and this is the only
+    // gate of tty login, sshd and su. Without a marker (the only case of a Device that never used the user layer) nothing
+    // changes. `user_layer_on` is true whenever a marker exists, so this is its busy part.
+    let refusal = match marker {
+        Marker::Absent => None,
+        Marker::Unreadable => Some(DENY_SESSION_UNAVAILABLE),
+        // Without a uid it cannot be told that the person is someone else (pam-session's rule too)
+        Marker::Present(_) if uid.is_none() => Some(DENY_SESSION_UNAVAILABLE),
+        Marker::Present(a) if uid != Some(a.uid) => Some(DENY_SESSION_BUSY),
+        Marker::Present(a) if a.state != crate::user_layer::ActiveState::Open => {
+            Some(DENY_SESSION_UNAVAILABLE)
+        }
+        Marker::Present(_) => None,
+    };
+    if let Some(msg) = refusal {
+        return Decision::Deny(msg);
     }
     if class == UserClass::Guest && !GUEST_SERVICES.contains(&service) {
         return Decision::Deny(DENY_GUEST_SERVICE);
@@ -454,6 +506,17 @@ fn method_name(m: LoginMethod) -> &'static str {
 /// 锁定应用的账号名单来自配置的 `apps.kiosk` 与 `kiosk = true` 的 `apps.deb`（`kiosk-<id>` 与应用的 `name`，按账号名排序）；id 不合规的跳过
 /// （清单的校验本该挡住；跳过只会少放行）。锁定时名单照写（`decide` 照样拒）。
 pub fn policy_from_bundle(school: &School, config: &Config, lock: Option<&Lock>) -> LoginPolicy {
+    policy_from_bundle_in(school, config, lock, false)
+}
+
+/// [`policy_from_bundle`] for settings that are format 3 (`user_layer`) or not: format 3 lists the `kiosk = true` .deb
+/// apps in every mode (user layer design §4.6).
+fn policy_from_bundle_in(
+    school: &School,
+    config: &Config,
+    lock: Option<&Lock>,
+    user_layer: bool,
+) -> LoginPolicy {
     // Guest sign-in is always on; `decide` still denies it on a locked device.
     let mut methods: Vec<String> = vec![method_name(LoginMethod::Guest).into()];
     for m in &config.login_methods {
@@ -478,13 +541,16 @@ pub fn policy_from_bundle(school: &School, config: &Config, lock: Option<&Lock>)
         locked: lock.is_some(),
         lock_message: lock.map(|l| l.message.clone()),
         from_bundle: true,
-        kiosk_users: kiosk_users(config),
+        kiosk_users: kiosk_users(config, user_layer),
         it_account: super::it_account::wanted(config.it_account.as_ref()).is_some(),
         it_account_uid: None,
+        local_users_admin: config.local_users_admin,
+        user_layer,
+        mastersos_claims: school.oidc.as_ref().is_some_and(|o| o.mastersos_claims),
     }
 }
 
-fn kiosk_users(config: &Config) -> Vec<KioskUser> {
+fn kiosk_users(config: &Config, user_layer: bool) -> Vec<KioskUser> {
     let mut out: Vec<KioskUser> = config
         .apps
         .kiosk
@@ -501,7 +567,7 @@ fn kiosk_users(config: &Config) -> Vec<KioskUser> {
                 .filter(|(id, a)| {
                     a.kiosk
                         && !config.apps.kiosk.contains_key(*id)
-                        && super::desktop::profile(config).flatpaks
+                        && (user_layer || super::desktop::profile(config).flatpaks)
                 })
                 .map(|(id, a)| (id, &a.name)),
         )
@@ -532,6 +598,9 @@ pub fn policy_from_seed(seed: &Seed) -> LoginPolicy {
         kiosk_users: Vec::new(),
         it_account: super::it_account::wanted(seed.it_account.as_ref()).is_some(),
         it_account_uid: None,
+        local_users_admin: false,
+        user_layer: false,
+        mastersos_claims: false,
     }
 }
 
@@ -868,6 +937,9 @@ pub(super) fn fail_closed(p: &LoginPolicy) -> LoginPolicy {
         kiosk_users: p.kiosk_users.clone(),
         it_account: p.it_account,
         it_account_uid: p.it_account_uid,
+        local_users_admin: p.local_users_admin,
+        user_layer: p.user_layer,
+        mastersos_claims: p.mastersos_claims,
     };
     if policy_json(&f).is_err() {
         f.kiosk_users.clear();
@@ -897,7 +969,7 @@ pub fn sso_on(policy: &LoginPolicy) -> bool {
 
 /// [`policy_from_bundle`] with the device's own part: the recorded owner uid of `itadmin` (the `lock` step writes the same).
 pub fn bundle_policy(ctx: &ApplyContext, env: &Env) -> LoginPolicy {
-    let mut p = policy_from_bundle(ctx.school, ctx.config, ctx.lock);
+    let mut p = policy_from_bundle_in(ctx.school, ctx.config, ctx.lock, ctx.user_layer().is_some());
     p.it_account_uid = owner_uid(env, p.it_account);
     p
 }
@@ -943,6 +1015,25 @@ pub fn set_it_account_uid(paths: &SysPaths, uid: u32) -> Result<()> {
     Ok(())
 }
 
+/// The `chrome_policy` the open card takes its `URLBlocklist` from: format 1/2 the Config's; format 3 the user config a
+/// `kind = "guest"` login resolves to on this Device (user layer design §3), so the card opens no site the Device's guest
+/// could not. Fails closed: a guest config that cannot be resolved blocks everything (`"*"`), which keeps the card listed.
+fn card_policy_source(ctx: &ApplyContext) -> toml::Table {
+    let Some(m) = ctx.user_layer() else {
+        return ctx.config.chrome_policy.clone();
+    };
+    match mastersos_bundle::guest_user_config(m, &ctx.group.id)
+        .and_then(|id| mastersos_bundle::user_config(m, &id))
+    {
+        Some(u) => u.chrome_policy,
+        None => {
+            let mut t = toml::Table::new();
+            t.insert("URLBlocklist".into(), toml::Value::Array(vec!["*".into()]));
+            t
+        }
+    }
+}
+
 fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
     let mut problems = Vec::new();
     for d in &ctx.school.allowed_domains {
@@ -951,12 +1042,13 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
         }
     }
     let policy = bundle_policy(ctx, env);
+    let blocks = card_policy_source(ctx);
     apply(
         env,
         &policy,
         ctx.school.oidc.as_ref(),
         ctx.school.id.as_deref(),
-        Some(&ctx.config.chrome_policy),
+        Some(&blocks),
         problems,
     )
 }
@@ -1398,6 +1490,33 @@ fn env_str(name: &str) -> Option<String> {
     std::env::var_os(name)?.into_string().ok()
 }
 
+/// pam-session's whole budget is 5 s: the refusal's translation gets one.
+const REFUSAL_GETTEXT_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// What a read of the marker means for [`decide`]: a marker that cannot be read fails closed.
+fn marker_of(found: &Result<Option<crate::user_layer::Active>>) -> Marker<'_> {
+    match found {
+        Ok(None) => Marker::Absent,
+        Ok(Some(a)) => Marker::Present(a),
+        Err(_) => Marker::Unreadable,
+    }
+}
+
+/// A user layer refusal ([`DENY_SESSION_BUSY`] or [`DENY_SESSION_UNAVAILABLE`], both msgids of `mastersos-system`) in
+/// the system language.
+///
+/// The language is the system's (`<root>/etc/locale.conf`; the root process's own `LANG` is not the user's). English
+/// when it cannot be translated. Runs `gettext` (bounded by [`REFUSAL_GETTEXT_TIMEOUT`]) for any locale except C, POSIX
+/// and an empty one.
+pub(crate) fn session_refusal(
+    runner: &dyn crate::runner::Runner,
+    root: &Path,
+    msgid: &str,
+) -> String {
+    let locale = crate::i18n::system_language(None, root);
+    crate::i18n::text_within(runner, locale.as_ref(), msgid, REFUSAL_GETTEXT_TIMEOUT)
+}
+
 /// 拒绝：原因打到 stdout（pam_exec 的 `stdout` 交给 GDM 显示），退出 1。写失败也照样拒绝。
 fn deny(msg: &str) -> ExitCode {
     let mut out = std::io::stdout().lock();
@@ -1423,8 +1542,19 @@ pub fn pam_check_main(args: impl Iterator<Item = OsString>) -> ExitCode {
         None
     };
     let (managed, policy) = load_policy(&paths);
-    match decide(&service, managed, policy.as_ref(), &user, uid) {
+    let found = crate::user_layer::active_marker(Path::new("/"));
+    match decide(
+        &service,
+        managed,
+        policy.as_ref(),
+        &user,
+        uid,
+        marker_of(&found),
+    ) {
         Decision::Allow => ExitCode::SUCCESS,
+        Decision::Deny(msg @ (DENY_SESSION_BUSY | DENY_SESSION_UNAVAILABLE)) => deny(
+            &session_refusal(&crate::runner::RealRunner, Path::new("/"), msg),
+        ),
         Decision::Deny(msg) => deny(msg),
     }
 }
@@ -1466,6 +1596,9 @@ client_id = "laptops"
             kiosk_users: vec![],
             it_account: false,
             it_account_uid: None,
+            local_users_admin: false,
+            user_layer: false,
+            mastersos_claims: false,
         }
     }
 
@@ -1697,6 +1830,296 @@ client_id = "laptops"
         }
     }
 
+    fn decide(
+        service: &str,
+        managed: bool,
+        policy: Option<&LoginPolicy>,
+        user: &str,
+        uid: Option<u32>,
+    ) -> Decision {
+        super::decide(service, managed, policy, user, uid, Marker::Absent)
+    }
+
+    fn layer_pol() -> LoginPolicy {
+        let mut p = all();
+        p.user_layer = true;
+        p
+    }
+
+    fn active(uid: u32, state: crate::user_layer::ActiveState) -> crate::user_layer::Active {
+        crate::user_layer::Active {
+            uid,
+            user: "bob".into(),
+            user_config: "teacher".into(),
+            dir: crate::user_layer::config_dir_name("teacher"),
+            caps: mastersos_bundle::Caps::new(),
+            state,
+            reason: None,
+            opened_at: 1,
+            seen: true,
+            held: false,
+        }
+    }
+
+    fn busy_for(
+        service: &str,
+        p: &LoginPolicy,
+        user: &str,
+        uid: Option<u32>,
+        m: Marker,
+    ) -> Decision {
+        super::decide(service, true, Some(p), user, uid, m)
+    }
+
+    #[test]
+    fn busy_while_active_marker_present() {
+        use crate::user_layer::ActiveState::{Closing, Open};
+        let p = layer_pol();
+        for state in [Open, Closing] {
+            let a = active(2000, state);
+            // every service class that reaches pam-check: GDM (password and authd), tty login, ssh, su
+            for svc in [GDM, "gdm-authd", "login", "sshd", "su"] {
+                for (user, uid) in [
+                    ("alice", Some(1001)),
+                    ("alice@school.ac.th", Some(20000)),
+                    ("guest", Some(1999)),
+                ] {
+                    if user == "guest" && svc != GDM {
+                        continue;
+                    }
+                    assert_eq!(
+                        busy_for(svc, &p, user, uid, Marker::Present(&a)),
+                        Decision::Deny(DENY_SESSION_BUSY),
+                        "{svc} {user} {state:?}"
+                    );
+                }
+                // a uid that cannot be looked up: it cannot be told that this is another person (as pam-session)
+                assert_eq!(
+                    busy_for(svc, &p, "alice@school.ac.th", None, Marker::Present(&a)),
+                    Decision::Deny(DENY_SESSION_UNAVAILABLE),
+                    "{svc} {state:?}"
+                );
+            }
+        }
+        // an unreadable marker fails closed, but names nobody as signed in
+        assert_eq!(
+            busy_for("login", &p, "alice", Some(1001), Marker::Unreadable),
+            Decision::Deny(DENY_SESSION_UNAVAILABLE)
+        );
+        // the message never names the other person
+        assert!(!DENY_SESSION_BUSY.contains("bob"));
+    }
+
+    #[test]
+    fn same_uid_allowed() {
+        use crate::user_layer::ActiveState::{Closing, Open};
+        let p = layer_pol();
+        let a = active(20000, Open);
+        // unlock and reauth of the signed-in person
+        assert_eq!(
+            busy_for(
+                GDM,
+                &p,
+                "alice@school.ac.th",
+                Some(20000),
+                Marker::Present(&a)
+            ),
+            Decision::Allow
+        );
+        // the usual rules still apply to the same uid
+        let mut locked = layer_pol();
+        locked.locked = true;
+        assert_eq!(
+            busy_for(
+                GDM,
+                &locked,
+                "alice@school.ac.th",
+                Some(20000),
+                Marker::Present(&a)
+            ),
+            Decision::Deny(DENY_LOCKED)
+        );
+        // a session that is closing refuses everybody: its own person with the unavailable message (nobody else is
+        // signed in; the revert is pending), everybody else as busy
+        let c = active(20000, Closing);
+        for svc in [GDM, "login", "su"] {
+            assert_eq!(
+                busy_for(
+                    svc,
+                    &p,
+                    "alice@school.ac.th",
+                    Some(20000),
+                    Marker::Present(&c)
+                ),
+                Decision::Deny(DENY_SESSION_UNAVAILABLE),
+                "{svc}"
+            );
+        }
+        assert_eq!(
+            busy_for(GDM, &p, "bob", Some(1001), Marker::Present(&c)),
+            Decision::Deny(DENY_SESSION_BUSY)
+        );
+    }
+
+    #[test]
+    fn no_marker_or_passthrough_is_not_busy() {
+        let p = layer_pol();
+        let a = active(2000, crate::user_layer::ActiveState::Open);
+        for svc in [GDM, "login", "sshd", "su"] {
+            assert_eq!(
+                busy_for(svc, &p, "alice", Some(1001), Marker::Absent),
+                Decision::Allow,
+                "{svc}"
+            );
+        }
+        for svc in PASSTHROUGH_SERVICES {
+            assert_eq!(
+                busy_for(svc, &p, "alice", Some(1001), Marker::Present(&a)),
+                Decision::Allow,
+                "{svc}"
+            );
+        }
+        // system accounts are not human sessions
+        assert_eq!(
+            busy_for("su", &p, "root", Some(0), Marker::Present(&a)),
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn format2_policy_without_layer_state_is_unaffected() {
+        let p = all();
+        assert!(!p.user_layer);
+        for svc in ["login", "sshd", "su", GDM] {
+            assert_eq!(
+                busy_for(svc, &p, "alice", Some(1001), Marker::Absent),
+                Decision::Allow,
+                "{svc}"
+            );
+        }
+    }
+
+    #[test]
+    fn stale_marker_refuses_even_with_format2_policy() {
+        let a = active(2000, crate::user_layer::ActiveState::Open);
+        let p = all();
+        assert!(!p.user_layer);
+        for svc in ["login", "sshd", "su", GDM] {
+            for (m, want) in [
+                (Marker::Present(&a), DENY_SESSION_BUSY),
+                (Marker::Unreadable, DENY_SESSION_UNAVAILABLE),
+            ] {
+                assert_eq!(
+                    busy_for(svc, &p, "alice", Some(1001), m),
+                    Decision::Deny(want),
+                    "{svc} {m:?}"
+                );
+            }
+        }
+        // no policy at all (unmanaged)
+        assert_eq!(
+            super::decide(
+                "login",
+                false,
+                None,
+                "alice",
+                Some(1001),
+                Marker::Unreadable
+            ),
+            Decision::Deny(DENY_SESSION_UNAVAILABLE)
+        );
+    }
+
+    #[test]
+    fn marker_reads_map_to_markers() {
+        let a = active(2000, crate::user_layer::ActiveState::Open);
+        assert!(matches!(marker_of(&Ok(None)), Marker::Absent));
+        assert!(matches!(marker_of(&Ok(Some(a.clone()))), Marker::Present(x) if x.uid == 2000));
+        assert!(matches!(
+            marker_of(&Err(anyhow::anyhow!("unreadable"))),
+            Marker::Unreadable
+        ));
+    }
+
+    #[test]
+    fn admin_has_no_override() {
+        let a = active(2000, crate::user_layer::ActiveState::Open);
+        let mut p = layer_pol();
+        p.admin_users = vec![ADMIN.into()];
+        p.it_account = true;
+        p.it_account_uid = Some(1500);
+        assert_eq!(
+            busy_for("login", &p, "itadmin", Some(1500), Marker::Present(&a)),
+            Decision::Deny(DENY_SESSION_BUSY)
+        );
+        assert_eq!(
+            busy_for(GDM, &p, ADMIN, Some(20001), Marker::Present(&a)),
+            Decision::Deny(DENY_SESSION_BUSY)
+        );
+        // nobody signed in: tty login of the IT account works as before
+        assert_eq!(
+            busy_for("login", &p, "itadmin", Some(1500), Marker::Absent),
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn kiosk_rules_unchanged() {
+        let a = active(2000, crate::user_layer::ActiveState::Open);
+        let mut p = layer_pol();
+        p.kiosk_users = vec![KioskUser {
+            user: "kiosk-exam".into(),
+            name: "Exam".into(),
+        }];
+        // the kiosk's own rules decide (pam-session checks the marker for it)
+        assert_eq!(
+            busy_for(GDM, &p, "kiosk-exam", Some(1990), Marker::Present(&a)),
+            decide(GDM, true, Some(&p), "kiosk-exam", Some(1990))
+        );
+        assert_eq!(
+            busy_for("login", &p, "kiosk-exam", Some(1990), Marker::Present(&a)),
+            Decision::Deny(DENY_KIOSK)
+        );
+    }
+
+    #[test]
+    fn session_refusals_are_translated_with_the_system_language() {
+        let root = tempfile::tempdir().unwrap();
+        let r = FakeRunner::new();
+        for msg in [DENY_SESSION_BUSY, DENY_SESSION_UNAVAILABLE] {
+            assert_eq!(session_refusal(&r, root.path(), msg), msg);
+        }
+        assert!(r.calls().is_empty());
+        std::fs::create_dir_all(root.path().join("etc")).unwrap();
+        std::fs::write(root.path().join("etc/locale.conf"), "LANG=th_TH.UTF-8\n").unwrap();
+        r.respond("/usr/bin/env", Output::ok("มีคนยังไม่ได้ออกจากระบบ"));
+        assert_eq!(
+            session_refusal(&r, root.path(), DENY_SESSION_BUSY),
+            "มีคนยังไม่ได้ออกจากระบบ"
+        );
+        assert!(r.calls()[0].contains("LANGUAGE=th_TH"));
+        r.respond("/usr/bin/env", Output::ok("translated"));
+        assert_eq!(
+            session_refusal(&r, root.path(), DENY_SESSION_UNAVAILABLE),
+            "translated"
+        );
+        assert!(
+            r.calls()[1].ends_with(DENY_SESSION_UNAVAILABLE),
+            "{:?}",
+            r.calls()
+        );
+    }
+
+    /// Both refusals are msgids of the system catalogue; the unavailable one names nobody and is not the busy one.
+    #[test]
+    fn session_refusals_are_agent_msgids() {
+        for msg in [DENY_SESSION_BUSY, DENY_SESSION_UNAVAILABLE] {
+            assert!(crate::i18n::AGENT_MSGIDS.contains(&msg), "{msg}");
+        }
+        assert_ne!(DENY_SESSION_BUSY, DENY_SESSION_UNAVAILABLE);
+        assert!(!DENY_SESSION_UNAVAILABLE.contains("Someone"));
+    }
+
     #[test]
     fn methods_gate_each_class() {
         let cases = [
@@ -1846,6 +2269,32 @@ client_id = "laptops"
         let p = policy_from_bundle(&m.school, &m.effective_of_group("a").unwrap(), None);
         assert!(p.from_bundle);
         assert!(fail_closed(&p).from_bundle, "管理员放得下：仍是包里的名单");
+    }
+
+    /// The user layer's fields: from the settings; absent from files written by older agents (= false).
+    #[test]
+    fn bundle_policy_carries_the_user_layer_fields() {
+        let mut m = mastersos_bundle::Manifest::parse(
+            "version = 1\n[school]\noidc = { issuer = \"https://sso.x.th\", client_id = \"c\" }\n[[group]]\nid = \"a\"\nname = \"a\"\nlocal_users_admin = true\n",
+        )
+        .unwrap();
+        let p = policy_from_bundle(&m.school, &m.effective_of_group("a").unwrap(), None);
+        assert!(p.local_users_admin);
+        assert!(!p.mastersos_claims);
+        assert!(
+            !p.user_layer,
+            "set by bundle_policy from the whole settings"
+        );
+        m.school.oidc.as_mut().unwrap().mastersos_claims = true;
+        let p = policy_from_bundle(&m.school, &m.effective_of_group("a").unwrap(), None);
+        assert!(p.mastersos_claims);
+        let f = fail_closed(&p);
+        assert!(f.local_users_admin && f.mastersos_claims);
+        let seed = policy_from_seed(&seed(SEED_OIDC));
+        assert!(!seed.local_users_admin && !seed.user_layer && !seed.mastersos_claims);
+        let old = br#"{"methods":["sso"],"locked":false}"#;
+        let p: LoginPolicy = serde_json::from_slice(old).unwrap();
+        assert!(!p.local_users_admin && !p.user_layer && !p.mastersos_claims);
     }
 
     #[test]
@@ -2088,6 +2537,7 @@ client_id = "laptops"
             quiet: &std::sync::atomic::AtomicBool::new(false),
             device: None,
             ident: &crate::system::tests::test_ident(),
+            manifest: None,
         };
         run(
             &ctx,
@@ -2909,6 +3359,9 @@ client_id = "laptops"
                 .collect(),
             it_account: true,
             it_account_uid: Some(59999),
+            local_users_admin: false,
+            user_layer: false,
+            mastersos_claims: false,
         };
         assert!(p.admin_users.iter().all(|a| checks::admin_user(a).is_ok()));
         assert!(p
@@ -3655,6 +4108,105 @@ client_id = "laptops"
         assert_eq!(v["URLAllowlist"][0], "https://*");
     }
 
+    /// User layer design §3: format 3 takes the card's blocks from the guest's user config, not the device Config
+    /// (which has no `chrome_policy` there); format 1/2 keeps the Config's.
+    #[test]
+    fn card_blocks_come_from_guest_config() {
+        let m = mastersos_bundle::Manifest::parse(&mastersos_bundle::testutil::spec_example_v3())
+            .unwrap();
+        let ident = crate::system::tests::test_ident();
+        let sel = mastersos_bundle::select(&m, &ident, None);
+        assert!(
+            sel.config.chrome_policy.is_empty(),
+            "the device layer has none"
+        );
+        let root = tmp_root();
+        put_decl_src(root.path(), "[authd]\nname = OIDC\n");
+        let p = paths(root.path());
+        let flag = AtomicBool::new(false);
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ApplyContext {
+            seed: &crate::system::tests::test_seed(),
+            school: &m.school,
+            group: sel.group,
+            config: &sel.config,
+            lock: None,
+            bundle_dir: dir.path(),
+            phase: Phase::Boot,
+            superseded: &flag,
+            quiet: &AtomicBool::new(false),
+            device: None,
+            ident: &ident,
+            manifest: Some(&m),
+        };
+        let r = FakeRunner::new();
+        let mut sys = SysState::default();
+        let out = run(
+            &ctx,
+            &mut Env {
+                paths: &p,
+                runner: &r,
+                sys: &mut sys,
+            },
+        );
+        assert_eq!(out, vec![ok(ITEM)]);
+        let v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(card_policy(root.path())).unwrap()).unwrap();
+        // `primary` (the guest's config) inherits `user_defaults`
+        assert_eq!(
+            v["URLBlocklist"],
+            serde_json::json!(["*", "chrome://*", "tiktok.com"])
+        );
+    }
+
+    /// Format 3 on a Device whose Group is not in the bundle: no guest user config resolves, so the card blocks everything
+    /// (`URLBlocklist` `"*"` on the device side): a listed card, never the open `https://*` one.
+    #[test]
+    fn card_blocks_everything_without_a_guest_config() {
+        let m = mastersos_bundle::Manifest::parse(&mastersos_bundle::testutil::spec_example_v3())
+            .unwrap();
+        let ident = crate::system::tests::test_ident();
+        let sel = mastersos_bundle::select(&m, &ident, None);
+        let mut group = sel.group.clone();
+        group.id = "not-in-the-bundle".into();
+        assert!(mastersos_bundle::guest_user_config(&m, &group.id).is_none());
+        let root = tmp_root();
+        put_decl_src(root.path(), "[authd]\nname = OIDC\n");
+        let p = paths(root.path());
+        let flag = AtomicBool::new(false);
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ApplyContext {
+            seed: &crate::system::tests::test_seed(),
+            school: &m.school,
+            group: &group,
+            config: &sel.config,
+            lock: None,
+            bundle_dir: dir.path(),
+            phase: Phase::Boot,
+            superseded: &flag,
+            quiet: &AtomicBool::new(false),
+            device: None,
+            ident: &ident,
+            manifest: Some(&m),
+        };
+        let r = FakeRunner::new();
+        let mut sys = SysState::default();
+        let out = run(
+            &ctx,
+            &mut Env {
+                paths: &p,
+                runner: &r,
+                sys: &mut sys,
+            },
+        );
+        assert_eq!(out, vec![ok(ITEM)]);
+        let v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(card_policy(root.path())).unwrap()).unwrap();
+        assert_eq!(v["URLBlocklist"], serde_json::json!(CARD_BLOCKLIST));
+        let allow = v["URLAllowlist"].as_array().unwrap();
+        assert!(!allow.iter().any(|e| e == OPEN_CARD_FILTER), "{allow:?}");
+    }
+
     #[test]
     fn card_policy_allows_only_the_idp_and_the_redirect() {
         let text = render_login_browser_policy(
@@ -4074,6 +4626,7 @@ client_id = "laptops"
             quiet: &std::sync::atomic::AtomicBool::new(false),
             device: None,
             ident: &crate::system::tests::test_ident(),
+            manifest: None,
         };
         let env = Env {
             paths: &p,

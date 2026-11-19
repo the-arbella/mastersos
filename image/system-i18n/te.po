@@ -37,3 +37,9 @@ msgstr "సెట్టింగ్‌లు తాజాగా ఉన్నా�
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT ఈ కంప్యూటర్ నుండి డయాగ్నస్టిక్ సమాచారాన్ని సేకరిస్తోంది."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "ఎవరో ఇంకా ఈ పరికరంలో సైన్ ఇన్ అయి ఉన్నారు. వారు ముందు సైన్ అవుట్ చేయాలి, లేదా పరికరాన్ని రీస్టార్ట్ చేయండి."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "ఈ పరికరం మీ సెషన్‌ను సిద్ధం చేయలేకపోయింది. కొద్దిసేపటి తర్వాత మళ్లీ ప్రయత్నించండి, లేదా పరికరాన్ని రీస్టార్ట్ చేయండి."

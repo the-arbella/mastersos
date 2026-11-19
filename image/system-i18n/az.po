@@ -37,3 +37,9 @@ msgstr "Ayarların aktual olduğu %s gündür təsdiqlənməyib. Zəhmət olmasa
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "İT bu kompüterdən diaqnostika məlumatı toplayır."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Kimsə hələ də bu cihazda daxil olub. O, əvvəlcə çıxış etməlidir, ya da cihaz yenidən başladılmalıdır."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Bu cihaz sessiyanızı hazırlaya bilmədi. Bir azdan yenidən cəhd edin və ya cihazı yenidən başladın."

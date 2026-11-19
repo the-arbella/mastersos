@@ -1015,6 +1015,7 @@ async fn legacy_browser_wants_no_deb_app() {
             group: m.groups.remove(0),
             config,
             escrow_recipients: vec![],
+            user_layer: false,
         }
     };
     let state = fx.root().join("state");
@@ -1024,6 +1025,16 @@ async fn legacy_browser_wants_no_deb_app() {
     assert!(legacy_cur.config.legacy_browser);
     let legacy = wanted_from(&legacy_cur, &state);
     assert!(legacy.apps.is_empty(), "{legacy:?}");
+    // format 3 installs the union whatever the mode (user layer design §4.6)
+    let mut layered = cur("");
+    layered.user_layer = true;
+    assert_eq!(
+        wanted_from(&layered, &state)
+            .apps
+            .keys()
+            .collect::<Vec<_>>(),
+        ["testnav"]
+    );
 
     ready(&fx.round(&desktop).await, "testnav");
     assert!(fx.ext("app-testnav").is_dir());
