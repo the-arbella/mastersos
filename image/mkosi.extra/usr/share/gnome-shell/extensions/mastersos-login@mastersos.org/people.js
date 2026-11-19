@@ -80,18 +80,22 @@ export function expandLoginName(typed, loginDomain, localNames) {
 }
 
 // The person Enter signs in without arrow keys: none while an address is being typed (it may be someone new). With a login
-// domain, a bare username that expandLoginName would complete selects nobody unless the first person shown matches it
-// exactly (shown comes from matchPeople with the same loginDomain, exact matches first): "bob" must not sign in a more
-// recent "bobby@..." but bob@<login_domain> itself. localNames null means the local accounts are not known yet: no
-// completion, the old rule. Without a login domain the old rule: the first person shown.
+// domain, a bare username that expandLoginName would complete is a user name, not a real name: only a person whose user
+// name is exactly that text (a local account, any case) or <text>@<login_domain> is preselected, else nobody and Enter
+// takes the completion. So "bob" never signs in a more recent "bobby@...", nor someone whose real name is exactly "Bob".
+// localNames null means the local accounts are not known yet: no completion, the old rule. Without a login domain, or for
+// text that does not complete, the old rule: the first person shown (matchPeople puts exact matches first).
 export function preselect(query, shown, loginDomain = null, localNames = null) {
     const q = (query ?? '').trim().toLowerCase();
     if (!shown.length || (query ?? '').includes('@'))
         return -1;
-    if (exact(shown[0], q, loginDomain))
-        return 0;
-    if (localNames && expandLoginName(query, loginDomain, localNames) !== null)
-        return -1;
+    if (localNames && expandLoginName(query, loginDomain, localNames) !== null) {
+        const completed = `${q}@${loginDomain.toLowerCase()}`;
+        return shown.findIndex(p => {
+            const user = p.userName.toLowerCase();
+            return user === q || user === completed;
+        });
+    }
     return 0;
 }
 

@@ -236,3 +236,21 @@ test('without a login domain, or before the accounts are known, the first person
     // The local accounts not loaded yet (null): no completion is offered, so the old rule holds.
     assert.equal(preselect('bob', matchPeople(people, 'bob', 'school.example').shown, 'school.example', null), 0);
 });
+
+test('a bare username that completes is a user name, not a real name', () => {
+    const D = 'school.example';
+    const mai = person('mai@school.example', 'Mai Tran', 1);
+    const x9 = person('x9@school.example', 'Mai', 9);
+    const r = matchPeople([mai, x9], 'mai', D);
+    assert.equal(r.shown[preselect('mai', r.shown, D, [])].userName, 'mai@school.example');
+    // mai@school.example not on this computer: nobody preselected, Enter completes to it.
+    assert.equal(preselect('mai', matchPeople([x9], 'mai', D).shown, D, []), -1);
+    assert.equal(expandLoginName('mai', D, []), 'mai@school.example');
+});
+
+test('without a login domain an exact real name is preselected as before', () => {
+    const people = [person('mai@school.example', 'Mai Tran', 1), person('x9@school.example', 'Mai', 9)];
+    const r = matchPeople(people, 'mai');
+    assert.equal(r.shown[preselect('mai', r.shown)].userName, 'x9@school.example');
+    assert.equal(r.shown[preselect('mai', r.shown, null, [])].userName, 'x9@school.example');
+});

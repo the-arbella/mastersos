@@ -6,9 +6,9 @@
 #
 # Run it as an ordinary user. mkosi.build runs the same tests as root in its chroot, so they run twice here: as this user,
 # then as root in a user namespace (unshare -r), with the same pass count required both times; a runner without user
-# namespaces fails instead of skipping the root run. Needs git, curl, tar, sha256sum, unshare (util-linux), and the network. The Go tarball and the module and build caches are kept in
-# $MASTERSOS_AUTHD_CACHE (default ~/.cache/mastersos-authd-oidc), so a rerun downloads nothing; the tarball's sha256 is
-# checked on every run, cached or not.
+# namespaces fails instead of skipping the root run. Needs git, curl, tar, sha256sum, unshare (util-linux), and the
+# network. The Go tarball and the module and build caches are kept in $MASTERSOS_AUTHD_CACHE (default
+# ~/.cache/mastersos-authd-oidc), so a rerun downloads nothing; the tarball's sha256 is checked on every run, cached or not.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
