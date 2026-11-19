@@ -88,6 +88,10 @@ pub const ISSUE_CODES: &[&str] = &[
     "admins_without_sso",
     "allowed_domain_invalid",
     "allowed_domains_too_many",
+    "assign_device_group_unknown",
+    "assign_empty_list",
+    "assign_id_invalid",
+    "assign_unreachable",
     "chrome_pause_invalid",
     "chrome_pause_too_long",
     "chrome_paused",
@@ -99,7 +103,9 @@ pub const ISSUE_CODES: &[&str] = &[
     "deb_icon_invalid",
     "deb_id_invalid",
     "deb_kiosk_id_conflict",
+    "deb_kiosk_in_user_config",
     "deb_name_invalid",
+    "deb_not_kiosk_in_device_config",
     "deb_packages_invalid",
     "deb_sha256_invalid",
     "deb_url_invalid",
@@ -118,6 +124,7 @@ pub const ISSUE_CODES: &[&str] = &[
     "escrow_recipient_unregistered",
     "escrow_recipients_invalid",
     "escrow_recipients_missing",
+    "facts_without_mastersos_claims",
     "feature_unsupported",
     "feature_unsupported_in_use",
     "few_recovery_keys",
@@ -157,9 +164,11 @@ pub const ISSUE_CODES: &[&str] = &[
     "legacy_shape",
     "locale_invalid",
     "lock_message_too_long",
+    "login_domain_not_allowed",
     "logo_incomplete",
     "logo_sha256_invalid",
     "logo_unknown",
+    "mastersos_claims_without_school_id",
     "missing_field",
     "no_admins",
     "oidc_invalid",
@@ -170,6 +179,8 @@ pub const ISSUE_CODES: &[&str] = &[
     "school_id_mismatch",
     "school_name_invalid",
     "school_wifi_moved",
+    "script_apply_in_user_config",
+    "script_login_in_device_config",
     "script_timeout_too_long",
     "secret_name_invalid",
     "secret_rerouted",
@@ -189,6 +200,13 @@ pub const ISSUE_CODES: &[&str] = &[
     "update_channel_unknown",
     "update_mirror_invalid",
     "update_mirror_not_https",
+    "user_config_duplicate_id",
+    "user_config_id_invalid",
+    "user_config_terminal",
+    "user_config_unknown",
+    "user_config_unreached",
+    "user_deb_conflict",
+    "user_fallback_missing",
     "web_app_invalid",
     "web_app_not_https",
     "wifi_invalid",
@@ -770,7 +788,10 @@ mod tests {
         let missing: Vec<_> = ISSUE_CODES
             .iter()
             .filter(|c| {
-                !SERVER_ONLY.contains(c) && !COUNT_CAPS.contains(c) && !labeled.contains(**c)
+                !SERVER_ONLY.contains(c)
+                    && !COUNT_CAPS.contains(c)
+                    && !SCHOOL_ID_STAMPED.contains(c)
+                    && !labeled.contains(**c)
             })
             .collect();
         assert!(
@@ -787,6 +808,10 @@ mod tests {
         "allowed_domains_too_many",
         "issues_truncated",
     ];
+
+    /// Codes that need a text without `[school] id`: `completed()` adds one to every example, so no
+    /// example can trigger them; a unit test covers each.
+    const SCHOOL_ID_STAMPED: &[&str] = &["mastersos_claims_without_school_id"];
 
     /// Codes that need the server's state (registered keys, the school's id, the fleet, the
     /// latest version): check_text never reports them, so the spec gives no check= example.

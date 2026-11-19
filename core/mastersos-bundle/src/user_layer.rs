@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::lint::{lint_app_formats, lint_deb_entries, lint_drop_sets, lint_web_app_entries};
 use crate::lint::{DropOwner, DropSet};
 use crate::manifest::*;
-use crate::Lint;
+use crate::{Lint, LintLevel};
 
 /// What a user config lifts from the learning lock (design §2.3). Effective capabilities are
 /// the preset's, plus `allow`, minus `deny` (deny wins).
@@ -1196,6 +1196,434 @@ pub fn guest_user_config(m: &Manifest, group_id: &str) -> Option<String> {
     )
 }
 
+/// The list conditions of a rule as `(key, entries)`, `None` when not written; `admin` is the
+/// only condition that is not a list.
+fn list_conditions(r: &Assign) -> [(&'static str, Option<usize>); 10] {
+    fn n<T>(v: &Option<Vec<T>>) -> Option<usize> {
+        v.as_ref().map(Vec::len)
+    }
+    [
+        ("kind", n(&r.kind)),
+        ("user", n(&r.user)),
+        ("device_group", n(&r.device_group)),
+        ("org_role", n(&r.org_role)),
+        ("class_role", n(&r.class_role)),
+        ("class", n(&r.class)),
+        ("org_node", n(&r.org_node)),
+        ("age_band", n(&r.age_band)),
+        ("sub", n(&r.sub)),
+        ("admin", r.admin.map(|_| 1)),
+    ]
+}
+
+/// The issuer-fact conditions a rule writes (design §2.1), in key order.
+fn fact_conditions(r: &Assign) -> Vec<&'static str> {
+    list_conditions(r)
+        .into_iter()
+        .filter(|(k, n)| {
+            n.is_some()
+                && matches!(
+                    *k,
+                    "org_role" | "class_role" | "class" | "org_node" | "age_band" | "sub"
+                )
+        })
+        .map(|(k, _)| k)
+        .collect()
+}
+
+/// An error-level lint at `path`.
+fn bad(code: &'static str, message: String, path: String) -> Lint {
+    Lint::new(LintLevel::Error, code, message).at(path)
+}
+
+/// The `check` errors of the user layer design (§2.1) that `validate_all` adds: the
+/// `[school.oidc]` keys `login_domain` and `mastersos_claims` (every format), then for a
+/// `format = 3` text the fallback, the user config ids and references, the rules, which layer
+/// may hold which scripts and .deb apps, and .deb ids that clash on one Group.
+pub fn validate_user_layer(m: &Manifest, out: &mut Vec<Lint>) {
+    if let Some(o) = &m.school.oidc {
+        if let Some(d) = &o.login_domain {
+            // Compared as the Device compares a login's domain with allowed_domains.
+            if !m
+                .school
+                .allowed_domains
+                .iter()
+                .any(|a| a.eq_ignore_ascii_case(d))
+            {
+                out.push(
+                    bad(
+                        "login_domain_not_allowed",
+                        format!(
+                            "school.oidc.login_domain {d:?} is not in allowed_domains: the names it completes could never sign in; add it to allowed_domains or change it."
+                        ),
+                        "school.oidc.login_domain".into(),
+                    )
+                    .param("domain", d),
+                );
+            }
+        }
+        if o.mastersos_claims && m.school.id.is_none() {
+            out.push(bad(
+                "mastersos_claims_without_school_id",
+                "school.oidc.mastersos_claims = true needs [school] id: the Device asks the issuer for that organisation and checks the token names it; add the school id or remove mastersos_claims."
+                    .into(),
+                "school.oidc.mastersos_claims".into(),
+            ));
+        }
+    }
+    let Some(u) = &m.user_layer else {
+        return;
+    };
+    let mut ids = BTreeSet::new();
+    for c in &u.configs {
+        let at = format!("user_config.{}", c.id);
+        if c.id.is_empty() || c.id.len() > 64 {
+            out.push(
+                bad(
+                    "user_config_id_invalid",
+                    format!(
+                        "User config id {:?} must be 1 to 64 bytes: rules and [user] fallback name it.",
+                        c.id
+                    ),
+                    at.clone(),
+                )
+                .param("id", &c.id),
+            );
+        }
+        if !ids.insert(c.id.as_str()) {
+            out.push(
+                bad(
+                    "user_config_duplicate_id",
+                    format!(
+                        "User config id {} appears more than once: give each user config its own id.",
+                        c.id
+                    ),
+                    at,
+                )
+                .param("id", &c.id),
+            );
+        }
+    }
+    match &u.fallback {
+        None => out.push(bad(
+            "user_fallback_missing",
+            "[user] fallback is missing: it names the user config of a person no rule matches; add [user] with fallback = \"<user config id>\"."
+                .into(),
+            "user.fallback".into(),
+        )),
+        Some(f) if !ids.contains(f.as_str()) => out.push(
+            bad(
+                "user_config_unknown",
+                format!(
+                    "[user] fallback names user config {f:?}, which does not exist: name an existing [[user_config]] id or add it."
+                ),
+                "user.fallback".into(),
+            )
+            .param("user_config", f),
+        ),
+        Some(_) => {}
+    }
+    let groups: BTreeSet<&str> = m.groups.iter().map(|g| g.id.as_str()).collect();
+    let mut catch_all: Option<usize> = None;
+    for (i, r) in u.rules.iter().enumerate() {
+        let at = format!("assign[{i}]");
+        if !ids.contains(r.user_config.as_str()) {
+            out.push(
+                bad(
+                    "user_config_unknown",
+                    format!(
+                        "Rule {at} names user config {:?}, which does not exist: name an existing [[user_config]] id or add it.",
+                        r.user_config
+                    ),
+                    format!("{at}.user_config"),
+                )
+                .param("user_config", &r.user_config),
+            );
+        }
+        if let Some(first) = catch_all {
+            out.push(
+                bad(
+                    "assign_unreachable",
+                    format!(
+                        "Rule {at} comes after rule assign[{first}], which has no condition and matches everyone: {at} never matches; move it before assign[{first}] or remove it."
+                    ),
+                    at.clone(),
+                )
+                .param("rule", first),
+            );
+        }
+        let conditions = list_conditions(r);
+        if catch_all.is_none() && conditions.iter().all(|(_, n)| n.is_none()) {
+            catch_all = Some(i);
+        }
+        for (key, n) in conditions {
+            if n == Some(0) {
+                out.push(
+                    bad(
+                        "assign_empty_list",
+                        format!(
+                            "Rule {at} writes {key} = []: an empty list never matches, so the rule never does; list values or leave {key} out."
+                        ),
+                        format!("{at}.{key}"),
+                    )
+                    .param("key", key),
+                );
+            }
+        }
+        for (key, list) in [
+            ("class", &r.class),
+            ("org_node", &r.org_node),
+            ("sub", &r.sub),
+        ] {
+            for (k, id) in list.iter().flatten().enumerate() {
+                if !valid_school_id(id) {
+                    out.push(
+                        bad(
+                            "assign_id_invalid",
+                            format!(
+                                "Rule {at}: {key} entry {id:?} is not a lowercase UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx), so it never matches; copy the id as the issuer gives it."
+                            ),
+                            format!("{at}.{key}[{k}]"),
+                        )
+                        .param("key", key)
+                        .param("value", id),
+                    );
+                }
+            }
+        }
+        for (k, g) in r.device_group.iter().flatten().enumerate() {
+            if !groups.contains(g.as_str()) {
+                out.push(
+                    bad(
+                        "assign_device_group_unknown",
+                        format!(
+                            "Rule {at}: device_group names group {g:?}, which does not exist: name an existing [[group]] id."
+                        ),
+                        format!("{at}.device_group[{k}]"),
+                    )
+                    .param("group", g),
+                );
+            }
+        }
+    }
+    // Scripts and .deb apps by layer (design §3): the user layer runs login scripts and shows
+    // non-kiosk .deb apps; the device layer runs apply scripts and kiosk .deb apps.
+    let user_tables = std::iter::once((
+        "user_defaults".to_owned(),
+        &u.defaults.scripts,
+        &u.defaults.apps.deb,
+    ))
+    .chain(
+        u.configs
+            .iter()
+            .map(|c| (format!("user_config.{}", c.id), &c.scripts, &c.apps.deb)),
+    );
+    for (base, scripts, debs) in user_tables {
+        for (i, sc) in scripts.iter().enumerate() {
+            if sc.when == When::Apply {
+                out.push(
+                    bad(
+                        "script_apply_in_user_config",
+                        format!(
+                            "{base}.scripts[{i}]: script {} runs when = \"apply\" (the default), which only a device config can: write when = \"login\", or move it to a device config.",
+                            sc.path
+                        ),
+                        format!("{base}.scripts[{i}]"),
+                    )
+                    .param("script", &sc.path),
+                );
+            }
+        }
+        for (id, a) in debs.iter().filter(|(_, a)| a.kiosk) {
+            out.push(
+                bad(
+                    "deb_kiosk_in_user_config",
+                    format!(
+                        "{base}.apps.deb.{id}: .deb app {:?} has kiosk = true, which only a device config can hold: move it to a device config, or remove kiosk.",
+                        a.name
+                    ),
+                    format!("{base}.apps.deb.{id}.kiosk"),
+                )
+                .param("app_id", id),
+            );
+        }
+    }
+    let device_tables = m
+        .defaults
+        .iter()
+        .map(|d| ("device_defaults".to_owned(), &d.scripts, &d.apps.deb))
+        .chain(
+            m.configs
+                .iter()
+                .map(|c| (format!("device_config.{}", c.id), &c.scripts, &c.apps.deb)),
+        );
+    for (base, scripts, debs) in device_tables {
+        for (i, sc) in scripts.iter().enumerate() {
+            if sc.when == When::Login {
+                out.push(
+                    bad(
+                        "script_login_in_device_config",
+                        format!(
+                            "{base}.scripts[{i}]: script {} runs when = \"login\", which only a user config can: move it to a user config, or make it an apply script.",
+                            sc.path
+                        ),
+                        format!("{base}.scripts[{i}]"),
+                    )
+                    .param("script", &sc.path),
+                );
+            }
+        }
+        for (id, a) in debs.iter().filter(|(_, a)| !a.kiosk) {
+            out.push(
+                bad(
+                    "deb_not_kiosk_in_device_config",
+                    format!(
+                        "{base}.apps.deb.{id}: .deb app {:?} is not a kiosk app, and a device config holds only kiosk .deb apps: move it to a user config's apps.deb, or write kiosk = true.",
+                        a.name
+                    ),
+                    format!("{base}.apps.deb.{id}"),
+                )
+                .param("app_id", id),
+            );
+        }
+    }
+    lint_deb_conflicts(m, u, out);
+}
+
+/// `user_deb_conflict`: on each Group, a non-kiosk .deb id that two reachable user configs
+/// define differently (after the merge with `[user_defaults]`), or that is the id of a kiosk .deb
+/// app of the Group's device config. A Device installs one .deb per id. Reported once per .deb
+/// id (the first clash met, Groups in order), at the second user config's entry, or at
+/// `user_defaults.apps.deb.<id>` when that config inherits it.
+fn lint_deb_conflicts(m: &Manifest, u: &UserLayer, out: &mut Vec<Lint>) {
+    let mut reported = BTreeSet::new();
+    for g in &m.groups {
+        let kiosk: BTreeSet<String> = m
+            .config(&g.config)
+            .map(|c| effective_config(m, c).apps.deb)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(_, a)| a.kiosk)
+            .map(|(id, _)| id)
+            .collect();
+        let mut seen: BTreeMap<String, (String, DebApp)> = BTreeMap::new();
+        for cid in reachable_user_configs(m, &g.id) {
+            let Some(c) = u.configs.iter().find(|c| c.id == cid) else {
+                continue;
+            };
+            for (id, a) in effective_user_config(u, c).deb {
+                if a.kiosk || reported.contains(&id) {
+                    continue;
+                }
+                let other = if kiosk.contains(&id) {
+                    Some(format!(
+                        "the kiosk .deb app {id:?} of device config {}",
+                        g.config
+                    ))
+                } else {
+                    match seen.get(&id) {
+                        Some((first, b)) if *b != a => Some(format!("user config {first}")),
+                        Some(_) => None,
+                        None => {
+                            seen.insert(id.clone(), (cid.clone(), a));
+                            None
+                        }
+                    }
+                };
+                let Some(other) = other else {
+                    continue;
+                };
+                let path = if c.apps.deb.contains_key(&id) {
+                    format!("user_config.{cid}.apps.deb.{id}")
+                } else {
+                    format!("user_defaults.apps.deb.{id}")
+                };
+                out.push(
+                    bad(
+                        "user_deb_conflict",
+                        format!(
+                            "User config {cid} defines .deb app {id:?} differently from {other}, and both apply on group {}: a Device installs one .deb per id; give them the same definition or different ids.",
+                            g.id
+                        ),
+                        path,
+                    )
+                    .param("app_id", &id)
+                    .param("user_config", &cid)
+                    .param("group", &g.id),
+                );
+                reported.insert(id);
+            }
+        }
+    }
+}
+
+/// The `check` warnings of the user layer design (§2.1) that [`crate::lint_at`] adds for a
+/// `format = 3` text: rules on issuer facts that cannot match without
+/// `school.oidc.mastersos_claims`, user configs nobody gets, and user configs with `terminal`.
+pub fn lint_user_layer(m: &Manifest) -> Vec<Lint> {
+    let mut out = Vec::new();
+    let Some(u) = &m.user_layer else {
+        return out;
+    };
+    let claims = m.school.oidc.as_ref().is_some_and(|o| o.mastersos_claims);
+    for (i, r) in u.rules.iter().enumerate() {
+        let facts = fact_conditions(r);
+        if claims || facts.is_empty() {
+            continue;
+        }
+        out.push(
+            Lint::new(
+                LintLevel::Warning,
+                "facts_without_mastersos_claims",
+                format!(
+                    "Rule assign[{i}] uses {}: this rule never matches: the issuer sends no facts unless school.oidc.mastersos_claims = true",
+                    facts.join(", ")
+                ),
+            )
+            .at(format!("assign[{i}]"))
+            .param("keys", facts.join(",")),
+        );
+    }
+    let named: BTreeSet<&str> = u
+        .rules
+        .iter()
+        .map(|r| r.user_config.as_str())
+        .chain(u.fallback.as_deref())
+        .collect();
+    for c in &u.configs {
+        let at = format!("user_config.{}", c.id);
+        if !named.contains(c.id.as_str()) {
+            out.push(
+                Lint::new(
+                    LintLevel::Warning,
+                    "user_config_unreached",
+                    format!(
+                        "No rule names user config {} and it is not [user] fallback: nobody gets it; name it in an [[assign]] rule or remove it.",
+                        c.id
+                    ),
+                )
+                .at(at.clone())
+                .param("user_config", &c.id),
+            );
+        }
+        if effective_user_config(u, c)
+            .caps
+            .contains(&Capability::Terminal)
+        {
+            out.push(
+                Lint::new(
+                    LintLevel::Warning,
+                    "user_config_terminal",
+                    "terminal defeats every other lock: environment, user Flatpaks, .desktop files; the session is effectively full",
+                )
+                .at(at)
+                .param("user_config", &c.id),
+            );
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1673,8 +2101,15 @@ mod tests {
     fn spec_example_v3_validates_clean() {
         let m = Manifest::parse(&v3_example()).unwrap();
         assert_eq!(m.validate_all(&Default::default()), []);
+        // Ruling R15: exactly the warnings the example is meant to give.
         let all = issues("", "");
-        assert!(!all.iter().any(|(_, p)| p.starts_with("user_")), "{all:?}");
+        let want = [
+            ("facts_without_mastersos_claims", "assign[1]"),
+            ("facts_without_mastersos_claims", "assign[2]"),
+            ("user_config_terminal", "user_config.teacher"),
+        ]
+        .map(|(c, p)| (c.to_string(), p.to_string()));
+        assert_eq!(all, want);
     }
 
     #[test]
@@ -1709,7 +2144,11 @@ mod tests {
             "scripts = [{ path = \"scripts/ok.sh\", when = \"login\" }]",
             "",
         );
-        assert!(!all.iter().any(|(_, p)| p.starts_with("user_")), "{all:?}");
+        assert!(
+            !all.iter()
+                .any(|(c, p)| p.starts_with("user_") && c != "user_config_terminal"),
+            "{all:?}"
+        );
     }
 
     #[test]
@@ -1832,7 +2271,7 @@ mod tests {
         // The teacher's drop of the inherited URLBlocklist (the spec example) is fine.
         assert!(
             !all.iter()
-                .any(|(_, p)| p.starts_with("user_config.teacher")),
+                .any(|(c, p)| p.starts_with("user_config.teacher") && c != "user_config_terminal"),
             "{all:?}"
         );
         let m = Manifest::parse(&v3_example().replacen(
@@ -1864,7 +2303,7 @@ mod tests {
         assert_eq!(v[0].code, "file_missing");
         assert_eq!(
             v[0].path.as_deref(),
-            Some("config.classroom.scripts[0].path")
+            Some("device_config.classroom.scripts[0].path")
         );
     }
 
@@ -2173,5 +2612,634 @@ mod tests {
         assert_eq!(f.classes[0].role, ClassRole::Student);
         let min: IssuerFacts = serde_json::from_str(r#"{"sub":"s","org":"o"}"#).unwrap();
         assert!(min.org_nodes.is_empty() && min.classes.is_empty() && min.org_role.is_none());
+    }
+
+    // ---- checks and warnings (Task 4) ----
+
+    const SCHOOL_ID_LINE: &str = "id = \"0193a0c2-0000-7000-8000-0000000000aa\"\n";
+    const OIDC_END: &str = "client_id = \"mastersos\" }";
+
+    /// The files of the bundle in these tests: the v2 example's, and one script.
+    fn files() -> BTreeSet<String> {
+        let mut f = crate::testutil::spec_example_present();
+        f.insert("scripts/x.sh".into());
+        f
+    }
+
+    fn codes(v: &[Lint]) -> Vec<&str> {
+        v.iter().map(|l| l.code).collect()
+    }
+
+    /// The v3 example with `from` replaced by `to` (once; `from` must be there).
+    fn v3_edit(from: &str, to: &str) -> String {
+        let text = v3_example();
+        assert!(text.contains(from), "{from}");
+        text.replacen(from, to, 1)
+    }
+
+    /// The v3 example with `extra` written into user config `id` (after its `name`).
+    fn v3_in_user_config(id: &str, extra: &str) -> String {
+        let name = match id {
+            "primary" => "name = \"Grade 1-6\"\n",
+            _ => "name = \"Teachers\"\n",
+        };
+        v3_edit(name, &format!("{name}{extra}\n"))
+    }
+
+    fn errors_of(text: &str) -> Vec<Lint> {
+        Manifest::parse(text).unwrap().validate_all(&files())
+    }
+
+    /// `validate_all` gives exactly one error, `code` at `path`.
+    fn only_error(text: &str, code: &str, path: &str) {
+        let v = errors_of(text);
+        assert_eq!(codes(&v), [code], "{v:?}");
+        assert_eq!(v[0].path.as_deref(), Some(path), "{v:?}");
+    }
+
+    fn warnings_of(text: &str) -> Vec<Lint> {
+        let m = Manifest::parse(text).unwrap();
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 11, 19).unwrap();
+        crate::lint_at(&m, &files(), today)
+    }
+
+    fn has_lint(v: &[Lint], code: &str, path: &str) -> bool {
+        v.iter()
+            .any(|l| l.code == code && l.path.as_deref() == Some(path))
+    }
+
+    fn v3_example_with_login_domain_and_claims() -> String {
+        v3_edit(
+            OIDC_END,
+            "client_id = \"mastersos\", login_domain = \"school.ac.th\", mastersos_claims = true }",
+        )
+    }
+
+    /// The line (1-based) of the first line of `text` equal to `line` at or after line `from`.
+    fn line_of(text: &str, line: &str, from: usize) -> u32 {
+        text.lines()
+            .enumerate()
+            .skip(from.saturating_sub(1))
+            .find(|(_, l)| *l == line)
+            .map(|(i, _)| i as u32 + 1)
+            .unwrap_or_else(|| panic!("{line}"))
+    }
+
+    #[test]
+    fn locator_finds_v3_paths() {
+        let text = v3_example();
+        let at = |path: &str| crate::check::locate(&text, path).map(|s| s.line);
+        let teacher = line_of(&text, "id = \"teacher\"", 1);
+        assert_eq!(at("user_config.teacher"), Some(teacher - 1));
+        assert_eq!(at("user_config.primary"), Some(teacher - 5));
+        let assigns: Vec<u32> = text
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| *l == "[[assign]]")
+            .map(|(i, _)| i as u32 + 1)
+            .collect();
+        assert_eq!(at("assign[1]"), Some(assigns[1]));
+        assert_eq!(at("assign[2].org_node"), Some(assigns[2] + 2));
+        assert_eq!(
+            at("user.fallback"),
+            Some(line_of(&text, "fallback = \"primary\"", 1))
+        );
+        let device = line_of(&text, "[[device_config]]", 1);
+        assert_eq!(at("device_config.classroom"), Some(device));
+        assert_eq!(at("device_config.classroom.name"), Some(device + 2));
+        assert_eq!(
+            at("device_defaults.login_methods"),
+            Some(line_of(&text, "login_methods = [\"sso\", \"guest\"]", 1))
+        );
+        // A missing `[user]` places nothing.
+        let no_user = v3_edit("[user]\nfallback = \"primary\"\n", "");
+        assert_eq!(crate::check::locate(&no_user, "user.fallback"), None);
+        // check_text places a device-layer issue of a format 3 text at its device_config line.
+        let text = v3_edit(
+            "name = \"Classroom laptops\"\n",
+            "name = \"Classroom laptops\"\nscripts = [{ path = \"scripts/missing.sh\" }]\n",
+        );
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 11, 19).unwrap();
+        let checked = crate::check::check_text(&text, &files(), today);
+        let missing = checked
+            .issues
+            .iter()
+            .find(|l| l.code == "file_missing")
+            .unwrap();
+        assert_eq!(
+            missing.path.as_deref(),
+            Some("device_config.classroom.scripts[0].path")
+        );
+        assert!(missing
+            .message
+            .starts_with("device_config.classroom.scripts[0].path:"));
+        assert_eq!(
+            missing.span.unwrap().line,
+            line_of(&text, "scripts = [{ path = \"scripts/missing.sh\" }]", 1)
+        );
+        // The repeated user config is the one placed.
+        let text = v3_with("[[user_config]]\nid = \"teacher\"\nname = \"Again\"");
+        let checked = crate::check::check_text(&text, &files(), today);
+        let dup = checked
+            .issues
+            .iter()
+            .find(|l| l.code == "user_config_duplicate_id")
+            .unwrap();
+        let second = line_of(&text, "id = \"teacher\"", teacher as usize + 1);
+        assert_eq!(dup.span.unwrap().line, second - 1);
+    }
+
+    #[test]
+    fn device_layer_paths_never_touch_other_paths() {
+        let text = v3_with("[[user_config]]\nid = \"spare\"\nname = \"Spare\"");
+        let w = warnings_of(&text);
+        assert!(
+            has_lint(&w, "user_config_unreached", "user_config.spare"),
+            "{w:?}"
+        );
+        assert!(w.iter().all(|l| {
+            let p = l.path.as_deref().unwrap_or("");
+            !p.starts_with("config") && !p.starts_with("defaults")
+        }));
+    }
+
+    #[test]
+    fn spec_example_v3_gives_only_the_intended_issues() {
+        let m = Manifest::parse(&v3_example()).unwrap();
+        assert_eq!(m.validate_all(&files()), []);
+        let w = warnings_of(&v3_example());
+        let got: Vec<(&str, &str)> = w
+            .iter()
+            .map(|l| (l.code, l.path.as_deref().unwrap_or("")))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("facts_without_mastersos_claims", "assign[1]"),
+                ("facts_without_mastersos_claims", "assign[2]"),
+                ("user_config_terminal", "user_config.teacher"),
+            ],
+            "{w:?}"
+        );
+        // With the issuer profile on, the rules on facts can match.
+        let w = warnings_of(&v3_example_with_login_domain_and_claims());
+        assert_eq!(codes(&w), ["user_config_terminal"], "{w:?}");
+        assert!(errors_of(&v3_example_with_login_domain_and_claims()).is_empty());
+    }
+
+    #[test]
+    fn user_fallback_missing() {
+        only_error(
+            &v3_edit("[user]\nfallback = \"primary\"\n", ""),
+            "user_fallback_missing",
+            "user.fallback",
+        );
+    }
+
+    #[test]
+    fn user_config_unknown() {
+        only_error(
+            &v3_with("[[assign]]\nuser_config = \"nobody\"\nkind = [\"guest\"]"),
+            "user_config_unknown",
+            "assign[3].user_config",
+        );
+        only_error(
+            &v3_edit("fallback = \"primary\"", "fallback = \"nobody\""),
+            "user_config_unknown",
+            "user.fallback",
+        );
+    }
+
+    #[test]
+    fn user_config_duplicate_id() {
+        only_error(
+            &v3_with("[[user_config]]\nid = \"teacher\"\nname = \"Again\""),
+            "user_config_duplicate_id",
+            "user_config.teacher",
+        );
+    }
+
+    #[test]
+    fn user_config_id_invalid() {
+        only_error(
+            &v3_with("[[user_config]]\nid = \"\"\nname = \"x\""),
+            "user_config_id_invalid",
+            "user_config.",
+        );
+        let long = "a".repeat(65);
+        only_error(
+            &v3_with(&format!("[[user_config]]\nid = \"{long}\"\nname = \"x\"")),
+            "user_config_id_invalid",
+            &format!("user_config.{long}"),
+        );
+        let ok = "a".repeat(64);
+        let text = v3_with(&format!("[[user_config]]\nid = \"{ok}\"\nname = \"x\""));
+        assert!(errors_of(&text).is_empty());
+    }
+
+    #[test]
+    fn assign_unreachable() {
+        let text = v3_with(
+            "[[assign]]\nuser_config = \"primary\"\n\
+             [[assign]]\nuser_config = \"teacher\"\nkind = [\"local\"]\n\
+             [[assign]]\nuser_config = \"teacher\"\nadmin = false",
+        );
+        let v = errors_of(&text);
+        assert_eq!(
+            codes(&v),
+            ["assign_unreachable", "assign_unreachable"],
+            "{v:?}"
+        );
+        assert_eq!(v[0].path.as_deref(), Some("assign[4]"));
+        assert_eq!(v[1].path.as_deref(), Some("assign[5]"));
+        // A rule without conditions at the end is fine.
+        assert!(errors_of(&v3_with("[[assign]]\nuser_config = \"primary\"")).is_empty());
+    }
+
+    #[test]
+    fn assign_id_invalid() {
+        only_error(
+            &v3_edit(
+                "0193a0c2-0000-7000-8000-000000000001",
+                "0193A0C2-0000-7000-8000-000000000001",
+            ),
+            "assign_id_invalid",
+            "assign[2].org_node[0]",
+        );
+        only_error(
+            &v3_with(&format!(
+                "[[assign]]\nuser_config = \"primary\"\nclass = [\"{TEACHER}\"]\nsub = [\"bob\"]"
+            )),
+            "assign_id_invalid",
+            "assign[3].sub[0]",
+        );
+    }
+
+    #[test]
+    fn assign_device_group_unknown() {
+        only_error(
+            &v3_with(
+                "[[assign]]\nuser_config = \"primary\"\ndevice_group = [\"default\", \"nope\"]",
+            ),
+            "assign_device_group_unknown",
+            "assign[3].device_group[1]",
+        );
+    }
+
+    #[test]
+    fn assign_empty_list() {
+        only_error(
+            &v3_with("[[assign]]\nuser_config = \"primary\"\nkind = []"),
+            "assign_empty_list",
+            "assign[3].kind",
+        );
+    }
+
+    #[test]
+    fn script_apply_in_user_config() {
+        only_error(
+            &v3_in_user_config("teacher", "scripts = [{ path = \"scripts/x.sh\" }]"),
+            "script_apply_in_user_config",
+            "user_config.teacher.scripts[0]",
+        );
+        only_error(
+            &v3_edit(
+                "[user_defaults]\n",
+                "[user_defaults]\nscripts = [{ path = \"scripts/x.sh\", when = \"apply\" }]\n",
+            ),
+            "script_apply_in_user_config",
+            "user_defaults.scripts[0]",
+        );
+    }
+
+    #[test]
+    fn script_login_in_device_config() {
+        only_error(
+            &v3_edit(
+                "name = \"Classroom laptops\"\n",
+                "name = \"Classroom laptops\"\nscripts = [{ path = \"scripts/x.sh\", when = \"login\" }]\n",
+            ),
+            "script_login_in_device_config",
+            "device_config.classroom.scripts[0]",
+        );
+        only_error(
+            &v3_edit(
+                "[device_defaults]\n",
+                "[device_defaults]\nscripts = [{ path = \"scripts/x.sh\", when = \"login\" }]\n",
+            ),
+            "script_login_in_device_config",
+            "device_defaults.scripts[0]",
+        );
+    }
+
+    #[test]
+    fn deb_kiosk_in_user_config() {
+        only_error(
+            &v3_in_user_config(
+                "teacher",
+                "apps.deb.zoom = { name = \"Zoom\", url = \"https://x.org/z.deb\", kiosk = true }",
+            ),
+            "deb_kiosk_in_user_config",
+            "user_config.teacher.apps.deb.zoom.kiosk",
+        );
+    }
+
+    #[test]
+    fn deb_not_kiosk_in_device_config() {
+        only_error(
+            &v3_with("apps.deb.zoom = { name = \"Zoom\", url = \"https://x.org/z.deb\" }"),
+            "deb_not_kiosk_in_device_config",
+            "device_config.classroom.apps.deb.zoom",
+        );
+        only_error(
+            &v3_edit(
+                "[device_defaults]\n",
+                "[device_defaults]\napps.deb.zoom = { name = \"Zoom\", url = \"https://x.org/z.deb\" }\n",
+            ),
+            "deb_not_kiosk_in_device_config",
+            "device_defaults.apps.deb.zoom",
+        );
+        // A kiosk .deb app belongs there.
+        let text = v3_with(
+            "apps.deb.zoom = { name = \"Zoom\", url = \"https://x.org/z.deb\", kiosk = true }",
+        );
+        assert!(errors_of(&text).is_empty());
+    }
+
+    #[test]
+    fn user_deb_conflict() {
+        let zoom = |url: &str| format!("apps.deb.zoom = {}", deb("Zoom", url));
+        let both = |a: &str, b: &str| {
+            v3_in_user_config("teacher", &zoom(b)).replacen(
+                "name = \"Grade 1-6\"\n",
+                &format!("name = \"Grade 1-6\"\n{}\n", zoom(a)),
+                1,
+            )
+        };
+        // Reported once, at the second user config reachable on the Group.
+        only_error(
+            &both("https://a.org/z.deb", "https://b.org/z.deb"),
+            "user_deb_conflict",
+            "user_config.primary.apps.deb.zoom",
+        );
+        // The same definition twice is no conflict.
+        assert!(errors_of(&both("https://a.org/z.deb", "https://a.org/z.deb")).is_empty());
+        // Nor is a user config no Group can give.
+        let spare = v3_with(&format!(
+            "[[user_config]]\nid = \"spare\"\nname = \"Spare\"\n{}",
+            zoom("https://b.org/z.deb")
+        ));
+        let spare = spare.replacen(
+            "name = \"Grade 1-6\"\n",
+            &format!("name = \"Grade 1-6\"\n{}\n", zoom("https://a.org/z.deb")),
+            1,
+        );
+        assert!(errors_of(&spare).is_empty());
+        // A user config .deb app with the id of the device's kiosk .deb app.
+        let text = v3_in_user_config("primary", &zoom("https://a.org/z.deb")).replacen(
+            "name = \"Classroom laptops\"\n",
+            "name = \"Classroom laptops\"\n\
+             apps.deb.zoom = { name = \"Zoom\", url = \"https://a.org/z.deb\", kiosk = true }\n",
+            1,
+        );
+        only_error(
+            &text,
+            "user_deb_conflict",
+            "user_config.primary.apps.deb.zoom",
+        );
+    }
+
+    #[test]
+    fn login_domain_not_allowed() {
+        only_error(
+            &v3_edit(
+                OIDC_END,
+                "client_id = \"mastersos\", login_domain = \"kids.school.ac.th\" }",
+            ),
+            "login_domain_not_allowed",
+            "school.oidc.login_domain",
+        );
+        // Compared ignoring ASCII case, as a login's domain is.
+        assert!(errors_of(&v3_edit(
+            OIDC_END,
+            "client_id = \"mastersos\", login_domain = \"School.ac.th\" }"
+        ))
+        .is_empty());
+        // Every format.
+        let v2 = crate::testutil::spec_example();
+        assert!(v2.contains(OIDC_END));
+        let v2 = v2.replacen(
+            OIDC_END,
+            "client_id = \"mastersos\", login_domain = \"kids.school.ac.th\" }",
+            1,
+        );
+        let v = Manifest::parse(&v2)
+            .unwrap()
+            .validate_all(&crate::testutil::spec_example_present());
+        assert_eq!(codes(&v), ["login_domain_not_allowed"], "{v:?}");
+        // A malformed login_domain is oidc_invalid (the lint of every [school.oidc] key).
+        let w = warnings_of(&v3_edit(
+            OIDC_END,
+            "client_id = \"mastersos\", login_domain = \"School.ac.th\" }",
+        ));
+        assert!(has_lint(&w, "oidc_invalid", "school.oidc"), "{w:?}");
+    }
+
+    #[test]
+    fn mastersos_claims_without_school_id() {
+        let text = v3_edit(SCHOOL_ID_LINE, "").replacen(
+            OIDC_END,
+            "client_id = \"mastersos\", mastersos_claims = true }",
+            1,
+        );
+        only_error(
+            &text,
+            "mastersos_claims_without_school_id",
+            "school.oidc.mastersos_claims",
+        );
+        assert!(errors_of(&v3_edit(SCHOOL_ID_LINE, "")).is_empty());
+    }
+
+    #[test]
+    fn facts_without_mastersos_claims() {
+        let w = warnings_of(&v3_example());
+        let facts: Vec<&Lint> = w
+            .iter()
+            .filter(|l| l.code == "facts_without_mastersos_claims")
+            .collect();
+        assert_eq!(facts.len(), 2, "{w:?}");
+        assert_eq!(facts[0].path.as_deref(), Some("assign[1]"));
+        assert_eq!(facts[1].path.as_deref(), Some("assign[2]"));
+        assert!(facts[0].message.contains(
+            "this rule never matches: the issuer sends no facts unless school.oidc.mastersos_claims = true"
+        ));
+        assert_eq!(facts[0].level, LintLevel::Warning);
+        // Without [school.oidc] at all, too.
+        let text = v3_edit(
+            "oidc = { issuer = \"https://sso.school.ac.th\", client_id = \"mastersos\" }\n",
+            "",
+        )
+        .replace(
+            "login_methods = [\"sso\", \"guest\"]",
+            "login_methods = [\"guest\"]",
+        );
+        let w = warnings_of(&text);
+        assert_eq!(
+            w.iter()
+                .filter(|l| l.code == "facts_without_mastersos_claims")
+                .count(),
+            2,
+            "{w:?}"
+        );
+        // With the issuer profile, none.
+        let w = warnings_of(&v3_example_with_login_domain_and_claims());
+        assert!(!codes(&w).contains(&"facts_without_mastersos_claims"));
+    }
+
+    #[test]
+    fn user_config_unreached() {
+        let w = warnings_of(&v3_with(
+            "[[user_config]]\nid = \"spare\"\nname = \"Spare\"",
+        ));
+        assert!(
+            has_lint(&w, "user_config_unreached", "user_config.spare"),
+            "{w:?}"
+        );
+        // The fallback and the configs rules name are reached.
+        let w = warnings_of(&v3_example());
+        assert!(!codes(&w).contains(&"user_config_unreached"), "{w:?}");
+    }
+
+    #[test]
+    fn user_config_terminal() {
+        let w = warnings_of(&v3_example());
+        let t: Vec<&Lint> = w
+            .iter()
+            .filter(|l| l.code == "user_config_terminal")
+            .collect();
+        assert_eq!(t.len(), 1, "{w:?}");
+        assert_eq!(t[0].path.as_deref(), Some("user_config.teacher"));
+        assert_eq!(
+            t[0].message,
+            "terminal defeats every other lock: environment, user Flatpaks, .desktop files; the session is effectively full"
+        );
+        let w = warnings_of(&v3_in_user_config("primary", "allow = [\"terminal\"]"));
+        assert!(
+            has_lint(&w, "user_config_terminal", "user_config.primary"),
+            "{w:?}"
+        );
+        let w = warnings_of(&v3_in_user_config("teacher", "deny = [\"terminal\"]"));
+        assert!(!codes(&w).contains(&"user_config_terminal"), "{w:?}");
+    }
+
+    #[test]
+    fn features_report_format3_login_domain_and_claims() {
+        let m = Manifest::parse(&v3_example_with_login_domain_and_claims()).unwrap();
+        let f = features_used(&m);
+        assert!(
+            f.contains(&FEATURE_FORMAT_3)
+                && f.contains(&FEATURE_OIDC_LOGIN_DOMAIN)
+                && f.contains(&FEATURE_OIDC_MASTERSOS_CLAIMS),
+            "{f:?}"
+        );
+        assert_eq!(FEATURE_OIDC_LOGIN_DOMAIN, "oidc_login_domain");
+        assert_eq!(FEATURE_OIDC_MASTERSOS_CLAIMS, "oidc_mastersos_claims");
+        let plain = features_used(&Manifest::parse(&v3_example()).unwrap());
+        assert!(plain.contains(&FEATURE_FORMAT_3));
+        assert!(!plain.contains(&FEATURE_OIDC_LOGIN_DOMAIN));
+        assert!(!plain.contains(&FEATURE_OIDC_MASTERSOS_CLAIMS));
+        let v2 = features_used(&Manifest::parse(&crate::testutil::spec_example()).unwrap());
+        assert!(!v2.contains(&FEATURE_FORMAT_3));
+        // Where each is written, for the lints about Devices that do not know it.
+        assert_eq!(
+            crate::feature_path(&m, FEATURE_OIDC_LOGIN_DOMAIN),
+            "school.oidc.login_domain"
+        );
+        assert_eq!(
+            crate::feature_path(&m, FEATURE_OIDC_MASTERSOS_CLAIMS),
+            "school.oidc.mastersos_claims"
+        );
+        assert_eq!(crate::feature_path(&m, FEATURE_FORMAT_3), "format");
+        assert_eq!(crate::feature_path(&m, FEATURE_CONFIG), "device_config");
+    }
+
+    #[test]
+    fn mastersos_claims_defaults_false_and_is_omitted() {
+        let o: Oidc = toml::from_str("issuer = \"https://i.org\"\nclient_id = \"c\"").unwrap();
+        assert!(!o.mastersos_claims);
+        assert_eq!(o.login_domain, None);
+        let text = toml::to_string(&o).unwrap();
+        assert!(
+            !text.contains("mastersos_claims") && !text.contains("login_domain"),
+            "{text}"
+        );
+        let o = Oidc {
+            mastersos_claims: true,
+            login_domain: Some("school.ac.th".into()),
+            ..o
+        };
+        let text = toml::to_string(&o).unwrap();
+        assert!(text.contains("mastersos_claims = true"), "{text}");
+        assert!(text.contains("login_domain = \"school.ac.th\""), "{text}");
+        assert_eq!(toml::from_str::<Oidc>(&text).unwrap(), o);
+    }
+
+    // ---- existing rules on format 3 (R12) ----
+
+    #[test]
+    fn kiosk_flatpak_counts_the_install_union() {
+        let kiosk = "apps.kiosk.geo = { name = \"GeoGebra\", exec = \"org.geogebra.GeoGebra\" }";
+        let w = warnings_of(&v3_with(kiosk));
+        let missing: Vec<&Lint> = w
+            .iter()
+            .filter(|l| l.code == "kiosk_flatpak_missing")
+            .collect();
+        assert_eq!(missing.len(), 1, "{w:?}");
+        assert_eq!(
+            missing[0].path.as_deref(),
+            Some("device_config.classroom.apps.kiosk.geo.exec")
+        );
+        assert!(missing[0].message.contains("no user config"), "{w:?}");
+        let text = v3_in_user_config("primary", "apps.flatpak = [\"org.geogebra.GeoGebra\"]")
+            .replacen(
+                "name = \"Classroom laptops\"\n",
+                &format!("name = \"Classroom laptops\"\n{kiosk}\n"),
+                1,
+            );
+        let w = warnings_of(&text);
+        assert!(!codes(&w).contains(&"kiosk_flatpak_missing"), "{w:?}");
+    }
+
+    #[test]
+    fn flatpak_now_installed_sees_the_install_union() {
+        let mut prev =
+            Manifest::parse("version = 1\n[[group]]\nid = \"default\"\nname = \"d\"\n").unwrap();
+        prev.configs[0].legacy_browser = true;
+        let next = Manifest::parse(&v3_in_user_config(
+            "primary",
+            "apps.flatpak = [\"org.gimp.GIMP\"]",
+        ))
+        .unwrap();
+        let l = crate::flatpak_now_installed(&prev, &next);
+        assert_eq!(codes(&l), ["flatpak_now_installed"], "{l:?}");
+        assert_eq!(l[0].path.as_deref(), Some("device_config.classroom"));
+        assert_eq!(l[0].params["apps"], "org.gimp.GIMP");
+        assert!(l[0].message.contains("user configs"), "{l:?}");
+        let none = Manifest::parse(&v3_example()).unwrap();
+        assert!(crate::flatpak_now_installed(&prev, &none).is_empty());
+    }
+
+    #[test]
+    fn school_wifi_moved_names_device_defaults() {
+        let text = v3_edit(
+            "allowed_domains = [\"school.ac.th\"]\n",
+            "allowed_domains = [\"school.ac.th\"]\nwifi = [{ ssid = \"s\", psk = \"12345678\" }]\n",
+        );
+        let w = warnings_of(&text);
+        let moved = w.iter().find(|l| l.code == "school_wifi_moved").unwrap();
+        assert!(
+            moved.message.contains("[[device_defaults.wifi]]"),
+            "{moved:?}"
+        );
     }
 }

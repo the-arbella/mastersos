@@ -236,6 +236,8 @@ with PKCE and the fixed redirect `http://127.0.0.1:48123/callback`.
 | `card_hosts` | list of strings | optional; only the issuer's host | lowercase hostnames with at least two labels; no scheme, port, path, wildcard or IP address; none twice; at most 20 | `card_hosts = ["sso.school.ac.th"]` | Only with `card_navigation = "listed"`: the hosts the sign-in card may open besides the issuer, for example an upstream provider. Each is reached over `https` on port 443, and its subdomains are not included. With `"open"` they change nothing. Feature `oidc_card`, like `client_secret`. |
 | `card_navigation` | string | `"open"` | `"open"`, `"listed"` | `card_navigation = "listed"` | Which pages the sign-in card may open. `open`: any `https` page the sign-in pages link or redirect to (an upstream provider, a captcha, a help page), except what the Device's own `chrome_policy` `URLBlocklist` blocks. `listed`: only the issuer and `card_hosts`; a Device whose `URLBlocklist` contains `"*"` always gets a listed card. See [The sign-in card](#the-sign-in-card). Devices whose OS predates this key reject the whole Version (feature `oidc_card_navigation`) and keep the card `listed`. |
 | `idp_hint` | string | optional; none | 1 to 64 of `A-Z a-z 0-9 _ -` | `idp_hint = "school-sso"` | Only when `issuer` is a broker in front of the school's SSO: the broker's id for that upstream provider. Feature `oidc_idp_hint`. |
+| `login_domain` | string | optional; none | lowercase letters, digits, `.` and `-`, like an `allowed_domains` entry; must be one of `allowed_domains` | `login_domain = "students.school.ac.th"` | On the login screen an entry without `@` that is not a local account on the Device is read as `<entry>@<login_domain>`, so young children type only their user name; a local account with that exact name keeps precedence (`login_domain_not_allowed`). Feature `oidc_login_domain`. |
+| `mastersos_claims` | boolean | `false` | `true`, `false` | `mastersos_claims = true` | `true`: the issuer follows the MastersOS issuer profile: the Device asks for the school's organisation (needs `[school] id`, `mastersos_claims_without_school_id`), takes the user name from `login_name` and reads the facts that `[[assign]]` rules use. `false`: a plain OIDC issuer; no facts, the user name comes from `email`. Feature `oidc_mastersos_claims`. |
 
 ```toml check=ok
 [school.oidc]
@@ -1557,6 +1559,153 @@ config = "standard"
 **How to fix:** keep at most 200 domains. Triggered by any list of 201 or more domains (no example,
 for length).
 
+### `assign_device_group_unknown`
+
+**Level:** error. **Meaning:** an `[[assign]]` rule's `device_group` names a Group id that no `[[group]]` has.
+
+<!-- prompt:omit -->
+**Why:** the condition can never hold for that id, so the rule does not do what it says.
+<!-- /prompt:omit -->
+
+**How to fix:** name an existing `[[group]]` id, or remove the entry.
+
+<!-- prompt:omit -->
+```toml check=assign_device_group_unknown
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[[assign]]
+user_config = "student"
+device_group = ["library"]
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
+### `assign_empty_list`
+
+**Level:** error. **Meaning:** an `[[assign]]` rule writes a condition as an empty list (for example `kind = []`).
+
+<!-- prompt:omit -->
+**Why:** a list matches when any of its entries does, so an empty list never matches and the rule is dead.
+<!-- /prompt:omit -->
+
+**How to fix:** list the values the rule is for, or leave the key out to match everyone.
+
+<!-- prompt:omit -->
+```toml check=assign_empty_list
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[[assign]]
+user_config = "student"
+kind = []
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
+### `assign_id_invalid`
+
+**Level:** error. **Meaning:** a `class`, `org_node` or `sub` entry of an `[[assign]]` rule is not a lowercase UUID.
+
+<!-- prompt:omit -->
+**Why:** the issuer sends these ids as lowercase UUIDs, so any other spelling never matches.
+<!-- /prompt:omit -->
+
+**How to fix:** copy the id exactly as the settings server shows it (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`).
+
+<!-- prompt:omit -->
+```toml check=assign_id_invalid
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[[assign]]
+user_config = "student"
+class = ["Class-7A"]
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
+### `assign_unreachable`
+
+**Level:** error. **Meaning:** an `[[assign]]` rule comes after a rule that has no condition at all.
+
+<!-- prompt:omit -->
+**Why:** rules are tried in order and the first match wins; a rule without conditions matches everyone, so no later rule is ever reached.
+<!-- /prompt:omit -->
+
+**How to fix:** move the rule without conditions to the end, or remove it and use `[user] fallback` instead. Every later rule is reported.
+
+<!-- prompt:omit -->
+```toml check=assign_unreachable
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[[assign]]
+user_config = "student"
+
+[[assign]]
+user_config = "student"
+kind = ["guest"]
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
 ### `chrome_pause_invalid`
 
 **Level:** error. **Meaning:** `[config.chrome] pause_until` is not a real date in the form
@@ -1870,6 +2019,43 @@ config = "standard"
 ```
 <!-- /prompt:omit -->
 
+### `deb_kiosk_in_user_config`
+
+**Level:** error. **Meaning:** a `.deb` app in `[user_defaults]` or a `[[user_config]]` has `kiosk = true`.
+
+<!-- prompt:omit -->
+**Why:** kiosk apps run in their own session before anyone signs in, which is the device layer.
+<!-- /prompt:omit -->
+
+**How to fix:** move the app to the `apps.deb` of a `[[device_config]]` (or `[device_defaults]`), or remove `kiosk = true`.
+
+<!-- prompt:omit -->
+```toml check=deb_kiosk_in_user_config
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[user_config.apps.deb.testnav]
+name = "TestNav"
+url = "https://download.testnav.com/testnav.deb"
+kiosk = true
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
 ### `deb_name_invalid`
 
 **Level:** error. **Meaning:** a `.deb` app's `name` is empty, longer than 64 characters, or contains `:`, `,` or a control character.
@@ -1894,6 +2080,42 @@ url = "https://download.testnav.com/testnav.deb"
 id = "default"
 name = "Unassigned"
 config = "standard"
+```
+<!-- /prompt:omit -->
+
+### `deb_not_kiosk_in_device_config`
+
+**Level:** error. **Meaning:** a `.deb` app in `[device_defaults]` or a `[[device_config]]` does not have `kiosk = true`.
+
+<!-- prompt:omit -->
+**Why:** a device config holds only kiosk apps; the apps people see in their session belong to user configs, and the Device installs every app of the user configs it can give.
+<!-- /prompt:omit -->
+
+**How to fix:** move the app to the `apps.deb` of a `[[user_config]]` (or `[user_defaults]`), or write `kiosk = true` if it is a kiosk app.
+
+<!-- prompt:omit -->
+```toml check=deb_not_kiosk_in_device_config
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[device_config.apps.deb.zoom]
+name = "Zoom"
+url = "https://zoom.us/client/latest/zoom_amd64.deb"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[user]
+fallback = "student"
 ```
 <!-- /prompt:omit -->
 
@@ -2375,6 +2597,42 @@ password could not be recovered.
 
 **How to fix:** put the recipients back (`mastersos keys add` writes them). Needs the school's state, so
 there is no standalone example.
+
+### `facts_without_mastersos_claims`
+
+**Level:** warning. **Meaning:** an `[[assign]]` rule uses `org_role`, `class_role`, `class`, `org_node`, `age_band` or `sub` while `school.oidc.mastersos_claims` is not `true` (or there is no `[school.oidc]`). The message says: this rule never matches: the issuer sends no facts unless school.oidc.mastersos_claims = true.
+
+<!-- prompt:omit -->
+**Why:** those conditions read facts that only an issuer with the MastersOS issuer profile sends.
+<!-- /prompt:omit -->
+
+**How to fix:** set `mastersos_claims = true` in `[school.oidc]` if the issuer supports it, or use the Device conditions (`kind`, `admin`, `user`, `device_group`).
+
+<!-- prompt:omit -->
+```toml check=facts_without_mastersos_claims
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[[assign]]
+user_config = "student"
+age_band = ["under13"]
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
 
 ### `feature_unsupported`
 
@@ -3431,6 +3689,42 @@ locked = { message = "This Device was reported lost. Please bring it to the IT o
 ```
 <!-- /prompt:omit -->
 
+### `login_domain_not_allowed`
+
+**Level:** error. **Meaning:** `school.oidc.login_domain` is not one of `allowed_domains` (compared ignoring case). Any format.
+
+<!-- prompt:omit -->
+**Why:** a name completed with that domain could never sign in.
+<!-- /prompt:omit -->
+
+**How to fix:** add the domain to `allowed_domains`, or change `login_domain` to one of them.
+
+<!-- prompt:omit -->
+```toml check=login_domain_not_allowed
+format = 3
+
+[school]
+oidc = { issuer = "https://sso.school.ac.th", client_id = "mastersos", login_domain = "students.school.ac.th" }
+allowed_domains = ["school.ac.th"]
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
 ### `logo_incomplete`
 
 **Level:** error. **Meaning:** `[school]` has one of `logo_sha256` (the sign-in screen logo) and `logo_icon_sha256` (the quick menu icon) but not the other.
@@ -3495,6 +3789,16 @@ config = "standard"
 <!-- /prompt:omit -->
 
 **How to fix:** ask IT to run `mastersos logo upload` and paste its output; or remove the key. Needs the school's stored logos, so there is no standalone example.
+
+### `mastersos_claims_without_school_id`
+
+**Level:** error. **Meaning:** `school.oidc.mastersos_claims = true` but `[school]` has no `id`.
+
+<!-- prompt:omit -->
+**Why:** the Device asks the issuer for the school's organisation and checks the token names it; without an id there is nothing to ask for.
+<!-- /prompt:omit -->
+
+**How to fix:** add the school's `id` to `[school]` (the settings server writes it), or remove `mastersos_claims`.
 
 ### `missing_field`
 
@@ -3749,6 +4053,72 @@ name = "Standard"
 id = "default"
 name = "Unassigned"
 config = "standard"
+```
+<!-- /prompt:omit -->
+
+### `script_apply_in_user_config`
+
+**Level:** error. **Meaning:** a script in `[user_defaults]` or a `[[user_config]]` runs `when = "apply"` (the default when `when` is left out).
+
+<!-- prompt:omit -->
+**Why:** apply scripts run as root when the Device applies its settings, which is the device layer.
+<!-- /prompt:omit -->
+
+**How to fix:** write `when = "login"` to run it as the person at sign-in, or move it to a device config.
+
+<!-- prompt:omit -->
+```toml check=script_apply_in_user_config files=scripts/hello.sh
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+scripts = [{ path = "scripts/hello.sh" }]
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
+### `script_login_in_device_config`
+
+**Level:** error. **Meaning:** a script in `[device_defaults]` or a `[[device_config]]` has `when = "login"`.
+
+<!-- prompt:omit -->
+**Why:** login scripts run as the person who signs in, which is the user layer.
+<!-- /prompt:omit -->
+
+**How to fix:** move it to a `[[user_config]]` (or `[user_defaults]`), or make it an apply script.
+
+<!-- prompt:omit -->
+```toml check=script_login_in_device_config files=scripts/hello.sh
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+scripts = [{ path = "scripts/hello.sh", when = "login" }]
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[user]
+fallback = "student"
 ```
 <!-- /prompt:omit -->
 
@@ -4187,6 +4557,256 @@ name = "Standard"
 id = "default"
 name = "Unassigned"
 config = "standard"
+```
+<!-- /prompt:omit -->
+
+### `user_config_duplicate_id`
+
+**Level:** error. **Meaning:** two `[[user_config]]` tables have the same `id`.
+
+<!-- prompt:omit -->
+**Why:** rules and `[user] fallback` name a user config by id, so the id must pick one.
+<!-- /prompt:omit -->
+
+**How to fix:** give each user config its own id.
+
+<!-- prompt:omit -->
+```toml check=user_config_duplicate_id
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
+### `user_config_id_invalid`
+
+**Level:** error. **Meaning:** a `[[user_config]]` `id` is empty or longer than 64 bytes.
+
+<!-- prompt:omit -->
+**Why:** rules and `[user] fallback` name it.
+<!-- /prompt:omit -->
+
+**How to fix:** write a short id, for example `student`.
+
+<!-- prompt:omit -->
+```toml check=user_config_id_invalid
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[[user_config]]
+id = ""
+name = "Nameless"
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
+### `user_config_terminal`
+
+**Level:** warning. **Meaning:** the effective capabilities of a user config (its preset, plus `allow`, minus `deny`, after `[user_defaults]`) include `terminal`. The message says: terminal defeats every other lock: environment, user Flatpaks, .desktop files; the session is effectively full.
+
+<!-- prompt:omit -->
+**Why:** with a terminal a person can undo the other locks of the session.
+<!-- /prompt:omit -->
+
+**How to fix:** nothing, when the session is meant to be full (preset `full`); otherwise add `terminal` to `deny`.
+
+<!-- prompt:omit -->
+```toml check=user_config_terminal
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+allow = ["terminal"]
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
+### `user_config_unknown`
+
+**Level:** error. **Meaning:** an `[[assign]]` rule's `user_config`, or `[user] fallback`, names a user config id that no `[[user_config]]` has.
+
+<!-- prompt:omit -->
+**Why:** a person matched there would get no user config.
+<!-- /prompt:omit -->
+
+**How to fix:** name an existing `[[user_config]]` id, or add the user config.
+
+<!-- prompt:omit -->
+```toml check=user_config_unknown
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[user]
+fallback = "students"
+```
+<!-- /prompt:omit -->
+
+### `user_config_unreached`
+
+**Level:** warning. **Meaning:** no `[[assign]]` rule names a `[[user_config]]` and it is not `[user] fallback`.
+
+<!-- prompt:omit -->
+**Why:** nobody can get it, so it is probably left over or misspelt.
+<!-- /prompt:omit -->
+
+**How to fix:** name it in a rule, or remove it.
+
+<!-- prompt:omit -->
+```toml check=user_config_unreached
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[[user_config]]
+id = "teacher"
+name = "Teachers"
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
+### `user_deb_conflict`
+
+**Level:** error. **Meaning:** two user configs that can both apply on one Group define a non-kiosk `.deb` app with the same id differently, or a user config's `.deb` app has the id of a kiosk `.deb` app of that Group's device config. Reported once per app id. The same definition in two user configs is fine.
+
+<!-- prompt:omit -->
+**Why:** a Device installs one `.deb` per app id: the union of the apps of every user config it can give.
+<!-- /prompt:omit -->
+
+**How to fix:** give the two entries the same definition (put it in `[user_defaults]`), or use different app ids.
+
+<!-- prompt:omit -->
+```toml check=user_deb_conflict
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[user_config.apps.deb.zoom]
+name = "Zoom"
+url = "https://zoom.us/client/latest/zoom_amd64.deb"
+
+[[user_config]]
+id = "teacher"
+name = "Teachers"
+
+[user_config.apps.deb.zoom]
+name = "Zoom"
+url = "https://mirror.school.ac.th/zoom_amd64.deb"
+
+[[assign]]
+user_config = "teacher"
+admin = true
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
+### `user_fallback_missing`
+
+**Level:** error. **Meaning:** a `format = 3` text has no `[user]` table with `fallback`.
+
+<!-- prompt:omit -->
+**Why:** the fallback is the user config of everyone no rule matches; without it nobody can be given a session.
+<!-- /prompt:omit -->
+
+**How to fix:** add `[user]` with `fallback = "<user config id>"`.
+
+<!-- prompt:omit -->
+```toml check=user_fallback_missing
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
 ```
 <!-- /prompt:omit -->
 

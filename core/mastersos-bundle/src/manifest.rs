@@ -636,6 +636,17 @@ pub struct Oidc {
     /// [`CardNavigation::Open`]. Read it through [`Oidc::navigation`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub card_navigation: Option<CardNavigation>,
+    /// The domain added to a login-screen entry without `@` that is not a local account on the
+    /// Device: `ana` signs in as `ana@<login_domain>` (user layer design §2.5). Must be one of
+    /// `allowed_domains` ([`FEATURE_OIDC_LOGIN_DOMAIN`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login_domain: Option<String>,
+    /// Whether the issuer follows the MastersOS issuer profile (user layer design §5): the
+    /// organisation scope and check, `login_name` and the facts that rule conditions read. Needs
+    /// `[school] id`. False (the default): a plain OIDC issuer, no facts, the user name from
+    /// `email` ([`FEATURE_OIDC_MASTERSOS_CLAIMS`]).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub mastersos_claims: bool,
 }
 
 impl Oidc {
@@ -1860,6 +1871,12 @@ pub const FEATURE_FORMAT_2: &str = "format_2";
 /// See [`FEATURE_UPDATE_MIRROR`]: the Device reads `format = 3` (device layer, user layer and
 /// rules, user layer design §2); the same string as [`format_feature`]`(3)`.
 pub const FEATURE_FORMAT_3: &str = "format_3";
+/// See [`FEATURE_UPDATE_MIRROR`]: `login_domain` in `[school.oidc]` (the login screen completes
+/// an entry without `@`, user layer design §2.5).
+pub const FEATURE_OIDC_LOGIN_DOMAIN: &str = "oidc_login_domain";
+/// See [`FEATURE_UPDATE_MIRROR`]: `mastersos_claims = true` in `[school.oidc]` (the MastersOS issuer
+/// profile, user layer design §5).
+pub const FEATURE_OIDC_MASTERSOS_CLAIMS: &str = "oidc_mastersos_claims";
 /// See [`FEATURE_UPDATE_MIRROR`]: `platform` in a kiosk app (the ChromeOS disguise, design
 /// docs/specs/2026-11-06-kiosk-platform-inject-design.md).
 pub const FEATURE_KIOSK_PLATFORM: &str = "kiosk_platform";
@@ -2014,6 +2031,15 @@ pub fn features_used(m: &Manifest) -> Vec<&'static str> {
         .any(|d| d.asset_id.is_some() || d.location.is_some())
     {
         out.push(FEATURE_DEVICE_ANNOTATIONS);
+    }
+    if m.format == 3 {
+        out.push(FEATURE_FORMAT_3);
+    }
+    if s.oidc.as_ref().is_some_and(|o| o.login_domain.is_some()) {
+        out.push(FEATURE_OIDC_LOGIN_DOMAIN);
+    }
+    if s.oidc.as_ref().is_some_and(|o| o.mastersos_claims) {
+        out.push(FEATURE_OIDC_MASTERSOS_CLAIMS);
     }
     out
 }
@@ -2312,6 +2338,9 @@ impl Manifest {
                     .filter(|l| l.level == LintLevel::Error),
             );
         }
+        // Rules, user config references, the layer of scripts and .deb apps, and the
+        // `[school.oidc]` keys of the user layer design (the latter for every format).
+        crate::user_layer::validate_user_layer(self, &mut out);
 
         // 一个文件的路径不能同时是另一个文件的上级目录（`files/a` 与 `files/a/b`）：
         // 机器解包到 current/ 时两者必有一个落不了地。
@@ -2390,6 +2419,7 @@ impl Manifest {
                 }
             }
         }
+        crate::lint::device_layer_paths(self, &mut out);
         out
     }
 }
@@ -2479,6 +2509,15 @@ mod tests {
             Err(BundleError::Invalid(msg)) => msg,
             other => panic!("期望 Invalid，得到 {other:?}"),
         }
+    }
+
+    /// The format 2 example stays clean with the user layer checks in `validate_all`.
+    #[test]
+    fn v2_example_still_validates_clean() {
+        assert!(Manifest::parse(&example())
+            .unwrap()
+            .validate_all(&present())
+            .is_empty());
     }
 
     #[test]

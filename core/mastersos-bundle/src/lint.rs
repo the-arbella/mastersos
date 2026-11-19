@@ -171,7 +171,8 @@ pub fn lint_at(m: &Manifest, present: &BTreeSet<String>, today: chrono::NaiveDat
                 .filter(|l| l.level != LintLevel::Error),
         );
     }
-    lint_kiosk_semantics(m, &configs, &mut out);
+    out.extend(crate::user_layer::lint_user_layer(m));
+    lint_kiosk_semantics(m, &with_install_union(m, &configs), &mut out);
     lint_deb_semantics(m, &configs, &mut out);
     let channels = std::iter::once((
         "school.update_channel".to_owned(),
@@ -277,7 +278,80 @@ pub fn lint_at(m: &Manifest, present: &BTreeSet<String>, today: chrono::NaiveDat
             );
         }
     }
+    device_layer_paths(m, &mut out);
     out
+}
+
+/// The device layer of a `format = 3` text is read into `defaults` / `configs`, so the rules
+/// shared with format 2 name it `defaults…` / `config.<id>…`; in a format 3 text those tables
+/// are written `[device_defaults]` / `[[device_config]]`. Rewrites such paths (and a message
+/// that starts with the path) so they name the table as written; the one place format 3 lints
+/// get their device-layer paths. Format 1/2 lints are left alone.
+pub(crate) fn device_layer_paths(m: &Manifest, lints: &mut [Lint]) {
+    if m.user_layer.is_none() {
+        return;
+    }
+    for l in lints {
+        let Some(path) = l.path.as_deref() else {
+            continue;
+        };
+        let Some(new) = device_layer_path(path) else {
+            continue;
+        };
+        if let Some(rest) = l.message.strip_prefix(path) {
+            l.message = format!("{new}{rest}");
+        }
+        l.path = Some(new);
+    }
+}
+
+/// `defaults…` → `device_defaults…`, `config` / `config.<id>…` → `device_config…`; `None` for any
+/// other path. Only a whole first segment matches (`config_x`, `user_config.a` stay).
+fn device_layer_path(path: &str) -> Option<String> {
+    [("defaults", "device_defaults"), ("config", "device_config")]
+        .into_iter()
+        .find_map(|(old, new)| {
+            let rest = path.strip_prefix(old)?;
+            (rest.is_empty() || rest.starts_with(['.', '['])).then(|| format!("{new}{rest}"))
+        })
+}
+
+/// For a `format = 3` text: each Config with `apps.flatpak` set to what its Devices install, the
+/// Flatpaks every Group using it installs ([`crate::install_union`]; a device config writes none
+/// itself). A device config no Group uses gets the Flatpaks of every user config. Format 1/2:
+/// `configs` unchanged.
+fn with_install_union<'a>(
+    m: &Manifest,
+    configs: &[(&'a ConfigLayer, Config)],
+) -> Vec<(&'a ConfigLayer, Config)> {
+    let Some(u) = &m.user_layer else {
+        return configs.to_vec();
+    };
+    configs
+        .iter()
+        .map(|(layer, e)| {
+            let mut e = e.clone();
+            let unions: Vec<Vec<String>> = m
+                .groups
+                .iter()
+                .filter(|g| g.config == layer.id)
+                .map(|g| crate::install_union(m, &g.id).0)
+                .collect();
+            e.apps.flatpak = match unions.split_first() {
+                Some((first, rest)) => first
+                    .iter()
+                    .filter(|f| rest.iter().all(|r| r.contains(*f)))
+                    .cloned()
+                    .collect(),
+                None => u
+                    .configs
+                    .iter()
+                    .flat_map(|c| crate::user_layer::effective_user_config(u, c).flatpak)
+                    .collect(),
+            };
+            (*layer, e)
+        })
+        .collect()
 }
 
 /// One layer of written settings, for the format rules: `[defaults]` (`config` is `None`) or a
@@ -507,6 +581,9 @@ pub fn feature_path(m: &Manifest, feature: &str) -> String {
         FEATURE_OIDC_CARD => Some("school.oidc".to_owned()),
         FEATURE_OIDC_IDP_HINT => Some("school.oidc.idp_hint".to_owned()),
         FEATURE_OIDC_CARD_NAVIGATION => Some("school.oidc.card_navigation".to_owned()),
+        FEATURE_OIDC_LOGIN_DOMAIN => Some("school.oidc.login_domain".to_owned()),
+        FEATURE_OIDC_MASTERSOS_CLAIMS => Some("school.oidc.mastersos_claims".to_owned()),
+        FEATURE_FORMAT_3 => Some("format".to_owned()),
         FEATURE_CONFIG => Some("config".to_owned()),
         FEATURE_KIOSK => layers()
             .find(|(_, empty, _)| !empty)
@@ -597,7 +674,11 @@ pub fn feature_path(m: &Manifest, feature: &str) -> String {
         }),
         _ => None,
     };
-    found.unwrap_or_else(|| "school".to_owned())
+    let path = found.unwrap_or_else(|| "school".to_owned());
+    match m.user_layer {
+        Some(_) => device_layer_path(&path).unwrap_or(path),
+        None => path,
+    }
 }
 
 /// Ruling 14, error: the machines of `gap` (seen in the last [`FEATURE_WINDOW_DAYS`] days) have
@@ -1096,17 +1177,21 @@ fn lint_kiosk_semantics(m: &Manifest, configs: &[(&ConfigLayer, Config)], out: &
     }
     for (path, cs) in group_hits(missing) {
         let (name, x) = &names[&path];
-        out.push(many(
-            Lint::new(
-                LintLevel::Warning,
-                "kiosk_flatpak_missing",
-                format!(
-                    "Kiosk app {name:?} launches Flatpak {x}, which is not in apps.flatpak of {}: machines will not install it, so the app cannot open.",
-                    used_by(&path, &cs)
-                ),
+        let message = if m.user_layer.is_some() {
+            format!(
+                "Kiosk app {name:?} launches Flatpak {x}, which no user config reachable on the Groups of {} lists in apps.flatpak: machines will not install it, so the app cannot open.",
+                used_by(&path, &cs)
             )
-            .at(path.clone())
-            .param("app_name", name),
+        } else {
+            format!(
+                "Kiosk app {name:?} launches Flatpak {x}, which is not in apps.flatpak of {}: machines will not install it, so the app cannot open.",
+                used_by(&path, &cs)
+            )
+        };
+        out.push(many(
+            Lint::new(LintLevel::Warning, "kiosk_flatpak_missing", message)
+                .at(path.clone())
+                .param("app_name", name),
             &path,
             &cs,
         ));
@@ -1203,11 +1288,20 @@ pub fn flatpak_now_installed(prev: &Manifest, next: &Manifest) -> Vec<Lint> {
         let Some(layer) = next.config_of_group(&g.id) else {
             continue;
         };
-        let c = effective_config(next, layer);
+        // Format 3: the Flatpaks a Device installs are the install union of its Group, and the
+        // device config writes none, so the path is the device config itself.
+        let (c, path) = if next.user_layer.is_some() {
+            let Some(c) = crate::effective_device_config(next, g) else {
+                continue;
+            };
+            (c, format!("config.{}", layer.id))
+        } else {
+            let path = pick(next, !layer.apps.flatpak.is_empty(), layer, "apps.flatpak");
+            (effective_config(next, layer), path)
+        };
         if !was_browser || c.legacy_browser || c.apps.flatpak.is_empty() {
             continue;
         }
-        let path = pick(next, !layer.apps.flatpak.is_empty(), layer, "apps.flatpak");
         match hits.iter_mut().find(|h| h.0 == path) {
             Some((_, configs, groups, _)) => {
                 if !configs.iter().any(|x| x.id == layer.id) {
@@ -1218,15 +1312,21 @@ pub fn flatpak_now_installed(prev: &Manifest, next: &Manifest) -> Vec<Lint> {
             None => hits.push((path, vec![layer], vec![&g.id], c.apps.flatpak)),
         }
     }
-    hits.into_iter()
+    let mut out: Vec<Lint> = hits
+        .into_iter()
         .map(|(path, configs, groups, flatpak)| {
             let apps = flatpak.join(", ");
+            let remove = if next.user_layer.is_some() {
+                "Remove them from the apps.flatpak of the user configs reachable on those Groups"
+            } else {
+                "Remove them from that config's apps.flatpak"
+            };
             many(
                 Lint::new(
                     LintLevel::Warning,
                     "flatpak_now_installed",
                     format!(
-                        "Group(s) {} were in browser mode in the published version, so no Flatpak app was installed on their Devices; with this version they use {}, which installs {apps} and shows them in the Dock. Remove them from that config's apps.flatpak if that is not wanted.",
+                        "Group(s) {} were in browser mode in the published version, so no Flatpak app was installed on their Devices; with this version they use {}, which installs {apps} and shows them in the Dock. {remove} if that is not wanted.",
                         groups.join(", "),
                         used_by(&path, &configs)
                     ),
@@ -1238,7 +1338,9 @@ pub fn flatpak_now_installed(prev: &Manifest, next: &Manifest) -> Vec<Lint> {
                 &configs,
             )
         })
-        .collect()
+        .collect();
+    device_layer_paths(next, &mut out);
+    out
 }
 
 /// Indexes of names that occur a second (or later) time in `items`.
@@ -1722,14 +1824,13 @@ fn lint_formats(
     // Only in a `format = 2` text: while Wi-Fi is all that would need format 2, the server keeps
     // it in `[school] wifi` (format 1), so a format-1 text could never follow this advice.
     if m.format >= 2 && !s.wifi.is_empty() {
-        out.push(
-            Lint::new(
-                LintLevel::Warning,
-                "school_wifi_moved",
-                "[[school.wifi]] has moved to [[defaults.wifi]]: networks still written under [school] keep working (they come before the Defaults' ones), but new ones belong in [defaults]; move them there.",
-            )
-            .at("school.wifi"),
-        );
+        // Format 3 writes the Defaults as `[device_defaults]`.
+        let message = if m.user_layer.is_some() {
+            "[[school.wifi]] has moved to [[device_defaults.wifi]]: networks still written under [school] keep working (they come before the device defaults' ones), but new ones belong in [device_defaults]; move them there."
+        } else {
+            "[[school.wifi]] has moved to [[defaults.wifi]]: networks still written under [school] keep working (they come before the Defaults' ones), but new ones belong in [defaults]; move them there."
+        };
+        out.push(Lint::new(LintLevel::Warning, "school_wifi_moved", message).at("school.wifi"));
     }
     lint_wifi(&s.wifi, "school", &|l| l, out);
     for i in duplicates(s.wifi.iter().map(|w| w.ssid.as_str())) {
