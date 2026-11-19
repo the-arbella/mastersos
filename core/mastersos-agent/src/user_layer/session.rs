@@ -53,7 +53,7 @@ pub enum WatchOutcome {
     Busy,
 }
 
-/// After a login: when the marker says a session is open, lift its config's capabilities
+/// After a login: when the marker says a session is open (and not [`Active::held`]), lift its config's capabilities
 /// ([`exec_block::apply_lifted`]), under the marker's lock so that a lift never lands after a revert. When logind already
 /// lists a live session of the uid, the marker records it as seen (as [`watch`] does). A fallback reason in the marker
 /// is logged. Nothing to do without a marker; an unreadable marker is an error, a busy lock a
@@ -89,6 +89,10 @@ pub fn after_login(paths: &SysPaths, runner: &dyn Runner) -> Result<()> {
             "user layer: the session got the fallback {:?}: {why}",
             a.user_config
         );
+    }
+    // Held until the next login (its user config was removed mid-session): nothing is lifted
+    if a.held {
+        return Ok(());
     }
     exec_block::apply_lifted(paths, runner, &a.caps).context("lifting the session's capabilities")
 }
@@ -200,7 +204,7 @@ fn revert(paths: &SysPaths, runner: &dyn Runner, a: &Active) -> Result<()> {
 }
 
 /// Neutral switched in, then every capability blocked. Both are tried; the errors are joined.
-fn to_neutral(paths: &SysPaths, runner: &dyn Runner) -> Result<()> {
+pub(crate) fn to_neutral(paths: &SysPaths, runner: &dyn Runner) -> Result<()> {
     let neutral = Rendered {
         dir: NEUTRAL_DIR.into(),
         caps: Caps::new(),

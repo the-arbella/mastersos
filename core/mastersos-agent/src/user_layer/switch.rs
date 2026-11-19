@@ -10,7 +10,8 @@
 //! 2. the dconf database: the config's compiled database ([`render::compiled_db`]) is copied to `mastersos-session.tmp`
 //!    (0644) and renamed to `mastersos-session`, the first system database of the dconf profile
 //!    `/etc/dconf/profile/user` ([`render::SESSION_PROFILE`], written here once the database exists; it takes
-//!    precedence over the image's `/usr/share/dconf/profile/user`, which format 1/2 Devices keep);
+//!    precedence over the image's `/usr/share/dconf/profile/user`, which format 1/2 Devices keep); the replaced
+//!    database is then invalidated as `dconf update` does, so running dconf clients reopen the new one;
 //! 3. the session directory: `/var/lib/mastersos-public/session` (first in `XDG_DATA_DIRS`) is re-pointed at
 //!    `user-layer/<d>` (`session.tmp`, renamed over `session`); the session mode for the image's readers is
 //!    `session/session-mode` behind it, and whose session it is in `session/uid` ([`UID_FILE`], written before the swap;
@@ -146,8 +147,13 @@ fn switch_dconf(root: &Path, var: &Path, d: &str) -> Result<()> {
         bail!("{name} is missing (not compiled)");
     };
     let db = safefs::open_dir(root, Path::new(render::DCONF_DB_DIR), true)?;
+    // The database being replaced, opened before the rename so that it can be invalidated after it
+    let old = open_old_db(&db);
     safefs::write_at(&db, SESSION_DB_TMP, &bytes, 0o644)?;
     safefs::rename_at(&db, SESSION_DB_TMP, SESSION_DB)?;
+    if let Some(old) = old {
+        invalidate_old_db(&db, old).context("invalidating the previous session database")?;
+    }
     // Only now that the database exists may the profile name it (unchanged after the first switch).
     let profile = safefs::open_dir(root, Path::new(render::PROFILE_DIR), true)?;
     safefs::set_mode(&profile, 0o755)?;
@@ -157,6 +163,47 @@ fn switch_dconf(root: &Path, var: &Path, d: &str) -> Result<()> {
         render::SESSION_PROFILE.as_bytes(),
         0o644,
     )?;
+    Ok(())
+}
+
+/// The current [`SESSION_DB`] opened for writing (no symlink, no blocking open, never a controlling tty); `None` when
+/// there is none. Any other failure is logged and gives `None`, as `dconf update` only warns there.
+fn open_old_db(db: &OwnedFd) -> Option<OwnedFd> {
+    use rustix::fs::{openat, Mode, OFlags};
+    let flags =
+        OFlags::WRONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK;
+    match openat(db, SESSION_DB, flags, Mode::empty()) {
+        Ok(fd) => Some(fd),
+        Err(rustix::io::Errno::NOENT) => None,
+        Err(e) => {
+            eprintln!(
+                "mastersos-agent: user layer: opening {SESSION_DB} for replacement: {}",
+                std::io::Error::from(e)
+            );
+            None
+        }
+    }
+}
+
+/// Marks the replaced database `old` invalid the way `dconf update` does, so that dconf clients that still have it
+/// mapped reopen [`SESSION_DB`] (they notice nothing otherwise). dconf (GNOME/dconf at 264e6598, `bin/dconf.c`,
+/// `update_directory`) opens the old file `O_WRONLY` before writing the new one (line 852) and, once the new one is in
+/// place, writes `"\0\0\0\0\0\0\0\0"` (8 zero bytes) at its start (lines 870-874). A client's system source reopens
+/// when `gvdb_table_is_valid` is false (`engine/dconf-engine-source-system.c` lines 38-41), and that is
+/// `!!*table->data`, the first byte of the file (GNOME/gvdb `gvdb/gvdb-reader.c` lines 826-829). Skipped when `old`
+/// is not a regular file or is the new database itself.
+fn invalidate_old_db(db: &OwnedFd, old: OwnedFd) -> Result<()> {
+    use std::os::unix::fs::FileExt;
+    let st = rustix::fs::fstat(&old).map_err(std::io::Error::from)?;
+    if rustix::fs::FileType::from_raw_mode(st.st_mode) != rustix::fs::FileType::RegularFile {
+        return Ok(());
+    }
+    let new = rustix::fs::statat(db, SESSION_DB, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+        .map_err(std::io::Error::from)?;
+    if (new.st_dev, new.st_ino) == (st.st_dev, st.st_ino) {
+        return Ok(());
+    }
+    std::fs::File::from(old).write_all_at(&[0u8; 8], 0)?;
     Ok(())
 }
 
@@ -387,6 +434,7 @@ pub(crate) fn on_open_at(
         reason: reason.clone(),
         opened_at: now.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()),
         seen: false,
+        held: false,
     };
     if let Err(e) = write_active(root, &active) {
         return refuse(format!("writing the session marker failed: {e:#}"));

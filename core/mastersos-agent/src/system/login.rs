@@ -1708,6 +1708,7 @@ client_id = "laptops"
             reason: None,
             opened_at: 1,
             seen: true,
+            held: false,
         }
     }
 

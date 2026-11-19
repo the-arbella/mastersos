@@ -18,6 +18,17 @@
 //! session uses ([`read_active`]). Under format 3 the legacy `/var/lib/mastersos-public/session-mode` stays
 //! `learning`: an older image after a rollback reads only that file.
 //!
+//! Last, the step follows the session (design §4.2: the reapply, and the boot apply, render from the active session's
+//! user config or neutral, never from the device config alone), under [`switch::lock_active`]:
+//!
+//! - nobody signed in: neutral is switched in and everything blocked;
+//! - a person signed in whose user config is still reachable: its re-rendered files are switched in at once, and a
+//!   capability it no longer has is blocked at once; one it gained is lifted only by the agent's
+//!   [`session::after_login`] (tighten now, loosen later, §4.4);
+//! - a person signed in whose user config was removed: the fallback is switched in with nothing lifted, held until
+//!   their next login ([`super::Active::held`]), and [`ACTIVE_ITEM`] fails with [`REMOVED_CONFIG`];
+//! - a session being closed is left to the agent's revert; a marker that cannot be read changes nothing.
+//!
 //! With a format 1/2 bundle the step does nothing, unless an earlier format 3 bundle left its state: then it
 //! removes everything it created, and the format 1/2 steps own the session as before.
 
@@ -32,7 +43,10 @@ use mastersos_bundle::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{active_marker, config_dir_name, is_config_dir, NEUTRAL_DIR};
+use super::switch::{self, switch_to};
+use super::{
+    active_marker, config_dir_name, is_config_dir, session, Active, ActiveState, NEUTRAL_DIR,
+};
 use crate::apply::{is_not_found, ApplyContext};
 use crate::deb_apps;
 use crate::deb_apps::status::PublicApp;
@@ -46,6 +60,11 @@ use crate::system::{
 /// The report item of the step; each user config adds `user-layer:config:<id>` (the `config:` keeps them apart from the
 /// agent's session items such as `user-layer:session`).
 pub const ITEM: &str = "user-layer";
+/// The report item of the signed-in session at the end of the step (only when something is wrong or worth saying).
+pub const ACTIVE_ITEM: &str = "user-layer:active";
+/// Why [`ACTIVE_ITEM`] fails when the signed-in person's user config is no longer in the settings.
+pub const REMOVED_CONFIG: &str =
+    "the signed-in person's user config was removed; they get it at their next login";
 /// The step's directory under `var_dir` (root 0700) and under `public_dir` (0755).
 pub const STATE_SUB: &str = "user-layer";
 /// The rules and the rendered configs, in the `var_dir` part of [`STATE_SUB`] (0600).
@@ -201,23 +220,18 @@ fn render_all(ctx: &ApplyContext, m: &Manifest, env: &mut Env) -> Vec<ItemResult
     // The signed-in session's config dir keeps its mode (the switch opened it) and is never removed. A marker that
     // exists but cannot be read keeps every dir this round.
     let active = active_marker(&paths.root).map(|a| a.map(|a| a.dir).filter(|d| is_config_dir(d)));
-    let active_dir = active.as_ref().ok().cloned().flatten();
+    let live = match &active {
+        Ok(Some(d)) => Live::Dir(d),
+        Ok(None) => Live::Nobody,
+        Err(_) => Live::Unknown,
+    };
     let mut index = BTreeMap::new();
     {
         let lists: Vec<_> = configs.iter().map(|c| &c.web).collect();
         let mut dl = Downloads::new(sys, desktop::icon_key(&lists));
         for c in &configs {
             let dir = config_dir_name(&c.id);
-            let mut r = render_one(
-                ctx,
-                paths,
-                c,
-                &dir,
-                active_dir.as_deref(),
-                &kiosk,
-                &public,
-                &mut dl,
-            );
+            let mut r = render_one(ctx, paths, c, &dir, live, &kiosk, &public, &mut dl);
             if let Err(e) = compile_db(paths, runner, &dir, r.keyfiles_written) {
                 r.errs.push(format!("dconf: {e:#}"));
             }
@@ -236,7 +250,7 @@ fn render_all(ctx: &ApplyContext, m: &Manifest, env: &mut Env) -> Vec<ItemResult
             paths,
             &neutral,
             NEUTRAL_DIR,
-            None,
+            Live::Nobody,
             &kiosk,
             &public,
             &mut dl,
@@ -267,13 +281,15 @@ fn render_all(ctx: &ApplyContext, m: &Manifest, env: &mut Env) -> Vec<ItemResult
         errs.push(format!("dconf: {e:#}"));
     }
     // The index last: it names only directories rendered above.
-    let written = match UserRules::from_manifest(m, group) {
+    let rules = UserRules::from_manifest(m, group);
+    let fallback = rules.as_ref().map(|r| r.fallback.clone());
+    let written = match rules {
         Some(rules) => write_index(
             paths,
             &Index {
                 group: group.to_string(),
                 rules,
-                configs: index,
+                configs: index.clone(),
                 neutral: Rendered {
                     dir: NEUTRAL_DIR.into(),
                     caps: neutral.caps.clone(),
@@ -294,7 +310,205 @@ fn render_all(ctx: &ApplyContext, m: &Manifest, env: &mut Env) -> Vec<ItemResult
     } else {
         failed(ITEM, errs.join("; "))
     });
+    out.extend(follow_session(paths, runner, &index, fallback.as_deref()));
     out
+}
+
+/// The signed-in session's config dir as the step found it: none, this one, or unknown (the marker cannot be read).
+#[derive(Clone, Copy)]
+enum Live<'a> {
+    Nobody,
+    Dir(&'a str),
+    Unknown,
+}
+
+fn neutral_rendered() -> Rendered {
+    let n = neutral();
+    Rendered {
+        dir: NEUTRAL_DIR.into(),
+        caps: n.caps,
+        home: n.home,
+    }
+}
+
+/// The end of the step: the session follows the configs just rendered (see the module documentation). `configs` are
+/// this round's rendered user configs by id, `fallback` the rules' fallback (none without rules). Returns the
+/// [`ACTIVE_ITEM`], if any.
+fn follow_session(
+    paths: &SysPaths,
+    runner: &dyn Runner,
+    configs: &BTreeMap<String, Rendered>,
+    fallback: Option<&str>,
+) -> Option<ItemResult> {
+    let root = paths.root.as_path();
+    let lock = match switch::lock_active(root, switch::LOCK_WAIT) {
+        Ok(l) => l,
+        Err(e) if switch::is_lock_busy(&e) => return Some(busy(paths, configs, &e)),
+        Err(e) => return Some(failed(ACTIVE_ITEM, format!("{e:#}"))),
+    };
+    let a = match active_marker(root) {
+        Ok(Some(a)) => a,
+        Ok(None) => {
+            return session::to_neutral(paths, runner)
+                .err()
+                .map(|e| failed(ACTIVE_ITEM, format!("nobody is signed in: {e:#}")));
+        }
+        Err(e) => {
+            return Some(failed(
+                ACTIVE_ITEM,
+                format!(
+                    "the signed-in session's marker cannot be read ({e:#}); nothing was switched"
+                ),
+            ))
+        }
+    };
+    if a.state == ActiveState::Closing {
+        return None;
+    }
+    let Some(r) = configs.get(&a.user_config) else {
+        return Some(removed(paths, runner, a, configs, fallback));
+    };
+    let (mut errs, loosen) = keep(paths, runner, a, r);
+    drop(lock);
+    // A capability the config gained: lifted by the agent's after-login step, which takes the lock itself
+    if loosen {
+        match session::after_login(paths, runner) {
+            Ok(()) => {}
+            Err(e) if switch::is_lock_busy(&e) => {
+                log::info!(
+                    "user layer: lifting the session's new capabilities: {e:#}; left to the agent"
+                );
+            }
+            Err(e) => errs.push(format!("{e:#}")),
+        }
+    }
+    (!errs.is_empty()).then(|| failed(ACTIVE_ITEM, errs.join("; ")))
+}
+
+/// The capabilities the marker `a` may keep under its config's rendering `r`: the config's, or only those it already had
+/// when it is held.
+fn allowed(a: &Active, r: &Rendered) -> Caps {
+    if a.held {
+        a.caps.intersection(&r.caps).copied().collect()
+    } else {
+        r.caps.clone()
+    }
+}
+
+/// The capabilities lifted now; unreadable state counts as nothing lifted (the caller then blocks everything).
+fn lifted_now(paths: &SysPaths) -> Caps {
+    exec_block::read_lifted(paths)
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+}
+
+/// The signed-in session `a` keeps its config `r`, under the marker's lock: what is lifted and no longer allowed is
+/// blocked first (even when the switch then fails), then `r` is switched in and the marker updated. Returns the errors
+/// and whether something allowed is not lifted yet.
+fn keep(paths: &SysPaths, runner: &dyn Runner, mut a: Active, r: &Rendered) -> (Vec<String>, bool) {
+    let mut errs = Vec::new();
+    let caps = allowed(&a, r);
+    let kept: Caps = lifted_now(paths).intersection(&caps).copied().collect();
+    if let Err(e) = exec_block::apply_lifted(paths, runner, &kept) {
+        errs.push(format!(
+            "blocking the capabilities the user config no longer has: {e:#}"
+        ));
+    }
+    if let Err(e) = switch_to(
+        &paths.root,
+        &paths.public_dir,
+        &paths.var_dir,
+        r,
+        Some(a.uid),
+    ) {
+        errs.push(format!("switching to the re-rendered user config: {e:#}"));
+    }
+    if a.caps != caps || a.dir != r.dir {
+        a.caps = caps.clone();
+        a.dir = r.dir.clone();
+        if let Err(e) = switch::write_active(&paths.root, &a) {
+            errs.push(format!("updating the session marker: {e:#}"));
+        }
+    }
+    (errs, !a.held && !caps.is_subset(&kept))
+}
+
+/// The signed-in session `a` lost its user config: everything blocked, the fallback switched in (neutral when there is
+/// none or it cannot be switched in) and the marker held with nothing lifted until the next login.
+fn removed(
+    paths: &SysPaths,
+    runner: &dyn Runner,
+    mut a: Active,
+    configs: &BTreeMap<String, Rendered>,
+    fallback: Option<&str>,
+) -> ItemResult {
+    let mut errs = vec![REMOVED_CONFIG.to_string()];
+    if let Err(e) = exec_block::apply_lifted(paths, runner, &Caps::new()) {
+        errs.push(format!("blocking everything: {e:#}"));
+    }
+    let go = |r: &Rendered, uid: Option<u32>| {
+        switch_to(&paths.root, &paths.public_dir, &paths.var_dir, r, uid)
+    };
+    let target = match fallback.and_then(|f| configs.get(f).map(|r| (f, r))) {
+        None => {
+            errs.push("the settings have no fallback user config".into());
+            None
+        }
+        Some((f, r)) => match go(r, Some(a.uid)) {
+            Ok(()) => Some((f.to_string(), r.dir.clone())),
+            Err(e) => {
+                errs.push(format!("switching to the fallback {f:?}: {e:#}"));
+                None
+            }
+        },
+    };
+    let dir = match target {
+        Some((id, dir)) => {
+            a.user_config = id;
+            dir
+        }
+        None => {
+            if let Err(e) = go(&neutral_rendered(), None) {
+                errs.push(format!("switching to neutral: {e:#}"));
+            }
+            NEUTRAL_DIR.to_string()
+        }
+    };
+    a.dir = dir;
+    a.caps = Caps::new();
+    a.held = true;
+    a.reason = Some(REMOVED_CONFIG.into());
+    if let Err(e) = switch::write_active(&paths.root, &a) {
+        errs.push(format!("updating the session marker: {e:#}"));
+    }
+    failed(ACTIVE_ITEM, errs.join("; "))
+}
+
+/// The marker's lock is held (a sign-in, sign-out or revert is changing the session): nothing is done and the next round
+/// tries again. Read without the lock: when a capability the session may no longer have is still lifted, the item fails
+/// so that the next apply comes soon.
+fn busy(paths: &SysPaths, configs: &BTreeMap<String, Rendered>, e: &anyhow::Error) -> ItemResult {
+    let allowed = match super::read_active(&paths.root) {
+        Some(a) if a.state == ActiveState::Closing => None,
+        Some(a) => Some(
+            configs
+                .get(&a.user_config)
+                .map(|r| allowed(&a, r))
+                .unwrap_or_default(),
+        ),
+        None => Some(Caps::new()),
+    };
+    match allowed {
+        Some(caps) if !lifted_now(paths).is_subset(&caps) => failed(
+            ACTIVE_ITEM,
+            format!("{e:#}; a capability the session no longer has is still lifted; retried at the next apply"),
+        ),
+        _ => ItemResult {
+            detail: Some(format!("{e:#}; retried next round")),
+            ..ok(ACTIVE_ITEM)
+        },
+    }
 }
 
 fn item_of(id: &str) -> String {
@@ -338,7 +552,7 @@ fn render_one(
     paths: &SysPaths,
     c: &UserConfig,
     dir: &str,
-    active_dir: Option<&str>,
+    live: Live,
     kiosk: &[String],
     public: &BTreeMap<String, PublicApp>,
     dl: &mut Downloads,
@@ -350,7 +564,7 @@ fn render_one(
     let lifted = |cap: Capability| c.caps.contains(&cap);
     let pdir = match public_dir(paths)
         .and_then(|p| sub(&p, STATE_SUB, PUBLIC_STATE_MODE))
-        .and_then(|s| config_dir(&s, dir, active_dir))
+        .and_then(|s| config_dir(&s, dir, live))
     {
         Ok(d) => d,
         Err(e) => {
@@ -435,10 +649,19 @@ fn render_one(
 /// The public config dir `dir` under the public [`STATE_SUB`] `parent`, created when missing. Its mode: 0755 for
 /// [`NEUTRAL_DIR`] (nothing in it is private; the greeter and boot state use it); 0700 for a user config, so that a
 /// signed-in person cannot read the other configs' scripts and settings, except that the signed-in session's own
-/// dir (`active_dir`) keeps 0755 when the switch has opened it. A re-render never opens a dir.
-fn config_dir(parent: &OwnedFd, dir: &str, active_dir: Option<&str>) -> Result<OwnedFd> {
+/// dir (`live`) keeps 0755 when the switch has opened it. A re-render never opens a dir. While the marker cannot be
+/// read (`live` unknown) an existing user config dir keeps its mode: it may be the live session's.
+fn config_dir(parent: &OwnedFd, dir: &str, live: Live) -> Result<OwnedFd> {
+    if matches!(live, Live::Unknown) && dir != NEUTRAL_DIR {
+        match safefs::open_dir_at(parent, Path::new(dir), false) {
+            Ok(d) => return Ok(d),
+            Err(e) if is_not_found(&e) => {}
+            Err(e) => return Err(e),
+        }
+    }
     let d = safefs::open_dir_at(parent, Path::new(dir), true)?;
-    let open = dir == NEUTRAL_DIR || (active_dir == Some(dir) && mode_of(&d)? == 0o755);
+    let open =
+        dir == NEUTRAL_DIR || (matches!(live, Live::Dir(a) if a == dir) && mode_of(&d)? == 0o755);
     let mode = if open { 0o755 } else { 0o700 };
     safefs::set_mode(&d, mode)?;
     Ok(d)

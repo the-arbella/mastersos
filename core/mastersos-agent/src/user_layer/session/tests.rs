@@ -1,6 +1,6 @@
 use super::*;
 use crate::runner::Output;
-use crate::system::exec_block::tests::{put_image, MountSim};
+use crate::system::exec_block::tests::MountSim;
 use crate::system::exec_block::{self, read_lifted};
 use crate::user_layer::render::{Index, STATE_SUB};
 use crate::user_layer::switch::tests::{assert_switched_to, rendered, session_uid};
@@ -14,10 +14,9 @@ const UID: u32 = 2001;
 const LIST: &str = "loginctl --json=short list-sessions";
 const T0: u64 = 1_800_000_000;
 
-/// A rendered root with the exec-block stub and targets in it, and a runner that simulates the bind mounts.
+/// A rendered root (nobody signed in: neutral, everything blocked) and a runner that simulates the bind mounts.
 fn setup() -> (tempfile::TempDir, SysPaths, Index, MountSim) {
     let (root, p, index) = rendered();
-    put_image(root.path());
     let r = MountSim::new(root.path());
     (root, p, index, r)
 }
@@ -40,6 +39,7 @@ fn signed_in(p: &SysPaths, index: &Index, state: ActiveState, seen: bool) -> Act
         reason: None,
         opened_at: T0,
         seen,
+        held: false,
     };
     write_active(&p.root, &a).unwrap();
     a
@@ -99,7 +99,7 @@ fn lift_follows_active_caps() {
     // No marker: nothing is lifted or run
     after_login(&p, &r).unwrap();
     assert!(r.calls().is_empty(), "{:?}", r.calls());
-    assert_eq!(read_lifted(&p).unwrap(), None);
+    assert_eq!(read_lifted(&p).unwrap(), Some(Caps::new()));
     // An open teacher session gets the teacher's capabilities
     let a = signed_in(&p, &index, ActiveState::Open, false);
     assert!(a.caps.contains(&Capability::Terminal), "{:?}", a.caps);
@@ -114,12 +114,24 @@ fn lift_follows_active_caps() {
     assert_eq!(lifted(&p), Caps::new());
 }
 
+/// A held session (its user config was removed mid-session) gets nothing lifted until its next login.
+#[test]
+fn held_session_lifts_nothing() {
+    let (_root, p, index, r) = setup();
+    let mut a = signed_in(&p, &index, ActiveState::Open, true);
+    a.held = true;
+    write_active(&p.root, &a).unwrap();
+    assert!(!a.caps.is_empty());
+    after_login(&p, &r).unwrap();
+    assert_eq!(lifted(&p), Caps::new());
+}
+
 #[test]
 fn no_marker_is_idle_and_runs_nothing() {
     let (_root, p, _index, r) = setup();
     assert_eq!(watch_at(&p, &r, at(T0)).unwrap(), WatchOutcome::Idle);
     assert!(r.calls().is_empty(), "{:?}", r.calls());
-    assert!(!p.root.join(RUN_DIR).exists());
+    assert!(!p.root.join(RUN_DIR).join(ACTIVE_FILE).exists());
 }
 
 #[test]

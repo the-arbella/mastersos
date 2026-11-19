@@ -17,10 +17,12 @@ const ADMIN: &str = "it@school.ac.th";
 const STUDENT: &str = "s1@school.ac.th";
 const LOCAL_UID: u32 = 1500;
 
-/// A system root where the `user-layer` step rendered the spec example (Group `default`: `teacher`, `primary` and
-/// neutral), with a stand-in compiled database for each config (the step's `dconf update` is a fake here).
+/// A system root (with the exec-block stub and targets) where the `user-layer` step rendered the spec example (Group
+/// `default`: `teacher`, `primary` and neutral) and, nobody being signed in, switched neutral in; with a stand-in
+/// compiled database for each config (the step's `dconf update` is a fake here), neutral's switched in again.
 pub(crate) fn rendered() -> (tempfile::TempDir, SysPaths, Index) {
     let root = tmp_root();
+    crate::system::exec_block::tests::put_image(root.path());
     let m = Manifest::parse(&spec_example_v3()).unwrap();
     let p = render_with(root.path(), &m);
     let index = read_index(&p.var_dir).unwrap();
@@ -34,6 +36,7 @@ pub(crate) fn rendered() -> (tempfile::TempDir, SysPaths, Index) {
         fs::write(&db, format!("db of {d}")).unwrap();
         fs::set_permissions(&db, fs::Permissions::from_mode(0o600)).unwrap();
     }
+    switch_to(&p.root, &p.public_dir, &p.var_dir, &index.neutral, None).unwrap();
     (root, p, index)
 }
 
@@ -508,13 +511,13 @@ fn other_uid_active_refuses() {
         reason: None,
         opened_at: 1,
         seen: true,
+        held: false,
     };
     write_active(&p.root, &other).unwrap();
     assert_eq!(open(&p, &policy(), STUDENT, 20000), OpenOutcome::Refused);
     // Nothing of the other session was touched
     assert_eq!(read_active(&p.root).unwrap(), other);
-    assert!(link(&p).is_none());
-    assert!(!managed(&p).exists());
+    assert_switched_to(&p, NEUTRAL_DIR);
     // The same person again (a second session while theirs is open) keeps the first session's config: nothing is
     // resolved or switched again under the first session
     assert_eq!(
@@ -533,11 +536,11 @@ fn other_uid_active_refuses() {
         Active {
             opened_at: again.opened_at,
             seen: false,
+            held: false,
             ..other.clone()
         }
     );
-    assert!(link(&p).is_none());
-    assert!(!managed(&p).exists());
+    assert_switched_to(&p, NEUTRAL_DIR);
     // A session being closed refuses every uid, its own too
     let mut closing = read_active(&p.root).unwrap();
     closing.state = ActiveState::Closing;
@@ -639,6 +642,7 @@ fn same_person_again_restarts_the_grace() {
         Active {
             opened_at: 1_800_000_600,
             seen: false,
+            held: false,
             ..first
         }
     );
@@ -716,8 +720,7 @@ fn a_held_lock_refuses_the_open() {
     assert!(started.elapsed() < LOCK_WAIT);
     assert_eq!(open(&p, &policy(), STUDENT, 20000), OpenOutcome::Refused);
     assert!(read_active(&p.root).is_none());
-    assert!(link(&p).is_none());
-    assert!(!managed(&p).exists());
+    assert_switched_to(&p, NEUTRAL_DIR);
     let r = FakeRunner::new();
     on_close(&p.root, 20000, &r);
     assert_eq!(r.calls().len(), 1);
@@ -762,4 +765,31 @@ fn facts_reason_and_switch_failure_are_both_kept() {
     let why = a.reason.unwrap();
     assert!(why.contains("the issuer handed over no facts"), "{why}");
     assert!(why.contains("switching to \"teacher\" failed"), "{why}");
+}
+
+/// The replaced session database is invalidated the way `dconf update` does it (8 zero bytes at its start), so that a
+/// dconf client that still has it mapped reopens the new one; the new one is untouched.
+#[test]
+fn switch_invalidates_the_old_session_db() {
+    use std::io::Read;
+    let (_root, p, index) = rendered();
+    // A client holding the current database (neutral's) open
+    let mut held = fs::File::open(session_db(&p)).unwrap();
+    switch_to(
+        &p.root,
+        &p.public_dir,
+        &p.var_dir,
+        &rendered_of(&index, "teacher"),
+        Some(LOCAL_UID),
+    )
+    .unwrap();
+    let mut old = Vec::new();
+    held.read_to_end(&mut old).unwrap();
+    assert_eq!(&old[..8], &[0u8; 8]);
+    assert_eq!(&old[8..], &b"db of neutral"[8..]);
+    assert_switched_to(&p, &dir_of("teacher"));
+    // No database before (first switch): nothing to invalidate
+    fs::remove_file(session_db(&p)).unwrap();
+    switch_to(&p.root, &p.public_dir, &p.var_dir, &index.neutral, None).unwrap();
+    assert_switched_to(&p, NEUTRAL_DIR);
 }

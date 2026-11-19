@@ -1,6 +1,7 @@
 use super::*;
 use crate::apply::Phase;
 use crate::runner::FakeRunner;
+use crate::system::exec_block::tests::{put_image, MountSim};
 use crate::system::tests::{paths, test_ident, test_seed, tmp_root};
 use crate::system::SysState;
 use crate::user_layer::{read_active, ActiveState, ACTIVE_FILE, RUN_DIR};
@@ -36,9 +37,10 @@ fn v2() -> Manifest {
     Manifest::parse("version = 1\n[[group]]\nid = \"default\"\nname = \"d\"\n").unwrap()
 }
 
-/// A system root with a few visible apps.
+/// A system root with a few visible apps and the exec-block stub and targets.
 fn root() -> tempfile::TempDir {
     let root = tmp_root();
+    put_image(root.path());
     let apps = root.path().join("usr/share/applications");
     fs::create_dir_all(&apps).unwrap();
     for name in [
@@ -113,14 +115,28 @@ impl std::ops::Deref for CompileRunner {
 impl crate::runner::Runner for CompileRunner {
     fn run(&self, cmd: &crate::runner::Cmd) -> anyhow::Result<crate::runner::Output> {
         let out = self.0.run(cmd)?;
-        if out.code == 0
-            && cmd.program == "dconf"
-            && cmd.args.first().is_some_and(|a| a == "compile")
-        {
-            let db = &cmd.args[1];
-            fs::write(db, format!("db compiled from {}", cmd.args[2]))?;
-            fs::set_permissions(db, fs::Permissions::from_mode(0o644))?;
-        }
+        fake_compile(cmd, &out)?;
+        Ok(out)
+    }
+}
+
+/// What a successful `dconf compile <out> <dir>` leaves: a stand-in database at `<out>`.
+fn fake_compile(cmd: &crate::runner::Cmd, out: &crate::runner::Output) -> anyhow::Result<()> {
+    if out.code == 0 && cmd.program == "dconf" && cmd.args.first().is_some_and(|a| a == "compile") {
+        let db = &cmd.args[1];
+        fs::write(db, format!("db compiled from {}", cmd.args[2]))?;
+        fs::set_permissions(db, fs::Permissions::from_mode(0o644))?;
+    }
+    Ok(())
+}
+
+/// [`CompileRunner`] that also simulates the exec-block bind mounts ([`MountSim`]).
+struct LiveRunner(MountSim);
+
+impl crate::runner::Runner for LiveRunner {
+    fn run(&self, cmd: &crate::runner::Cmd) -> anyhow::Result<crate::runner::Output> {
+        let out = self.0.run(cmd)?;
+        fake_compile(cmd, &out)?;
         Ok(out)
     }
 }
@@ -237,8 +253,10 @@ fn renders_every_reachable_config_and_neutral() {
     assert_eq!(names(&public(root.path())), want);
     for d in &want {
         assert!(var(root.path()).join(d).join(CHROME_FILE).is_file(), "{d}");
-        assert!(
+        // neutral's staging copy was renamed into managed/ by the switch at the end of the step
+        assert_eq!(
             staging(root.path()).join(format!("{d}.json")).is_file(),
+            d != NEUTRAL_DIR,
             "{d}"
         );
         assert!(var(root.path())
@@ -252,7 +270,10 @@ fn renders_every_reachable_config_and_neutral() {
             .is_file());
     }
     // the staging copies sit beside managed/, never in it
-    assert!(!root.path().join(POLICIES_DIR).join("managed").exists());
+    assert_eq!(
+        names(&root.path().join(POLICIES_DIR).join("managed")),
+        ["mastersos.json"]
+    );
     let index = read_index(&root.path().join("var/lib/mastersos-system")).unwrap();
     assert_eq!(index.group, "default");
     assert_eq!(index.rules.fallback, "primary");
@@ -299,7 +320,7 @@ fn renders_every_reachable_config_and_neutral() {
     got.sort();
     assert_eq!(got, want_compiles);
     assert_eq!(dconf_updates(&r), 0, "{:?}", r.calls());
-    assert!(names(&db(root.path())).is_empty());
+    assert_eq!(names(&db(root.path())), [SESSION_DB]);
     assert_eq!(
         compiled_db(
             root.path(),
@@ -313,13 +334,21 @@ fn renders_every_reachable_config_and_neutral() {
         read(root.path().join("var/lib/mastersos-public/session-mode")),
         "learning\n"
     );
-    // nothing is switched in here
-    assert!(!root
-        .path()
-        .join("var/lib/mastersos-public")
-        .join(SESSION_LINK)
-        .exists());
-    assert!(!db(root.path()).join(SESSION_DB).exists());
+    // nobody is signed in: neutral is switched in, nothing lifted, nothing to report about the session
+    assert_eq!(
+        session_link(root.path()).as_deref(),
+        Some("user-layer/neutral")
+    );
+    assert_eq!(
+        read(
+            root.path()
+                .join(POLICIES_DIR)
+                .join("managed/mastersos.json")
+        ),
+        read(var(root.path()).join(NEUTRAL_DIR).join(CHROME_FILE))
+    );
+    assert_eq!(lifted(root.path()), Caps::new());
+    assert!(out.iter().all(|i| i.item != ACTIVE_ITEM), "{out:?}");
 }
 
 #[test]
@@ -442,6 +471,7 @@ fn unreachable_dirs_are_removed_but_active_is_kept() {
         reason: None,
         opened_at: 0,
         seen: true,
+        held: false,
     };
     fs::create_dir_all(root.path().join(RUN_DIR)).unwrap();
     fs::write(
@@ -522,6 +552,7 @@ fn write_marker(root: &Path, dir: &str) {
         reason: None,
         opened_at: 0,
         seen: true,
+        held: false,
     };
     fs::create_dir_all(root.join(RUN_DIR)).unwrap();
     fs::write(
@@ -648,6 +679,14 @@ fn active_dir_stays_open_across_rerender() {
 #[test]
 fn unreadable_marker_keeps_every_dir() {
     let root = root();
+    render(root.path(), &v3());
+    // the live session's dir, opened by the switch; the marker cannot say whose it is
+    let teacher = config_dir_name("teacher");
+    fs::set_permissions(
+        public(root.path()).join(&teacher),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
     let old = config_dir_name("old");
     fs::create_dir_all(var(root.path()).join(&old)).unwrap();
     fs::create_dir_all(root.path().join(RUN_DIR)).unwrap();
@@ -656,6 +695,14 @@ fn unreadable_marker_keeps_every_dir() {
     let (out, _) = render(root.path(), &v3());
     let main = out.iter().find(|r| r.item == ITEM).unwrap();
     assert!(!main.ok, "{main:?}");
+    // nothing is switched and no dir mode changes
+    let session = out.iter().find(|r| r.item == ACTIVE_ITEM).unwrap();
+    assert!(!session.ok, "{session:?}");
+    assert_eq!(mode(public(root.path()).join(&teacher)), 0o755);
+    assert_eq!(
+        mode(public(root.path()).join(config_dir_name("primary"))),
+        0o700
+    );
     assert!(var(root.path()).join(&old).exists());
     assert!(var(root.path()).join(INDEX_FILE).exists());
     // the first layout's leftovers in /etc/dconf/db go all the same
@@ -675,16 +722,13 @@ fn unreadable_marker_keeps_every_dir() {
 fn format3_then_format2_cleans_up() {
     let root = root();
     render(root.path(), &v3());
-    // what the switch (Task 4) adds
-    std::os::unix::fs::symlink(
-        "user-layer/neutral",
-        root.path()
-            .join("var/lib/mastersos-public")
-            .join(SESSION_LINK),
-    )
-    .unwrap();
-    fs::create_dir_all(db(root.path())).unwrap();
-    fs::write(db(root.path()).join(SESSION_DB), "gvdb").unwrap();
+    // what the switch (Task 4) adds, here at the end of the step (nobody signed in: neutral)
+    assert_eq!(
+        session_link(root.path()).as_deref(),
+        Some("user-layer/neutral")
+    );
+    assert!(db(root.path()).join(SESSION_DB).is_file());
+    assert!(root.path().join(PROFILE_DIR).join(PROFILE_FILE).is_file());
     for d in [config_dir_name("teacher"), NEUTRAL_DIR.into()] {
         fs::write(db(root.path()).join(db_name(&d)), "gvdb").unwrap();
     }
@@ -851,4 +895,323 @@ fn learning_dconf_text_is_unchanged() {
         )
     );
     assert!(locks.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// The end of the step: the session follows the rendered configs (Task 7)
+// ---------------------------------------------------------------------------
+
+const UID: u32 = 2001;
+
+fn session_link(root: &Path) -> Option<String> {
+    fs::read_link(root.join("var/lib/mastersos-public").join(SESSION_LINK))
+        .ok()
+        .map(|t| t.to_string_lossy().into_owned())
+}
+
+fn session_uid(root: &Path) -> Option<String> {
+    fs::read_to_string(root.join("var/lib/mastersos-public/session/uid")).ok()
+}
+
+fn managed_policy(root: &Path) -> String {
+    read(root.join(POLICIES_DIR).join("managed/mastersos.json"))
+}
+
+fn lifted(root: &Path) -> Caps {
+    exec_block::read_lifted(&paths(root))
+        .unwrap()
+        .expect("exec-block state")
+}
+
+/// The exec-block stub is mounted over the terminal (as [`MountSim`] simulates it).
+fn terminal_blocked(root: &Path) -> bool {
+    fs::read(root.join("usr/libexec/gnome-terminal-server")).unwrap()
+        == fs::read(root.join(exec_block::STUB.trim_start_matches('/'))).unwrap()
+}
+
+fn caps_of(cs: &[Capability]) -> Caps {
+    cs.iter().copied().collect()
+}
+
+fn live(root: &Path) -> LiveRunner {
+    LiveRunner(MountSim::new(root))
+}
+
+fn render_live(root: &Path, m: &Manifest, r: &LiveRunner) -> Vec<ItemResult> {
+    run_step_with(step(), root, m, r, &mut SysState::default())
+}
+
+fn active_item(out: &[ItemResult]) -> Option<&ItemResult> {
+    out.iter().find(|i| i.item == ACTIVE_ITEM)
+}
+
+/// What a login of `UID` to the user config `id` leaves after the agent's lift: its rendering switched in, the marker,
+/// `caps` lifted.
+fn sign_in(root: &Path, r: &LiveRunner, id: &str, caps: &Caps) -> crate::user_layer::Active {
+    let p = paths(root);
+    let rendered = Rendered {
+        dir: config_dir_name(id),
+        caps: caps.clone(),
+        home: HomeMode::Keep,
+    };
+    // a config no longer in the settings has no rendering to switch to: its dir is only named
+    if var(root).join(&rendered.dir).join(CHROME_FILE).exists() {
+        switch_to(&p.root, &p.public_dir, &p.var_dir, &rendered, Some(UID)).unwrap();
+    }
+    let a = crate::user_layer::Active {
+        uid: UID,
+        user: "t1@school.ac.th".into(),
+        user_config: id.into(),
+        dir: rendered.dir.clone(),
+        caps: caps.clone(),
+        state: ActiveState::Open,
+        reason: None,
+        opened_at: 0,
+        seen: true,
+        held: false,
+    };
+    switch::write_active(root, &a).unwrap();
+    exec_block::apply_lifted(&p, r, caps).unwrap();
+    a
+}
+
+/// The spec example with `deny = ["terminal"]` on `teacher`.
+fn v3_teacher_no_terminal() -> Manifest {
+    let text = spec_example_v3().replacen(
+        "id = \"teacher\"\nname = \"Teachers\"\n",
+        "id = \"teacher\"\nname = \"Teachers\"\ndeny = [\"terminal\"]\n",
+        1,
+    );
+    let m = Manifest::parse(&text).unwrap();
+    assert!(!user_config(&m, "teacher")
+        .unwrap()
+        .caps
+        .contains(&Capability::Terminal));
+    m
+}
+
+/// A signed-in person keeps their user config through a reapply: its re-rendered files are switched in at once, and a
+/// capability it gained is lifted by the agent's after-login step (never by the switch itself).
+#[test]
+fn reapply_keeps_active_session() {
+    let root = root();
+    let r = live(root.path());
+    render_live(root.path(), &v3(), &r);
+    let primary = config_dir_name("primary");
+    let before = sign_in(root.path(), &r, "primary", &Caps::new());
+    assert!(is_hidden(
+        root.path(),
+        &primary,
+        "org.gnome.Nautilus.desktop"
+    ));
+    // the settings now let `primary` use the file manager
+    let out = render_live(root.path(), &v3_primary_files(), &r);
+    ok_item(&out, ITEM);
+    assert!(active_item(&out).is_none(), "{out:?}");
+    // still the person's own config, re-rendered and switched in
+    assert_eq!(
+        session_link(root.path()),
+        Some(format!("user-layer/{primary}"))
+    );
+    assert_eq!(session_uid(root.path()).as_deref(), Some("2001\n"));
+    assert_eq!(mode(public(root.path()).join(&primary)), 0o755);
+    assert!(!is_hidden(
+        root.path(),
+        &primary,
+        "org.gnome.Nautilus.desktop"
+    ));
+    assert_eq!(
+        managed_policy(root.path()),
+        read(var(root.path()).join(&primary).join(CHROME_FILE))
+    );
+    assert_eq!(
+        read(db(root.path()).join(SESSION_DB)),
+        read(var(root.path()).join(&primary).join(DCONF_DB_FILE))
+    );
+    // the marker follows the config; the new capability is lifted
+    let files = caps_of(&[Capability::FileManager]);
+    let a = read_active(root.path()).unwrap();
+    assert_eq!(
+        a,
+        crate::user_layer::Active {
+            caps: files.clone(),
+            ..before
+        }
+    );
+    assert_eq!(lifted(root.path()), files);
+    assert!(terminal_blocked(root.path()));
+    // nothing changes: a reapply keeps it all as it is
+    let out = render_live(root.path(), &v3_primary_files(), &r);
+    assert!(active_item(&out).is_none(), "{out:?}");
+    assert_eq!(read_active(root.path()).unwrap(), a);
+    assert_eq!(lifted(root.path()), files);
+}
+
+/// A capability the signed-in person's user config lost is blocked by the reapply itself, at once.
+#[test]
+fn reapply_tightens_removed_capability_now() {
+    let root = root();
+    let r = live(root.path());
+    render_live(root.path(), &v3(), &r);
+    let teacher_caps = read_index(&root.path().join("var/lib/mastersos-system"))
+        .unwrap()
+        .configs["teacher"]
+        .caps
+        .clone();
+    assert!(teacher_caps.contains(&Capability::Terminal));
+    sign_in(root.path(), &r, "teacher", &teacher_caps);
+    assert!(!terminal_blocked(root.path()));
+    // the reapply never lifts: the after-login step is not needed for this (and fails here)
+    r.0.fail_on("loginctl");
+    let out = render_live(root.path(), &v3_teacher_no_terminal(), &r);
+    assert!(active_item(&out).is_none(), "{out:?}");
+    let mut want = teacher_caps.clone();
+    want.remove(&Capability::Terminal);
+    assert_eq!(lifted(root.path()), want);
+    assert!(terminal_blocked(root.path()));
+    assert_eq!(read_active(root.path()).unwrap().caps, want);
+    let teacher = config_dir_name("teacher");
+    assert_eq!(
+        session_link(root.path()),
+        Some(format!("user-layer/{teacher}"))
+    );
+    // the dconf locks of the session follow too
+    assert!(lockfile(root.path(), &teacher)
+        .unwrap()
+        .contains("disable-command-line"));
+}
+
+/// A signed-in person whose user config was removed gets the fallback with everything blocked, held until their next
+/// login: a later reapply never lifts the fallback's capabilities, nor does the agent's after-login step.
+#[test]
+fn removed_config_falls_back_blocked() {
+    let root = root();
+    let r = live(root.path());
+    render_live(root.path(), &v3(), &r);
+    let gone = config_dir_name("gone");
+    fs::create_dir_all(public(root.path()).join(&gone)).unwrap();
+    let before = sign_in(root.path(), &r, "gone", &caps_of(&[Capability::Terminal]));
+    assert!(!terminal_blocked(root.path()));
+    let m = v3_primary_files();
+    let out = render_live(root.path(), &m, &r);
+    ok_item(&out, ITEM);
+    let item = active_item(&out).unwrap();
+    assert!(!item.ok);
+    assert_eq!(item.detail.as_deref(), Some(REMOVED_CONFIG));
+    assert_eq!(
+        REMOVED_CONFIG,
+        "the signed-in person's user config was removed; they get it at their next login"
+    );
+    let primary = config_dir_name("primary");
+    let held = crate::user_layer::Active {
+        user_config: "primary".into(),
+        dir: primary.clone(),
+        caps: Caps::new(),
+        reason: Some(REMOVED_CONFIG.into()),
+        held: true,
+        ..before
+    };
+    assert_eq!(read_active(root.path()).unwrap(), held);
+    assert_eq!(lifted(root.path()), Caps::new());
+    assert!(terminal_blocked(root.path()));
+    assert_eq!(
+        session_link(root.path()),
+        Some(format!("user-layer/{primary}"))
+    );
+    assert_eq!(session_uid(root.path()).as_deref(), Some("2001\n"));
+    assert_eq!(
+        managed_policy(root.path()),
+        read(var(root.path()).join(&primary).join(CHROME_FILE))
+    );
+    // the next reapply: the fallback is reachable, but its file manager stays blocked until the next login
+    let out = render_live(root.path(), &m, &r);
+    assert!(active_item(&out).is_none(), "{out:?}");
+    assert_eq!(read_active(root.path()).unwrap(), held);
+    assert_eq!(lifted(root.path()), Caps::new());
+    // the removed config's dir goes now that no session uses it
+    assert!(!public(root.path()).join(&gone).exists());
+    // the agent's after-login step lifts nothing for a held session
+    session::after_login(&paths(root.path()), &r).unwrap();
+    assert_eq!(lifted(root.path()), Caps::new());
+}
+
+/// Nobody signed in: the reapply (and the boot apply) leaves the Device neutral, whatever the last session left.
+#[test]
+fn no_marker_reapply_is_neutral() {
+    let root = root();
+    let r = live(root.path());
+    render_live(root.path(), &v3(), &r);
+    let caps = read_index(&root.path().join("var/lib/mastersos-system"))
+        .unwrap()
+        .configs["teacher"]
+        .caps
+        .clone();
+    sign_in(root.path(), &r, "teacher", &caps);
+    // `/run` is gone after a reboot
+    fs::remove_file(root.path().join(RUN_DIR).join(ACTIVE_FILE)).unwrap();
+    let teacher = config_dir_name("teacher");
+    let out = render_live(root.path(), &v3(), &r);
+    assert!(active_item(&out).is_none(), "{out:?}");
+    assert_eq!(
+        session_link(root.path()).as_deref(),
+        Some("user-layer/neutral")
+    );
+    assert_eq!(session_uid(root.path()), None);
+    assert_eq!(lifted(root.path()), Caps::new());
+    assert!(terminal_blocked(root.path()));
+    assert_eq!(
+        managed_policy(root.path()),
+        read(var(root.path()).join(NEUTRAL_DIR).join(CHROME_FILE))
+    );
+    assert_eq!(mode(public(root.path()).join(&teacher)), 0o700);
+}
+
+/// A session being closed belongs to the agent's revert: the reapply switches and lifts nothing.
+#[test]
+fn closing_session_is_left_to_the_revert() {
+    let root = root();
+    let r = live(root.path());
+    render_live(root.path(), &v3(), &r);
+    let caps = caps_of(&[Capability::Terminal]);
+    let mut a = sign_in(root.path(), &r, "teacher", &caps);
+    a.state = ActiveState::Closing;
+    switch::write_active(root.path(), &a).unwrap();
+    let out = render_live(root.path(), &v3_teacher_no_terminal(), &r);
+    assert!(active_item(&out).is_none(), "{out:?}");
+    assert_eq!(read_active(root.path()).unwrap(), a);
+    assert_eq!(lifted(root.path()), caps);
+    let teacher = config_dir_name("teacher");
+    assert_eq!(
+        session_link(root.path()),
+        Some(format!("user-layer/{teacher}"))
+    );
+}
+
+/// The marker's lock is held: nothing is switched; the item fails only when a capability the session no longer has is
+/// still lifted.
+#[test]
+fn busy_lock_waits_for_the_next_round() {
+    let root = root();
+    let r = live(root.path());
+    render_live(root.path(), &v3(), &r);
+    let caps = read_index(&root.path().join("var/lib/mastersos-system"))
+        .unwrap()
+        .configs["teacher"]
+        .caps
+        .clone();
+    let a = sign_in(root.path(), &r, "teacher", &caps);
+    let held = switch::lock_active(root.path(), std::time::Duration::ZERO).unwrap();
+    let out = render_live(root.path(), &v3(), &r);
+    let item = active_item(&out).unwrap();
+    assert!(item.ok, "{item:?}");
+    // the terminal was taken away while the lock is held: still lifted, so the item fails
+    let out = render_live(root.path(), &v3_teacher_no_terminal(), &r);
+    let item = active_item(&out).unwrap();
+    assert!(!item.ok, "{item:?}");
+    assert_eq!(read_active(root.path()).unwrap(), a);
+    assert_eq!(lifted(root.path()), caps);
+    drop(held);
+    let out = render_live(root.path(), &v3_teacher_no_terminal(), &r);
+    assert!(active_item(&out).is_none(), "{out:?}");
+    assert!(terminal_blocked(root.path()));
 }

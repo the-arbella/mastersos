@@ -58,6 +58,11 @@ pub struct Active {
     /// The agent has seen a logind session of `uid`.
     #[serde(default)]
     pub seen: bool,
+    /// The session's capabilities are held until the next login: its user config was removed mid-session, so it was
+    /// switched to the fallback with nothing lifted. While set, a reapply only ever narrows `caps` and nothing lifts
+    /// them; a new login writes a fresh marker without it.
+    #[serde(default)]
+    pub held: bool,
 }
 
 /// Whether the session of an [`Active`] marker is still open or is being closed.

@@ -1923,6 +1923,7 @@ mod tests {
                 reason: None,
                 opened_at: 1,
                 seen: true,
+                held: false,
             },
         )
         .unwrap();
