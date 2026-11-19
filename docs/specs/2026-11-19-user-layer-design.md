@@ -232,7 +232,9 @@ never match, and `check` warns when a rule uses them.
   "age_band": "13-17" }
 ```
 
-  No facts (scope not granted, request failed) → `[user] fallback`.
+  No facts (scope not granted, request failed): fact conditions never match; rules without fact conditions
+  (`admin`, `device_group`, `kind`, `user`) still apply in order, and `[user] fallback` applies when none matches
+  (David's ruling 2026-11-19 on the contract's wording).
 - **Hand-off (consume once)**:
   1. At the start of every authentication (login or unlock) the broker deletes that user's facts file.
   2. On grant it writes `/run/mastersos/facts/<user name>.json` (root 0700 directory from tmpfiles; the
