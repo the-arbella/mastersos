@@ -3620,6 +3620,11 @@ config = "teacher"
         assert_eq!(l[0].path.as_deref(), Some("group.default.config"));
         assert_eq!(l[0].params["group"], "default");
         assert_eq!(l[0].params["config"], "staff");
+        assert_eq!(
+            l[0].message,
+            "group.default.config: group default uses config staff, which does not exist; \
+             name an existing [[config]] id or add the config"
+        );
     }
 
     #[test]

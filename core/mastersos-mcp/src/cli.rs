@@ -174,10 +174,10 @@ enum ExplainCmd {
         /// The account kind: sso, local or guest
         #[arg(long, value_parser = parse_enum::<Kind>)]
         kind: Kind,
-        /// The person is an administrator on the Device
+        /// The person is an administrator on the Device (not with --kind guest)
         #[arg(long)]
         admin: bool,
-        /// The login name (default: none, so no `user` condition matches)
+        /// The login name (default: `guest` with --kind guest, otherwise none, so no `user` condition matches)
         #[arg(long)]
         user: Option<String>,
         /// The person's role in the organisation: owner, admin or member (sso only)
@@ -920,6 +920,12 @@ fn explain(c: &ExplainCmd, json: bool) -> Result<ExitCode, OpError> {
             sub,
             device_group,
         } => {
+            // As on a Device (`guest_user_config`): the guest session is never an administrator.
+            if *kind == Kind::Guest && *admin {
+                return Err(OpError::Failed(
+                    "--admin does not apply to --kind guest: the guest session is never an administrator on a Device".into(),
+                ));
+            }
             let (_, text, m) = local_manifest(dir.as_deref())?;
             if let Some(g) = device_group {
                 if !m.groups.iter().any(|x| &x.id == g) {
@@ -975,7 +981,14 @@ fn explain(c: &ExplainCmd, json: bool) -> Result<ExitCode, OpError> {
             let q = UserQuery {
                 kind: *kind,
                 admin: *admin,
-                user: user.clone().unwrap_or_default(),
+                // A Device signs the guest session in as user "guest".
+                user: user.clone().unwrap_or_else(|| {
+                    if *kind == Kind::Guest {
+                        "guest".into()
+                    } else {
+                        String::new()
+                    }
+                }),
                 facts,
             };
             let out = explain_mod::explain_user(&m, &text, &q, device_group.as_deref());
@@ -1036,7 +1049,7 @@ fn migrate_notes(legacy: bool) -> String {
     let mut notes = vec![
         "The keys that moved into [[device_config]], [[user_config]] and the defaults lose their comments.",
         "Every Device also installs the Flatpak and .deb apps of the fallback user config (the default Group's), legacy browser Groups included; once Devices run a format 3 agent, those apps show in the Dash only where a user config lists them.",
-        "Publishing a format 3 text waits until every recently seen Device reports `format_3` (`mastersos devices list`).",
+        "Publishing a format 3 text is refused (`feature_unsupported` for `format_3`, or `format_unsupported`) until every Device seen in the last 30 days reports `format_3`; the refusal names the Devices that are too old.",
     ];
     if legacy {
         notes.push("The settings were in the legacy shape (Groups holding the settings): the secret references now belong to configs, so the first publish needs `--allow-reroute` for each secret it names.");

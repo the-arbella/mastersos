@@ -162,8 +162,9 @@ What a Device does with a format 3 file:
 <!-- /prompt:omit -->
 
 **Compatibility.** Devices report the feature `format_3`. Publishing a `format = 3` text is refused
-(`format_unsupported`) while a recently seen Device does not report it, so publish format 3 only
-after `mastersos devices list` shows every Device on an OS that reads it. Until the agent that
+(`feature_unsupported` for the feature `format_3`, or `format_unsupported`) while a Device seen in
+the last 30 days does not report it; the refusal names those Devices and the OS image each last
+reported, so update them first. Until the agent that
 applies user configs ships, current agents refuse a format 3 bundle outright. A Device that reads
 format 3 still accepts format 1 and 2 texts and behaves exactly as before with them (every login gets
 the Device's single Config).
@@ -177,7 +178,8 @@ the Device's single Config).
   gave it (`rule assign[<n>], manifest.toml:<line>`, or `fallback`). The fact flags count only for
   `--kind sso`, and only when `school.oidc.mastersos_claims = true`: otherwise they are ignored with a
   note, because the Devices receive no facts. `--class-role` pairs with `--class` by position, or is
-  given once for every class. For a format 1 or 2 text it says `implied` and shows the Group's Config.
+  given once for every class. `--kind guest` is the guest session as a Device signs it in: user `guest`
+  unless `--user` says otherwise, never `--admin` (refused). For a format 1 or 2 text it says `implied` and shows the Group's Config.
   It refuses a text without `[user] fallback`.
 - `mastersos explain device <serial> [--dir <dir>]` prints the Group of that Device (its `[[device]]`
   entry, else `default`), its device config, the user configs a person can get on it, and the Flatpak
@@ -869,8 +871,8 @@ sub-tables are written like the Config ones (`[[device_defaults.wifi]]` like
 
 A device config (`format = 3`): what a Device looks like before anyone signs in, on top of
 [`[device_defaults]`](#device_defaults). It is today's [`[[config]]`](#config) without the user-layer
-keys (`interface`, `chrome_policy`, `apps.web`, `apps.flatpak`, login scripts); writing one of them
-is `unknown_field`. Groups name it by `id` (`[[group]] config`). A device config no Group names is
+keys (`interface`, `chrome_policy`, `apps.web`, `apps.flatpak`, login scripts); writing one of the
+keys is `unknown_field`, and a `when = "login"` script is `script_login_in_device_config`. Groups name it by `id` (`[[group]] config`). A device config no Group names is
 `config_unused`. The Group, `[[device]]`, `[device.locked]`, `[school]` and `[[trust]]` tables are
 unchanged.
 
@@ -3119,7 +3121,7 @@ with Configs counts as using it, `wifi_ext`: any `[[school.wifi]]`, or a Wi-Fi e
 `wpa3_only` (either value), `eap` or an enterprise key, or `oidc_card`: `client_secret` or
 `card_hosts` in `[school.oidc]`, or `support`: `[config.support]` or `support` in `[defaults]`, or
 `config_update_channel`: `update_channel` in `[defaults]` or a `[[config]]`, or `oidc_idp_hint`:
-`idp_hint` in `[school.oidc]`, or `oidc_card_navigation`: `card_navigation` in `[school.oidc]`, or `deb_apps`: `apps.deb` or `ubuntu_mirror` in `[defaults]` or a `[[config]]`, or `device_annotations`: `asset_id` or `location` in a `[[device]]`, or `kiosk_platform`, `kiosk_inject`, `kiosk_device_attributes`, `kiosk_managed_config`: the kiosk app keys `platform`, `inject`, `device_attributes = true` and `managed_config`),
+`idp_hint` in `[school.oidc]`, or `oidc_card_navigation`: `card_navigation` in `[school.oidc]`, or `deb_apps`: `apps.deb` or `ubuntu_mirror` in `[defaults]` or a `[[config]]`, or `device_annotations`: `asset_id` or `location` in a `[[device]]`, or `kiosk_platform`, `kiosk_inject`, `kiosk_device_attributes`, `kiosk_managed_config`: the kiosk app keys `platform`, `inject`, `device_attributes = true` and `managed_config`, or `format_3`: `format = 3`, or `oidc_login_domain`: `login_domain` in `[school.oidc]`, or `oidc_mastersos_claims`: `mastersos_claims = true` in `[school.oidc]`),
 and some Devices seen in the last 30 days have not reported that they understand it.
 
 <!-- prompt:omit -->
@@ -4171,7 +4173,7 @@ locked = { message = "This Device was reported lost. Please bring it to the IT o
 **Level:** error. **Meaning:** `school.oidc.login_domain` is not one of `allowed_domains` (compared ignoring case). Any format.
 
 <!-- prompt:omit -->
-**Why:** a name completed with that domain could never sign in.
+**Why:** the rule is that `login_domain` must be one of `school.allowed_domains`.
 <!-- /prompt:omit -->
 
 **How to fix:** add the domain to `allowed_domains`, or change `login_domain` to one of them.

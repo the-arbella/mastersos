@@ -163,3 +163,118 @@ pub fn explain_device(m: &Manifest, serial: &str) -> Result<DeviceExplained, Str
         deb: s.config.apps.deb.keys().cloned().collect(),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mastersos_bundle::testutil::spec_example_v3;
+    use mastersos_bundle::{guest_user_config, UserRules};
+
+    const TEACHER_CLASS: &str = "0193a0c2-0000-7000-8000-0000000000c1";
+    const PRIMARY_NODE: &str = "0193a0c2-0000-7000-8000-000000000001";
+
+    /// The spec example with `mastersos_claims = true`, a Group `lab`, and rules that depend on
+    /// the Group, the kind and the login name.
+    fn text() -> String {
+        let t = spec_example_v3();
+        let out = t
+            .replacen(
+                "client_id = \"mastersos\" }",
+                "client_id = \"mastersos\", mastersos_claims = true }",
+                1,
+            )
+            .replacen(
+                "config = \"classroom\"\n",
+                "config = \"classroom\"\n\n[[group]]\nid = \"lab\"\nname = \"Lab\"\nconfig = \"classroom\"\n",
+                1,
+            )
+            .replacen(
+                "[user]\nfallback",
+                "[[assign]]\nuser_config = \"teacher\"\nkind = [\"local\"]\ndevice_group = [\"lab\"]\n\n\
+                 [[assign]]\nuser_config = \"teacher\"\nuser = [\"guest\"]\ndevice_group = [\"lab\"]\n\n\
+                 [user]\nfallback",
+                1,
+            );
+        assert_eq!(out.matches("[[assign]]").count(), 5, "{out}");
+        assert!(out.contains("mastersos_claims = true"), "{out}");
+        out
+    }
+
+    fn facts(classes: Vec<ClassFact>, nodes: &[&str]) -> IssuerFacts {
+        IssuerFacts {
+            sub: "0193a0c2-0000-7000-8000-0000000000a1".into(),
+            org: "0193a0c2-0000-7000-8000-0000000000aa".into(),
+            org_role: None,
+            org_nodes: nodes.iter().map(|n| n.to_string()).collect(),
+            classes,
+            age_band: None,
+        }
+    }
+
+    /// `explain user` answers what a Device answers: for every Group, the user config of
+    /// `UserRules::from_manifest(m, g).resolve(...)` (and, for the guest, `guest_user_config`).
+    #[test]
+    fn explain_user_matches_user_rules() {
+        let text = text();
+        let m = Manifest::parse(&text).unwrap();
+        let teacher = vec![ClassFact {
+            id: TEACHER_CLASS.into(),
+            role: ClassRole::Teacher,
+        }];
+        let queries = [
+            (Kind::Sso, true, "it@school.ac.th", None),
+            (
+                Kind::Sso,
+                false,
+                "t@school.ac.th",
+                Some(facts(teacher, &[])),
+            ),
+            (
+                Kind::Sso,
+                false,
+                "p@school.ac.th",
+                Some(facts(vec![], &[PRIMARY_NODE])),
+            ),
+            (Kind::Sso, false, "x@school.ac.th", Some(facts(vec![], &[]))),
+            (Kind::Sso, false, "", None),
+            (Kind::Local, false, "student1", None),
+            (Kind::Local, true, "student1", None),
+            (Kind::Guest, false, "guest", None),
+        ];
+        let mut seen = std::collections::BTreeSet::new();
+        for (kind, admin, user, facts) in queries {
+            let q = UserQuery {
+                kind,
+                admin,
+                user: user.into(),
+                facts,
+            };
+            let out = explain_user(&m, &text, &q, None);
+            assert_eq!(out.len(), m.groups.len());
+            for (e, g) in out.iter().zip(&m.groups) {
+                assert_eq!(e.group, g.id);
+                let device = DeviceFacts {
+                    kind,
+                    admin,
+                    user,
+                    device_group: &g.id,
+                };
+                let want = UserRules::from_manifest(&m, &g.id)
+                    .unwrap()
+                    .resolve(&device, q.facts.as_ref())
+                    .user_config;
+                assert_eq!(e.user_config, want, "{q:?} on {}", g.id);
+                if kind == Kind::Guest {
+                    assert_eq!(Some(want), guest_user_config(&m, &g.id), "{}", g.id);
+                }
+                seen.insert((g.id.clone(), e.user_config.clone()));
+            }
+        }
+        // The cases reach both user configs on both Groups.
+        for g in ["default", "lab"] {
+            for c in ["primary", "teacher"] {
+                assert!(seen.contains(&(g.into(), c.into())), "{g} {c}: {seen:?}");
+            }
+        }
+    }
+}

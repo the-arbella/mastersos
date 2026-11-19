@@ -286,12 +286,21 @@ pub fn lint_at(m: &Manifest, present: &BTreeSet<String>, today: chrono::NaiveDat
 /// shared with format 2 name it `defaults…` / `config.<id>…`; in a format 3 text those tables
 /// are written `[device_defaults]` / `[[device_config]]`. Rewrites such paths (and a message
 /// that starts with the path) so they name the table as written; the one place format 3 lints
-/// get their device-layer paths. Format 1/2 lints are left alone.
+/// get their device-layer paths. The shared rules also name the tables in the middle of a
+/// message (`[defaults]` as the owner of an entry, "name an existing [[config]] id"): those
+/// become `[device_defaults]` / `[[device_config]]` too. Format 1/2 lints are left alone.
 pub(crate) fn device_layer_paths(m: &Manifest, lints: &mut [Lint]) {
     if m.user_layer.is_none() {
         return;
     }
     for l in lints {
+        // `[user_defaults]` and `[[user_config]]` do not contain these tokens.
+        if l.message.contains("[defaults]") || l.message.contains("[[config]]") {
+            l.message = l
+                .message
+                .replace("[defaults]", "[device_defaults]")
+                .replace("[[config]]", "[[device_config]]");
+        }
         let Some(path) = l.path.as_deref() else {
             continue;
         };

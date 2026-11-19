@@ -272,6 +272,37 @@ fn explain_user_guest_gets_the_fallback() {
 }
 
 #[test]
+fn explain_user_guest_is_user_guest_and_never_admin() {
+    // A rule for the login name `guest`: a Device signs the guest session in under that name.
+    let t = v3_with_lab().replacen(
+        "[user]\nfallback",
+        "[[assign]]\nuser_config = \"teacher\"\nuser = [\"guest\"]\ndevice_group = [\"lab\"]\n\n[user]\nfallback",
+        1,
+    );
+    let (home, dir) = settings(&t);
+    let d = dir.to_str().unwrap();
+    let o = mastersos(
+        home.path(),
+        &["explain", "user", "--dir", d, "--kind", "guest"],
+    );
+    let (out, err) = text(&o);
+    assert!(o.status.success(), "{out}{err}");
+    let l = assign_line(&t, 3);
+    assert_eq!(
+        out.trim(),
+        format!("group default: primary (fallback)\ngroup lab: teacher (rule assign[3], manifest.toml:{l})")
+    );
+    let o = mastersos(
+        home.path(),
+        &["explain", "user", "--dir", d, "--kind", "guest", "--admin"],
+    );
+    let (out, err) = text(&o);
+    assert!(!o.status.success(), "{out}{err}");
+    assert!(out.is_empty(), "{out}");
+    assert!(err.contains("--admin") && err.contains("guest"), "{err}");
+}
+
+#[test]
 fn explain_user_on_format2_uses_the_implied_layer() {
     let (home, dir) = settings(&defaults_example());
     let d = dir.to_str().unwrap();

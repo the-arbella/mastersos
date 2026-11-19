@@ -732,6 +732,9 @@ config = "student"
                     browser_debs_checked |= !o.apps.deb.is_empty();
                     let written = new.config_of_group(&g.id).unwrap();
                     assert!(written.apps.deb.is_empty(), "{}\n{out}", g.id);
+                    // `n` also installs the union over the reachable user configs, the fallback
+                    // (the default Group's config) included: this holds only because the
+                    // fixtures' fallback config has no non-kiosk .deb apps.
                     assert!(n.apps.deb.is_empty(), "{}\n{out}", g.id);
                 }
                 // A legacy `mode = "browser"` Group becomes preset learning without Flatpak or

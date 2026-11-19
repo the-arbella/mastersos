@@ -1254,7 +1254,7 @@ pub fn validate_user_layer(m: &Manifest, out: &mut Vec<Lint>) {
                     bad(
                         "login_domain_not_allowed",
                         format!(
-                            "school.oidc.login_domain {d:?} is not in allowed_domains: the names it completes could never sign in; add it to allowed_domains or change it."
+                            "school.oidc.login_domain {d:?} is not in allowed_domains: login_domain must be one of school.allowed_domains; add it to allowed_domains or change it."
                         ),
                         "school.oidc.login_domain".into(),
                     )
@@ -2339,6 +2339,89 @@ mod tests {
             let err = Manifest::parse(&v3_with(t)).unwrap_err().to_string();
             let want = format!("unknown field `{key}`");
             assert!(err.contains(&want), "{t}: {err}");
+        }
+    }
+
+    #[test]
+    fn format3_rejects_user_layer_keys_in_the_device_layer() {
+        let in_config = "name = \"Classroom laptops\"\n";
+        let in_defaults = "login_methods = [\"sso\", \"guest\"]\n";
+        for (after, t, key) in [
+            (
+                in_config,
+                "chrome_policy = { URLBlocklist = [\"a.com\"] }",
+                "chrome_policy",
+            ),
+            (in_defaults, "interface = \"full\"", "interface"),
+            (
+                in_defaults,
+                "chrome_policy = { URLBlocklist = [\"a.com\"] }",
+                "chrome_policy",
+            ),
+        ] {
+            let text = v3_edit(after, &format!("{after}{t}\n"));
+            let err = Manifest::parse(&text).unwrap_err().to_string();
+            let want = format!("unknown field `{key}`");
+            assert!(err.contains(&want), "{t}: {err}");
+        }
+    }
+
+    #[test]
+    fn assign_needs_format_3() {
+        let assign = "\n[[assign]]\nuser_config = \"a\"\n";
+        // The legacy shape (Groups holding the settings), and a text without `format`.
+        for text in [
+            format!("{}{assign}", crate::testutil::legacy_spec_example()),
+            format!("{}\n{assign}", v2_minimal_body()),
+        ] {
+            match Manifest::parse(&text) {
+                Err(BundleError::Parse(e)) => assert!(e.contains("assign"), "{e}"),
+                other => panic!("{other:?}\n{text}"),
+            }
+        }
+    }
+
+    #[test]
+    fn format3_messages_name_the_device_layer_tables() {
+        // A Group naming a device config that does not exist.
+        let text = v3_edit(
+            "name = \"Unassigned\"\nconfig = \"classroom\"\n",
+            "name = \"Unassigned\"\nconfig = \"nope\"\n",
+        );
+        let v = errors_of(&text);
+        let l = v
+            .iter()
+            .find(|l| l.code == "group_unknown_config")
+            .unwrap_or_else(|| panic!("{v:?}"));
+        assert_eq!(
+            l.message,
+            "group.default.config: group default uses config nope, which does not exist; \
+             name an existing [[device_config]] id or add the config"
+        );
+        // An entry of the device defaults, named as its owner in the middle of the message.
+        let text = v3_edit(
+            "login_methods = [\"sso\", \"guest\"]\n",
+            "login_methods = [\"sso\", \"guest\"]\n\
+             files = [{ src = \"files/wallpaper.jpg\", dest = \"wallpaper.jpg\" }]\n\
+             wifi = [{ ssid = \"A\", open = true }, { ssid = \"A\", open = true }]\n",
+        );
+        let v = errors_of(&text);
+        let l = v
+            .iter()
+            .find(|l| l.code == "dest_not_absolute")
+            .unwrap_or_else(|| panic!("{v:?}"));
+        assert!(l.message.contains("in [device_defaults]"), "{l:?}");
+        let w = warnings_of(&text);
+        let l = w
+            .iter()
+            .find(|l| l.code == "wifi_ssid_duplicate")
+            .unwrap_or_else(|| panic!("{w:?}"));
+        assert!(l.message.contains("in [device_defaults]"), "{l:?}");
+        for l in v.iter().chain(&w) {
+            assert!(
+                !l.message.contains("[defaults]") && !l.message.contains("[[config]]"),
+                "{l:?}"
+            );
         }
     }
 
