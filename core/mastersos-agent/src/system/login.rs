@@ -2647,10 +2647,10 @@ client_id = "laptops"
         );
     }
 
-    /// Order, write: the expected-org file is written before the drop-in (the drop-in write is blocked here, and the file
-    /// is already there).
+    /// The expected-org file is written even when the drop-in write fails (the drop-in write is blocked here). This does
+    /// not check the order of the two steps: the broker reads both only at restart, after both have run.
     #[test]
-    fn expected_org_is_written_before_the_drop_in() {
+    fn expected_org_is_written_even_when_the_drop_in_write_fails() {
         let root = tmp_root();
         let r = FakeRunner::new();
         let mut sys = SysState::default();
