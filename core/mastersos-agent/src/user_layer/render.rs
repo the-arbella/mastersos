@@ -29,6 +29,10 @@
 //!   their next login ([`super::Active::held`]), and [`ACTIVE_ITEM`] fails with [`REMOVED_CONFIG`];
 //! - a session being closed is left to the agent's revert; a marker that cannot be read changes nothing.
 //!
+//! The render creates a user config dir root-only (0700) and never changes the mode of an existing one (a login may
+//! open its dir after the step read the marker); this last part, under the lock, closes every user config dir that no
+//! session uses.
+//!
 //! With a format 1/2 bundle the step does nothing, unless an earlier format 3 bundle left its state: then it
 //! removes everything it created, and the format 1/2 steps own the session as before.
 
@@ -217,21 +221,17 @@ fn render_all(ctx: &ApplyContext, m: &Manifest, env: &mut Env) -> Vec<ItemResult
     let public =
         deb_apps::status::read_public(&paths.public_dir.join(deb_apps::status::PUBLIC_NAME));
     let neutral = neutral();
-    // The signed-in session's config dir keeps its mode (the switch opened it) and is never removed. A marker that
-    // exists but cannot be read keeps every dir this round.
+    // The signed-in session's config dir is never removed. A marker that exists but cannot be read keeps every dir this
+    // round. Read without the lock: a login may switch a dir in after this, so the render never changes the mode of an
+    // existing dir; the end of the step closes the others (`follow_session`).
     let active = active_marker(&paths.root).map(|a| a.map(|a| a.dir).filter(|d| is_config_dir(d)));
-    let live = match &active {
-        Ok(Some(d)) => Live::Dir(d),
-        Ok(None) => Live::Nobody,
-        Err(_) => Live::Unknown,
-    };
     let mut index = BTreeMap::new();
     {
         let lists: Vec<_> = configs.iter().map(|c| &c.web).collect();
         let mut dl = Downloads::new(sys, desktop::icon_key(&lists));
         for c in &configs {
             let dir = config_dir_name(&c.id);
-            let mut r = render_one(ctx, paths, c, &dir, live, &kiosk, &public, &mut dl);
+            let mut r = render_one(ctx, paths, c, &dir, &kiosk, &public, &mut dl);
             if let Err(e) = compile_db(paths, runner, &dir, r.keyfiles_written) {
                 r.errs.push(format!("dconf: {e:#}"));
             }
@@ -245,16 +245,7 @@ fn render_all(ctx: &ApplyContext, m: &Manifest, env: &mut Env) -> Vec<ItemResult
                 },
             );
         }
-        let mut r = render_one(
-            ctx,
-            paths,
-            &neutral,
-            NEUTRAL_DIR,
-            Live::Nobody,
-            &kiosk,
-            &public,
-            &mut dl,
-        );
+        let mut r = render_one(ctx, paths, &neutral, NEUTRAL_DIR, &kiosk, &public, &mut dl);
         if let Err(e) = compile_db(paths, runner, NEUTRAL_DIR, r.keyfiles_written) {
             r.errs.push(format!("dconf: {e:#}"));
         }
@@ -314,14 +305,6 @@ fn render_all(ctx: &ApplyContext, m: &Manifest, env: &mut Env) -> Vec<ItemResult
     out
 }
 
-/// The signed-in session's config dir as the step found it: none, this one, or unknown (the marker cannot be read).
-#[derive(Clone, Copy)]
-enum Live<'a> {
-    Nobody,
-    Dir(&'a str),
-    Unknown,
-}
-
 fn neutral_rendered() -> Rendered {
     let n = neutral();
     Rendered {
@@ -349,7 +332,9 @@ fn follow_session(
     let a = match active_marker(root) {
         Ok(Some(a)) => a,
         Ok(None) => {
-            return session::to_neutral(paths, runner)
+            let done = session::to_neutral(paths, runner);
+            close_others(paths, None);
+            return done
                 .err()
                 .map(|e| failed(ACTIVE_ITEM, format!("nobody is signed in: {e:#}")));
         }
@@ -363,12 +348,19 @@ fn follow_session(
         }
     };
     if a.state == ActiveState::Closing {
+        close_others(paths, Some(&a.dir));
         return None;
     }
     let Some(r) = configs.get(&a.user_config) else {
-        return Some(removed(paths, runner, a, configs, fallback));
+        let item = removed(paths, runner, a, configs, fallback);
+        // `removed` rewrote the marker's dir; read back what it now names (unreadable: nothing is closed)
+        if let Ok(Some(a)) = active_marker(root) {
+            close_others(paths, Some(&a.dir));
+        }
+        return Some(item);
     };
     let (mut errs, loosen) = keep(paths, runner, a, r);
+    close_others(paths, Some(&r.dir));
     drop(lock);
     // A capability the config gained: lifted by the agent's after-login step, which takes the lock itself
     if loosen {
@@ -383,6 +375,42 @@ fn follow_session(
         }
     }
     (!errs.is_empty()).then(|| failed(ACTIVE_ITEM, errs.join("; ")))
+}
+
+/// Closes (0700) every user config dir in the public [`STATE_SUB`] but `live` (the marker's dir) and the one the
+/// [`SESSION_LINK`] points at (a switch that failed half way may leave it there): the render never changes an existing
+/// dir's mode, since a login may open one after the step read the marker. Called under the marker's lock. Failures
+/// are logged: a dir left open is closed by the next round, and the session is never looser for it.
+fn close_others(paths: &SysPaths, live: Option<&str>) {
+    let closed = (|| -> Result<()> {
+        let Some(pub_fd) = open_existing_abs(&paths.public_dir)? else {
+            return Ok(());
+        };
+        let Some(parent) = safefs::open_child_dir(&pub_fd, STATE_SUB)? else {
+            return Ok(());
+        };
+        let linked = safefs::read_link_at(&pub_fd, SESSION_LINK);
+        let linked = linked
+            .as_deref()
+            .and_then(|l| l.strip_prefix(&format!("{STATE_SUB}/")));
+        for name in safefs::list_at(&parent)? {
+            if !is_config_dir(&name)
+                || name == NEUTRAL_DIR
+                || Some(name.as_str()) == live
+                || Some(name.as_str()) == linked
+            {
+                continue;
+            }
+            let d = safefs::open_dir_at(&parent, Path::new(&name), false)?;
+            if mode_of(&d)? != 0o700 {
+                safefs::set_mode(&d, 0o700)?;
+            }
+        }
+        Ok(())
+    })();
+    if let Err(e) = closed {
+        log::warn!("user layer: closing the config directories no session uses: {e:#}");
+    }
 }
 
 /// The capabilities the marker `a` may keep under its config's rendering `r`: the config's, or only those it already had
@@ -562,7 +590,6 @@ fn render_one(
     paths: &SysPaths,
     c: &UserConfig,
     dir: &str,
-    live: Live,
     kiosk: &[String],
     public: &BTreeMap<String, PublicApp>,
     dl: &mut Downloads,
@@ -574,7 +601,7 @@ fn render_one(
     let lifted = |cap: Capability| c.caps.contains(&cap);
     let pdir = match public_dir(paths)
         .and_then(|p| sub(&p, STATE_SUB, PUBLIC_STATE_MODE))
-        .and_then(|s| config_dir(&s, dir, live))
+        .and_then(|s| config_dir(&s, dir))
     {
         Ok(d) => d,
         Err(e) => {
@@ -656,13 +683,13 @@ fn render_one(
     r
 }
 
-/// The public config dir `dir` under the public [`STATE_SUB`] `parent`, created when missing. Its mode: 0755 for
-/// [`NEUTRAL_DIR`] (nothing in it is private; the greeter and boot state use it); 0700 for a user config, so that a
-/// signed-in person cannot read the other configs' scripts and settings, except that the signed-in session's own
-/// dir (`live`) keeps 0755 when the switch has opened it. A re-render never opens a dir. While the marker cannot be
-/// read (`live` unknown) an existing user config dir keeps its mode: it may be the live session's.
-fn config_dir(parent: &OwnedFd, dir: &str, live: Live) -> Result<OwnedFd> {
-    if matches!(live, Live::Unknown) && dir != NEUTRAL_DIR {
+/// The public config dir `dir` under the public [`STATE_SUB`] `parent`. [`NEUTRAL_DIR`] is always 0755 (nothing in it
+/// is private; the greeter and boot state use it). A user config dir is created 0700, so that a signed-in person cannot
+/// read the other configs' scripts and settings; an existing one keeps its mode: only the switch opens one (for the
+/// session it signs in, possibly after this step read the marker) and the end of the step closes the others
+/// ([`close_others`], under the marker's lock).
+fn config_dir(parent: &OwnedFd, dir: &str) -> Result<OwnedFd> {
+    if dir != NEUTRAL_DIR {
         match safefs::open_dir_at(parent, Path::new(dir), false) {
             Ok(d) => return Ok(d),
             Err(e) if is_not_found(&e) => {}
@@ -670,9 +697,7 @@ fn config_dir(parent: &OwnedFd, dir: &str, live: Live) -> Result<OwnedFd> {
         }
     }
     let d = safefs::open_dir_at(parent, Path::new(dir), true)?;
-    let open =
-        dir == NEUTRAL_DIR || (matches!(live, Live::Dir(a) if a == dir) && mode_of(&d)? == 0o755);
-    let mode = if open { 0o755 } else { 0o700 };
+    let mode = if dir == NEUTRAL_DIR { 0o755 } else { 0o700 };
     safefs::set_mode(&d, mode)?;
     Ok(d)
 }

@@ -1379,3 +1379,135 @@ fn removed_config_with_broken_fallback_goes_neutral() {
     assert_eq!(lifted(root.path()), Caps::new());
     assert!(terminal_blocked(root.path()));
 }
+
+// ---------------------------------------------------------------------------
+// A login during a render keeps its dir open (final review FR-I1)
+// ---------------------------------------------------------------------------
+
+/// [`LiveRunner`] that signs `UID` in (the switch and marker of `on_open`, without the step's lock) to the config rendered
+/// second, right after the first config's `dconf compile`: after the step read the marker, before it reaches that
+/// config's dir. At the second config's compile (after its `render_one`) it records that dir's mode.
+struct LoginMidRender {
+    inner: LiveRunner,
+    root: PathBuf,
+    /// The dir signed in to, once done.
+    signed_in: std::sync::Mutex<Option<String>>,
+    /// The mode of the signed-in dir right after the step rendered it.
+    mode_after_render: std::sync::Mutex<Option<u32>>,
+}
+
+impl crate::runner::Runner for LoginMidRender {
+    fn run(&self, cmd: &crate::runner::Cmd) -> anyhow::Result<crate::runner::Output> {
+        let out = self.inner.run(cmd)?;
+        if cmd.program != "dconf" || cmd.args.first().is_none_or(|a| a != "compile") {
+            return Ok(out);
+        }
+        // `dconf compile <out> <var>/user-layer/<d>/dconf.d`
+        let d = Path::new(&cmd.args[2])
+            .parent()
+            .and_then(|p| p.file_name())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let mut signed_in = self.signed_in.lock().unwrap();
+        match signed_in.as_deref() {
+            None => {
+                let other = ["teacher", "primary"]
+                    .into_iter()
+                    .find(|id| config_dir_name(id) != d)
+                    .unwrap();
+                let p = paths(&self.root);
+                let r = read_index(&p.var_dir).unwrap().configs[other].clone();
+                switch_to(&p.root, &p.public_dir, &p.var_dir, &r, Some(UID)).unwrap();
+                switch::write_active(
+                    &self.root,
+                    &crate::user_layer::Active {
+                        uid: UID,
+                        user: "t1@school.ac.th".into(),
+                        user_config: other.into(),
+                        dir: r.dir.clone(),
+                        caps: Caps::new(),
+                        state: ActiveState::Open,
+                        reason: None,
+                        opened_at: 0,
+                        seen: false,
+                        held: false,
+                    },
+                )
+                .unwrap();
+                *signed_in = Some(r.dir);
+            }
+            Some(x) if x == d => {
+                *self.mode_after_render.lock().unwrap() = Some(mode(public(&self.root).join(x)));
+            }
+            Some(_) => {}
+        }
+        Ok(out)
+    }
+}
+
+/// A login between the step's marker read and its render of the person's config: the render never closes that dir
+/// (the starting session reads its `session-mode` and `xdg` through it), and the end of the step keeps it open.
+#[test]
+fn login_during_render_keeps_its_dir_open() {
+    let root = root();
+    render_live(root.path(), &v3(), &live(root.path()));
+    let r = LoginMidRender {
+        inner: live(root.path()),
+        root: root.path().to_path_buf(),
+        signed_in: Default::default(),
+        mode_after_render: Default::default(),
+    };
+    let out = run_step_with(step(), root.path(), &v3(), &r, &mut SysState::default());
+    ok_item(&out, ITEM);
+    assert!(active_item(&out).is_none(), "{out:?}");
+    let x = r.signed_in.lock().unwrap().clone().expect("signed in");
+    assert_eq!(*r.mode_after_render.lock().unwrap(), Some(0o755));
+    assert_eq!(mode(public(root.path()).join(&x)), 0o755);
+    assert_eq!(session_link(root.path()), Some(format!("user-layer/{x}")));
+    assert_eq!(session_uid(root.path()).as_deref(), Some("2001\n"));
+    // the other config's dir is closed by the end of the step
+    let other = [config_dir_name("teacher"), config_dir_name("primary")]
+        .into_iter()
+        .find(|d| *d != x)
+        .unwrap();
+    assert_eq!(mode(public(root.path()).join(&other)), 0o700);
+    assert_eq!(mode(public(root.path()).join(NEUTRAL_DIR)), 0o755);
+}
+
+/// The end of the step closes every user config dir but the session's: one left open by anything (a failed close of
+/// the switch, an older agent) is root-only again; nobody signed in, all are.
+#[test]
+fn follow_session_closes_every_other_config_dir() {
+    let root = root();
+    let r = live(root.path());
+    render_live(root.path(), &v3(), &r);
+    let (teacher, primary) = (config_dir_name("teacher"), config_dir_name("primary"));
+    sign_in(root.path(), &r, "teacher", &Caps::new());
+    let open = |d: &str| {
+        fs::set_permissions(
+            public(root.path()).join(d),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap()
+    };
+    open(&primary);
+    render_live(root.path(), &v3(), &r);
+    assert_eq!(mode(public(root.path()).join(&teacher)), 0o755);
+    assert_eq!(mode(public(root.path()).join(&primary)), 0o700);
+    // a session being closed keeps its own dir until the revert
+    let mut a = read_active(root.path()).unwrap();
+    a.state = ActiveState::Closing;
+    switch::write_active(root.path(), &a).unwrap();
+    open(&primary);
+    render_live(root.path(), &v3(), &r);
+    assert_eq!(mode(public(root.path()).join(&teacher)), 0o755);
+    assert_eq!(mode(public(root.path()).join(&primary)), 0o700);
+    // nobody signed in
+    fs::remove_file(root.path().join(RUN_DIR).join(ACTIVE_FILE)).unwrap();
+    open(&primary);
+    render_live(root.path(), &v3(), &r);
+    assert_eq!(mode(public(root.path()).join(&teacher)), 0o700);
+    assert_eq!(mode(public(root.path()).join(&primary)), 0o700);
+    assert_eq!(mode(public(root.path()).join(NEUTRAL_DIR)), 0o755);
+}
