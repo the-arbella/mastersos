@@ -596,8 +596,14 @@ pub(crate) mod tests {
     /// /usr/bin/gnome-terminal 是指向 .real 的链接（不挂它本身），ptyxis 不存在。
     pub(crate) fn image_root() -> tempfile::TempDir {
         let root = tmp_root();
+        put_image(root.path());
+        root
+    }
+
+    /// Puts the stub and the targets of [`image_root`] into an existing root.
+    pub(crate) fn put_image(root: &Path) {
         let put = |abs: &str, body: &str| {
-            let p = under(root.path(), abs);
+            let p = under(root, abs);
             fs::create_dir_all(p.parent().unwrap()).unwrap();
             fs::write(p, body).unwrap();
         };
@@ -608,10 +614,9 @@ pub(crate) mod tests {
         put("/usr/bin/gnome-control-center", "gcc");
         std::os::unix::fs::symlink(
             "gnome-terminal.real",
-            under(root.path(), "/usr/bin/gnome-terminal"),
+            under(root, "/usr/bin/gnome-terminal"),
         )
         .unwrap();
-        root
     }
 
     pub(crate) const PRESENT: [&str; 4] = [

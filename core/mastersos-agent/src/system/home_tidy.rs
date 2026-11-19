@@ -872,6 +872,12 @@ fn user_gone(runner: &dyn Runner, uid: u32, id: &str, dl: &Deadline) -> Option<b
     })
 }
 
+/// Under the user layer (format 3): switch off linger for every person account, administrators included (design §4.5:
+/// no linger for human sessions; the agent stops each person's user manager at logout).
+pub fn linger_off_for_everyone(runner: &dyn Runner) -> Result<()> {
+    linger_off_for_students(runner, &[])
+}
+
 /// Learning mode: switch off linger for every person account that is not an administrator (case-insensitive), so no
 /// user manager starts at boot before anyone logs in. All of them are tried; failures are reported as a count only.
 pub fn linger_off_for_students(runner: &dyn Runner, admins: &[String]) -> Result<()> {

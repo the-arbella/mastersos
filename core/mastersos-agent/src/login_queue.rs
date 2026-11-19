@@ -75,7 +75,7 @@ const SIGNAL_TIMEOUT: Duration = Duration::from_secs(1);
 /// 等 `user@<uid>.service` active 最多这么久、每隔这么久看一次。
 const USER_WAIT: Duration = Duration::from_secs(30);
 const USER_POLL: Duration = Duration::from_secs(1);
-const SYSTEMCTL_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const SYSTEMCTL_TIMEOUT: Duration = Duration::from_secs(10);
 /// `systemd-run` 本身比脚本的超时多给这么久（单元由 systemd 按 RuntimeMaxSec 终止，这只是兜底）。
 const RUN_SLACK: Duration = Duration::from_secs(60);
 /// `systemd-run --wait` 在单元因 RuntimeMaxSec 被终止时的退出码（VM 实测；与脚本自己退出 1 相同，见模块文档）。

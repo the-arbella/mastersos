@@ -215,6 +215,8 @@ async fn run_resident(
         PushSource::Events(rx) => agent.push_rx = Some(rx),
         PushSource::Spawn => agent.plan_push(&shutdown),
     }
+    // Boot is neutral (spec §4.8): unless a session is open while the agent restarts
+    agent.boot_neutral().await;
     // agent 没在跑时登录的人（记号留在队列里）：照样拉取之后跑
     agent.take_logins();
     // 后台任务的第一轮就看得到本地包选中的分组（Flatpak 对账）
@@ -245,6 +247,15 @@ async fn run_resident(
         agent.job_wake.clone(),
     );
     agent.side_changed = Some(spawned.changed.clone());
+    // Lifts after a login and reverts to neutral after a logout (also a session left over from before a restart).
+    tokio::spawn(crate::user_layer::session::monitor(
+        sys_paths(&agent.cfg),
+        agent.runner.clone(),
+        agent.side.clone(),
+        spawned.changed.clone(),
+        agent.session_kick.clone(),
+        shutdown.clone(),
+    ));
     // Spawned after the jobs: it reports a failing `loginctl` among their results.
     tokio::spawn(crate::quiet::monitor(
         Arc::new(RealRunner),
@@ -445,6 +456,8 @@ pub async fn apply_local_with(
         );
     }
     agent.save();
+    // After the boot apply rendered neutral, before GDM: the files the last session switched in survived the reboot.
+    agent.boot_neutral().await;
     // Before GDM starts: the login screen says why there is no network, no settings or no browser yet.
     let (paths, has_bundle, fetch_error) = (
         sys_paths(&agent.cfg),
@@ -539,6 +552,9 @@ struct Agent {
     worker: Option<ApplyHandle>,
     /// 上一轮应用有失败项（被 SIGUSR1 叫醒时立即重应用）。
     last_had_failures: bool,
+    /// Wakes the user layer's session monitor ([`crate::user_layer::session::monitor`]) after the login queue was
+    /// taken: lift after a login, revert after a logout.
+    session_kick: Arc<Notify>,
     /// 后台任务的结果，回报时追加在应用结果之后。
     side: SideResults,
     /// 叫醒后台任务（主循环被叫醒时 `notify_waiters`）。
@@ -768,6 +784,7 @@ impl Agent {
             results: vec![],
             worker,
             last_had_failures: false,
+            session_kick: Arc::new(Notify::new()),
             side: Arc::new(Mutex::new(Default::default())),
             job_wake: Arc::new(Notify::new()),
             identity,
@@ -917,6 +934,29 @@ impl Agent {
         }
     }
 
+    /// Under a format 3 bundle with no session open: switch the user layer to neutral
+    /// ([`crate::user_layer::session::boot_neutral`]). Failures are logged.
+    async fn boot_neutral(&self) {
+        if !self
+            .bundle
+            .as_ref()
+            .is_some_and(|b| b.manifest.user_layer.is_some())
+        {
+            return;
+        }
+        let (paths, runner) = (sys_paths(&self.cfg), self.runner.clone());
+        match tokio::task::spawn_blocking(move || {
+            crate::user_layer::session::boot_neutral(&paths, runner.as_ref())
+        })
+        .await
+        {
+            Ok(Ok(true)) => log::info!("user layer: switched to neutral"),
+            Ok(Ok(false)) => {}
+            Ok(Err(e)) => log::warn!("user layer: switching to neutral at start: {e:#}"),
+            Err(e) => log::warn!("user layer: switching to neutral at start: {e}"),
+        }
+    }
+
     fn seed_writable(&self) -> Result<()> {
         seed_writable(&self.cfg)
     }
@@ -971,6 +1011,8 @@ impl Agent {
         // 这个人刚登录过。一个小 JSON 文件，同步写；失败只记日志，不影响登录
         let uids =
             crate::homes::drain_and_record(&self.login.queue, &self.login.last_login, Utc::now());
+        // The user layer after every wake-up, also a logout's (its queue is empty): lift, or revert to neutral
+        self.session_kick.notify_one();
         if uids.is_empty() {
             return;
         }

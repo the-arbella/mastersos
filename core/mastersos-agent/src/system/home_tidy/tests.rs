@@ -573,7 +573,8 @@ fn keep_list_follows_the_rule() {
 
 mod prepare {
     use super::super::{
-        linger_off_for_students, prepare_user_manager, Deadline, Prep, LOGIN_DEADLINE,
+        linger_off_for_everyone, linger_off_for_students, prepare_user_manager, Deadline, Prep,
+        LOGIN_DEADLINE,
     };
     use super::FakeClock;
     use crate::runner::{Cmd, FakeRunner, Output, Runner};
@@ -767,6 +768,29 @@ mod prepare {
         let calls = r.calls();
         assert_eq!(calls.len(), 2, "{calls:?}");
         assert_eq!(calls[1], "loginctl disable-linger 10001");
+    }
+
+    /// Under the user layer administrators get no linger either (design §4.5).
+    #[test]
+    fn linger_off_for_everyone_includes_admins() {
+        let json = r#"[
+            {"uid":10001,"user":"student@school.ac.th","linger":true,"state":"lingering"},
+            {"uid":10002,"user":"Boss@school.ac.th","linger":true,"state":"lingering"},
+            {"uid":0,"user":"root","linger":true,"state":"online"},
+            {"uid":120,"user":"gdm","linger":true,"state":"online"}
+        ]"#;
+        let r = FakeRunner::new();
+        r.respond("loginctl list-users", Output::ok(json));
+        linger_off_for_everyone(&r).unwrap();
+        let calls = r.calls();
+        assert_eq!(
+            calls[1..],
+            [
+                "loginctl disable-linger 10001",
+                "loginctl disable-linger 10002"
+            ],
+            "{calls:?}"
+        );
     }
 
     #[test]

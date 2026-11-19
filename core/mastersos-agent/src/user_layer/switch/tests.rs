@@ -116,7 +116,7 @@ fn rendered_of(index: &Index, id: &str) -> Rendered {
 }
 
 /// What a session that got `d` sees through the switched files.
-fn assert_switched_to(p: &SysPaths, d: &str) {
+pub(crate) fn assert_switched_to(p: &SysPaths, d: &str) {
     assert_eq!(
         fs::read(managed(p)).unwrap(),
         fs::read(chrome_of(p, d)).unwrap(),
@@ -150,7 +150,7 @@ fn assert_switched_to(p: &SysPaths, d: &str) {
 }
 
 /// The uid published next to the session's mode (R23).
-fn session_uid(p: &SysPaths) -> Option<String> {
+pub(crate) fn session_uid(p: &SysPaths) -> Option<String> {
     fs::read_to_string(p.public_dir.join("session/uid")).ok()
 }
 

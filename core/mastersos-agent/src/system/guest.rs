@@ -412,54 +412,100 @@ pub fn seat_sessions_busy(
     seat: Option<&str>,
 ) -> Result<Option<String>> {
     use anyhow::Context;
-    let out = run_ok(
-        runner,
-        Cmd::new("loginctl", &["--json=short", "list-sessions"]).timeout(PAM_CMD_TIMEOUT),
-    )?;
-    let v: serde_json::Value =
-        serde_json::from_str(out.trim()).context("loginctl output is not JSON")?;
-    let rows = v.as_array().context("loginctl output is not an array")?;
-    for row in rows {
-        let o = row.as_object().context("loginctl row is not an object")?;
-        let field = |k: &str| o.get(k).and_then(|x| x.as_str());
-        let class = field("class").context("loginctl row has no class")?;
+    for s in logind_sessions(runner, PAM_CMD_TIMEOUT)? {
         // seat 栏同样要有：null、"" 与 "-" 是没有座位（ssh）；缺栏或别的类型读不懂，往拒绝的方向落
-        let on = match o.get("seat").context("loginctl row has no seat")? {
-            serde_json::Value::Null => "",
-            serde_json::Value::String(s) if s == "-" => "",
-            serde_json::Value::String(s) => s.as_str(),
-            _ => anyhow::bail!("loginctl seat field is not a string"),
-        };
+        let on = s.seat.as_deref().context("loginctl row has no seat")?;
         let same_seat = match seat {
             Some(want) => on == want,
             None => !on.is_empty(),
         };
-        if !same_seat || !class.starts_with("user") {
+        if !same_seat || !s.class.starts_with("user") {
             continue;
         }
-        let id = field("session").context("loginctl row has no session")?;
-        // systemd 259 dropped `state` from list-sessions JSON: ask logind for this one session instead of guessing
-        let state = match field("state") {
-            Some(s) => s.to_string(),
-            None => {
-                let out = run_ok(
-                    runner,
-                    Cmd::new("loginctl", &["show-session", id, "-p", "State", "--value"])
-                        .timeout(PAM_CMD_TIMEOUT),
-                )?;
-                let s = out.trim();
-                anyhow::ensure!(!s.is_empty(), "loginctl show-session {id} printed no State");
-                s.to_string()
-            }
-        };
+        let id = s.id.as_deref().context("loginctl row has no session")?;
+        let state = logind_session_state(runner, id, s.state.as_deref(), PAM_CMD_TIMEOUT)?;
         if state != "closing" {
             return Ok(Some(format!(
-                "{id} {} {class} {state}",
-                field("user").unwrap_or("?")
+                "{id} {} {} {state}",
+                s.user.as_deref().unwrap_or("?"),
+                s.class
             )));
         }
     }
     Ok(None)
+}
+
+/// One row of `loginctl --json=short list-sessions` ([`logind_sessions`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LogindSession {
+    pub id: Option<String>,
+    pub uid: Option<u32>,
+    pub user: Option<String>,
+    pub class: String,
+    /// `Some("")` for no seat (null, `""` or `"-"`); `None` when the field is missing or not a string.
+    pub seat: Option<String>,
+    /// Missing on systemd 259 and later: see [`logind_session_state`].
+    pub state: Option<String>,
+}
+
+/// The sessions logind lists (`loginctl --json=short list-sessions`, at most `timeout`). Output that is not a JSON array
+/// of objects, or a row without `class`, is an error.
+pub(crate) fn logind_sessions(
+    runner: &dyn crate::runner::Runner,
+    timeout: std::time::Duration,
+) -> Result<Vec<LogindSession>> {
+    use anyhow::Context;
+    let out = run_ok(
+        runner,
+        Cmd::new("loginctl", &["--json=short", "list-sessions"]).timeout(timeout),
+    )?;
+    let v: serde_json::Value =
+        serde_json::from_str(out.trim()).context("loginctl output is not JSON")?;
+    let rows = v.as_array().context("loginctl output is not an array")?;
+    let mut sessions = Vec::with_capacity(rows.len());
+    for row in rows {
+        let o = row.as_object().context("loginctl row is not an object")?;
+        let field = |k: &str| o.get(k).and_then(|x| x.as_str()).map(str::to_string);
+        let class = field("class").context("loginctl row has no class")?;
+        let seat = match o.get("seat") {
+            Some(serde_json::Value::Null) => Some(String::new()),
+            Some(serde_json::Value::String(s)) if s == "-" => Some(String::new()),
+            Some(serde_json::Value::String(s)) => Some(s.clone()),
+            _ => None,
+        };
+        sessions.push(LogindSession {
+            id: field("session"),
+            uid: o
+                .get("uid")
+                .and_then(|u| u.as_u64())
+                .and_then(|u| u32::try_from(u).ok()),
+            user: field("user"),
+            class,
+            seat,
+            state: field("state"),
+        });
+    }
+    Ok(sessions)
+}
+
+/// The state of session `id`: `listed` when the list had it, else (systemd 259 dropped `state` from list-sessions JSON)
+/// `loginctl show-session <id> -p State --value` (at most `timeout`); failing or empty output is an error, not a guess.
+pub(crate) fn logind_session_state(
+    runner: &dyn crate::runner::Runner,
+    id: &str,
+    listed: Option<&str>,
+    timeout: std::time::Duration,
+) -> Result<String> {
+    if let Some(s) = listed {
+        return Ok(s.to_string());
+    }
+    let out = run_ok(
+        runner,
+        Cmd::new("loginctl", &["show-session", id, "-p", "State", "--value"]).timeout(timeout),
+    )?;
+    let s = out.trim();
+    anyhow::ensure!(!s.is_empty(), "loginctl show-session {id} printed no State");
+    Ok(s.to_string())
 }
 
 fn env_str(name: &str) -> String {

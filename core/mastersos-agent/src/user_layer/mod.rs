@@ -3,6 +3,7 @@
 
 pub mod facts;
 pub mod render;
+pub mod session;
 pub mod switch;
 
 use std::path::Path;

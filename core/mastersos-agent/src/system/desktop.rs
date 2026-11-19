@@ -637,8 +637,7 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
 /// left in [`XDG_DIR`] (they sit behind the session's xdg dir and would still hide apps from it).
 fn run_device_layer(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
     let mut errs: Vec<String> = Vec::new();
-    let admins = super::login::bundle_policy(ctx, env).admin_users;
-    if let Err(e) = super::home_tidy::linger_off_for_students(env.runner, &admins) {
+    if let Err(e) = super::home_tidy::linger_off_for_everyone(env.runner) {
         errs.push(format!("linger: {e:#}"));
     }
     if let Err(e) = kiosk_launchers(env.paths, ctx.config) {
