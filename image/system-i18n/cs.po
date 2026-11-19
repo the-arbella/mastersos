@@ -40,3 +40,6 @@ msgstr "IT shromažďuje diagnostické informace z tohoto počítače."
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "V tomto zařízení je stále někdo přihlášen. Musí se nejprve odhlásit, nebo zařízení restartujte."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Toto zařízení nedokázalo připravit vaši relaci. Zkuste to znovu za chvíli, nebo zařízení restartujte."

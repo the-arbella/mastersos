@@ -40,3 +40,6 @@ msgstr "IT-ja po mbledh të dhëna diagnostikuese nga ky kompjuter."
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "Dikush është ende i identifikuar në këtë pajisje. Ai duhet të dalë së pari, ose rinisni pajisjen."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Kjo pajisje nuk mundi ta përgatiste seancën tuaj. Provoni përsëri pas pak, ose rinisni pajisjen."

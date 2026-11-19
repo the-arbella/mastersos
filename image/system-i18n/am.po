@@ -40,3 +40,6 @@ msgstr "አይቲ ከዚህ ኮምፒውተር የምርመራ መረጃ እየ�
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "አንድ ሰው አሁንም በዚህ መሣሪያ ገብቷል። መጀመሪያ መውጣት አለበት፣ ወይም መሣሪያውን እንደገና ያስጀምሩ።"
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "ይህ መሣሪያ ክፍለ-ጊዜዎን ማዘጋጀት አልቻለም። ትንሽ ቆይተው እንደገና ይሞክሩ፣ ወይም መሣሪያውን እንደገና ያስጀምሩ።"

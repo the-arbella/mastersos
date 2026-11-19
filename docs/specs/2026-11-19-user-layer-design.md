@@ -199,7 +199,10 @@ resolves to on this Device, keeping "the card opens no site this Device's guest 
 7. **One human session at a time**: while a human session (SSO, local, guest, itadmin) is open another
    login is refused in `pam-check` with "Someone is still signed in on this device. They need to sign out
    first, or restart the device." (through i18n). Never names the person. No admin override. Lock/unlock
-   is the same session. Kiosk sessions keep today's rules.
+   is the same session. Kiosk sessions keep today's rules. That message is only for another person's
+   session; every other refusal of the user layer (the marker cannot be read, the same person's session
+   is still being closed, the session cannot be switched in, see 9) says "This device could not get your
+   session ready. Try again in a moment, or restart the device." (through i18n).
 8. **Crash / power loss**: boot always starts neutral; `/run` is tmpfs.
 9. **Failure**: if the chosen config cannot be switched in, the session gets `fallback`; if that fails
    too, the login is refused. Reported.

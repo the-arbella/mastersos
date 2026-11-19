@@ -40,3 +40,6 @@ msgstr "আইটি বিভাগ এই কম্পিউটার থে�
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "কেউ এখনও এই ডিভাইসে সাইন ইন করা আছেন। তাঁকে আগে সাইন আউট করতে হবে, অথবা ডিভাইসটি রিস্টার্ট করুন।"
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "এই ডিভাইসটি আপনার সেশন প্রস্তুত করতে পারেনি। একটু পরে আবার চেষ্টা করুন, অথবা ডিভাইসটি পুনরায় চালু করুন।"

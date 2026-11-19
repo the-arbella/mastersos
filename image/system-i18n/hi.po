@@ -40,3 +40,6 @@ msgstr "IT इस कंप्यूटर से निदान जानक�
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "कोई अभी भी इस डिवाइस पर साइन इन है। उन्हें पहले साइन आउट करना होगा, या डिवाइस को रीस्टार्ट करें।"
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "यह डिवाइस आपका सत्र तैयार नहीं कर सका। थोड़ी देर बाद फिर से कोशिश करें, या डिवाइस को रीस्टार्ट करें।"

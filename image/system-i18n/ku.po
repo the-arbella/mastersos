@@ -40,3 +40,6 @@ msgstr "IT ji vî komputerî agahiyên teşhîsê berhev dike."
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "Kesek hê jî di vê cîhazê de têketî ye. Pêdivî ye ku pêşî derkeve, an jî cîhazê ji nû ve bide destpêkirin."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Vê cîhazê nikarîbû danişîna te amade bike. Piştî kêliyekê dîsa biceribîne, an jî cîhazê ji nû ve bide destpêkirin."

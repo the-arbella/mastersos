@@ -40,3 +40,6 @@ msgstr "IT kolektas diagnozajn informojn de ĉi tiu komputilo."
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "Iu ankoraŭ estas ensalutinta en ĉi tiu aparato. Tiu devas unue elsaluti, aŭ restartigu la aparaton."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Ĉi tiu aparato ne povis pretigi vian seancon. Reprovu post momento, aŭ restartigu la aparaton."

@@ -40,3 +40,6 @@ msgstr "فناوری اطلاعات در حال جمع‌آوری اطلاعات
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "هنوز کسی در این دستگاه وارد شده است. او باید ابتدا خارج شود، یا دستگاه را راه‌اندازی مجدد کنید."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "این دستگاه نتوانست نشست شما را آماده کند. کمی بعد دوباره تلاش کنید، یا دستگاه را راه‌اندازی مجدد کنید."

@@ -40,3 +40,6 @@ msgstr "Lo servici informatic recampa d'informacions de diagnostic d'aqueste ord
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "Qualqu'un es encara connectat sus aqueste periferic. Cal que se desconnècte d'en primièr, o tornatz amodar lo periferic."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Aqueste periferic a pas pogut preparar vòstra session. Tornatz ensajar dins un moment, o tornatz amodar lo periferic."

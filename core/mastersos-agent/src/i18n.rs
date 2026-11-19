@@ -35,7 +35,7 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_LOCALE_CONF: u64 = 64 * 1024;
 
 /// Every msgid the agent shows. `image/tests/check-tree.sh` (rule 73) requires each in `mastersos-system.pot`.
-pub const AGENT_MSGIDS: [&str; 7] = [
+pub const AGENT_MSGIDS: [&str; 8] = [
     crate::kiosk_session::POLICY_NOT_ISOLATED,
     crate::kiosk_session::ENTER_FAILED,
     crate::kiosk_session::ENTER_CONFIRM,
@@ -43,6 +43,7 @@ pub const AGENT_MSGIDS: [&str; 7] = [
     crate::login_queue::MSG_STALE_DAYS,
     crate::upload::drain::NOTICE,
     crate::system::login::DENY_SESSION_BUSY,
+    crate::system::login::DENY_SESSION_UNAVAILABLE,
 ];
 
 /// The gettext environment for one locale name.

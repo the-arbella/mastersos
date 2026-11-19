@@ -40,3 +40,6 @@ msgstr "Os serviços de TI estão a recolher informações de diagnóstico deste
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "Alguém ainda tem sessão iniciada neste dispositivo. Essa pessoa precisa terminar a sessão primeiro, ou reinicie o dispositivo."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Este dispositivo não conseguiu preparar a sua sessão. Tente novamente daqui a pouco, ou reinicie o dispositivo."

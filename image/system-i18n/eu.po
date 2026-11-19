@@ -40,3 +40,6 @@ msgstr "IT saila ordenagailu honetako diagnostiko-informazioa biltzen ari da."
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "Norbait oraindik saioa hasita dago gailu honetan. Lehenik saioa itxi behar du, edo berrabiarazi gailua."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Gailu honek ezin izan du zure saioa prestatu. Saiatu berriro une batean, edo berrabiarazi gailua."

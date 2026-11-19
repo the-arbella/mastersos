@@ -40,3 +40,6 @@ msgstr "IT bu kompyuterden diagnostika malümatı toplay."
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "Birisi hâlâ bu cihazda oturım açıq. Evel çıqmalı, yaki cihaznı yañıdan başlatıñız."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Bu cihaz oturımıñıznı azırlap olamadı. Bir azdan soñ kene tecribe etiñiz ya da cihaznı yañıdan başlatıñız."

@@ -150,7 +150,10 @@ What a Device does with a format 3 file:
   login waits until that is confirmed.
 - **One person at a time:** while a person (SSO, local, guest or `itadmin`) is signed in, another
   login is refused with "Someone is still signed in on this device. They need to sign out first, or
-  restart the device." Nobody is named and there is no administrator override.
+  restart the device." Nobody is named and there is no administrator override. When nobody else is
+  signed in but the Device cannot get the session ready (for example the previous session of the same
+  person is still being closed), the login is refused with "This device could not get your session
+  ready. Try again in a moment, or restart the device."
 - **Installs:** a Device installs the union of `apps.flatpak` and the non-kiosk `apps.deb` over the
   user configs it can reach: those named by rules whose `device_group` is absent or lists the
   Device's Group, plus the fallback. The first definition of an id wins; Flatpak removes only what it

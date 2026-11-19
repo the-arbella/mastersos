@@ -40,3 +40,6 @@ msgstr "IT-osakond kogub sellest arvutist diagnostikateavet."
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "Keegi on sellesse seadmesse endiselt sisse logitud. Ta peab enne välja logima või seade tuleb taaskäivitada."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "See seade ei suutnud teie seanssi ette valmistada. Proovige mõne hetke pärast uuesti või taaskäivitage seade."

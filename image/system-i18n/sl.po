@@ -40,3 +40,6 @@ msgstr "Informatiki zbirajo diagnostične podatke s tega računalnika."
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "V to napravo je še vedno nekdo prijavljen. Najprej se mora odjaviti ali znova zaženite napravo."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Ta naprava ni mogla pripraviti vaše seje. Poskusite znova čez trenutek ali znova zaženite napravo."

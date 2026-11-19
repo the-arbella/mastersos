@@ -40,3 +40,6 @@ msgstr "ИТ служба прикупља дијагностичке подат
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "Неко је још увек пријављен на овом уређају. Прво мора да се одјави или поново покрените уређај."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Овај уређај није могао да припреми вашу сесију. Покушајте поново за тренутак или поново покрените уређај."

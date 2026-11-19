@@ -40,3 +40,6 @@ msgstr "TI ta recoyendo información de diagnósticu d'esti ordenador."
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "Daquién entá tien la sesión aniciada nesti preséu. Tien de zarrar la sesión primero, o reaniciar el preséu."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Esti preséu nun pudo preparar la to sesión. Volvi tentalo nun momentu o reanicia'l preséu."

@@ -40,3 +40,6 @@ msgstr "BT bu bilgisayardan tanılama bilgisi topluyor."
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "Bu cihazda hâlâ oturum açmış biri var. Önce oturumu kapatması gerekir ya da cihazı yeniden başlatın."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Bu cihaz oturumunuzu hazırlayamadı. Birazdan yeniden deneyin ya da cihazı yeniden başlatın."

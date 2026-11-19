@@ -40,3 +40,6 @@ msgstr "IT 担当者がこのコンピューターの診断情報を収集して
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "このデバイスにはまだ誰かがサインインしています。先にサインアウトしてもらうか、デバイスを再起動してください。"
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "このデバイスでセッションを準備できませんでした。しばらくしてからもう一度お試しいただくか、デバイスを再起動してください。"

@@ -40,3 +40,6 @@ msgstr "IT གིས་ གློག་ཀླད་འདི་ལས་ བར�
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "མི་ཅིག་གིས་ད་ལྟོ་ཡང་འཕྲུལ་ཆས་འདི་ནང་ལོགས་འཛུལ་འབད་དེ་ཡོདཔ་ཨིན། དང་པ་ཕྱིར་འཐོན་འབད་དགོ ཡང་ན་འཕྲུལ་ཆས་ལོག་འགོ་བཙུགས་གནང་།"
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "འཕྲུལ་ཆས་འདི་གིས་ཁྱོད་ཀྱི་ལཱ་ཡུན་གྲ་སྒྲིག་འབད་མ་ཚུགས། ཡུད་ཙམ་ཅིག་ཤུལ་ལས་ལོག་འབད་རྩོལ་བསྐྱེད་ ཡང་ན་འཕྲུལ་ཆས་ལོག་འགོ་བཙུགས་གནང་།"

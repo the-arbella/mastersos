@@ -40,3 +40,6 @@ msgstr "צוות ה-IT אוסף מידע אבחוני מהמחשב הזה."
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "מישהו עדיין מחובר למכשיר הזה. עליו להתנתק קודם, או שיש להפעיל מחדש את המכשיר."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "המכשיר הזה לא הצליח להכין את ההפעלה שלך. יש לנסות שוב בעוד רגע, או להפעיל מחדש את המכשיר."

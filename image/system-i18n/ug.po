@@ -40,3 +40,6 @@ msgstr "IT بۇ كومپيۇتېردىن دىياگنوز ئۇچۇرى توپل�
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "بۇ ئۈسكۈنىگە يەنىلا بىرسى كىرگەن. ئۇ ئالدى بىلەن چىقىشى كېرەك، ياكى ئۈسكۈنىنى قايتا قوزغىتىڭ."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "بۇ ئۈسكۈنە سۆزلىشىشىڭىزنى تەييارلىيالمىدى. بىردەمدىن كېيىن قايتا سىناڭ، ياكى ئۈسكۈنىنى قايتا قوزغىتىڭ."

@@ -288,9 +288,14 @@ pub const DENY_KIOSK_SEAT_UNKNOWN: &str =
     "暂时查不到这台电脑上的其他会话，请稍候再试或举手找老师 / Could not check for other sessions on this computer; try again shortly or ask a teacher";
 pub const DENY_KIOSK_UNKNOWN: &str =
     "这个锁定应用已不在这台电脑的设置里 / This app is no longer set up on this computer";
-/// Another person's session (any human account) is still signed in, or this Device could not switch the session to a
-/// user config: one human session at a time (user layer design §4.7, §4.9). Never names the other person.
+/// Another person's session (any human account of another uid) is still signed in or being closed: one human session at a
+/// time (user layer design §4.7). Only for a marker of another uid; never names the other person.
 pub const DENY_SESSION_BUSY: &str = "Someone is still signed in on this device. They need to sign out first, or restart the device.";
+/// The user layer could not get the session ready, with no other person's session in the way: the marker cannot be read,
+/// the same person's previous session is still being closed, the marker's lock stays busy, the rules are missing or
+/// unreadable, or neither the chosen config nor the fallback can be switched in (user layer design §4.7, §4.9).
+pub const DENY_SESSION_UNAVAILABLE: &str =
+    "This device could not get your session ready. Try again in a moment, or restart the device.";
 pub const DENY_DOMAIN: &str =
     "这个账号的域名不允许登录这台电脑 / Accounts from this domain cannot sign in on this computer";
 
@@ -412,18 +417,23 @@ pub fn decide(
     if class != UserClass::Sso && uid.is_some_and(is_system_uid) {
         return Decision::Allow;
     }
-    // One human session at a time (user layer design §4.7): another uid's marker (open or closing), a closing marker of
-    // the same uid, and a marker that cannot be read all refuse; no admin override. The marker itself is the gate, not the
-    // policy: state on disk with a policy that is not format 3 (or none) fails closed, because pam-session guards only
-    // GDM and this is the only gate of tty login, sshd and su. Without a marker (the only case of a Device that never
-    // used the user layer) nothing changes. `user_layer_on` is true whenever a marker exists, so this is its busy part.
-    let busy = match marker {
-        Marker::Absent => false,
-        Marker::Unreadable => true,
-        Marker::Present(a) => uid != Some(a.uid) || a.state != crate::user_layer::ActiveState::Open,
+    // One human session at a time (user layer design §4.7): another uid's marker (open or closing) refuses with the busy
+    // message; a closing marker of the same uid and a marker that cannot be read refuse with the unavailable one (nobody
+    // else is known to be signed in); no admin override. The marker itself is the gate, not the policy: state on disk
+    // with a policy that is not format 3 (or none) fails closed, because pam-session guards only GDM and this is the only
+    // gate of tty login, sshd and su. Without a marker (the only case of a Device that never used the user layer) nothing
+    // changes. `user_layer_on` is true whenever a marker exists, so this is its busy part.
+    let refusal = match marker {
+        Marker::Absent => None,
+        Marker::Unreadable => Some(DENY_SESSION_UNAVAILABLE),
+        Marker::Present(a) if uid != Some(a.uid) => Some(DENY_SESSION_BUSY),
+        Marker::Present(a) if a.state != crate::user_layer::ActiveState::Open => {
+            Some(DENY_SESSION_UNAVAILABLE)
+        }
+        Marker::Present(_) => None,
     };
-    if busy {
-        return Decision::Deny(DENY_SESSION_BUSY);
+    if let Some(msg) = refusal {
+        return Decision::Deny(msg);
     }
     if class == UserClass::Guest && !GUEST_SERVICES.contains(&service) {
         return Decision::Deny(DENY_GUEST_SERVICE);
@@ -1478,8 +1488,8 @@ fn env_str(name: &str) -> Option<String> {
     std::env::var_os(name)?.into_string().ok()
 }
 
-/// pam-session's whole budget is 5 s: the busy message's translation gets one.
-const BUSY_GETTEXT_TIMEOUT: Duration = Duration::from_secs(1);
+/// pam-session's whole budget is 5 s: the refusal's translation gets one.
+const REFUSAL_GETTEXT_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// What a read of the marker means for [`decide`]: a marker that cannot be read fails closed.
 fn marker_of(found: &Result<Option<crate::user_layer::Active>>) -> Marker<'_> {
@@ -1490,19 +1500,19 @@ fn marker_of(found: &Result<Option<crate::user_layer::Active>>) -> Marker<'_> {
     }
 }
 
-/// The busy refusal in the system language.
+/// A user layer refusal ([`DENY_SESSION_BUSY`] or [`DENY_SESSION_UNAVAILABLE`], both msgids of `mastersos-system`) in
+/// the system language.
 ///
 /// The language is the system's (`<root>/etc/locale.conf`; the root process's own `LANG` is not the user's). English
-/// when it cannot be translated. Runs `gettext` (bounded by [`BUSY_GETTEXT_TIMEOUT`]) for any locale except C, POSIX
+/// when it cannot be translated. Runs `gettext` (bounded by [`REFUSAL_GETTEXT_TIMEOUT`]) for any locale except C, POSIX
 /// and an empty one.
-pub(crate) fn busy_message(runner: &dyn crate::runner::Runner, root: &Path) -> String {
+pub(crate) fn session_refusal(
+    runner: &dyn crate::runner::Runner,
+    root: &Path,
+    msgid: &str,
+) -> String {
     let locale = crate::i18n::system_language(None, root);
-    crate::i18n::text_within(
-        runner,
-        locale.as_ref(),
-        DENY_SESSION_BUSY,
-        BUSY_GETTEXT_TIMEOUT,
-    )
+    crate::i18n::text_within(runner, locale.as_ref(), msgid, REFUSAL_GETTEXT_TIMEOUT)
 }
 
 /// 拒绝：原因打到 stdout（pam_exec 的 `stdout` 交给 GDM 显示），退出 1。写失败也照样拒绝。
@@ -1540,9 +1550,9 @@ pub fn pam_check_main(args: impl Iterator<Item = OsString>) -> ExitCode {
         marker_of(&found),
     ) {
         Decision::Allow => ExitCode::SUCCESS,
-        Decision::Deny(DENY_SESSION_BUSY) => {
-            deny(&busy_message(&crate::runner::RealRunner, Path::new("/")))
-        }
+        Decision::Deny(msg @ (DENY_SESSION_BUSY | DENY_SESSION_UNAVAILABLE)) => deny(
+            &session_refusal(&crate::runner::RealRunner, Path::new("/"), msg),
+        ),
         Decision::Deny(msg) => deny(msg),
     }
 }
@@ -1884,10 +1894,10 @@ client_id = "laptops"
                 }
             }
         }
-        // an unreadable marker fails closed
+        // an unreadable marker fails closed, but names nobody as signed in
         assert_eq!(
             busy_for("login", &p, "alice", Some(1001), Marker::Unreadable),
-            Decision::Deny(DENY_SESSION_BUSY)
+            Decision::Deny(DENY_SESSION_UNAVAILABLE)
         );
         // the message never names the other person
         assert!(!DENY_SESSION_BUSY.contains("bob"));
@@ -1922,16 +1932,24 @@ client_id = "laptops"
             ),
             Decision::Deny(DENY_LOCKED)
         );
-        // a session that is closing refuses everybody
+        // a session that is closing refuses everybody: its own person with the unavailable message (nobody else is
+        // signed in; the revert is pending), everybody else as busy
         let c = active(20000, Closing);
+        for svc in [GDM, "login", "su"] {
+            assert_eq!(
+                busy_for(
+                    svc,
+                    &p,
+                    "alice@school.ac.th",
+                    Some(20000),
+                    Marker::Present(&c)
+                ),
+                Decision::Deny(DENY_SESSION_UNAVAILABLE),
+                "{svc}"
+            );
+        }
         assert_eq!(
-            busy_for(
-                GDM,
-                &p,
-                "alice@school.ac.th",
-                Some(20000),
-                Marker::Present(&c)
-            ),
+            busy_for(GDM, &p, "bob", Some(1001), Marker::Present(&c)),
             Decision::Deny(DENY_SESSION_BUSY)
         );
     }
@@ -1980,10 +1998,13 @@ client_id = "laptops"
         let p = all();
         assert!(!p.user_layer);
         for svc in ["login", "sshd", "su", GDM] {
-            for m in [Marker::Present(&a), Marker::Unreadable] {
+            for (m, want) in [
+                (Marker::Present(&a), DENY_SESSION_BUSY),
+                (Marker::Unreadable, DENY_SESSION_UNAVAILABLE),
+            ] {
                 assert_eq!(
                     busy_for(svc, &p, "alice", Some(1001), m),
-                    Decision::Deny(DENY_SESSION_BUSY),
+                    Decision::Deny(want),
                     "{svc} {m:?}"
                 );
             }
@@ -1998,7 +2019,7 @@ client_id = "laptops"
                 Some(1001),
                 Marker::Unreadable
             ),
-            Decision::Deny(DENY_SESSION_BUSY)
+            Decision::Deny(DENY_SESSION_UNAVAILABLE)
         );
     }
 
@@ -2055,16 +2076,41 @@ client_id = "laptops"
     }
 
     #[test]
-    fn busy_message_is_translated_with_the_system_language() {
+    fn session_refusals_are_translated_with_the_system_language() {
         let root = tempfile::tempdir().unwrap();
         let r = FakeRunner::new();
-        assert_eq!(busy_message(&r, root.path()), DENY_SESSION_BUSY);
+        for msg in [DENY_SESSION_BUSY, DENY_SESSION_UNAVAILABLE] {
+            assert_eq!(session_refusal(&r, root.path(), msg), msg);
+        }
         assert!(r.calls().is_empty());
         std::fs::create_dir_all(root.path().join("etc")).unwrap();
         std::fs::write(root.path().join("etc/locale.conf"), "LANG=th_TH.UTF-8\n").unwrap();
         r.respond("/usr/bin/env", Output::ok("มีคนยังไม่ได้ออกจากระบบ"));
-        assert_eq!(busy_message(&r, root.path()), "มีคนยังไม่ได้ออกจากระบบ");
+        assert_eq!(
+            session_refusal(&r, root.path(), DENY_SESSION_BUSY),
+            "มีคนยังไม่ได้ออกจากระบบ"
+        );
         assert!(r.calls()[0].contains("LANGUAGE=th_TH"));
+        r.respond("/usr/bin/env", Output::ok("translated"));
+        assert_eq!(
+            session_refusal(&r, root.path(), DENY_SESSION_UNAVAILABLE),
+            "translated"
+        );
+        assert!(
+            r.calls()[1].ends_with(DENY_SESSION_UNAVAILABLE),
+            "{:?}",
+            r.calls()
+        );
+    }
+
+    /// Both refusals are msgids of the system catalogue; the unavailable one names nobody and is not the busy one.
+    #[test]
+    fn session_refusals_are_agent_msgids() {
+        for msg in [DENY_SESSION_BUSY, DENY_SESSION_UNAVAILABLE] {
+            assert!(crate::i18n::AGENT_MSGIDS.contains(&msg), "{msg}");
+        }
+        assert_ne!(DENY_SESSION_BUSY, DENY_SESSION_UNAVAILABLE);
+        assert!(!DENY_SESSION_UNAVAILABLE.contains("Someone"));
     }
 
     #[test]

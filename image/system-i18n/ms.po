@@ -40,3 +40,6 @@ msgstr "IT sedang mengumpul maklumat diagnostik daripada komputer ini."
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "Seseorang masih log masuk pada peranti ini. Mereka perlu log keluar dahulu, atau mulakan semula peranti."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Peranti ini tidak dapat menyediakan sesi anda. Cuba lagi sebentar lagi, atau mulakan semula peranti."

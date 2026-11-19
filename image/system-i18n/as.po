@@ -40,3 +40,6 @@ msgstr "আই.টি.য়ে এই কমপিউটাৰৰ পৰা ড
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "কোনোবাই এতিয়াও এই ডিভাইচত ছাইন ইন হৈ আছে। তেওঁ প্ৰথমে ছাইন আউট কৰিব লাগিব, নহ’লে ডিভাইচটো ৰিষ্টাৰ্ট কৰক।"
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "এই ডিভাইচটোৱে আপোনাৰ ছেশ্বন সাজু কৰিব নোৱাৰিলে। অলপ পিছত পুনৰ চেষ্টা কৰক, নাইবা ডিভাইচটো পুনৰাৰম্ভ কৰক।"

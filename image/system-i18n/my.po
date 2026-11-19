@@ -40,3 +40,6 @@ msgstr "IT သည် ဤကွန်ပျူတာမှ ချို့ယွ�
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "ဤစက်ထဲတွင် တစ်စုံတစ်ဦး ဆက်လက်ဝင်ရောက်ထားဆဲဖြစ်သည်။ ၎င်းတို့ အရင်ထွက်ရမည် သို့မဟုတ် စက်ကို ပြန်စတင်ပါ။"
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "ဤစက်သည် သင်၏ ဆက်ရှင်ကို ပြင်ဆင်၍ မရပါ။ ခဏနေမှ ထပ်စမ်းကြည့်ပါ သို့မဟုတ် စက်ကို ပြန်စတင်ပါ။"

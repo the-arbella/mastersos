@@ -40,3 +40,6 @@ msgstr "Mae TG yn casglu gwybodaeth ddiagnostig o'r cyfrifiadur hwn."
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "Mae rhywun yn dal i fod wedi mewngofnodi ar y ddyfais hon. Mae angen iddynt allgofnodi yn gyntaf, neu ailgychwyn y ddyfais."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Methodd y ddyfais hon â pharatoi eich sesiwn. Rhowch gynnig arall arni mewn munud, neu ailgychwynnwch y ddyfais."

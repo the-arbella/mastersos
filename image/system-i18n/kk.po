@@ -40,3 +40,6 @@ msgstr "IT бөлімі осы компьютерден диагностикал
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "Бұл құрылғыға әлі біреу кірген. Ол алдымен шығуы керек немесе құрылғыны қайта қосыңыз."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Бұл құрылғы сеансыңызды дайындай алмады. Біраздан кейін қайталап көріңіз немесе құрылғыны қайта қосыңыз."

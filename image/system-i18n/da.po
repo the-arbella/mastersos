@@ -40,3 +40,6 @@ msgstr "IT indsamler diagnosticeringsoplysninger fra denne computer."
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "Nogen er stadig logget ind på denne enhed. De skal logge ud først, eller du kan genstarte enheden."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Denne enhed kunne ikke gøre din session klar. Prøv igen om lidt, eller genstart enheden."

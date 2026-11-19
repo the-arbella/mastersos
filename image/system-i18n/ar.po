@@ -40,3 +40,6 @@ msgstr "يجمع قسم تقنية المعلومات معلومات تشخيص�
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "لا يزال شخص ما مسجلاً الدخول على هذا الجهاز. يجب عليه تسجيل الخروج أولاً، أو أعد تشغيل الجهاز."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "تعذّر على هذا الجهاز تجهيز جلستك. حاول مرة أخرى بعد قليل، أو أعد تشغيل الجهاز."

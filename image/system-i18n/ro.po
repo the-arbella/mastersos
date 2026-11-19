@@ -40,3 +40,6 @@ msgstr "Departamentul IT colectează informații de diagnosticare de la acest co
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "Cineva este încă autentificat pe acest dispozitiv. Trebuie să se deconecteze mai întâi sau reporniți dispozitivul."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Acest dispozitiv nu a putut pregăti sesiunea dumneavoastră. Încercați din nou peste un moment sau reporniți dispozitivul."

@@ -40,3 +40,6 @@ msgstr "IT ਇਸ ਕੰਪਿਊਟਰ ਤੋਂ ਨਿਦਾਨ ਜਾਣਕ�
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "ਕੋਈ ਅਜੇ ਵੀ ਇਸ ਡਿਵਾਈਸ ਉੱਤੇ ਸਾਈਨ ਇਨ ਹੈ। ਉਸਨੂੰ ਪਹਿਲਾਂ ਸਾਈਨ ਆਊਟ ਕਰਨਾ ਪਵੇਗਾ, ਜਾਂ ਡਿਵਾਈਸ ਨੂੰ ਮੁੜ ਚਾਲੂ ਕਰੋ।"
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "ਇਹ ਡਿਵਾਈਸ ਤੁਹਾਡਾ ਸੈਸ਼ਨ ਤਿਆਰ ਨਹੀਂ ਕਰ ਸਕਿਆ। ਥੋੜ੍ਹੀ ਦੇਰ ਬਾਅਦ ਮੁੜ ਕੋਸ਼ਿਸ਼ ਕਰੋ, ਜਾਂ ਡਿਵਾਈਸ ਨੂੰ ਮੁੜ ਚਾਲੂ ਕਰੋ।"

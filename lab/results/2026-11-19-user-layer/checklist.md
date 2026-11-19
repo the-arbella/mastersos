@@ -106,13 +106,13 @@ Steps:
 1. After sign-in (allow up to ~10 s for the agent to lift): open Files from the Dash; open a terminal.
 2. As root: `cat /var/lib/mastersos-system/exec-block-mode /run/mastersos/exec-block-lifted`; `findmnt` probe.
 3. Force a Chrome sysext refresh during the session (`systemctl reload systemd-sysext.service` as the root shell, or `mastersos-agent exec-block`, the hook the sysext merge runs); repeat 1-2.
-4. Refresh concurrent with a login (final review FR-M3): sign A out and wait for neutral. From the root shell start `time systemctl reload systemd-sysext.service` and, while it runs (immediately after starting it), sign A in at the greeter; repeat with a reapply (`mastersos-agent once`) started just before the reload. Record the reload's duration, whether the login is accepted or refused with the busy message, and the journal lines of `pam-session` and the agent (`journalctl -b -o short-precise | grep -E 'pam-session|user layer|exec-block'`).
+4. Refresh concurrent with a login (final review FR-M3): sign A out and wait for neutral. From the root shell start `time systemctl reload systemd-sysext.service` and, while it runs (immediately after starting it), sign A in at the greeter; repeat with a reapply (`mastersos-agent once`) started just before the reload. Record the reload's duration, whether the login is accepted or refused (a busy lock gives the unavailable message, "This device could not get your session ready. ..."), and the journal lines of `pam-session` and the agent (`journalctl -b -o short-precise | grep -E 'pam-session|user layer|exec-block'`).
 
 Expected:
 - Files opens (`/usr/bin/nautilus` not stubbed), terminal and Settings still the stub. `exec-block-lifted` is `lifted:file_manager`; `exec-block-mode` stays `browser`.
 - After the sysext refresh the exec-block re-assert keeps the same set: nautilus unstubbed, terminal stubbed.
 - The Files entry is in the Dash; the FileManager1 D-Bus override is lifted.
-- Step 4 (record, behaviour note): the agent's `follow_session`, `after_login` and revert hold `active.lock` while `apply_lifted` waits for the exec-block lock, and the exec-block re-assert after a sysext refresh can hold that lock while it mounts (up to about 10 s per mount). A login during that waits 2 s for `active.lock` and is refused with the busy message; a second attempt after the refresh succeeds. Record what actually happens and how long the window is.
+- Step 4 (record, behaviour note): the agent's `follow_session`, `after_login` and revert hold `active.lock` while `apply_lifted` waits for the exec-block lock, and the exec-block re-assert after a sysext refresh can hold that lock while it mounts (up to about 10 s per mount). A login during that waits 2 s for `active.lock` and is refused with the unavailable message (nobody else is signed in); a second attempt after the refresh succeeds. Record what actually happens and how long the window is.
 
 Screenshots: `13-allow-files-open.png`, `14-allow-terminal-stub.png`, `15-allow-after-sysext-refresh.png`.
 
@@ -160,7 +160,7 @@ Steps:
 4. Repeat 1-2, then reboot instead of restarting the agent.
 
 Expected:
-- While the marker exists and the agent is down: every login of another uid, and of the same uid once the marker is `closing`, is refused with the busy message (pam-check; pam-session re-checks as a backstop), also on a Device whose bundle is format 2 if a stale marker is present (fail closed). The marker cannot be reverted by anything but the agent.
+- While the marker exists and the agent is down: every login of another uid is refused with the busy message, and of the same uid once the marker is `closing` with the unavailable message (pam-check; pam-session re-checks as a backstop), also on a Device whose bundle is format 2 if a stale marker is present (fail closed). The marker cannot be reverted by anything but the agent.
 - With the agent back: marker removed, state neutral (item 4 final state), B signs in.
 - Reboot: `/run` is tmpfs so the marker is gone; boot starts neutral (`session` -> `neutral`, stubs all in place); logins work.
 - `active.json` unreadable (corrupt it deliberately in a second run): login refused (fail closed); after the agent runs the revert it reports `user-layer:revert` or clears it; record which.

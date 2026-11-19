@@ -479,13 +479,19 @@ fn broken_fallback_refuses() {
     )
     .unwrap();
     fs::remove_file(render::compiled_db(&p.root, &p.var_dir, &dir_of("primary"))).unwrap();
-    assert_eq!(open(&p, &policy(), STUDENT, 20000), OpenOutcome::Refused);
+    assert_eq!(
+        open(&p, &policy(), STUDENT, 20000),
+        OpenOutcome::Refused(Refusal::Unavailable)
+    );
     assert!(read_active(&p.root).is_none());
     // R12: back to neutral, never the half-switched or the previous config
     assert_switched_to(&p, NEUTRAL_DIR);
     // The admin's chosen config fails too, then the fallback: refused as well
     fs::remove_file(chrome_of(&p, &dir_of("teacher"))).unwrap();
-    assert_eq!(open(&p, &policy(), ADMIN, 20000), OpenOutcome::Refused);
+    assert_eq!(
+        open(&p, &policy(), ADMIN, 20000),
+        OpenOutcome::Refused(Refusal::Unavailable)
+    );
     assert_switched_to(&p, NEUTRAL_DIR);
 }
 
@@ -493,7 +499,10 @@ fn broken_fallback_refuses() {
 fn missing_rules_refuse() {
     let (_root, p, _) = rendered();
     fs::remove_file(p.var_dir.join(STATE_SUB).join(render::INDEX_FILE)).unwrap();
-    assert_eq!(open(&p, &policy(), STUDENT, 20000), OpenOutcome::Refused);
+    assert_eq!(
+        open(&p, &policy(), STUDENT, 20000),
+        OpenOutcome::Refused(Refusal::Unavailable)
+    );
     assert!(read_active(&p.root).is_none());
     assert_eq!(link(&p).as_deref(), Some("user-layer/neutral"));
 }
@@ -514,7 +523,10 @@ fn other_uid_active_refuses() {
         held: false,
     };
     write_active(&p.root, &other).unwrap();
-    assert_eq!(open(&p, &policy(), STUDENT, 20000), OpenOutcome::Refused);
+    assert_eq!(
+        open(&p, &policy(), STUDENT, 20000),
+        OpenOutcome::Refused(Refusal::Busy)
+    );
     // Nothing of the other session was touched
     assert_eq!(read_active(&p.root).unwrap(), other);
     assert_switched_to(&p, NEUTRAL_DIR);
@@ -546,12 +558,21 @@ fn other_uid_active_refuses() {
     let mut closing = read_active(&p.root).unwrap();
     closing.state = ActiveState::Closing;
     write_active(&p.root, &closing).unwrap();
-    assert_eq!(open(&p, &policy(), "bob", 2000), OpenOutcome::Refused);
-    assert_eq!(open(&p, &policy(), STUDENT, 20000), OpenOutcome::Refused);
+    assert_eq!(
+        open(&p, &policy(), "bob", 2000),
+        OpenOutcome::Refused(Refusal::Unavailable)
+    );
+    assert_eq!(
+        open(&p, &policy(), STUDENT, 20000),
+        OpenOutcome::Refused(Refusal::Busy)
+    );
     assert_eq!(read_active(&p.root).unwrap(), closing);
     // An unreadable marker refuses too
     fs::write(p.root.join(RUN_DIR).join(ACTIVE_FILE), "{").unwrap();
-    assert_eq!(open(&p, &policy(), STUDENT, 20000), OpenOutcome::Refused);
+    assert_eq!(
+        open(&p, &policy(), STUDENT, 20000),
+        OpenOutcome::Refused(Refusal::Unavailable)
+    );
 }
 
 #[test]
@@ -719,7 +740,10 @@ fn a_held_lock_refuses_the_open() {
     assert!(lock_active(&p.root, Duration::from_millis(200)).is_err());
     assert!(started.elapsed() >= Duration::from_millis(200));
     assert!(started.elapsed() < LOCK_WAIT);
-    assert_eq!(open(&p, &policy(), STUDENT, 20000), OpenOutcome::Refused);
+    assert_eq!(
+        open(&p, &policy(), STUDENT, 20000),
+        OpenOutcome::Refused(Refusal::Unavailable)
+    );
     assert!(read_active(&p.root).is_none());
     assert_switched_to(&p, NEUTRAL_DIR);
     let r = FakeRunner::new();
@@ -740,14 +764,12 @@ fn concurrent_opens_switch_once() {
         let b = s.spawn(|| open(&p, &policy(), ADMIN, 20001));
         vec![a.join().unwrap(), b.join().unwrap()]
     });
-    let refused = outs.iter().filter(|o| **o == OpenOutcome::Refused).count();
+    // the loser waits for the lock and then finds the winner's marker: another person, busy
+    let busy = OpenOutcome::Refused(Refusal::Busy);
+    let refused = outs.iter().filter(|o| **o == busy).count();
     assert_eq!(refused, 1, "{outs:?}");
     let a = read_active(&p.root).unwrap();
-    let winner = if outs[0] == OpenOutcome::Refused {
-        20001
-    } else {
-        20000
-    };
+    let winner = if outs[0] == busy { 20001 } else { 20000 };
     assert_eq!(a.uid, winner);
     assert_switched_to(&p, &a.dir);
 }
@@ -899,6 +921,9 @@ fn same_person_again_switches_the_markers_config_in_again() {
     )
     .unwrap();
     fs::remove_file(chrome_of(&p, &dir_of("primary"))).unwrap();
-    assert_eq!(open(&p, &policy(), STUDENT, 20000), OpenOutcome::Refused);
+    assert_eq!(
+        open(&p, &policy(), STUDENT, 20000),
+        OpenOutcome::Refused(Refusal::Unavailable)
+    );
     assert_switched_to(&p, NEUTRAL_DIR);
 }

@@ -40,3 +40,6 @@ msgstr "ផ្នែក IT កំពុងប្រមូលព័ត៌មា�
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "មានអ្នកណាម្នាក់នៅតែចូលគណនីលើឧបករណ៍នេះ។ ពួកគេត្រូវចាកចេញជាមុន ឬចាប់ផ្តើមឧបករណ៍ឡើងវិញ។"
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "ឧបករណ៍នេះមិនអាចរៀបចំសម័យរបស់អ្នកបានទេ។ សូមព្យាយាមម្តងទៀតបន្តិចទៀត ឬចាប់ផ្តើមឧបករណ៍ឡើងវិញ។"

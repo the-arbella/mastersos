@@ -267,9 +267,38 @@ pub enum OpenOutcome {
         fallback_reason: Option<String>,
         home: HomeMode,
     },
-    /// The login must be refused: another person's session is still signed in (or the marker cannot be read), or
-    /// neither the chosen config nor the fallback could be switched in.
-    Refused,
+    /// The login must be refused, for the reason given.
+    Refused(Refusal),
+}
+
+/// Why [`on_open`] refused a login; each has its own message for the person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// Another person (a marker of another uid, open or closing) is still signed in: [`login::DENY_SESSION_BUSY`].
+    Busy,
+    /// The session could not be got ready and nobody else is known to be signed in (the marker cannot be read, the same
+    /// person's session is still being closed, the lock stays busy, the rules are missing, no config can be switched in,
+    /// the marker cannot be written): [`login::DENY_SESSION_UNAVAILABLE`].
+    Unavailable,
+}
+
+impl Refusal {
+    /// The msgid shown to the person (translated by the caller).
+    pub fn msgid(self) -> &'static str {
+        match self {
+            Refusal::Busy => login::DENY_SESSION_BUSY,
+            Refusal::Unavailable => login::DENY_SESSION_UNAVAILABLE,
+        }
+    }
+
+    /// The refusal for a login of `uid` (`None`: unknown) that does not get as far as the switch, from the marker under
+    /// `root`: [`Refusal::Busy`] only when a marker of another uid exists.
+    pub fn from_marker(root: &Path, uid: Option<u32>) -> Refusal {
+        match (active_marker(root), uid) {
+            (Ok(Some(a)), Some(uid)) if a.uid != uid => Refusal::Busy,
+            _ => Refusal::Unavailable,
+        }
+    }
 }
 
 /// `pam-session`'s open_session of a human account (`user`, uid `uid`): resolves the user config and switches to it,
@@ -309,7 +338,7 @@ pub(crate) fn on_open_at(
         Ok(l) => l,
         Err(e) => {
             log(&format!("{e:#}; denied"));
-            return OpenOutcome::Refused;
+            return OpenOutcome::Refused(Refusal::Unavailable);
         }
     };
     let switch =
@@ -330,7 +359,7 @@ pub(crate) fn on_open_at(
         ) {
             log(&format!("switching back to neutral: {e:#}"));
         }
-        OpenOutcome::Refused
+        OpenOutcome::Refused(Refusal::Unavailable)
     };
     // Backstop of pam-check's one-session rule: another person's session, or any session being closed, is not touched.
     match active_marker(root) {
@@ -377,18 +406,22 @@ pub(crate) fn on_open_at(
                 home,
             };
         }
-        Ok(Some(a)) => {
+        Ok(Some(a)) if a.uid != uid => {
             log(&format!(
                 "a session is still signed in or closing (uid {}); denied",
                 a.uid
             ));
-            return OpenOutcome::Refused;
+            return OpenOutcome::Refused(Refusal::Busy);
+        }
+        Ok(Some(_)) => {
+            log("this person's previous session is still being closed; denied");
+            return OpenOutcome::Refused(Refusal::Unavailable);
         }
         Err(e) => {
             log(&format!(
                 "the session marker cannot be read ({e:#}); denied"
             ));
-            return OpenOutcome::Refused;
+            return OpenOutcome::Refused(Refusal::Unavailable);
         }
     }
     let Some(index) = read_index(&paths.var_dir) else {

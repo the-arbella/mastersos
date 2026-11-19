@@ -40,3 +40,6 @@ msgstr "IT zbiyro diagnostyczne informacyje z tego kōmputra."
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "Kajsik je jeszcze zalogowany na tym gerŏcie. Musi sie nojprzōd wylogować abo uruchōm gerŏt jeszcze roz."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Tyn gerŏt niy poradziōł rychtnōńć twojij sesyje. Sprōbuj jeszcze roz za chwila abo uruchōm gerŏt jeszcze roz."

@@ -40,3 +40,6 @@ msgstr "Bộ phận IT đang thu thập thông tin chẩn đoán từ máy tính
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "Vẫn còn người đang đăng nhập trên thiết bị này. Họ cần đăng xuất trước, hoặc hãy khởi động lại thiết bị."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Thiết bị này không thể chuẩn bị phiên của bạn. Hãy thử lại sau giây lát, hoặc khởi động lại thiết bị."

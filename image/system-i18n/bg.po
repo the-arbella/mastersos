@@ -40,3 +40,6 @@ msgstr "ИТ отделът събира диагностична информа
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "Някой все още е влязъл в това устройство. Първо трябва да излезе или да рестартирате устройството."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Това устройство не успя да подготви сесията ви. Опитайте отново след малко или рестартирайте устройството."

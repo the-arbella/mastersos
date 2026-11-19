@@ -40,3 +40,6 @@ msgstr "Az informatikus diagnosztikai adatokat gyűjt erről a számítógéprő
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "Valaki még be van jelentkezve ezen az eszközön. Először ki kell jelentkeznie, vagy indítsa újra az eszközt."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Ez az eszköz nem tudta előkészíteni a munkamenetét. Próbálja újra egy kis idő múlva, vagy indítsa újra az eszközt."

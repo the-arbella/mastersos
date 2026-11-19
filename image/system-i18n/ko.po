@@ -40,3 +40,6 @@ msgstr "IT에서 이 컴퓨터의 진단 정보를 수집하고 있습니다."
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "아직 이 기기에 로그인한 사람이 있습니다. 먼저 로그아웃해야 하며, 또는 기기를 다시 시작하세요."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "이 기기에서 세션을 준비하지 못했습니다. 잠시 후 다시 시도하거나 기기를 다시 시작하세요."

@@ -40,3 +40,6 @@ msgstr "Il IT al sta tirant dongje informazions diagnostichis di chest computer.
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "Cualchidun al è ancjemò cu la session vierte su chest dispositîf. Al à di sierâ prime la session, o torne a inviâ il dispositîf."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Chest dispositîf nol è rivât a prontâ la tô session. Torne a provâ ca di un moment, o torne a inviâ il dispositîf."

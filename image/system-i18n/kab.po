@@ -40,3 +40,6 @@ msgstr "IT la yesseggra talɣut n usenqed seg uselkim-agi."
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "Yella win i yettwasekren yakan ɣef yibenk-a. Yessefk ad d-yeffeɣ uqbel, neɣ ales asenker n yibenk."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Ibenk-a ur yezmir ara ad iheggi tiɣimit-ik. Ɛreḍ tikkelt nniḍen ticki, neɣ ales asenker n yibenk."

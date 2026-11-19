@@ -40,3 +40,6 @@ msgstr "IT 人員正在收集這部電腦的診斷資訊。"
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "這台裝置上還有人沒有登出。他們需要先登出，或者重新啟動裝置。"
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "這台裝置無法準備好你的工作階段。請稍後再試，或者重新啟動裝置。"

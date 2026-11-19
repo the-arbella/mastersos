@@ -40,3 +40,6 @@ msgstr "Το τμήμα IT συλλέγει διαγνωστικές πληρο�
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "Κάποιος είναι ακόμη συνδεδεμένος σε αυτήν τη συσκευή. Πρέπει πρώτα να αποσυνδεθεί ή να γίνει επανεκκίνηση της συσκευής."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Αυτή η συσκευή δεν μπόρεσε να προετοιμάσει τη συνεδρία σας. Δοκιμάστε ξανά σε λίγο ή επανεκκινήστε τη συσκευή."

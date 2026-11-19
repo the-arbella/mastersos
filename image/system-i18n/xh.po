@@ -40,3 +40,6 @@ msgstr "I-IT iqokelela ulwazi lokuxilonga kule khompyutha."
 
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr "Umntu usangene kweli sixhobo. Kufuneka aphume kuqala, okanye uqale kwakhona isixhobo."
+
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr "Esi sixhobo asikwazanga kulungisa iseshoni yakho. Zama kwakhona emva kwexeshana, okanye uqale kwakhona isixhobo."

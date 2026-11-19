@@ -518,7 +518,7 @@ fn env_str(name: &str) -> String {
 /// stdout；其他情况永远退出 0（登录队列失败不挡登录）。不 panic、不建 tokio 运行时、不往 stderr 打日志之外的事。
 /// Under the user layer (format 3) an open_session of a human account (the guest after `session_open`) first switches
 /// the session to its user config ([`crate::user_layer::switch::on_open`]); a refusal exits 1 with
-/// [`login::DENY_SESSION_BUSY`]. Their close_session marks the session closing ([`SessionAction::Close`]), exit 0.
+/// [`login::DENY_SESSION_BUSY`] or [`login::DENY_SESSION_UNAVAILABLE`]. Their close_session marks the session closing ([`SessionAction::Close`]), exit 0.
 pub fn pam_session_main() -> ExitCode {
     // 只有 root（PAM 里的 gdm-session-worker 经 pam_exec）调它才算数：PAM_* 环境变量谁都能伪造，普通用户自己跑它
     // 什么都不许做——不拿标记、不复制、不拉起清理、不进登录队列（提交安全审查：授权）
@@ -710,8 +710,10 @@ fn close_under_layer(
     }
 }
 
-/// The user layer's part of `pam-session` (format 3, or its state on disk: `layer_on`). Refusals print
-/// [`login::DENY_SESSION_BUSY`] to `out`. Synchronous, no commands except waking the agent on close; never panics.
+/// The user layer's part of `pam-session` (format 3, or its state on disk: `layer_on`). Refusals print their message to
+/// `out` in the system language: [`login::DENY_SESSION_BUSY`] only when a marker of another uid is in the way,
+/// [`login::DENY_SESSION_UNAVAILABLE`] for every other refusal ([`switch::Refusal`]). Synchronous, no commands except
+/// gettext and waking the agent on close; never panics.
 pub(crate) fn user_layer_decision(
     phase: LayerPhase,
     layer_on: bool,
@@ -721,9 +723,9 @@ pub(crate) fn user_layer_decision(
     runner: &dyn Runner,
     out: &mut dyn Write,
 ) -> LayerDecision {
-    use crate::user_layer::switch;
-    let refuse = |out: &mut dyn Write| {
-        let _ = writeln!(out, "{}", login::busy_message(runner, root));
+    use crate::user_layer::switch::{self, Refusal};
+    let refuse = |why: Refusal, out: &mut dyn Write| {
+        let _ = writeln!(out, "{}", login::session_refusal(runner, root, why.msgid()));
         let _ = out.flush();
         LayerDecision::Deny
     };
@@ -732,14 +734,14 @@ pub(crate) fn user_layer_decision(
             eprintln!(
                 "mastersos-agent pam-session: {user}: user layer state without a format 3 login policy; denied"
             );
-            return refuse(out);
+            return refuse(Refusal::from_marker(root, Some(uid)), out);
         };
         match switch::on_open(root, paths, p, user, uid) {
             OpenOutcome::NotUserLayer => LayerDecision::Proceed { tidy: None },
             OpenOutcome::Switched { home, .. } => LayerDecision::Proceed {
                 tidy: Some(home == HomeMode::Tidy),
             },
-            OpenOutcome::Refused => refuse(out),
+            OpenOutcome::Refused(why) => refuse(why, out),
         }
     };
     match phase {
@@ -756,7 +758,7 @@ pub(crate) fn user_layer_decision(
         _ if !layer_on => LayerDecision::Proceed { tidy: None },
         LayerPhase::Open { user, uid: None } => {
             eprintln!("mastersos-agent pam-session: {user}: no uid; user layer: denied");
-            refuse(out)
+            refuse(Refusal::from_marker(root, None), out)
         }
         LayerPhase::Open {
             user,
@@ -764,13 +766,21 @@ pub(crate) fn user_layer_decision(
         } => open(user, uid, out),
         LayerPhase::GuestOpen => open(GUEST_USER, GUEST_UID, out),
         LayerPhase::KioskOpen { user } => {
-            if switch::marker_present(root) {
-                eprintln!(
-                    "mastersos-agent pam-session: {user}: a session is still signed in or being closed; user layer: denied"
-                );
-                refuse(out)
-            } else {
-                LayerDecision::Proceed { tidy: None }
+            // A kiosk account never has a marker of its own: any marker is another person's
+            match crate::user_layer::active_marker(root) {
+                Ok(None) => LayerDecision::Proceed { tidy: None },
+                Ok(Some(_)) => {
+                    eprintln!(
+                        "mastersos-agent pam-session: {user}: a session is still signed in or being closed; user layer: denied"
+                    );
+                    refuse(Refusal::Busy, out)
+                }
+                Err(e) => {
+                    eprintln!(
+                        "mastersos-agent pam-session: {user}: the session marker cannot be read ({e:#}); user layer: denied"
+                    );
+                    refuse(Refusal::Unavailable, out)
+                }
             }
         }
     }
@@ -1909,6 +1919,10 @@ mod tests {
         format!("{}\n", login::DENY_SESSION_BUSY)
     }
 
+    fn unavailable() -> String {
+        format!("{}\n", login::DENY_SESSION_UNAVAILABLE)
+    }
+
     fn other_marker(p: &crate::system::SysPaths, state: crate::user_layer::ActiveState) {
         use crate::user_layer::{config_dir_name, switch::write_active, Active};
         write_active(
@@ -1929,7 +1943,8 @@ mod tests {
         .unwrap();
     }
 
-    /// A refused open exits 1 with the busy message on stdout; an open without a uid is refused too.
+    /// A refused open exits 1 with the busy message on stdout when another person's marker is in the way; an open
+    /// without a uid is refused with the unavailable message (who it is cannot be told).
     #[test]
     fn user_layer_refusal_exits_1_with_busy_on_stdout() {
         use crate::user_layer::{read_active, switch::tests, ActiveState};
@@ -1951,8 +1966,63 @@ mod tests {
             uid: None,
         };
         let (d, out) = decide(no_uid, true, &p, Some(&pol), &r);
-        assert_eq!((d.exit_status(), out), (Some(1), busy()));
+        assert_eq!((d.exit_status(), out), (Some(1), unavailable()));
         assert!(r.calls().is_empty());
+    }
+
+    /// Every refusal of pam-session that is not another person's marker gets the unavailable message, never the busy one.
+    #[test]
+    fn user_layer_refusals_without_another_person_are_unavailable() {
+        use crate::user_layer::{
+            read_active, switch, switch::tests, ActiveState, ACTIVE_FILE, RUN_DIR,
+        };
+        let open = LayerPhase::Open {
+            user: "s1@school.ac.th",
+            uid: Some(20000),
+        };
+        let r = FakeRunner::new();
+        let pol = tests::policy();
+        // the same person's session is still being closed (the revert is pending)
+        let (_root, p, _) = tests::rendered();
+        let (d, _) = decide(open, true, &p, Some(&pol), &r);
+        assert!(matches!(d, LayerDecision::Proceed { .. }), "{d:?}");
+        let mut a = read_active(&p.root).unwrap();
+        a.state = ActiveState::Closing;
+        switch::write_active(&p.root, &a).unwrap();
+        let (d, out) = decide(open, true, &p, Some(&pol), &r);
+        assert_eq!((d.exit_status(), out), (Some(1), unavailable()));
+        // the marker cannot be read
+        fs::write(p.root.join(RUN_DIR).join(ACTIVE_FILE), "{").unwrap();
+        let (d, out) = decide(open, true, &p, Some(&pol), &r);
+        assert_eq!((d.exit_status(), out), (Some(1), unavailable()));
+        // the marker's lock stays busy
+        let (_root, p, _) = tests::rendered();
+        let held = switch::lock_active(&p.root, std::time::Duration::ZERO).unwrap();
+        let (d, out) = decide(open, true, &p, Some(&pol), &r);
+        assert_eq!((d.exit_status(), out), (Some(1), unavailable()));
+        drop(held);
+        // the rules are missing
+        fs::remove_file(p.var_dir.join("user-layer/index.json")).unwrap();
+        let (d, out) = decide(open, true, &p, Some(&pol), &r);
+        assert_eq!((d.exit_status(), out), (Some(1), unavailable()));
+        // neither the chosen config nor the fallback can be switched in
+        let (_root, p, index) = tests::rendered();
+        for c in index.configs.values() {
+            fs::remove_file(
+                p.var_dir
+                    .join("user-layer")
+                    .join(&c.dir)
+                    .join("chrome.json"),
+            )
+            .unwrap();
+        }
+        let (d, out) = decide(open, true, &p, Some(&pol), &r);
+        assert_eq!((d.exit_status(), out), (Some(1), unavailable()));
+        assert!(read_active(&p.root).is_none());
+        // another person's marker: busy
+        other_marker(&p, ActiveState::Closing);
+        let (d, out) = decide(open, true, &p, Some(&pol), &r);
+        assert_eq!((d.exit_status(), out), (Some(1), busy()));
     }
 
     /// An open switches and goes on with the config's home decision; the close marks the session closing and wakes
@@ -2031,7 +2101,7 @@ mod tests {
         }
         fs::write(p.root.join(RUN_DIR).join(ACTIVE_FILE), "{").unwrap();
         let (d, out) = decide(kiosk, true, &p, Some(&pol), &r);
-        assert_eq!((d.exit_status(), out), (Some(1), busy()));
+        assert_eq!((d.exit_status(), out), (Some(1), unavailable()));
         // Without the user layer the kiosk check is not this step's
         let (d, _) = decide(kiosk, false, &p, None, &r);
         assert_eq!(d, LayerDecision::Proceed { tidy: None });
@@ -2056,11 +2126,30 @@ mod tests {
                 uid: Some(1500),
             };
             let (d, out) = decide(open, true, &p, policy, &r);
-            assert_eq!((d.exit_status(), out), (Some(1), busy()), "{policy:?}");
+            assert_eq!(
+                (d.exit_status(), out),
+                (Some(1), unavailable()),
+                "{policy:?}"
+            );
             let (d, out) = decide(LayerPhase::GuestOpen, true, &p, policy, &r);
-            assert_eq!((d.exit_status(), out), (Some(1), busy()), "{policy:?}");
+            assert_eq!(
+                (d.exit_status(), out),
+                (Some(1), unavailable()),
+                "{policy:?}"
+            );
         }
         assert!(read_active(&p.root).is_none());
+        // ... and with another person's marker, busy
+        other_marker(&p, ActiveState::Open);
+        for policy in [None, Some(&fmt2)] {
+            let open = LayerPhase::Open {
+                user: "alice",
+                uid: Some(1500),
+            };
+            let (d, out) = decide(open, true, &p, policy, &r);
+            assert_eq!((d.exit_status(), out), (Some(1), busy()), "{policy:?}");
+        }
+        fs::remove_file(p.root.join(RUN_DIR).join(ACTIVE_FILE)).unwrap();
         // A marker alone (the rules already removed)
         fs::remove_file(p.var_dir.join("user-layer/index.json")).unwrap();
         assert!(!crate::user_layer::user_layer_on(&p.root, &p, None));

@@ -52,3 +52,7 @@ msgstr ""
 #. mastersos-agent pam-check / pam-session: another person is still signed in (one session at a time)
 msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
 msgstr ""
+
+#. mastersos-agent pam-check / pam-session: the session could not be got ready and nobody else is signed in
+msgid "This device could not get your session ready. Try again in a moment, or restart the device."
+msgstr ""
