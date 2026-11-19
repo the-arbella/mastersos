@@ -86,8 +86,9 @@ fn open_facts_dir(root: &Path) -> anyhow::Result<Option<OwnedFd>> {
 
 /// Read and delete the facts file of `user` under `root`.
 ///
-/// Whenever the file for this user exists it is removed, whatever it holds. A file of another user is never touched, and
-/// a name that is not safe as a file name touches nothing. The broker names the file after the login name in ASCII
+/// Whenever the file for this user exists it is removed, whatever it holds (a symlink: the link itself), unless the
+/// facts directory cannot be trusted or the entry is a directory. A file of another user is never touched, and a name
+/// that is not safe as a file name touches nothing. The broker names the file after the login name in ASCII
 /// lower case (its login names are `[a-z0-9._-]+@[a-z0-9.-]+`), so `user` is looked up and compared lower-cased.
 pub fn take_facts(root: &Path, user: &str, now: SystemTime) -> FactsOutcome {
     if !user_name_ok(user) || user.contains('/') || user.starts_with('.') {
