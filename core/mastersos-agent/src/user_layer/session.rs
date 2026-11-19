@@ -77,6 +77,10 @@ pub fn after_login(paths: &SysPaths, runner: &dyn Runner) -> Result<()> {
         }
     };
     let _lock = lock_active(root, LOCK_WAIT)?;
+    // Again under the lock: a format 1/2 apply may have deferred its cleanup meanwhile
+    if render::cleanup_deferred(paths) {
+        return Ok(());
+    }
     let Some(mut a) = active_marker(root)? else {
         return Ok(());
     };
@@ -118,7 +122,8 @@ pub fn after_login(paths: &SysPaths, runner: &dyn Runner) -> Result<()> {
 /// marker only while the session link or the dconf profile is still there),
 /// `loginctl disable-linger`, `systemctl stop user@<uid>.service`, and only when all of them worked the marker removed.
 /// Any failure keeps the marker (logins stay refused) and is returned. An unreadable marker or logind list is an error,
-/// never "no session". A busy lock is [`WatchOutcome::Busy`].
+/// never "no session". A busy lock is [`WatchOutcome::Busy`]. Without a marker, a deferred format 1/2 cleanup is
+/// finished (its failure returned and retried every round).
 pub fn watch(paths: &SysPaths, runner: &dyn Runner) -> Result<WatchOutcome> {
     watch_at(paths, runner, SystemTime::now())
 }
@@ -131,7 +136,7 @@ pub(crate) fn watch_at(
     let root = paths.root.as_path();
     // Most rounds: no session, nothing locked or run
     let Some(before) = active_marker(root).context("reading the session marker")? else {
-        return Ok(WatchOutcome::Idle);
+        return idle(paths, runner);
     };
     // logind is asked outside the lock, so that a sign-in waiting for it is not held up by `loginctl`; a failure keeps
     // the marker (fail closed) and is retried next round
@@ -142,6 +147,7 @@ pub(crate) fn watch_at(
         Err(e) => return Err(e),
     };
     let Some(mut a) = active_marker(root).context("reading the session marker")? else {
+        // Gone meanwhile: the next round looks at a deferred cleanup
         return Ok(WatchOutcome::Idle);
     };
     // What logind said is about `before`'s uid; a marker that changed meanwhile waits for the next round
@@ -186,24 +192,19 @@ pub(crate) fn watch_at(
 /// The revert of [`watch`], with the marker's lock held by the caller.
 fn revert(paths: &SysPaths, runner: &dyn Runner, a: &Active) -> Result<()> {
     let mut errs: Vec<String> = Vec::new();
-    if render::cleanup_deferred(paths) {
-        // A format 1/2 apply waited for this session: its lifts are forgotten (the exec-block back to the format 1/2 mode
-        // word) and its files go now, instead of neutral being switched in (which would overwrite the format 1/2 steps'
-        // Chrome policy and exec-block mode).
-        if let Err(e) = exec_block::drop_lifts(paths, runner) {
-            errs.push(format!("dropping the session's lifts: {e:#}"));
-        }
-        if let Err(e) = render::remove_state(paths) {
-            // While the session link or the dconf profile is still there, the next login would get this layer's files:
-            // the marker stays (logins refused). Otherwise every format 1/2 apply tries again.
-            if session_files_present(paths) {
-                errs.push(format!(
-                    "removing the user configs of an earlier settings format 3: {e:#}"
-                ));
+    // Reported after the marker is removed: a failure that leaves nothing a next session would read
+    let mut after: Option<anyhow::Error> = None;
+    if deferred_cleanup_due(paths) {
+        // A format 1/2 apply waited for this session: its lifts are forgotten and its files go now, instead of neutral
+        // being switched in (which would overwrite the format 1/2 steps' Chrome policy and exec-block mode).
+        if let Err(e) = finish_cleanup(paths, runner) {
+            // While the session link or the dconf profile is still there (or the lifts could not be dropped), the next
+            // login would get this layer's files or lifts: the marker stays (logins refused). Otherwise the marker goes
+            // and the watch finishes the removal on its next rounds (reported until then).
+            if e.is::<LiftsKept>() || session_files_present(paths) {
+                errs.push(format!("{e:#}"));
             } else {
-                log::warn!(
-                    "user layer: settings format 1/2: removing the user configs after the session: {e:#}; retried at the next apply"
-                );
+                after = Some(e);
             }
         }
     } else if layer_state_present(paths) {
@@ -233,7 +234,82 @@ fn revert(paths: &SysPaths, runner: &dyn Runner, a: &Active) -> Result<()> {
         ));
     }
     let dir = safefs::open_dir(&paths.root, Path::new(RUN_DIR), false)?;
-    safefs::remove_at(&dir, ACTIVE_FILE).context("removing the session marker")
+    safefs::remove_at(&dir, ACTIVE_FILE).context("removing the session marker")?;
+    match after {
+        Some(e) => Err(e.context(
+            "the session is back, but the settings format 1/2 cleanup is not done; retried",
+        )),
+        None => Ok(()),
+    }
+}
+
+/// [`watch`] without a marker: a format 1/2 cleanup that was deferred (and no session waits for it any more) is finished
+/// under the marker's lock; its failure is returned (reported) and retried next round. Only a stat otherwise.
+fn idle(paths: &SysPaths, runner: &dyn Runner) -> Result<WatchOutcome> {
+    if !render::cleanup_deferred(paths) {
+        return Ok(WatchOutcome::Idle);
+    }
+    let _lock = match lock_active(&paths.root, LOCK_WAIT) {
+        Ok(l) => l,
+        Err(e) if switch::is_lock_busy(&e) => return Ok(WatchOutcome::Busy),
+        Err(e) => return Err(e),
+    };
+    if !matches!(active_marker(&paths.root), Ok(None)) {
+        // A session (or an unreadable marker): its revert does it
+        return Ok(WatchOutcome::Idle);
+    }
+    if deferred_cleanup_due(paths) {
+        finish_cleanup(paths, runner)?;
+        log::info!("user layer: settings format 1/2: removed the user configs of format 3");
+    }
+    Ok(WatchOutcome::Idle)
+}
+
+/// Whether a deferred format 1/2 cleanup ([`render::cleanup_deferred`]) is to be done now, with the marker's lock held:
+/// only while the installed login policy is not format 3. Under format 3 the deferral is stale (a format 3 render that
+/// could not delete it): it is deleted and the session reverts as usual. An unreadable policy does nothing.
+fn deferred_cleanup_due(paths: &SysPaths) -> bool {
+    if !render::cleanup_deferred(paths) {
+        return false;
+    }
+    match crate::system::login::policy_at(paths) {
+        Some(p) if !p.user_layer => true,
+        Some(_) => {
+            if let Err(e) = render::drop_deferral(paths) {
+                log::warn!(
+                    "user layer: deleting a stale deferral of the format 1/2 cleanup: {e:#}"
+                );
+            }
+            false
+        }
+        None => {
+            log::warn!(
+                "user layer: the login policy cannot be read; the deferred format 1/2 cleanup waits"
+            );
+            false
+        }
+    }
+}
+
+/// The lifts could not be dropped: nothing was removed, so the deferral and its retry stay.
+#[derive(Debug)]
+struct LiftsKept(anyhow::Error);
+
+impl std::fmt::Display for LiftsKept {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "dropping the session's lifts: {:#}", self.0)
+    }
+}
+
+impl std::error::Error for LiftsKept {}
+
+/// The deferred format 1/2 cleanup, with the marker's lock held: the lifts dropped (the exec-block back to the mode word
+/// on disk), then, only when that worked, this layer's files removed (with the deferral).
+fn finish_cleanup(paths: &SysPaths, runner: &dyn Runner) -> Result<()> {
+    exec_block::drop_lifts(paths, runner).map_err(|e| anyhow::Error::new(LiftsKept(e)))?;
+    render::remove_state(paths)
+        .context("removing the user configs of an earlier settings format 3")?;
+    Ok(())
 }
 
 /// Neutral switched in, then every capability blocked. Both are tried; the errors are joined.

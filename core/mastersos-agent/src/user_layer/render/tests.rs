@@ -1755,7 +1755,7 @@ fn removed_config_with_unreadable_marker_after_reports_it() {
     assert!(!main.ok, "{main:?}");
     assert_eq!(
         main.detail.as_deref(),
-        Some("the signed-in session's marker cannot be read after the switch to the fallback; kept every user config this round")
+        Some("the signed-in session's marker is missing or cannot be read after the switch to the fallback; kept every user config this round")
     );
     assert_eq!(stale_left(root.path(), &old), [true; 3]);
 }
@@ -1862,4 +1862,28 @@ fn format3_render_drops_a_deferral() {
     render_live(root.path(), &v3(), &r);
     assert!(!deferred(root.path()));
     assert_eq!(layer_left(root.path()), [true; 6]);
+}
+
+/// I1: a lift that landed after the format 1/2 `desktop` step cleared the lifts and before the cleanup deferred is
+/// dropped by the deferral itself (under the marker's lock): the exec-block follows the mode word again.
+#[test]
+fn deferred_downgrade_drops_a_late_lift() {
+    let root = root();
+    let r = live(root.path());
+    render_live(root.path(), &v3(), &r);
+    sign_in(
+        root.path(),
+        &r,
+        "teacher",
+        &caps_of(&[Capability::Terminal]),
+    );
+    assert!(!terminal_blocked(root.path()));
+    render_live(root.path(), &v2(), &r);
+    assert!(deferred(root.path()));
+    assert!(!root
+        .path()
+        .join(exec_block::LOCK_DIR)
+        .join(exec_block::LIFTED_FILE)
+        .exists());
+    assert!(terminal_blocked(root.path()));
 }

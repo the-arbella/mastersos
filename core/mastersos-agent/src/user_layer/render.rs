@@ -74,8 +74,8 @@ pub const REMOVED_CONFIG: &str =
 /// The step's directory under `var_dir` (root 0700) and under `public_dir` (0755).
 pub const STATE_SUB: &str = "user-layer";
 /// In the `var_dir` part of [`STATE_SUB`] while the format 1/2 cleanup waits for a session to end (a marker exists): the
-/// agent's revert of that session then removes this layer's files instead of switching to neutral. Removed with the
-/// rest of the state, and by any format 3 render.
+/// agent's revert of that session then removes this layer's files instead of switching to neutral, and the agent's
+/// watch finishes it once no marker is left. Removed with the rest of the state, and by any format 3 render.
 pub const CLEANUP_DEFERRED_FILE: &str = "cleanup-deferred";
 /// The rules and the rendered configs, in the `var_dir` part of [`STATE_SUB`] (0600).
 pub const INDEX_FILE: &str = "index.json";
@@ -180,7 +180,7 @@ pub fn step() -> Step {
 fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
     match ctx.user_layer() {
         Some(m) => render_all(ctx, m, env),
-        None => match cleanup(env.paths) {
+        None => match cleanup(env.paths, env.runner) {
             Ok(Cleanup::Nothing) => vec![],
             Ok(Cleanup::Removed) => vec![ItemResult {
                 detail: Some("removed the user configs of an earlier settings format 3".into()),
@@ -400,7 +400,7 @@ fn follow_session(
         let tidy_errs = match active_marker(root) {
             Ok(Some(now)) => tidy(paths, configs, &[&named, &now.dir]),
             _ => vec![
-                "the signed-in session's marker cannot be read after the switch to the fallback; kept every user config this round"
+                "the signed-in session's marker is missing or cannot be read after the switch to the fallback; kept every user config this round"
                     .into(),
             ],
         };
@@ -973,7 +973,7 @@ enum Cleanup {
 /// Without a marker under the lock nobody is: `on_open` writes it before it releases the lock. A session link left on a
 /// user config without a marker (a neutral switch that failed) does not hold the cleanup up, since nothing under format
 /// 1/2 would ever re-point it.
-fn cleanup(paths: &SysPaths) -> Result<Cleanup> {
+fn cleanup(paths: &SysPaths, runner: &dyn Runner) -> Result<Cleanup> {
     if !layer_state_present(paths)? {
         return Ok(Cleanup::Nothing);
     }
@@ -987,6 +987,9 @@ fn cleanup(paths: &SysPaths) -> Result<Cleanup> {
     };
     if !matches!(active_marker(&paths.root), Ok(None)) {
         mark_deferred(paths)?;
+        // A lift between the `desktop` step (which cleared them) and the deferral is dropped now; with the deferral on
+        // disk no later one lifts anything (`session::after_login` checks it under this lock)
+        exec_block::drop_lifts(paths, runner).context("dropping the session's lifts")?;
         return Ok(Cleanup::Deferred);
     }
     Ok(if remove_state(paths)? {
@@ -1013,6 +1016,17 @@ fn mark_deferred(paths: &SysPaths) -> Result<()> {
     };
     safefs::write_at(&state, CLEANUP_DEFERRED_FILE, b"", 0o600)?;
     Ok(())
+}
+
+/// Deletes [`CLEANUP_DEFERRED_FILE`] (a missing one is fine).
+pub(crate) fn drop_deferral(paths: &SysPaths) -> Result<()> {
+    let Some(var) = open_existing_abs(&paths.var_dir)? else {
+        return Ok(());
+    };
+    match safefs::open_child_dir(&var, STATE_SUB)? {
+        Some(state) => safefs::remove_at(&state, CLEANUP_DEFERRED_FILE),
+        None => Ok(()),
+    }
 }
 
 /// Whether a format 1/2 apply deferred its cleanup ([`CLEANUP_DEFERRED_FILE`]): the revert then calls

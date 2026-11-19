@@ -612,11 +612,7 @@ fn revert_with_deferred_cleanup_removes_the_layer() {
     let (_root, p, index, r) = setup();
     signed_in(&p, &index, ActiveState::Closing, true);
     let var = p.var_dir.join(STATE_SUB);
-    fs::write(
-        var.join(crate::user_layer::render::CLEANUP_DEFERRED_FILE),
-        "",
-    )
-    .unwrap();
+    defer_cleanup(&p);
     let managed = p
         .root
         .join("etc/opt/chrome/policies/managed/mastersos.json");
@@ -638,15 +634,25 @@ fn revert_with_deferred_cleanup_removes_the_layer() {
     assert!(fs::symlink_metadata(p.public_dir.join("session")).is_err());
 }
 
-/// Writes the format 1/2 cleanup's deferral (R3).
+/// Installs a login policy of settings format 3 (`user_layer`) or 1/2.
+fn install_policy(p: &SysPaths, user_layer: bool) {
+    let mut pol = crate::user_layer::switch::tests::policy();
+    pol.user_layer = user_layer;
+    let dir = p.var_dir.join("login");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("policy.json"), serde_json::to_vec(&pol).unwrap()).unwrap();
+}
+
+fn deferral(p: &SysPaths) -> std::path::PathBuf {
+    p.var_dir
+        .join(STATE_SUB)
+        .join(crate::user_layer::render::CLEANUP_DEFERRED_FILE)
+}
+
+/// What a format 1/2 apply leaves while a session is signed in (R3): its login policy and the cleanup's deferral.
 fn defer_cleanup(p: &SysPaths) {
-    fs::write(
-        p.var_dir
-            .join(STATE_SUB)
-            .join(crate::user_layer::render::CLEANUP_DEFERRED_FILE),
-        "",
-    )
-    .unwrap();
+    install_policy(p, false);
+    fs::write(deferral(p), "").unwrap();
 }
 
 fn lifted_file(p: &SysPaths) -> std::path::PathBuf {
@@ -716,4 +722,111 @@ fn deferred_revert_keeps_the_marker_when_the_removal_fails() {
     );
     assert_eq!(read_active(&p.root).unwrap(), a);
     assert!(fs::symlink_metadata(p.public_dir.join("session")).is_ok());
+}
+
+/// I1: the deferral is checked again under the marker's lock: a lift that waited for the lock while a format 1/2 apply
+/// deferred its cleanup lifts nothing.
+#[test]
+fn after_login_rechecks_the_deferral_under_the_lock() {
+    let (_root, p, index, r) = setup();
+    signed_in(&p, &index, ActiveState::Open, false);
+    install_policy(&p, false);
+    list(&r, &[greeter()]);
+    let held = lock_active(&p.root, Duration::ZERO).unwrap();
+    std::thread::scope(|s| {
+        let lift = s.spawn(|| after_login(&p, &r));
+        // the lift has read the marker and waits for the lock
+        std::thread::sleep(Duration::from_millis(300));
+        fs::write(deferral(&p), "").unwrap();
+        drop(held);
+        lift.join().unwrap().unwrap();
+    });
+    assert_eq!(lifted(&p), Caps::new());
+}
+
+/// I2 (i): the deferred removal fails once the session link and the dconf profile are gone: the marker goes (the
+/// session is over and nothing reads the files), the failure is returned (reported), and the next round of the watch
+/// finishes the removal.
+#[test]
+fn deferred_revert_failure_without_session_files_is_reported_and_finished_later() {
+    let (_root, p, index, r) = setup();
+    signed_in(&p, &index, ActiveState::Closing, true);
+    defer_cleanup(&p);
+    // the public tree cannot be removed (a symlink where the directory is), the steps before it work
+    let public = p.public_dir.join(STATE_SUB);
+    let real = p.public_dir.join("user-layer-real");
+    fs::rename(&public, &real).unwrap();
+    std::os::unix::fs::symlink("user-layer-real", &public).unwrap();
+    list(&r, &[greeter()]);
+    let e = watch_at(&p, &r, at(T0 + 1)).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("removing the user configs"),
+        "{e:#}"
+    );
+    assert!(read_active(&p.root).is_none());
+    assert!(deferral(&p).exists());
+    // the next round: no marker, the deferral is finished
+    fs::remove_file(&public).unwrap();
+    assert_eq!(watch_at(&p, &r, at(T0 + 6)).unwrap(), WatchOutcome::Idle);
+    assert!(!p.var_dir.join(STATE_SUB).exists());
+}
+
+/// I2 (ii): a deferral with no marker (the apply found the lock busy and nobody signed in) is finished by the watch;
+/// a busy lock waits for the next round.
+#[test]
+fn watch_finishes_a_deferral_without_a_marker() {
+    let (_root, p, _index, r) = setup();
+    defer_cleanup(&p);
+    let held = lock_active(&p.root, Duration::ZERO).unwrap();
+    assert_eq!(watch_at(&p, &r, at(T0)).unwrap(), WatchOutcome::Busy);
+    assert!(p.var_dir.join(STATE_SUB).exists());
+    drop(held);
+    assert_eq!(watch_at(&p, &r, at(T0)).unwrap(), WatchOutcome::Idle);
+    assert!(!p.var_dir.join(STATE_SUB).exists());
+    assert!(fs::symlink_metadata(p.public_dir.join("session")).is_err());
+    assert!(!lifted_file(&p).exists());
+    // nothing left
+    assert_eq!(watch_at(&p, &r, at(T0)).unwrap(), WatchOutcome::Idle);
+}
+
+/// M3: the lifts cannot be dropped: nothing is removed, so the deferral (and its retry) stays; the failure is returned.
+#[test]
+fn failed_drop_of_the_lifts_keeps_the_deferral() {
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Closing, true);
+    exec_block::apply_lifted(&p, &r, &a.caps).unwrap();
+    defer_cleanup(&p);
+    r.fail_on("nsenter");
+    list(&r, &[greeter()]);
+    assert!(watch_at(&p, &r, at(T0 + 1)).is_err());
+    assert!(read_active(&p.root).is_some());
+    assert!(deferral(&p).exists());
+    assert!(p.var_dir.join(STATE_SUB).exists());
+    // without a marker (the watch's own retry) the same
+    fs::remove_file(p.root.join(RUN_DIR).join(ACTIVE_FILE)).unwrap();
+    assert!(watch_at(&p, &r, at(T0 + 6)).is_err());
+    assert!(deferral(&p).exists());
+    assert!(p.var_dir.join(STATE_SUB).exists());
+}
+
+/// M4: a deferral left behind under settings format 3 is stale: the revert deletes it and switches to neutral as usual,
+/// and the watch without a marker only deletes it; the format 3 state stays.
+#[test]
+fn stale_deferral_under_format3_is_dropped() {
+    let (_root, p, index, r) = setup();
+    signed_in(&p, &index, ActiveState::Closing, true);
+    defer_cleanup(&p);
+    install_policy(&p, true);
+    list(&r, &[greeter()]);
+    assert!(matches!(
+        watch_at(&p, &r, at(T0 + 1)).unwrap(),
+        WatchOutcome::Reverted { .. }
+    ));
+    assert_neutral(&p);
+    assert!(!deferral(&p).exists());
+    assert!(p.var_dir.join(STATE_SUB).join("index.json").exists());
+    fs::write(deferral(&p), "").unwrap();
+    assert_eq!(watch_at(&p, &r, at(T0 + 6)).unwrap(), WatchOutcome::Idle);
+    assert!(!deferral(&p).exists());
+    assert!(p.var_dir.join(STATE_SUB).join("index.json").exists());
 }
