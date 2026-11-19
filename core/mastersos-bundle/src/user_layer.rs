@@ -1012,6 +1012,184 @@ pub fn effective_device_config(m: &Manifest, group: &Group) -> Option<Config> {
     Some(config)
 }
 
+/// What the Device knows about the person signing in, without asking the issuer.
+#[derive(Debug, Clone, Copy)]
+pub struct DeviceFacts<'a> {
+    /// The account kind.
+    pub kind: Kind,
+    /// Whether the person is an administrator on the Device.
+    pub admin: bool,
+    /// The login name; rules compare it case-insensitively.
+    pub user: &'a str,
+    /// The id of the Group of this Device.
+    pub device_group: &'a str,
+}
+
+/// One class of the person, from the issuer facts (design §5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClassFact {
+    /// The class id, a lowercase UUID.
+    pub id: String,
+    /// The person's role in that class.
+    pub role: ClassRole,
+}
+
+/// The issuer facts of one login: the userinfo JSON of design §5. Unknown claims are ignored
+/// because the issuer may add some.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IssuerFacts {
+    /// The issuer subject id.
+    pub sub: String,
+    /// The organisation id.
+    pub org: String,
+    /// The person's role in the organisation, when the issuer says.
+    #[serde(default)]
+    pub org_role: Option<OrgRole>,
+    /// The person's org-tree node and all its ancestors.
+    #[serde(default)]
+    pub org_nodes: Vec<String>,
+    /// The classes the person is in.
+    #[serde(default)]
+    pub classes: Vec<ClassFact>,
+    /// The person's age band, when the issuer says.
+    #[serde(default)]
+    pub age_band: Option<AgeBand>,
+}
+
+/// The outcome of [`resolve`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Resolution {
+    /// The id of the user config the person gets.
+    pub user_config: String,
+    /// The index of the rule that matched; `None` when the fallback applies.
+    pub rule: Option<usize>,
+}
+
+/// Whether an optional condition holds for `value`: absent holds, an empty list never does.
+fn cond<T>(c: &Option<Vec<T>>, any: impl Fn(&T) -> bool) -> bool {
+    c.as_ref().is_none_or(|v| v.iter().any(any))
+}
+
+fn rule_matches(r: &Assign, d: &DeviceFacts, facts: Option<&IssuerFacts>) -> bool {
+    // `user` is compared with Unicode lowercasing on both sides.
+    let user = d.user.to_lowercase();
+    if !(cond(&r.kind, |k| *k == d.kind)
+        && r.admin.is_none_or(|a| a == d.admin)
+        && cond(&r.user, |u| u.to_lowercase() == user)
+        && cond(&r.device_group, |g| g == d.device_group))
+    {
+        return false;
+    }
+    let has_fact_condition = r.org_role.is_some()
+        || r.class_role.is_some()
+        || r.class.is_some()
+        || r.org_node.is_some()
+        || r.age_band.is_some()
+        || r.sub.is_some();
+    if !has_fact_condition {
+        return true;
+    }
+    let (Some(f), Kind::Sso) = (facts, d.kind) else {
+        return false;
+    };
+    cond(&r.org_role, |x| f.org_role == Some(*x))
+        && cond(&r.class_role, |x| f.classes.iter().any(|c| c.role == *x))
+        && cond(&r.class, |x| f.classes.iter().any(|c| c.id == *x))
+        && cond(&r.org_node, |x| f.org_nodes.iter().any(|n| n == x))
+        && cond(&r.age_band, |x| f.age_band == Some(*x))
+        && cond(&r.sub, |x| f.sub == *x)
+}
+
+/// The user config of a person: the first rule whose every written condition holds, else
+/// `fallback`. Within a list any element matches, so an empty list never matches. `user` is
+/// compared case-insensitively (Unicode lowercase on both sides); ids and `sub` compare exactly.
+/// Fact conditions hold only when `facts` is `Some` and the account is `sso`.
+pub fn resolve(
+    rules: &[Assign],
+    fallback: &str,
+    device: &DeviceFacts,
+    facts: Option<&IssuerFacts>,
+) -> Resolution {
+    match rules.iter().position(|r| rule_matches(r, device, facts)) {
+        Some(i) => Resolution {
+            user_config: rules[i].user_config.clone(),
+            rule: Some(i),
+        },
+        None => Resolution {
+            user_config: fallback.to_string(),
+            rule: None,
+        },
+    }
+}
+
+/// What a Device of one Group needs at login (design §4): written root-only by the agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UserRules {
+    /// The Group of this Device.
+    pub group: String,
+    /// The user config when no rule matches.
+    pub fallback: String,
+    /// The rules reachable on this Group, in order (indices re-numbered).
+    pub rules: Vec<Assign>,
+    /// The ids of the user configs reachable on this Group.
+    pub configs: Vec<String>,
+}
+
+impl UserRules {
+    /// The rules file for `group_id`. `None` for format 1/2 and for a format 3 manifest without
+    /// `[user] fallback` (a check error).
+    pub fn from_manifest(m: &Manifest, group_id: &str) -> Option<UserRules> {
+        let u = m.user_layer.as_ref()?;
+        let fallback = u.fallback.clone()?;
+        let rules = u
+            .rules
+            .iter()
+            .filter(|r| {
+                r.device_group
+                    .as_ref()
+                    .is_none_or(|gs| gs.iter().any(|g| g == group_id))
+            })
+            .cloned()
+            .collect();
+        Some(UserRules {
+            group: group_id.to_string(),
+            fallback,
+            rules,
+            configs: reachable_user_configs(m, group_id),
+        })
+    }
+
+    /// [`resolve`] over these rules and fallback.
+    pub fn resolve(&self, device: &DeviceFacts, facts: Option<&IssuerFacts>) -> Resolution {
+        resolve(&self.rules, &self.fallback, device, facts)
+    }
+}
+
+/// The user config of the guest session on a Device of this Group: format 3 resolves a guest
+/// without facts; format 1/2 the Group's Config id. `None` for an unknown Group (or no fallback).
+pub fn guest_user_config(m: &Manifest, group_id: &str) -> Option<String> {
+    if m.user_layer.is_none() {
+        return m
+            .groups
+            .iter()
+            .find(|g| g.id == group_id)
+            .map(|g| g.config.clone());
+    }
+    m.groups.iter().find(|g| g.id == group_id)?;
+    let device = DeviceFacts {
+        kind: Kind::Guest,
+        admin: false,
+        user: "guest",
+        device_group: group_id,
+    };
+    Some(
+        UserRules::from_manifest(m, group_id)?
+            .resolve(&device, None)
+            .user_config,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1733,5 +1911,251 @@ mod tests {
             .unwrap()
             .user_layer
             .is_none());
+    }
+
+    // ---- rule resolution ----
+
+    const TEACHER: &str = "0193a0c2-0000-7000-8000-0000000000c1";
+    const PRIMARY_CHILD: &str = "0193a0c2-0000-7000-8000-000000000001";
+    const SUB: &str = "0193a0c2-0000-7000-8000-0000000000a1";
+
+    fn sso(user: &str, admin: bool) -> (Kind, bool, String) {
+        (Kind::Sso, admin, user.to_string())
+    }
+
+    fn guest() -> (Kind, bool, String) {
+        (Kind::Guest, false, "guest".to_string())
+    }
+
+    struct F(IssuerFacts);
+
+    fn facts() -> F {
+        F(IssuerFacts {
+            sub: SUB.to_string(),
+            org: "o".to_string(),
+            org_role: None,
+            org_nodes: vec![],
+            classes: vec![],
+            age_band: None,
+        })
+    }
+
+    impl F {
+        fn class(mut self, id: &str) -> F {
+            self.0.classes.push(ClassFact {
+                id: id.to_string(),
+                role: ClassRole::Teacher,
+            });
+            self
+        }
+        fn node(mut self, id: &str) -> F {
+            self.0.org_nodes.push(id.to_string());
+            self
+        }
+    }
+
+    fn assign(extra: &str) -> Assign {
+        let t = format!("user_config = \"x\"\n{extra}");
+        toml::from_str(&t).unwrap()
+    }
+
+    fn run(rules: &[Assign], dev: &(Kind, bool, String), f: Option<&IssuerFacts>) -> Resolution {
+        let d = DeviceFacts {
+            kind: dev.0,
+            admin: dev.1,
+            user: &dev.2,
+            device_group: "default",
+        };
+        resolve(rules, "fb", &d, f)
+    }
+
+    #[test]
+    fn resolves_spec_example() {
+        let m = Manifest::parse(&v3_example()).unwrap();
+        let rules = m.user_layer.as_ref().unwrap().rules.clone();
+        let cases = [
+            (
+                sso("t@s.ac.th", false),
+                Some(facts().class(TEACHER)),
+                "teacher",
+                Some(1),
+            ),
+            (sso("a@s.ac.th", true), None, "teacher", Some(0)),
+            (
+                sso("k@s.ac.th", false),
+                Some(facts().node(PRIMARY_CHILD)),
+                "primary",
+                Some(2),
+            ),
+            (guest(), None, "primary", None),
+        ];
+        for (dev, f, want, rule) in cases {
+            let d = DeviceFacts {
+                kind: dev.0,
+                admin: dev.1,
+                user: &dev.2,
+                device_group: "default",
+            };
+            let r = resolve(&rules, "primary", &d, f.as_ref().map(|f| &f.0));
+            assert_eq!((r.user_config.as_str(), r.rule), (want, rule), "{}", dev.2);
+        }
+    }
+
+    #[test]
+    fn fact_conditions_need_facts() {
+        let rules = [assign(&format!("sub = [\"{SUB}\"]"))];
+        let f = facts();
+        assert_eq!(run(&rules, &sso("a@s", false), Some(&f.0)).rule, Some(0));
+        assert_eq!(run(&rules, &sso("a@s", false), None).rule, None);
+        let local = (Kind::Local, false, "a".to_string());
+        assert_eq!(run(&rules, &local, Some(&f.0)).user_config, "fb");
+        assert_eq!(run(&rules, &guest(), Some(&f.0)).rule, None);
+        // A rule with only a fact condition does not shadow a later plain rule.
+        let rules = [assign("org_role = [\"owner\"]"), assign("")];
+        assert_eq!(run(&rules, &sso("a@s", false), None).rule, Some(1));
+    }
+
+    #[test]
+    fn fact_values_must_be_present_and_equal() {
+        let mut f = facts();
+        let rules = [assign("org_role = [\"owner\"]")];
+        assert_eq!(run(&rules, &sso("a@s", false), Some(&f.0)).rule, None);
+        f.0.org_role = Some(OrgRole::Owner);
+        assert_eq!(run(&rules, &sso("a@s", false), Some(&f.0)).rule, Some(0));
+        let rules = [assign("age_band = [\"13-17\"]")];
+        assert_eq!(run(&rules, &sso("a@s", false), Some(&f.0)).rule, None);
+        f.0.age_band = Some(AgeBand::Teen);
+        assert_eq!(run(&rules, &sso("a@s", false), Some(&f.0)).rule, Some(0));
+        let rules = [assign("class_role = [\"student\"]")];
+        assert_eq!(run(&rules, &sso("a@s", false), Some(&f.0)).rule, None);
+    }
+
+    #[test]
+    fn empty_list_never_matches() {
+        for c in [
+            "kind = []",
+            "user = []",
+            "device_group = []",
+            "org_role = []",
+            "class_role = []",
+            "class = []",
+            "org_node = []",
+            "age_band = []",
+            "sub = []",
+        ] {
+            let rules = [assign(c)];
+            let f = facts();
+            assert_eq!(
+                run(&rules, &sso("a@s", false), Some(&f.0)).rule,
+                None,
+                "{c}"
+            );
+            assert_eq!(run(&rules, &sso("a@s", false), None).rule, None, "{c}");
+        }
+    }
+
+    #[test]
+    fn user_condition_is_case_insensitive() {
+        let rules = [assign("user = [\"alice@s.ac.th\"]")];
+        assert_eq!(
+            run(&rules, &sso("Alice@S.ac.th", false), None).rule,
+            Some(0)
+        );
+        let rules = [assign("user = [\"Alice@S.ac.th\"]")];
+        assert_eq!(
+            run(&rules, &sso("alice@s.ac.th", false), None).rule,
+            Some(0)
+        );
+        assert_eq!(run(&rules, &sso("bob@s.ac.th", false), None).rule, None);
+    }
+
+    #[test]
+    fn and_of_conditions_or_within_lists() {
+        let rules = [assign("kind = [\"sso\", \"local\"]\nadmin = false")];
+        assert_eq!(run(&rules, &sso("a@s", false), None).rule, Some(0));
+        assert_eq!(run(&rules, &sso("a@s", true), None).rule, None);
+        let local = (Kind::Local, false, "a".to_string());
+        assert_eq!(run(&rules, &local, None).rule, Some(0));
+        assert_eq!(run(&rules, &guest(), None).rule, None);
+    }
+
+    #[test]
+    fn device_group_condition_uses_the_device_group() {
+        let rules = [assign("device_group = [\"exam-room\"]")];
+        assert_eq!(run(&rules, &sso("a@s", false), None).rule, None);
+    }
+
+    #[test]
+    fn rules_file_round_trips_and_filters_by_group() {
+        let text = v3_text(
+            "[[user_config]]\nid = \"a\"\nname = \"A\"\n\
+             [[user_config]]\nid = \"b\"\nname = \"B\"\n\
+             [[assign]]\nuser_config = \"b\"\ndevice_group = [\"exam-room\"]\n\
+             [[assign]]\nuser_config = \"a\"\nadmin = true\n\
+             [user]\nfallback = \"a\"\n",
+        );
+        let m = Manifest::parse(&text).unwrap();
+        let r = UserRules::from_manifest(&m, "default").unwrap();
+        assert!(r.rules.iter().all(|a| a
+            .device_group
+            .as_ref()
+            .is_none_or(|g| g.iter().any(|x| x == "default"))));
+        assert_eq!(r.rules.len(), 1);
+        assert_eq!(r.configs, vec!["a".to_string()]);
+        assert_eq!(
+            UserRules::from_manifest(&m, "exam-room")
+                .unwrap()
+                .rules
+                .len(),
+            2
+        );
+        let dev = sso("x@s", true);
+        let d = DeviceFacts {
+            kind: dev.0,
+            admin: dev.1,
+            user: &dev.2,
+            device_group: "default",
+        };
+        assert_eq!(r.resolve(&d, None).rule, Some(0));
+        assert_eq!(
+            serde_json::from_str::<UserRules>(&serde_json::to_string(&r).unwrap()).unwrap(),
+            r
+        );
+        assert!(serde_json::from_str::<UserRules>(
+            r#"{"group":"g","fallback":"f","rules":[],"configs":[],"x":1}"#
+        )
+        .is_err());
+        let v2 = Manifest::parse(&format!("format = 2\n{}", v2_minimal_body())).unwrap();
+        assert!(UserRules::from_manifest(&v2, "default").is_none());
+    }
+
+    #[test]
+    fn rules_file_none_without_fallback() {
+        let m = Manifest::parse(&v3_text("")).unwrap();
+        assert!(UserRules::from_manifest(&m, "default").is_none());
+    }
+
+    #[test]
+    fn guest_resolution() {
+        let m = Manifest::parse(&v3_example()).unwrap();
+        assert_eq!(guest_user_config(&m, "default").as_deref(), Some("primary"));
+        assert_eq!(guest_user_config(&m, "nope"), None);
+        let v2 = Manifest::parse(&format!("format = 2\n{}", v2_minimal_body())).unwrap();
+        assert_eq!(guest_user_config(&v2, "default").as_deref(), Some("c"));
+        assert_eq!(guest_user_config(&v2, "nope"), None);
+    }
+
+    #[test]
+    fn issuer_facts_ignore_unknown_claims() {
+        let f: IssuerFacts = serde_json::from_str(
+            r#"{"sub":"s","org":"o","org_role":"member","org_nodes":["n"],
+                "classes":[{"id":"c","role":"student","extra":1}],"age_band":"13-17","foo":1}"#,
+        )
+        .unwrap();
+        assert_eq!(f.org_role, Some(OrgRole::Member));
+        assert_eq!(f.age_band, Some(AgeBand::Teen));
+        assert_eq!(f.classes[0].role, ClassRole::Student);
+        let min: IssuerFacts = serde_json::from_str(r#"{"sub":"s","org":"o"}"#).unwrap();
+        assert!(min.org_nodes.is_empty() && min.classes.is_empty() && min.org_role.is_none());
     }
 }
