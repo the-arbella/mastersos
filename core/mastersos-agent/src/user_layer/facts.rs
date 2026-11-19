@@ -85,11 +85,13 @@ fn open_facts_dir(root: &Path) -> anyhow::Result<Option<OwnedFd>> {
 /// Read and delete the facts file of `user` under `root`.
 ///
 /// Whenever the file for this user exists it is removed, whatever it holds. A file of another user is never touched, and
-/// a name that is not safe as a file name touches nothing.
+/// a name that is not safe as a file name touches nothing. The broker names the file after the login name in ASCII
+/// lower case (its login names are `[a-z0-9._-]+@[a-z0-9.-]+`), so `user` is looked up and compared lower-cased.
 pub fn take_facts(root: &Path, user: &str, now: SystemTime) -> FactsOutcome {
     if !user_name_ok(user) || user.contains('/') || user.starts_with('.') {
         return FactsOutcome::Error("the login name is not usable as a facts file name".into());
     }
+    let user = user.to_ascii_lowercase();
     let dir = match open_facts_dir(root) {
         Ok(Some(d)) => d,
         Ok(None) => return FactsOutcome::Missing,
@@ -107,7 +109,7 @@ pub fn take_facts(root: &Path, user: &str, now: SystemTime) -> FactsOutcome {
     };
     // Single use: a failed removal must not turn good facts into an error, and the age limit bounds a leftover.
     let _ = safefs::remove_at(&dir, &name);
-    interpret(&bytes, user, now)
+    interpret(&bytes, &user, now)
 }
 
 fn read_bounded(dir: &OwnedFd, name: &str) -> anyhow::Result<Option<Vec<u8>>> {
@@ -340,5 +342,64 @@ mod tests {
             FactsOutcome::Error(_)
         ));
         assert!(target.exists());
+    }
+    /// The exact bytes patch 0007's `mastersosWriteFactsFile` writes: Go's `json.Marshal` of `mastersosFactsFile`, fields
+    /// in struct order, the `facts` map with sorted keys, compact, a login name with its domain.
+    const BROKER_FACTS: &str = r#"{"version":1,"user":"alice@school.example","granted_at":1799999990,"facts":{"age_band":"13-17","classes":[{"id":"0b6f3c1e-2a4d-4c8b-9e7f-1a2b3c4d5e6f","role":"student"}],"org":"org-1","org_nodes":["node-1","node-2"],"org_role":"member","sub":"alice-id"}}"#;
+    const BROKER_ERROR: &str = r#"{"version":1,"user":"alice@school.example","granted_at":1799999990,"error":"the issuer is not reachable"}"#;
+    /// The broker passes on what the issuer sent for its keys, `null` included (patch 0007's own test).
+    const BROKER_NULLS: &str = r#"{"version":1,"user":"alice@school.example","granted_at":1799999990,"facts":{"age_band":null,"classes":[{"id":"c","role":"student"}],"org":"org-1","org_nodes":[],"org_role":"member","sub":"alice-id"}}"#;
+
+    #[test]
+    fn broker_facts_file_is_read() {
+        let (t, d) = setup();
+        put(&d, "alice@school.example.json", BROKER_FACTS);
+        let FactsOutcome::Facts(f) = take_facts(t.path(), "alice@school.example", at(NOW)) else {
+            panic!("expected facts");
+        };
+        assert_eq!(f.sub, "alice-id");
+        assert_eq!(f.org, "org-1");
+        assert_eq!(f.org_role, Some(mastersos_bundle::OrgRole::Member));
+        assert_eq!(
+            f.org_nodes,
+            vec!["node-1".to_string(), "node-2".to_string()]
+        );
+        assert_eq!(f.classes.len(), 1);
+        assert_eq!(f.classes[0].role, mastersos_bundle::ClassRole::Student);
+        assert_eq!(f.age_band, Some(mastersos_bundle::AgeBand::Teen));
+        assert!(!d.join("alice@school.example.json").exists());
+    }
+
+    #[test]
+    fn broker_error_file_is_error() {
+        let (t, d) = setup();
+        put(&d, "alice@school.example.json", BROKER_ERROR);
+        assert!(matches!(
+            take_facts(t.path(), "alice@school.example", at(NOW)),
+            FactsOutcome::Error(_)
+        ));
+        assert!(!d.join("alice@school.example.json").exists());
+    }
+
+    #[test]
+    fn broker_null_facts_are_read() {
+        let (t, d) = setup();
+        put(&d, "alice@school.example.json", BROKER_NULLS);
+        let FactsOutcome::Facts(f) = take_facts(t.path(), "alice@school.example", at(NOW)) else {
+            panic!("expected facts");
+        };
+        assert_eq!(f.age_band, None);
+        assert!(f.org_nodes.is_empty());
+    }
+
+    #[test]
+    fn mixed_case_login_finds_the_lower_case_file() {
+        let (t, d) = setup();
+        put(&d, "alice@school.example.json", BROKER_FACTS);
+        assert!(matches!(
+            take_facts(t.path(), "Alice@School.example", at(NOW)),
+            FactsOutcome::Facts(_)
+        ));
+        assert!(!d.join("alice@school.example.json").exists());
     }
 }
