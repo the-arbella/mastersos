@@ -55,19 +55,36 @@ export function suggestDomains(query, domains, taken = []) {
         .slice(0, LIMIT);
 }
 
+// A bare username (no '@') that is not a local account on this computer is a school account: <username>@<login_domain>.
+// Null when the text is not a plain username, there is no login domain, it is a hidden local name, or a local account has
+// exactly this name (that account keeps precedence). A case variant of a local name is settled before this is called:
+// matchPeople/preselect (case-insensitive) pick the local person and set the pick first.
+export function expandLoginName(typed, loginDomain, localNames) {
+    const name = (typed ?? '').trim();
+    const lower = name.toLowerCase();
+    if (typeof loginDomain !== 'string' || !loginDomain)
+        return null;
+    if (name.includes('@') || !/^[a-z0-9._-]{1,64}$/.test(lower) || HIDDEN(lower))
+        return null;
+    if ((localNames ?? []).includes(name))
+        return null;
+    return `${lower}@${loginDomain}`;
+}
+
 // The person Enter signs in without arrow keys: none while an address is being typed (it may be someone new).
 export function preselect(query, shown) {
     return shown.length && !(query ?? '').includes('@') ? 0 : -1;
 }
 
 // Why the person was refused for who they are rather than for what they typed, from the broker's or the agent's English text:
-//   'not-allowed'   not of the school's domains: the broker's allowed_domains (patch 0006) or the agent's pam-check
+//   'not-allowed'   not of the school's domains: the broker's allowed_domains (patch 0006) or the agent's pam-check, or another
+//                   organisation than this school's (the issuer profile, patch 0007)
 //                   (DENY_DOMAIN in core/mastersos-agent/src/system/login.rs, checked by login-people-test.mjs);
 //   'unverified'    the school's provider does not say the email address is verified (authd-oidc's generic provider);
 //   'wrong-account' the school's page signed in another account than the one picked here (patch 0004);
 //   null            anything else.
 const REFUSALS = [
-    ['not-allowed', /not allowed in broker configuration|Accounts from this domain cannot sign in/i],
+    ['not-allowed', /not allowed in broker configuration|Accounts from this domain cannot sign in|not a member of this school/i],
     ['unverified', /email not verified/i],
     ['wrong-account', /does not match the authenticated user/i],
 ];

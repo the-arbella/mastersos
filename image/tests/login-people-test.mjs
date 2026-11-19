@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 
 // login-people-test.sh copies people.js to a .mjs first: node before 22 reads a bare .js as CommonJS.
-const {HIDDEN, LIMIT, REFUSAL_DOMAINS, matchPeople, preselect, refusalDomains, refusalKind, suggestDomains} =
+const {HIDDEN, LIMIT, REFUSAL_DOMAINS, expandLoginName, matchPeople, preselect, refusalDomains, refusalKind, suggestDomains} =
     await import(process.env.MASTERSOS_PEOPLE_MJS);
 
 const person = (userName, realName, loginTime = 0) => ({userName, realName, loginTime});
@@ -163,4 +163,29 @@ test('other messages are no refusal of the person', () => {
     for (const m of ['Error retrieving access token. Please try again.', 'Error connecting to provider', '', null, undefined,
         agentRefusal('DENY_LOCKED'), agentRefusal('DENY_SSO')])
         assert.equal(refusalKind(m), null, String(m));
+});
+
+test('a bare username becomes <username>@<login_domain>', () => {
+    const D = 'school.example';
+    assert.equal(expandLoginName('Alice', D, []), 'alice@school.example');
+    assert.equal(expandLoginName('  bob.1_x-y  ', D, ['carol']), 'bob.1_x-y@school.example');
+    // A local account with exactly that name keeps precedence.
+    assert.equal(expandLoginName('alice', D, ['alice']), null);
+    // A case variant ("Alice" with a local "alice") is settled before this runs: matchPeople/preselect pick the local
+    // person (case-insensitive) and set _picked, so expandLoginName is never reached; on its own it only refuses exact names.
+    assert.equal(expandLoginName('Alice', D, ['alice']), 'alice@school.example');
+    assert.equal(expandLoginName('alice', null, []), null);
+    assert.equal(expandLoginName('alice', '', []), null);
+    assert.equal(expandLoginName('itadmin', D, []), null);
+    assert.equal(expandLoginName('Guest', D, []), null);
+    assert.equal(expandLoginName('kiosk-1', D, []), null);
+    assert.equal(expandLoginName('a@b', D, []), null);
+    assert.equal(expandLoginName('a b', D, []), null);
+    assert.equal(expandLoginName('', D, []), null);
+    assert.equal(expandLoginName('a'.repeat(64), D, []), `${'a'.repeat(64)}@${D}`);
+    assert.equal(expandLoginName('a'.repeat(65), D, []), null);
+});
+
+test('the broker refusing another organisation is a not-allowed refusal', () => {
+    assert.equal(refusalKind('Authentication failure: this account is not a member of this school'), 'not-allowed');
 });

@@ -12,6 +12,8 @@
 //     the keyboard menu afterwards
 //   - as a name is typed, the school addresses (name@domain for each school domain, filtered by what follows an '@') are
 //     offered in the same list as the people; an explicit pick fills in the address, typing it by hand always works.
+//   - when the school sets a login domain, a bare username that is not a local account is completed to name@login_domain
+//     on Enter (expandLoginName in people.js), so young children type only their username.
 // Never reads passwords or tokens: everything secret stays in PAM, authd and the school's page. Reads
 // /var/lib/mastersos-public/branding/branding.json; missing, broken or empty values show nothing and never throw. New settings
 // (branding.json, the locked apps) are applied while the login screen is up (watch.js).
@@ -38,7 +40,7 @@ import {LoginCard} from './card.js';
 import {HelpDialog, readSupportEnabled} from './help.js';
 import {collectingFor} from './help-model.js';
 import {LanguageScreen, languageChosen, restartGreeter} from './setup.js';
-import {matchPeople, preselect, refusalDomains, refusalKind, suggestDomains} from './people.js';
+import {expandLoginName, matchPeople, preselect, refusalDomains, refusalKind, suggestDomains} from './people.js';
 import {KIOSK_DIR, Shelf} from './shelf.js';
 import {agentRefusal, bannerText, brokerText, cleanText, fmt, strings, tr} from './strings.js';
 import {Watch} from './watch.js';
@@ -120,6 +122,14 @@ function domainList(b) {
         .slice(0, 20);
 }
 
+// The school's login domain (branding.json login_domain), lowercase; null unless it is a plain domain name.
+function loginDomain(b) {
+    const d = b?.login_domain;
+    if (typeof d !== 'string' || d.length > 253 || d !== cleanText(d, 253) || !/^[A-Za-z0-9.-]+$/.test(d))
+        return null;
+    return d.toLowerCase();
+}
+
 // Which choice to make for the person: an address goes to the school's broker, anything else (the IT account, a local
 // user) to the local one; among auth modes the first is what the broker prefers (for a school account, the card).
 export function pickChoice(id, choices, userName) {
@@ -164,6 +174,7 @@ export default class MastersosLoginExtension extends Extension {
         const b = readBranding();
         const name = schoolName(b);
         this._domains = domainList(b);
+        this._loginDomain = loginDomain(b);
         this._managed = name ? fmt(this._text.managed, name) : null;
         this._localeManaged = localeManaged(b);
         this._card = new LoginCard(this._text);
@@ -198,6 +209,7 @@ export default class MastersosLoginExtension extends Extension {
     _settingsChanged() {
         const b = readBranding();
         this._domains = domainList(b);
+        this._loginDomain = loginDomain(b);
         const name = schoolName(b);
         this._managed = name ? fmt(this._text.managed, name) : null;
         this._localeManaged = localeManaged(b);
@@ -806,10 +818,15 @@ export default class MastersosLoginExtension extends Extension {
             dlg._nextSignalId = 0;
             prompt.updateSensitivity(false);
             const typed = prompt.getAnswer();
-            const answer = this._picked ?? this._defaultPick(typed) ?? typed;
+            const picked = this._picked ?? this._defaultPick(typed);
+            // A bare username that is no local account is a school account at the login domain.
+            const localNames = dlg._userManager?.list_users().map(u => u.get_user_name()) ?? [];
+            const expanded = picked ? null : expandLoginName(typed, this._loginDomain, localNames);
+            const answer = picked ?? expanded ?? typed;
             this._hideMatches();
             dlg._user = dlg._userManager.get_user(answer);
-            if (answer !== typed)
+            // Not for a completed name: like a school address typed by hand, it may be nobody this computer knows yet.
+            if (!expanded && answer !== typed)
                 prompt.setUser(dlg._user);
             prompt.clear();
             dlg._beginVerification({userName: answer});
