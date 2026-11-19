@@ -85,6 +85,8 @@ pub fn db_name(dir: &str) -> String {
 /// 0700). `dconf compile` writes the database there, where no one else can read it and `dconf update` never looks.
 pub const DCONF_KEYFILE_SUB: &str = "dconf.d";
 pub const DCONF_DB_FILE: &str = "dconf.db";
+/// What `dconf compile` writes before it is renamed over [`DCONF_DB_FILE`].
+pub const DCONF_DB_TMP: &str = "dconf.db.tmp";
 
 /// The compiled dconf database of the config directory `dir` (root only), which the switch copies to [`SESSION_DB`].
 /// The one place that names it.
@@ -162,12 +164,13 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
     }
 }
 
-/// What rendering one config gave: errors and remarks for its report item, and whether its dconf keyfiles changed.
+/// What rendering one config gave: errors and remarks for its report item, and whether its dconf keyfiles (and
+/// locks) were all written.
 #[derive(Default)]
 struct Outcome {
     errs: Vec<String>,
     notes: Vec<String>,
-    keyfiles_changed: bool,
+    keyfiles_written: bool,
 }
 
 fn render_all(ctx: &ApplyContext, m: &Manifest, env: &mut Env) -> Vec<ItemResult> {
@@ -199,7 +202,6 @@ fn render_all(ctx: &ApplyContext, m: &Manifest, env: &mut Env) -> Vec<ItemResult
     let active = active_marker(&paths.root).map(|a| a.map(|a| a.dir).filter(|d| is_config_dir(d)));
     let active_dir = active.as_ref().ok().cloned().flatten();
     let mut index = BTreeMap::new();
-    let recompile = sys.load_failed;
     {
         let lists: Vec<_> = configs.iter().map(|c| &c.web).collect();
         let mut dl = Downloads::new(sys, desktop::icon_key(&lists));
@@ -215,7 +217,7 @@ fn render_all(ctx: &ApplyContext, m: &Manifest, env: &mut Env) -> Vec<ItemResult
                 &public,
                 &mut dl,
             );
-            if let Err(e) = compile_db(paths, runner, &dir, r.keyfiles_changed || recompile) {
+            if let Err(e) = compile_db(paths, runner, &dir, r.keyfiles_written) {
                 r.errs.push(format!("dconf: {e:#}"));
             }
             out.push(item(&item_of(&c.id), r));
@@ -238,13 +240,16 @@ fn render_all(ctx: &ApplyContext, m: &Manifest, env: &mut Env) -> Vec<ItemResult
             &public,
             &mut dl,
         );
-        if let Err(e) = compile_db(paths, runner, NEUTRAL_DIR, r.keyfiles_changed || recompile) {
+        if let Err(e) = compile_db(paths, runner, NEUTRAL_DIR, r.keyfiles_written) {
             r.errs.push(format!("dconf: {e:#}"));
         }
         errs.extend(r.errs.into_iter().map(|e| format!("neutral: {e}")));
     }
     let mut keep: BTreeSet<String> = index.values().map(|r| r.dir.clone()).collect();
     keep.insert(NEUTRAL_DIR.into());
+    if let Err(e) = remove_old_dconf(paths) {
+        errs.push(format!("removing the old dconf databases: {e:#}"));
+    }
     match &active {
         Ok(a) => {
             keep.extend(a.iter().cloned());
@@ -420,7 +425,7 @@ fn render_one(
             desktop::write_dconf_at(&k, &shown, &keyfile, &lockfile)
         });
     match written {
-        Ok(changed) => r.keyfiles_changed = changed,
+        Ok(_) => r.keyfiles_written = true,
         Err(e) => r.errs.push(format!("dconf: {e:#}")),
     }
     r
@@ -444,29 +449,44 @@ fn mode_of(fd: &OwnedFd) -> Result<u32> {
 }
 
 /// Compiles the keyfiles of the config dir `dir` into its [`DCONF_DB_FILE`] (`dconf compile`, which reads the
-/// keyfile directory and its `locks/` exactly as `dconf update` does) when they changed (`changed`) or the database is
-/// missing; then makes it 0600. A failed compile removes the database, so that the switch to this config fails
-/// (closed) instead of using an older one; the next round compiles again.
-fn compile_db(paths: &SysPaths, runner: &dyn Runner, dir: &str, changed: bool) -> Result<()> {
+/// keyfile directory and its `locks/` exactly as `dconf update` does), every round: through a temporary file renamed
+/// over it (0600), so the database always matches the keyfiles of this round. When the keyfiles could not all be
+/// written (`keyfiles_written` false) or the compile fails, the database is removed: the switch to this config then
+/// fails (closed) instead of using an older one, and the next round compiles again.
+fn compile_db(
+    paths: &SysPaths,
+    runner: &dyn Runner,
+    dir: &str,
+    keyfiles_written: bool,
+) -> Result<()> {
     let cdir = sub(&state_dir(paths)?, dir, 0o700)?;
-    if !changed && safefs::open_file_at(&cdir, DCONF_DB_FILE)?.is_some() {
-        return Ok(());
+    let compiled = if keyfiles_written {
+        compile_into(paths, runner, &cdir, dir)
+    } else {
+        Ok(())
+    };
+    if !keyfiles_written || compiled.is_err() {
+        let _ = safefs::remove_at(&cdir, DCONF_DB_TMP);
+        safefs::remove_at(&cdir, DCONF_DB_FILE)?;
     }
+    compiled
+}
+
+fn compile_into(paths: &SysPaths, runner: &dyn Runner, cdir: &OwnedFd, dir: &str) -> Result<()> {
+    safefs::remove_at(cdir, DCONF_DB_TMP)?;
     let abs = paths.var_dir.join(STATE_SUB).join(dir);
-    let (out, src) = (abs.join(DCONF_DB_FILE), abs.join(DCONF_KEYFILE_SUB));
+    let (out, src) = (abs.join(DCONF_DB_TMP), abs.join(DCONF_KEYFILE_SUB));
     let (Some(out), Some(src)) = (out.to_str(), src.to_str()) else {
         bail!("the state directory's path is not UTF-8");
     };
-    if let Err(e) = run_ok(runner, Cmd::new("dconf", &["compile", out, src])) {
-        safefs::remove_at(&cdir, DCONF_DB_FILE)?;
-        return Err(e);
-    }
-    if let Some(f) = safefs::open_file_at(&cdir, DCONF_DB_FILE)? {
-        rustix::fs::fchmod(&f, rustix::fs::Mode::from_raw_mode(0o600))
-            .map_err(std::io::Error::from)
-            .context("making the compiled database root-only")?;
-    }
-    Ok(())
+    run_ok(runner, Cmd::new("dconf", &["compile", out, src]))?;
+    let Some(f) = safefs::open_file_at(cdir, DCONF_DB_TMP)? else {
+        bail!("dconf compile wrote no database");
+    };
+    rustix::fs::fchmod(&f, rustix::fs::Mode::from_raw_mode(0o600))
+        .map_err(std::io::Error::from)
+        .context("making the compiled database root-only")?;
+    safefs::rename_at(cdir, DCONF_DB_TMP, DCONF_DB_FILE)
 }
 
 /// The policy file of `c` and its staging copy; on a render error both are removed.
@@ -545,7 +565,6 @@ fn remove_unreachable(paths: &SysPaths, keep: &BTreeSet<String>) -> Result<()> {
             }
         }
     }
-    remove_old_dconf(paths)?;
     let staging = staging_dir(paths)?;
     for name in safefs::list_at(&staging)? {
         if name.strip_suffix(".json").is_some_and(gone) {
@@ -625,4 +644,4 @@ fn open_existing_abs(path: &Path) -> Result<Option<OwnedFd>> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

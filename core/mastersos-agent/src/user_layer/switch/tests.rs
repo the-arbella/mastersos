@@ -58,7 +58,7 @@ fn render_with(root: &Path, m: &Manifest) -> SysPaths {
         manifest: Some(m),
     };
     let p = paths(root);
-    let r = FakeRunner::new();
+    let r = render::tests::CompileRunner::default();
     let mut sys = SysState::default();
     let mut env = Env {
         paths: &p,

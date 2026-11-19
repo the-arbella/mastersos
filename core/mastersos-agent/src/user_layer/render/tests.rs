@@ -62,7 +62,7 @@ fn run_step_with(
     step: Step,
     root: &Path,
     m: &Manifest,
-    r: &FakeRunner,
+    r: &dyn crate::runner::Runner,
     sys: &mut SysState,
 ) -> Vec<ItemResult> {
     let ident = test_ident();
@@ -92,10 +92,37 @@ fn run_step_with(
     (step.run)(&ctx, &mut env)
 }
 
-fn render(root: &Path, m: &Manifest) -> (Vec<ItemResult>, FakeRunner) {
-    let r = FakeRunner::new();
+fn render(root: &Path, m: &Manifest) -> (Vec<ItemResult>, CompileRunner) {
+    let r = CompileRunner::default();
     let out = run_step_with(step(), root, m, &r, &mut SysState::default());
     (out, r)
+}
+
+/// A [`FakeRunner`] whose successful `dconf compile <out> <dir>` writes a stand-in database to `<out>` (0644, as
+/// `dconf compile` leaves it under umask 022).
+#[derive(Default)]
+pub(crate) struct CompileRunner(pub(crate) FakeRunner);
+
+impl std::ops::Deref for CompileRunner {
+    type Target = FakeRunner;
+    fn deref(&self) -> &FakeRunner {
+        &self.0
+    }
+}
+
+impl crate::runner::Runner for CompileRunner {
+    fn run(&self, cmd: &crate::runner::Cmd) -> anyhow::Result<crate::runner::Output> {
+        let out = self.0.run(cmd)?;
+        if out.code == 0
+            && cmd.program == "dconf"
+            && cmd.args.first().is_some_and(|a| a == "compile")
+        {
+            let db = &cmd.args[1];
+            fs::write(db, format!("db compiled from {}", cmd.args[2]))?;
+            fs::set_permissions(db, fs::Permissions::from_mode(0o644))?;
+        }
+        Ok(out)
+    }
 }
 
 fn var(root: &Path) -> PathBuf {
@@ -262,7 +289,7 @@ fn renders_every_reachable_config_and_neutral() {
             let v = var(root.path()).join(d);
             format!(
                 "dconf compile {} {}",
-                v.join(DCONF_DB_FILE).display(),
+                v.join(DCONF_DB_TMP).display(),
                 v.join(DCONF_KEYFILE_SUB).display()
             )
         })
@@ -542,42 +569,52 @@ fn config_dirs_are_root_only() {
 }
 
 #[test]
-fn compiles_only_changed_or_missing_databases() {
+fn recompiles_every_round_and_fails_closed() {
     let root = root();
-    let (_, r) = render(root.path(), &v3());
-    assert_eq!(compiles(&r).len(), 3);
-    // compiled (the fake runner writes nothing) and unchanged: nothing to compile
     let dirs = [
         config_dir_name("teacher"),
         config_dir_name("primary"),
-        NEUTRAL_DIR.into(),
+        NEUTRAL_DIR.to_string(),
     ];
+    let db_of = |d: &str| var(root.path()).join(d).join(DCONF_DB_FILE);
+    let (_, r) = render(root.path(), &v3());
+    assert_eq!(compiles(&r).len(), 3);
     for d in &dirs {
-        fs::write(var(root.path()).join(d).join(DCONF_DB_FILE), "gvdb").unwrap();
+        assert_eq!(mode(db_of(d)), 0o600, "{d}");
+        assert!(!var(root.path()).join(d).join(DCONF_DB_TMP).exists());
     }
-    let (_, r) = render(root.path(), &v3());
-    assert!(compiles(&r).is_empty(), "{:?}", r.calls());
-    // a database gone missing is compiled again
-    fs::remove_file(var(root.path()).join(&dirs[0]).join(DCONF_DB_FILE)).unwrap();
-    let (_, r) = render(root.path(), &v3());
-    assert_eq!(compiles(&r).len(), 1);
-    // changed keyfiles and a failing compile: the old database goes, so the switch cannot use it
-    fs::write(var(root.path()).join(&dirs[0]).join(DCONF_DB_FILE), "gvdb").unwrap();
-    fs::write(
-        var(root.path())
-            .join(&dirs[0])
-            .join(DCONF_KEYFILE_SUB)
-            .join("50-mastersos"),
-        "stale",
-    )
-    .unwrap();
-    let r = FakeRunner::new();
-    r.respond(
-        "dconf compile",
-        crate::runner::Output::fail(1, "bad keyfile"),
-    );
+    // unchanged keyfiles: compiled again all the same (a crash between writing and compiling cannot leave a stale one)
+    let (out, r) = render(root.path(), &v3());
+    assert_eq!(compiles(&r).len(), 3, "{:?}", r.calls());
+    ok_item(&out, "user-layer:teacher");
+    // the compile fails: no database, the item fails
+    let r = CompileRunner::default();
+    for _ in 0..3 {
+        r.respond(
+            "dconf compile",
+            crate::runner::Output::fail(1, "bad keyfile"),
+        );
+    }
     let out = run_step_with(step(), root.path(), &v3(), &r, &mut SysState::default());
-    assert!(!var(root.path()).join(&dirs[0]).join(DCONF_DB_FILE).exists());
+    for d in &dirs {
+        assert!(!db_of(d).exists(), "{d}");
+    }
+    let teacher = out.iter().find(|i| i.item == "user-layer:teacher").unwrap();
+    assert!(!teacher.ok, "{teacher:?}");
+    // compiled again by the next round
+    render(root.path(), &v3());
+    assert!(dirs.iter().all(|d| db_of(d).exists()));
+    // a keyfile that cannot be written (`locks` is not a directory): not compiled, the old database goes
+    let locks = var(root.path())
+        .join(&dirs[0])
+        .join(DCONF_KEYFILE_SUB)
+        .join("locks");
+    fs::remove_dir_all(&locks).unwrap();
+    fs::write(&locks, "not a directory").unwrap();
+    let (out, r) = render(root.path(), &v3());
+    assert!(!db_of(&dirs[0]).exists());
+    assert!(db_of(&dirs[1]).exists());
+    assert_eq!(compiles(&r).len(), 2, "{:?}", r.calls());
     let teacher = out.iter().find(|i| i.item == "user-layer:teacher").unwrap();
     assert!(!teacher.ok, "{teacher:?}");
 }
@@ -609,11 +646,18 @@ fn unreadable_marker_keeps_every_dir() {
     fs::create_dir_all(var(root.path()).join(&old)).unwrap();
     fs::create_dir_all(root.path().join(RUN_DIR)).unwrap();
     fs::write(root.path().join(RUN_DIR).join(ACTIVE_FILE), "not json").unwrap();
+    fs::create_dir_all(db(root.path()).join(format!("{}.d", db_name(&old)))).unwrap();
     let (out, _) = render(root.path(), &v3());
     let main = out.iter().find(|r| r.item == ITEM).unwrap();
     assert!(!main.ok, "{main:?}");
     assert!(var(root.path()).join(&old).exists());
     assert!(var(root.path()).join(INDEX_FILE).exists());
+    // the first layout's leftovers in /etc/dconf/db go all the same
+    assert!(
+        old_layout(root.path()).is_empty(),
+        "{:?}",
+        names(&db(root.path()))
+    );
     // without the marker the dir goes
     fs::remove_file(root.path().join(RUN_DIR).join(ACTIVE_FILE)).unwrap();
     let (out, _) = render(root.path(), &v3());
