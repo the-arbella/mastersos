@@ -540,7 +540,8 @@ fn other_uid_active_refuses() {
             ..other.clone()
         }
     );
-    assert_switched_to(&p, NEUTRAL_DIR);
+    // the marker's config is switched in again (final review FR-M4): what the marker says is what the session gets
+    assert_switched_to(&p, &dir_of("teacher"));
     // A session being closed refuses every uid, its own too
     let mut closing = read_active(&p.root).unwrap();
     closing.state = ActiveState::Closing;
@@ -827,4 +828,77 @@ fn card_policy_dir_has_no_staging_files() {
         .unwrap()
         .join(".mastersos-staging")
         .is_dir());
+}
+
+/// Spec §4.10: the marker's reason (which reaches the status report) is a fixed category; the issuer's or the file
+/// system's text, which may carry the login name or fact values, goes to the journal only.
+#[test]
+fn facts_error_reason_carries_no_login_name() {
+    let (_root, p, _) = rendered();
+    let mut pol = policy();
+    pol.mastersos_claims = true;
+    let named = format!(
+        r#"{{"version":1,"user":"{STUDENT}","granted_at":{},"error":"no account {STUDENT} in class 7B"}}"#,
+        now_secs()
+    );
+    facts_file(&p, STUDENT, &named);
+    switched("primary", true, &open(&p, &pol, STUDENT, 20000));
+    let why = read_active(&p.root).unwrap().reason.unwrap();
+    assert_eq!(why, "the issuer facts are unusable");
+    // a facts file the agent will not read (a symlink): its name is the login name
+    fs::remove_file(p.root.join(RUN_DIR).join(ACTIVE_FILE)).unwrap();
+    let f = p.root.join(FACTS_DIR).join(format!("{STUDENT}.json"));
+    std::os::unix::fs::symlink("/dev/null", &f).unwrap();
+    switched("primary", true, &open(&p, &pol, STUDENT, 20000));
+    let why = read_active(&p.root).unwrap().reason.unwrap();
+    assert_eq!(why, "the issuer facts are unusable");
+    assert!(!why.contains("s1@"), "{why}");
+}
+
+/// The same person again while their marker is open, after a revert that was only half done (neutral switched in, the
+/// marker still theirs): the marker's config is switched in again, so the session runs on the files the marker and the
+/// report name. A config that cannot be switched in refuses the login, back on neutral.
+#[test]
+fn same_person_again_switches_the_markers_config_in_again() {
+    let (_root, p, index) = rendered();
+    switched("primary", false, &open(&p, &policy(), STUDENT, 20000));
+    let first = read_active(&p.root).unwrap();
+    switch_to(&p.root, &p.public_dir, &p.var_dir, &index.neutral, None).unwrap();
+    assert_switched_to(&p, NEUTRAL_DIR);
+    switched("primary", false, &open(&p, &policy(), STUDENT, 20000));
+    assert_switched_to(&p, &dir_of("primary"));
+    assert_eq!(session_uid(&p).as_deref(), Some("20000\n"));
+    assert_eq!(read_active(&p.root).unwrap().user_config, first.user_config);
+    // held on neutral (its config removed, no fallback): neutral again, nobody's
+    let held = Active {
+        user_config: "gone".into(),
+        dir: NEUTRAL_DIR.into(),
+        caps: Caps::new(),
+        held: true,
+        ..first.clone()
+    };
+    write_active(&p.root, &held).unwrap();
+    switch_to(
+        &p.root,
+        &p.public_dir,
+        &p.var_dir,
+        &rendered_of(&index, "teacher"),
+        Some(20000),
+    )
+    .unwrap();
+    switched("gone", false, &open(&p, &policy(), STUDENT, 20000));
+    assert_switched_to(&p, NEUTRAL_DIR);
+    // the marker's config cannot be switched in: refused, neutral
+    write_active(&p.root, &first).unwrap();
+    switch_to(
+        &p.root,
+        &p.public_dir,
+        &p.var_dir,
+        &rendered_of(&index, "teacher"),
+        Some(20000),
+    )
+    .unwrap();
+    fs::remove_file(chrome_of(&p, &dir_of("primary"))).unwrap();
+    assert_eq!(open(&p, &policy(), STUDENT, 20000), OpenOutcome::Refused);
+    assert_switched_to(&p, NEUTRAL_DIR);
 }

@@ -276,7 +276,9 @@ pub enum OpenOutcome {
 /// then writes the [`Active`] marker. Reads only the rules file and (for a school account, when the issuer sends facts)
 /// the facts file; never the bundle. Facts that are missing, an error or stale only disable the rules with fact
 /// conditions (design §5); a config that cannot be switched in gives the fallback, and a fallback that cannot be switched
-/// in refuses the login after a best-effort switch to neutral. Reasons go to stderr (the journal) and the marker.
+/// in refuses the login after a best-effort switch to neutral. Reasons go to stderr (the journal) in full; the marker
+/// (and through it the status report) gets only fixed categories and config ids, never the login name or fact values
+/// (design §4.10). A second open of the same person switches the marker's config in again.
 pub fn on_open(
     root: &Path,
     paths: &SysPaths,
@@ -310,11 +312,55 @@ pub(crate) fn on_open_at(
             return OpenOutcome::Refused;
         }
     };
+    let switch =
+        |r: &Rendered| switch_to(&paths.root, &paths.public_dir, &paths.var_dir, r, Some(uid));
+    let refuse = |why: String| {
+        log(&format!("{why}; denied"));
+        let neutral = Rendered {
+            dir: NEUTRAL_DIR.into(),
+            caps: Caps::new(),
+            home: HomeMode::Tidy,
+        };
+        if let Err(e) = switch_to(
+            &paths.root,
+            &paths.public_dir,
+            &paths.var_dir,
+            &neutral,
+            None,
+        ) {
+            log(&format!("switching back to neutral: {e:#}"));
+        }
+        OpenOutcome::Refused
+    };
     // Backstop of pam-check's one-session rule: another person's session, or any session being closed, is not touched.
     match active_marker(root) {
         Ok(None) => {}
         Ok(Some(mut a)) if a.uid == uid && a.state == ActiveState::Open => {
-            // A second session of the same person keeps the first one's config: nothing is resolved or switched again.
+            // A second session of the same person keeps the first one's config: nothing is resolved again. Its files are
+            // switched in again, though: a revert that was only half done (neutral switched in, the marker left) must
+            // not leave the session on other files than the marker and the report name.
+            let index = read_index(&paths.var_dir);
+            let target = if a.dir == NEUTRAL_DIR {
+                index.as_ref().map(|i| (i.neutral.clone(), None))
+            } else {
+                index
+                    .as_ref()
+                    .and_then(|i| i.configs.get(&a.user_config))
+                    .filter(|r| r.dir == a.dir)
+                    .map(|r| (r.clone(), Some(uid)))
+            };
+            let Some((r, owner)) = target else {
+                return refuse(format!(
+                    "the session's user config {:?} was not rendered",
+                    a.user_config
+                ));
+            };
+            if let Err(e) = switch_to(&paths.root, &paths.public_dir, &paths.var_dir, &r, owner) {
+                return refuse(format!(
+                    "switching to the session's user config {:?} again failed: {e:#}",
+                    a.user_config
+                ));
+            }
             // The grace of the agent's watch starts again (R9): this login is not in logind yet either, and the first
             // session may be gone already.
             a.opened_at = now.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
@@ -322,7 +368,7 @@ pub(crate) fn on_open_at(
             if let Err(e) = write_active(root, &a) {
                 log(&format!("restarting the session's grace failed: {e:#}"));
             }
-            let home = read_index(&paths.var_dir)
+            let home = index
                 .and_then(|i| i.configs.get(&a.user_config).map(|r| r.home))
                 .unwrap_or(HomeMode::Keep);
             return OpenOutcome::Switched {
@@ -345,26 +391,6 @@ pub(crate) fn on_open_at(
             return OpenOutcome::Refused;
         }
     }
-    let switch =
-        |r: &Rendered| switch_to(&paths.root, &paths.public_dir, &paths.var_dir, r, Some(uid));
-    let refuse = |why: String| {
-        log(&format!("{why}; denied"));
-        let neutral = Rendered {
-            dir: NEUTRAL_DIR.into(),
-            caps: Caps::new(),
-            home: HomeMode::Tidy,
-        };
-        if let Err(e) = switch_to(
-            &paths.root,
-            &paths.public_dir,
-            &paths.var_dir,
-            &neutral,
-            None,
-        ) {
-            log(&format!("switching back to neutral: {e:#}"));
-        }
-        OpenOutcome::Refused
-    };
     let Some(index) = read_index(&paths.var_dir) else {
         return refuse("the user config rules are missing or unreadable".into());
     };
@@ -378,7 +404,9 @@ pub(crate) fn on_open_at(
                 None
             }
             FactsOutcome::Error(e) => {
-                reasons.push(format!("the issuer facts are unusable: {e}"));
+                // The text may carry the login name or fact values: the journal only (spec §4.10)
+                log(&format!("the issuer facts are unusable: {e}"));
+                reasons.push("the issuer facts are unusable".to_string());
                 None
             }
             FactsOutcome::Stale => {
@@ -395,7 +423,10 @@ pub(crate) fn on_open_at(
     match index.configs.get(&chosen) {
         Some(r) => match switch(r) {
             Ok(()) => picked = Some((chosen.clone(), r)),
-            Err(e) => reasons.push(format!("switching to {chosen:?} failed: {e:#}")),
+            Err(e) => {
+                log(&format!("switching to {chosen:?} failed: {e:#}"));
+                reasons.push(format!("switching to {chosen:?} failed"));
+            }
         },
         None => reasons.push(format!("the user config {chosen:?} was not rendered")),
     }
