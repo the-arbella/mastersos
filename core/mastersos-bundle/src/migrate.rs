@@ -28,7 +28,9 @@ pub enum MigrateError {
     /// when there is no `default` Group (nothing to name as `[user] fallback`), and when a .deb
     /// id of the `default` Group's Config is defined differently (or as a kiosk app) by another
     /// Group's Config: format 3 installs the fallback's apps on every Device (design §4.6), so
-    /// the two would clash (`user_deb_conflict`).
+    /// the two would clash (`user_deb_conflict`). It also carries the internal failures, which
+    /// would be a migrate bug: the new tables cannot be serialized, or the written text does not
+    /// parse back.
     #[error("the settings cannot be written as format 3: {0}")]
     Invalid(String),
 }
@@ -168,7 +170,8 @@ fn split(c: &ConfigLayer, d: &Defaults, legacy: bool) -> (DeviceConfigLayer, Use
             .cloned()
             .collect()
     };
-    // Legacy `mode = "browser"`: no Flatpak and no non-kiosk .deb (design §6).
+    // Legacy `mode = "browser"`: no Flatpak and no .deb at all, kiosk ones included, on either
+    // side (design §6, ruling R18): today's agent runs no .deb app for it. Kiosk apps stay.
     let installs = !c.legacy_browser;
     let device = DeviceConfigLayer {
         id: c.id.clone(),
@@ -186,7 +189,7 @@ fn split(c: &ConfigLayer, d: &Defaults, legacy: bool) -> (DeviceConfigLayer, Use
                 .apps
                 .deb
                 .iter()
-                .filter(|(_, a)| a.kiosk)
+                .filter(|(_, a)| installs && a.kiosk)
                 .map(|(k, a)| (k.clone(), a.clone()))
                 .collect(),
             ubuntu_mirror: c.apps.ubuntu_mirror.clone(),
@@ -524,8 +527,8 @@ mod tests {
     use super::*;
     use crate::testutil::{legacy_spec_example, spec_example, spec_example_v3};
     use crate::{
-        user_config, Config, DeviceFacts, Interface, Kind, Manifest, UserConfig, UserRules,
-        V3Manifest, When,
+        install_union, user_config, Config, DeviceFacts, Interface, Kind, Manifest, UserConfig,
+        UserRules, V3Manifest, When,
     };
 
     const KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
@@ -689,6 +692,11 @@ config = "student"
         c.apps.deb.retain(|_, a| a.kiosk);
         c.chrome_policy.clear();
         c.scripts.retain(|s| s.when == When::Apply);
+        // The agent runs no .deb app at all, kiosk ones included, for a legacy browser Config
+        // (ruling R18); the migrated device config writes none.
+        if c.legacy_browser {
+            c.apps.deb.clear();
+        }
         c.legacy_browser = false;
         c
     }
@@ -699,6 +707,7 @@ config = "student"
 
     #[test]
     fn migrate_preserves_every_group() {
+        let mut browser_debs_checked = false;
         for text in [
             example_v2(),
             example_v2_with_defaults_and_drop(),
@@ -715,6 +724,13 @@ config = "student"
                 let o = old.effective_of_group(&g.id).unwrap();
                 let n = new.effective_of_group(&g.id).unwrap();
                 assert_eq!(device_part(&o), device_part(&n), "{}\n{out}", g.id);
+                if o.legacy_browser {
+                    // `device_part` hides it: the migrated device config itself has no .deb.
+                    browser_debs_checked |= !o.apps.deb.is_empty();
+                    let written = new.config_of_group(&g.id).unwrap();
+                    assert!(written.apps.deb.is_empty(), "{}\n{out}", g.id);
+                    assert!(n.apps.deb.is_empty(), "{}\n{out}", g.id);
+                }
                 // A legacy `mode = "browser"` Group becomes preset learning without Flatpak or
                 // non-kiosk .deb apps (design §6); `UserConfig::implied` already leaves those out
                 // and only marks it `legacy_browser`, which a format 3 user config never is.
@@ -735,6 +751,10 @@ config = "student"
                 }
             }
         }
+        assert!(
+            browser_debs_checked,
+            "no legacy browser Group with .deb apps was checked"
+        );
     }
 
     #[test]
@@ -846,6 +866,32 @@ config = "student"
         assert!(doc.user_config.iter().all(|c| c.home.is_none()));
     }
 
+    /// R9: a non-default Group installs its own Config's Flatpaks and non-kiosk .deb apps plus
+    /// the fallback's (the default Group's Config), in that order.
+    #[test]
+    fn install_set_is_own_plus_fallback() {
+        let text = example_v2_with_defaults_and_drop();
+        let old = Manifest::parse(&text).unwrap();
+        let new = Manifest::parse(&to_format3(&text).unwrap()).unwrap();
+        let fallback = old.effective_of_group("default").unwrap();
+        for g in old.groups.iter().filter(|g| g.id != "default") {
+            let own = old.effective_of_group(&g.id).unwrap();
+            let mut flatpak = own.apps.flatpak.clone();
+            for f in &fallback.apps.flatpak {
+                if !flatpak.contains(f) {
+                    flatpak.push(f.clone());
+                }
+            }
+            let mut deb: std::collections::BTreeMap<_, _> = fallback.apps.deb.clone();
+            deb.extend(own.apps.deb.clone());
+            deb.retain(|_, a| !a.kiosk);
+            assert_eq!(install_union(&new, &g.id), (flatpak, deb), "{}", g.id);
+        }
+        let (flatpak, deb) = install_union(&new, "lab");
+        assert_eq!(flatpak, ["org.libreoffice.LibreOffice", "org.gimp.GIMP"]);
+        assert_eq!(deb.keys().collect::<Vec<_>>(), ["exam"]);
+    }
+
     #[test]
     fn keys_land_in_their_layer() {
         let doc = v3(&to_format3(&example_v2_with_defaults_and_drop()).unwrap());
@@ -921,9 +967,9 @@ config = "student"
         let cart_u = &doc.user_config[1];
         assert_eq!(cart_u.id, "cart-g3");
         assert_eq!(cart_u.preset, Some(crate::Preset::Learning));
-        // Browser mode: no Flatpak and no non-kiosk .deb; the kiosk .deb stays on the device.
+        // Browser mode: no Flatpak and no .deb on either side, the kiosk one included (R18).
         assert!(cart_u.apps.flatpak.is_empty() && cart_u.apps.deb.is_empty());
-        assert_eq!(cart_d.apps.deb.keys().collect::<Vec<_>>(), ["quiz"]);
+        assert!(cart_d.apps.deb.is_empty());
         assert_eq!(cart_d.downloads.len(), 1);
         let teacher_u = &doc.user_config[0];
         assert_eq!(teacher_u.preset, Some(crate::Preset::Full));
