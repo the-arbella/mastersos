@@ -95,6 +95,27 @@ pub fn is_config_dir(name: &str) -> bool {
         })
 }
 
+/// Whether the user layer is on for `pam-session` and `pam-check`: the policy says format 3, or its state is on disk (the rules file
+/// or the session marker, also when the marker cannot be read). State without a format 3 policy (an unreadable
+/// policy file, or a switch to format 1/2 before the agent's cleanup) fails closed.
+pub(crate) fn user_layer_on(
+    root: &Path,
+    paths: &crate::system::SysPaths,
+    policy: Option<&crate::system::login::LoginPolicy>,
+) -> bool {
+    if policy.is_some_and(|p| p.user_layer) || switch::marker_present(root) {
+        return true;
+    }
+    let index = paths
+        .var_dir
+        .join(render::STATE_SUB)
+        .join(render::INDEX_FILE);
+    match std::fs::symlink_metadata(&index) {
+        Ok(_) => true,
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -129,10 +129,20 @@ pub fn gettext_cmd(locale: &Locale, msgid: &str) -> Cmd {
 
 /// `msgid` translated into `locale` (see the module documentation); `msgid` itself when that is not possible.
 pub fn text(runner: &dyn Runner, locale: Option<&Locale>, msgid: &str) -> String {
+    text_within(runner, locale, msgid, TIMEOUT)
+}
+
+/// [`text`] with its own bound on the `gettext` call (English when it runs out).
+pub fn text_within(
+    runner: &dyn Runner,
+    locale: Option<&Locale>,
+    msgid: &str,
+    timeout: Duration,
+) -> String {
     let Some(locale) = locale else {
         return msgid.to_string();
     };
-    match runner.run(&gettext_cmd(locale, msgid)) {
+    match runner.run(&gettext_cmd(locale, msgid).timeout(timeout)) {
         Ok(o) if o.code == 0 => {
             let t = o.stdout.trim_end_matches('\n');
             if t.is_empty() || t.matches("%s").count() != msgid.matches("%s").count() {

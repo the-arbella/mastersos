@@ -518,7 +518,7 @@ pub fn pam_session_main() -> ExitCode {
     let root = Path::new("/");
     let paths = crate::system::SysPaths::default();
     // M2: user layer state on disk counts even when the policy cannot be read (fail closed)
-    let layer_on = user_layer_on(root, &paths, policy.as_ref());
+    let layer_on = crate::user_layer::user_layer_on(root, &paths, policy.as_ref());
     let action = close_under_layer(action, &pam_type, &user, policy.as_ref(), layer_on);
     let layer = |phase: LayerPhase| {
         let mut out = std::io::stdout().lock();
@@ -640,28 +640,6 @@ impl LayerDecision {
 
 fn exit_of(d: &LayerDecision) -> ExitCode {
     ExitCode::from(d.exit_status().unwrap_or(0))
-}
-
-/// Whether the user layer is on for `pam-session`: the policy says format 3, or its state is on disk (the rules file
-/// or the session marker, also when the marker cannot be read). State without a format 3 policy (an unreadable
-/// policy file, or a switch to format 1/2 before the agent's cleanup) fails closed.
-pub(crate) fn user_layer_on(
-    root: &Path,
-    paths: &crate::system::SysPaths,
-    policy: Option<&LoginPolicy>,
-) -> bool {
-    use crate::user_layer::{render, switch};
-    if user_layer(policy) || switch::marker_present(root) {
-        return true;
-    }
-    let index = paths
-        .var_dir
-        .join(render::STATE_SUB)
-        .join(render::INDEX_FILE);
-    match std::fs::symlink_metadata(&index) {
-        Ok(_) => true,
-        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
-    }
 }
 
 /// The close_session of a human account marks the session closing also when the user layer is on only through its
@@ -2021,9 +1999,9 @@ mod tests {
         let fmt3 = tests::policy();
         let fmt2 = kpol();
         // The rendered rules alone
-        assert!(user_layer_on(&p.root, &p, None));
-        assert!(user_layer_on(&p.root, &p, Some(&fmt2)));
-        assert!(user_layer_on(&p.root, &p, Some(&fmt3)));
+        assert!(crate::user_layer::user_layer_on(&p.root, &p, None));
+        assert!(crate::user_layer::user_layer_on(&p.root, &p, Some(&fmt2)));
+        assert!(crate::user_layer::user_layer_on(&p.root, &p, Some(&fmt3)));
         let r = FakeRunner::new();
         for policy in [None, Some(&fmt2)] {
             let open = LayerPhase::Open {
@@ -2038,12 +2016,12 @@ mod tests {
         assert!(read_active(&p.root).is_none());
         // A marker alone (the rules already removed)
         fs::remove_file(p.var_dir.join("user-layer/index.json")).unwrap();
-        assert!(!user_layer_on(&p.root, &p, None));
-        assert!(!user_layer_on(&p.root, &p, Some(&fmt2)));
+        assert!(!crate::user_layer::user_layer_on(&p.root, &p, None));
+        assert!(!crate::user_layer::user_layer_on(&p.root, &p, Some(&fmt2)));
         other_marker(&p, ActiveState::Open);
-        assert!(user_layer_on(&p.root, &p, None));
+        assert!(crate::user_layer::user_layer_on(&p.root, &p, None));
         fs::write(p.root.join(RUN_DIR).join(ACTIVE_FILE), "{").unwrap();
-        assert!(user_layer_on(&p.root, &p, Some(&fmt2)));
+        assert!(crate::user_layer::user_layer_on(&p.root, &p, Some(&fmt2)));
         other_marker(&p, ActiveState::Open);
         // A human's close under such state becomes a close; a listed kiosk account and no state stay a no-op
         for policy in [None, Some(&fmt2)] {

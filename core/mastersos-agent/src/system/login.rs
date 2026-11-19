@@ -401,18 +401,17 @@ pub fn decide(
         return Decision::Allow;
     }
     // One human session at a time (user layer design §4.7): another uid's marker (open or closing), a closing marker of
-    // the same uid, and a marker that cannot be read all refuse; no admin override. Format 2 policies ignore the marker.
-    if policy.is_some_and(|p| p.user_layer) {
-        let busy = match marker {
-            Marker::Absent => false,
-            Marker::Unreadable => true,
-            Marker::Present(a) => {
-                uid != Some(a.uid) || a.state != crate::user_layer::ActiveState::Open
-            }
-        };
-        if busy {
-            return Decision::Deny(DENY_SESSION_BUSY);
-        }
+    // the same uid, and a marker that cannot be read all refuse; no admin override. The marker itself is the gate, not the
+    // policy: state on disk with a policy that is not format 3 (or none) fails closed, because pam-session guards only
+    // GDM and this is the only gate of tty login, sshd and su. Without a marker (the only case of a Device that never
+    // used the user layer) nothing changes. `user_layer_on` is true whenever a marker exists, so this is its busy part.
+    let busy = match marker {
+        Marker::Absent => false,
+        Marker::Unreadable => true,
+        Marker::Present(a) => uid != Some(a.uid) || a.state != crate::user_layer::ActiveState::Open,
+    };
+    if busy {
+        return Decision::Deny(DENY_SESSION_BUSY);
     }
     if class == UserClass::Guest && !GUEST_SERVICES.contains(&service) {
         return Decision::Deny(DENY_GUEST_SERVICE);
@@ -1342,13 +1341,31 @@ fn env_str(name: &str) -> Option<String> {
     std::env::var_os(name)?.into_string().ok()
 }
 
+/// pam-session's whole budget is 5 s: the busy message's translation gets one.
+const BUSY_GETTEXT_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// What a read of the marker means for [`decide`]: a marker that cannot be read fails closed.
+fn marker_of(found: &Result<Option<crate::user_layer::Active>>) -> Marker<'_> {
+    match found {
+        Ok(None) => Marker::Absent,
+        Ok(Some(a)) => Marker::Present(a),
+        Err(_) => Marker::Unreadable,
+    }
+}
+
 /// The busy refusal in the system language.
 ///
 /// The language is the system's (`<root>/etc/locale.conf`; the root process's own `LANG` is not the user's). English
-/// when it cannot be translated. Runs `gettext` only for a non-English system language.
+/// when it cannot be translated. Runs `gettext` (bounded by [`BUSY_GETTEXT_TIMEOUT`]) for any locale except C, POSIX
+/// and an empty one.
 pub(crate) fn busy_message(runner: &dyn crate::runner::Runner, root: &Path) -> String {
     let locale = crate::i18n::system_language(None, root);
-    crate::i18n::text(runner, locale.as_ref(), DENY_SESSION_BUSY)
+    crate::i18n::text_within(
+        runner,
+        locale.as_ref(),
+        DENY_SESSION_BUSY,
+        BUSY_GETTEXT_TIMEOUT,
+    )
 }
 
 /// 拒绝：原因打到 stdout（pam_exec 的 `stdout` 交给 GDM 显示），退出 1。写失败也照样拒绝。
@@ -1376,13 +1393,15 @@ pub fn pam_check_main(args: impl Iterator<Item = OsString>) -> ExitCode {
         None
     };
     let (managed, policy) = load_policy(&paths);
-    let marker = crate::user_layer::active_marker(Path::new("/"));
-    let marker = match &marker {
-        Ok(None) => Marker::Absent,
-        Ok(Some(a)) => Marker::Present(a),
-        Err(_) => Marker::Unreadable,
-    };
-    match decide(&service, managed, policy.as_ref(), &user, uid, marker) {
+    let found = crate::user_layer::active_marker(Path::new("/"));
+    match decide(
+        &service,
+        managed,
+        policy.as_ref(),
+        &user,
+        uid,
+        marker_of(&found),
+    ) {
         Decision::Allow => ExitCode::SUCCESS,
         Decision::Deny(DENY_SESSION_BUSY) => {
             deny(&busy_message(&crate::runner::RealRunner, Path::new("/")))
@@ -1805,18 +1824,55 @@ client_id = "laptops"
     }
 
     #[test]
-    fn format2_policy_ignores_marker() {
+    fn format2_policy_without_layer_state_is_unaffected() {
+        let p = all();
+        assert!(!p.user_layer);
+        for svc in ["login", "sshd", "su", GDM] {
+            assert_eq!(
+                busy_for(svc, &p, "alice", Some(1001), Marker::Absent),
+                Decision::Allow,
+                "{svc}"
+            );
+        }
+    }
+
+    #[test]
+    fn stale_marker_refuses_even_with_format2_policy() {
         let a = active(2000, crate::user_layer::ActiveState::Open);
         let p = all();
         assert!(!p.user_layer);
+        for svc in ["login", "sshd", "su", GDM] {
+            for m in [Marker::Present(&a), Marker::Unreadable] {
+                assert_eq!(
+                    busy_for(svc, &p, "alice", Some(1001), m),
+                    Decision::Deny(DENY_SESSION_BUSY),
+                    "{svc} {m:?}"
+                );
+            }
+        }
+        // no policy at all (unmanaged)
         assert_eq!(
-            busy_for("login", &p, "alice", Some(1001), Marker::Present(&a)),
-            Decision::Allow
+            super::decide(
+                "login",
+                false,
+                None,
+                "alice",
+                Some(1001),
+                Marker::Unreadable
+            ),
+            Decision::Deny(DENY_SESSION_BUSY)
         );
-        assert_eq!(
-            busy_for("login", &p, "alice", Some(1001), Marker::Unreadable),
-            Decision::Allow
-        );
+    }
+
+    #[test]
+    fn marker_reads_map_to_markers() {
+        let a = active(2000, crate::user_layer::ActiveState::Open);
+        assert!(matches!(marker_of(&Ok(None)), Marker::Absent));
+        assert!(matches!(marker_of(&Ok(Some(a.clone()))), Marker::Present(x) if x.uid == 2000));
+        assert!(matches!(
+            marker_of(&Err(anyhow::anyhow!("unreadable"))),
+            Marker::Unreadable
+        ));
     }
 
     #[test]
