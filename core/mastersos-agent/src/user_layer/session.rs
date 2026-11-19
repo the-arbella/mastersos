@@ -150,6 +150,12 @@ pub(crate) fn watch_at(
         // Gone meanwhile: the next round looks at a deferred cleanup
         return Ok(WatchOutcome::Idle);
     };
+    // A format 1/2 apply deferred its cleanup for this session: nothing may stay lifted (a lift that slipped in before
+    // the deferral is dropped within one round)
+    if exec_block::lifts_recorded(paths) && deferred_cleanup_due(paths) {
+        exec_block::drop_lifts(paths, runner)
+            .context("dropping a lift while the settings format 1/2 cleanup waits")?;
+    }
     // What logind said is about `before`'s uid; a marker that changed meanwhile waits for the next round
     if a.uid != before.uid {
         return Ok(WatchOutcome::StillOpen);

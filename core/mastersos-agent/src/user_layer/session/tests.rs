@@ -830,3 +830,30 @@ fn stale_deferral_under_format3_is_dropped() {
     assert!(!deferral(&p).exists());
     assert!(p.var_dir.join(STATE_SUB).join("index.json").exists());
 }
+
+/// A lift left while a format 1/2 apply deferred its cleanup for a session still signed in is dropped by the next
+/// round of the watch (the exec-block follows the mode word again); the session stays.
+#[test]
+fn watch_drops_a_stray_lift_while_the_cleanup_is_deferred() {
+    use crate::system::exec_block::tests::is_stub;
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Open, true);
+    exec_block::apply_lifted(&p, &r, &a.caps).unwrap();
+    assert!(!is_stub(&p.root, "/usr/libexec/gnome-terminal-server"));
+    defer_cleanup(&p);
+    list(
+        &r,
+        &[
+            greeter(),
+            row("3", UID, Some("seat0"), "user", Some("active")),
+        ],
+    );
+    assert_eq!(
+        watch_at(&p, &r, at(T0 + 1)).unwrap(),
+        WatchOutcome::StillOpen
+    );
+    assert!(!lifted_file(&p).exists());
+    assert!(is_stub(&p.root, "/usr/libexec/gnome-terminal-server"));
+    assert_eq!(read_active(&p.root).unwrap(), a);
+    assert!(deferral(&p).exists());
+}

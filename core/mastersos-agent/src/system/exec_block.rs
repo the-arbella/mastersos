@@ -467,6 +467,11 @@ pub fn apply_lifted(paths: &SysPaths, runner: &dyn Runner, lifted: &Caps) -> Res
     ensured
 }
 
+/// Whether [`LIFTED_FILE`] records any lifted capability (missing, unreadable or not understood: none).
+pub fn lifts_recorded(paths: &SysPaths) -> bool {
+    !read_lifted_file(paths).is_empty()
+}
+
 /// Forgets every lift of the user layer (its format 3 state goes under format 1/2) and converges to the mode word on
 /// disk, under the lock: [`LIFTED_FILE`] removed, then a blocked word mounts every stub and an open one (a format 1/2
 /// `full` Group) lifts everything. A mode file that is not understood blocks everything; no state changes no mount.
