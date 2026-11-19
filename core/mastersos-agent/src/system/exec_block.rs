@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{bail, Context, Result};
+use mastersos_bundle::{Capability, Caps, ALL_CAPS};
 
 use super::SysPaths;
 use crate::runner::{run_ok, Cmd, RealRunner, Runner};
@@ -35,22 +36,67 @@ use crate::runner::{run_ok, Cmd, RealRunner, Runner};
 pub const STUB: &str = "/usr/lib/mastersos/interface-denied";
 
 /// 锁住的会话里堵住的可执行文件：终端、文件管理器、设置。镜像里没有的跳过（换了终端的发行版也不出错）。
+/// It is the concatenation of the three capability groups below (checked by a test).
 pub const TARGETS: &[&str] = &[
-    // gnome-terminal：客户端（Debian 把真身叫 .real，/usr/bin/gnome-terminal 是包装脚本）与真正开窗口的服务端
     "/usr/bin/gnome-terminal",
     "/usr/bin/gnome-terminal.real",
     "/usr/bin/gnome-terminal.wrapper",
     "/usr/libexec/gnome-terminal-server",
-    // 新的 GNOME 终端
     "/usr/bin/ptyxis",
     "/usr/libexec/ptyxis-agent",
     "/usr/bin/kgx",
     "/usr/bin/xterm",
-    // 文件管理器
     "/usr/bin/nautilus",
-    // 设置
     "/usr/bin/gnome-control-center",
 ];
+
+/// Terminals (capability `terminal`). gnome-terminal：客户端（Debian 把真身叫 .real，/usr/bin/gnome-terminal
+/// 是包装脚本）与真正开窗口的服务端；新的 GNOME 终端 ptyxis、kgx；xterm。
+pub const TERMINAL_TARGETS: &[&str] = &[
+    "/usr/bin/gnome-terminal",
+    "/usr/bin/gnome-terminal.real",
+    "/usr/bin/gnome-terminal.wrapper",
+    "/usr/libexec/gnome-terminal-server",
+    "/usr/bin/ptyxis",
+    "/usr/libexec/ptyxis-agent",
+    "/usr/bin/kgx",
+    "/usr/bin/xterm",
+];
+/// The file manager (capability `file_manager`).
+pub const FILE_MANAGER_TARGETS: &[&str] = &["/usr/bin/nautilus"];
+/// The control center (capability `settings`).
+pub const SETTINGS_TARGETS: &[&str] = &["/usr/bin/gnome-control-center"];
+
+/// The exec-block target group a capability lifts; the other capabilities lift nothing here.
+fn group(cap: Capability) -> &'static [&'static str] {
+    match cap {
+        Capability::Terminal => TERMINAL_TARGETS,
+        Capability::FileManager => FILE_MANAGER_TARGETS,
+        Capability::Settings => SETTINGS_TARGETS,
+        _ => &[],
+    }
+}
+
+/// The targets to block while `lifted` capabilities are lifted: all minus the lifted groups.
+pub fn targets_for(lifted: &Caps) -> Vec<&'static str> {
+    TARGETS
+        .iter()
+        .copied()
+        .filter(|t| !lifted.iter().any(|c| group(*c).contains(t)))
+        .collect()
+}
+
+fn all_caps() -> Caps {
+    ALL_CAPS.into_iter().collect()
+}
+
+fn caps_for(block: bool) -> Caps {
+    if block {
+        Caps::new()
+    } else {
+        all_caps()
+    }
+}
 
 /// 同一路径上最多卸几层（并发的两次应用可能叠挂两层）。
 pub const MAX_LAYERS: usize = 4;
@@ -92,6 +138,19 @@ fn present(p: &Path) -> bool {
 /// 收敛到期望的状态：`block` 时 [`TARGETS`] 里镜像有的每一个都解析到桩，否则没有一个解析到桩。已经是期望的状态时
 /// 什么命令都不跑。逐个目标做，某一个失败不挡其余的；失败的汇总成一个错误（只有路径与退出码）。
 pub fn ensure(root: &Path, runner: &dyn Runner, block: bool) -> Result<()> {
+    ensure_set(root, runner, &caps_for(block), true)
+}
+
+/// Like [`ensure`] for a lifted set: the targets of [`targets_for`] resolve to the stub, the rest
+/// do not. With `unbind_lifted` false the lifted targets are left as they are (never lifts).
+pub fn ensure_set(
+    root: &Path,
+    runner: &dyn Runner,
+    lifted: &Caps,
+    unbind_lifted: bool,
+) -> Result<()> {
+    let blocked = targets_for(lifted);
+    let block = !blocked.is_empty();
     let path = under(root, STUB);
     let stub = if present(&path) {
         Some(std::fs::read(&path).with_context(|| format!("read {STUB}"))?)
@@ -104,8 +163,9 @@ pub fn ensure(root: &Path, runner: &dyn Runner, block: bool) -> Result<()> {
     let mut errs = Vec::new();
     for t in TARGETS {
         let p = under(root, t);
-        let r = match (&stub, block) {
+        let r = match (&stub, blocked.contains(t)) {
             (Some(s), true) => bind(runner, &p, t, s),
+            (Some(_), false) if !unbind_lifted => Ok(()),
             (Some(s), false) => unbind(runner, &p, t, s),
             // 没有桩就不可能读出桩（旧镜像、或桩被换掉了）；没有可卸的。
             (None, _) => Ok(()),
@@ -217,11 +277,24 @@ fn lock_bounded(root: &Path, wait: std::time::Duration) -> Result<Option<std::os
     }
 }
 
+#[cfg(test)]
 pub(crate) fn write_mode(paths: &SysPaths, block: bool) -> Result<()> {
+    write_lifted_mode(paths, &caps_for(block))
+}
+
+/// Writes the lifted set. Nothing lifted and everything lifted keep the old words (see
+/// [`MODE_FILE`]); anything in between is `lifted:<cap>,<cap>` in `Caps` order.
+fn write_lifted_mode(paths: &SysPaths, lifted: &Caps) -> Result<()> {
     let dir = super::var_dir(paths)?;
-    // The old vocabulary on purpose: see MODE_FILE.
-    let text: &[u8] = if block { b"browser\n" } else { b"desktop\n" };
-    crate::safefs::write_at(&dir, MODE_FILE, text, 0o600)
+    let text = if lifted.is_empty() {
+        "browser\n".to_string()
+    } else if *lifted == all_caps() {
+        "desktop\n".to_string()
+    } else {
+        let names: Vec<&str> = lifted.iter().map(|c| c.as_str()).collect();
+        format!("lifted:{}\n", names.join(","))
+    };
+    crate::safefs::write_at(&dir, MODE_FILE, text.as_bytes(), 0o600)
         .with_context(|| format!("write {MODE_FILE}"))?;
     Ok(())
 }
@@ -255,20 +328,65 @@ pub fn session_mode_locked(public_dir: &Path) -> bool {
 /// 盘上的模式：`Some(true)` 挡住（`learning`，或旧的 `browser`）、`Some(false)` 放开（`full`，或旧的 `desktop`）；
 /// `var_dir` 或文件不存在、内容读不懂都是 `None`。不建目录。
 pub fn read_mode(paths: &SysPaths) -> Result<Option<bool>> {
+    Ok(read_parsed(paths)?.map(|m| match m {
+        Some(l) => l != all_caps(),
+        None => true,
+    }))
+}
+
+/// Parses the mode file: `Some(caps)` for a readable value, `None` for content that is not understood.
+/// A `lifted:` list with an unknown name is understood as an empty set (block everything), never
+/// partially trusted.
+fn parse_mode(bytes: &[u8]) -> Option<Caps> {
+    match bytes {
+        b"learning\n" | b"browser\n" | b"block\n" => return Some(Caps::new()),
+        b"full\n" | b"desktop\n" | b"unblock\n" => return Some(all_caps()),
+        _ => {}
+    }
+    let list = std::str::from_utf8(bytes)
+        .ok()?
+        .strip_prefix("lifted:")?
+        .strip_suffix('\n')?;
+    let mut caps = Caps::new();
+    if list.is_empty() {
+        return Some(caps);
+    }
+    for name in list.split(',') {
+        match ALL_CAPS.into_iter().find(|c| c.as_str() == name) {
+            Some(c) => {
+                caps.insert(c);
+            }
+            None => return Some(Caps::new()),
+        }
+    }
+    Some(caps)
+}
+
+/// `Ok(None)`: no state. `Ok(Some(None))`: content not understood. `Ok(Some(Some(caps)))`: the set.
+#[allow(clippy::option_option)]
+fn read_parsed(paths: &SysPaths) -> Result<Option<Option<Caps>>> {
     let dir = match crate::safefs::open_abs_dir(&paths.var_dir, false) {
         Ok(d) => d,
         Err(e) if crate::apply::is_not_found(&e) => return Ok(None),
         Err(e) => return Err(e),
     };
-    Ok(match crate::safefs::read_at(&dir, MODE_FILE)?.as_deref() {
-        Some(b"learning\n" | b"browser\n") => Some(true),
-        Some(b"full\n" | b"desktop\n") => Some(false),
-        Some(_) => {
-            log::warn!("cannot understand the contents of {MODE_FILE}; doing nothing");
-            None
+    Ok(match crate::safefs::read_at(&dir, MODE_FILE)? {
+        Some(bytes) => {
+            let m = parse_mode(&bytes);
+            if m.is_none() {
+                log::warn!("cannot understand the contents of {MODE_FILE}; doing nothing");
+            }
+            Some(m)
         }
         None => None,
     })
+}
+
+/// The capabilities lifted on disk: old `block`/`browser`/`learning` are none, `unblock`/`desktop`/`full`
+/// all, `lifted:<cap>,<cap>` the list. Missing state is `None`; content that is not understood is
+/// `Some(empty)` (block everything).
+pub fn read_lifted(paths: &SysPaths) -> Result<Option<Caps>> {
+    Ok(read_parsed(paths)?.map(|m| m.unwrap_or_default()))
 }
 
 /// `desktop` 步骤用：持锁，先把模式落盘、再收敛挂载。之后不论谁（sysext 刷新后的 `exec-block`）在什么时候跑，
@@ -277,9 +395,14 @@ pub fn read_mode(paths: &SysPaths) -> Result<Option<bool>> {
 /// 模式写不进去时（复审 T13 R2）这一轮照样按要的模式收敛，再把写失败报出来：锁住的会话不因磁盘满之类放开。
 /// 之后的 `exec-block` 读到的还是旧模式，直到某一轮写成功——错误在回报里看得见。
 pub fn apply(paths: &SysPaths, runner: &dyn Runner, block: bool) -> Result<()> {
+    apply_lifted(paths, runner, &caps_for(block))
+}
+
+/// [`apply`] for a lifted set: under the lock, write the mode, then converge to [`targets_for`].
+pub fn apply_lifted(paths: &SysPaths, runner: &dyn Runner, lifted: &Caps) -> Result<()> {
     let _lock = lock(&paths.root)?;
-    let written = write_mode(paths, block);
-    let ensured = ensure(&paths.root, runner, block);
+    let written = write_lifted_mode(paths, lifted);
+    let ensured = ensure_set(&paths.root, runner, lifted, true);
     written.context("record the exec-block mode")?;
     ensured
 }
@@ -309,18 +432,18 @@ pub(crate) fn sync_with(
         );
         eprintln!("exec-block: did not get the lock; converging without it");
     }
-    let Some(block) = read_mode(paths)? else {
+    // Not understood content does nothing; `read_lifted` would block everything instead.
+    let Some(Some(lifted)) = read_parsed(paths)? else {
         return Ok(None);
     };
+    let block = lifted != all_caps();
     // 不持锁时只往「挡住」的方向收敛：持锁的一方可能正在切换模式，这时读到的「放开」可能已经过时，
     // 照它卸掉桩就是在锁住的会话里放开（fail open）。挂上多余的桩只是暂时挡住，持锁的一方做完会收敛回来。
-    if _lock.is_none() && !block {
-        log::warn!(
-            "exec-block: no lock and the mode on disk is full; leaving the stubs to the holder"
-        );
-        return Ok(Some(block));
+    // Lifted groups are therefore left alone, only the blocked ones are ensured.
+    if _lock.is_none() && !lifted.is_empty() {
+        log::warn!("exec-block: no lock; not lifting anything, leaving that to the holder");
     }
-    ensure(&paths.root, runner, block)?;
+    ensure_set(&paths.root, runner, &lifted, _lock.is_some())?;
     Ok(Some(block))
 }
 
@@ -826,6 +949,114 @@ pub(crate) mod tests {
         let e = apply(&p, &r, false).unwrap_err();
         assert!(!format!("{e:#}").is_empty());
         assert!(!is_stub(root.path(), "/usr/bin/nautilus"));
+    }
+
+    fn caps(list: &[Capability]) -> Caps {
+        list.iter().copied().collect()
+    }
+
+    #[test]
+    fn targets_are_the_concatenation_of_the_groups() {
+        let cat: Vec<&str> = [TERMINAL_TARGETS, FILE_MANAGER_TARGETS, SETTINGS_TARGETS].concat();
+        assert_eq!(cat, TARGETS);
+        assert_eq!(targets_for(&Caps::new()), TARGETS);
+        assert!(targets_for(&all_caps()).is_empty());
+        // Capabilities without a group lift nothing.
+        let none = caps(&[
+            Capability::Extensions,
+            Capability::AllApps,
+            Capability::UserApps,
+        ]);
+        assert_eq!(targets_for(&none), TARGETS);
+    }
+
+    #[test]
+    fn lifting_file_manager_unblocks_only_nautilus() {
+        let root = image_root();
+        let p = paths(root.path());
+        let r = MountSim::new(root.path());
+        apply(&p, &r, true).unwrap();
+        apply_lifted(&p, &r, &caps(&[Capability::FileManager])).unwrap();
+        assert!(!is_stub(root.path(), "/usr/bin/nautilus"));
+        assert!(is_stub(root.path(), "/usr/bin/gnome-control-center"));
+        assert!(is_stub(root.path(), "/usr/libexec/gnome-terminal-server"));
+        assert_eq!(
+            fs::read(p.var_dir.join(MODE_FILE)).unwrap(),
+            b"lifted:file_manager\n"
+        );
+        assert_eq!(
+            read_lifted(&p).unwrap(),
+            Some(caps(&[Capability::FileManager]))
+        );
+    }
+
+    #[test]
+    fn old_mode_values_still_read() {
+        let root = tmp_root();
+        let p = paths(root.path());
+        fs::create_dir_all(&p.var_dir).unwrap();
+        for (text, want) in [
+            ("block\n", Caps::new()),
+            ("browser\n", Caps::new()),
+            ("unblock\n", all_caps()),
+            ("desktop\n", all_caps()),
+            ("lifted:\n", Caps::new()),
+            (
+                "lifted:settings,terminal\n",
+                caps(&[Capability::Terminal, Capability::Settings]),
+            ),
+        ] {
+            fs::write(p.var_dir.join(MODE_FILE), text).unwrap();
+            assert_eq!(read_lifted(&p).unwrap().unwrap(), want, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn garbage_mode_blocks_everything() {
+        let root = tmp_root();
+        let p = paths(root.path());
+        fs::create_dir_all(&p.var_dir).unwrap();
+        for text in [
+            "garbage",
+            "",
+            "lifted:terminal,bogus\n",
+            "lifted:terminal",
+            "desktop",
+        ] {
+            fs::write(p.var_dir.join(MODE_FILE), text).unwrap();
+            assert_eq!(read_lifted(&p).unwrap(), Some(Caps::new()), "{text:?}");
+        }
+        fs::remove_file(p.var_dir.join(MODE_FILE)).unwrap();
+        assert_eq!(read_lifted(&p).unwrap(), None);
+    }
+
+    #[test]
+    fn sync_uses_recorded_lifted_set() {
+        let (root, got) = sync_from_mode_file(b"lifted:terminal\n", false);
+        assert_eq!(got, Some(true));
+        assert!(!is_stub(root.path(), "/usr/libexec/gnome-terminal-server"));
+        assert!(!is_stub(root.path(), "/usr/bin/gnome-terminal.real"));
+        assert!(is_stub(root.path(), "/usr/bin/nautilus"));
+        assert!(is_stub(root.path(), "/usr/bin/gnome-control-center"));
+    }
+
+    #[test]
+    fn unlocked_sync_never_lifts() {
+        let root = image_root();
+        let p = paths(root.path());
+        let r = MountSim::new(root.path());
+        apply(&p, &r, true).unwrap();
+        write_lifted_mode(&p, &caps(&[Capability::Terminal])).unwrap();
+        let _held = lock(&p.root).unwrap();
+        sync_with(&p, &r, std::time::Duration::from_millis(300)).unwrap();
+        assert!(
+            is_stub(root.path(), "/usr/libexec/gnome-terminal-server"),
+            "no lock: the lifted group stays blocked"
+        );
+        drop(_held);
+        sync(&p, &r).unwrap();
+        assert!(!is_stub(root.path(), "/usr/libexec/gnome-terminal-server"));
+        assert!(is_stub(root.path(), "/usr/bin/nautilus"));
     }
 
     /// 复审 T13 R1：mount/umount 各自有短超时，不按默认的 120 秒。
