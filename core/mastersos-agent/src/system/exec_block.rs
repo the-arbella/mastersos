@@ -467,6 +467,21 @@ pub fn apply_lifted(paths: &SysPaths, runner: &dyn Runner, lifted: &Caps) -> Res
     ensured
 }
 
+/// Forgets every lift of the user layer (its format 3 state goes under format 1/2) and converges to the mode word on
+/// disk, under the lock: [`LIFTED_FILE`] removed, then a blocked word mounts every stub and an open one (a format 1/2
+/// `full` Group) lifts everything. A mode file that is not understood blocks everything; no state changes no mount.
+pub fn drop_lifts(paths: &SysPaths, runner: &dyn Runner) -> Result<()> {
+    let _lock = lock(&paths.root)?;
+    let cleared = clear_lifted_file(paths);
+    let ensured = match read_parsed(paths)? {
+        Some(Some(lifted)) => ensure_set(&paths.root, runner, &lifted, true),
+        Some(None) => ensure(&paths.root, runner, true),
+        None => Ok(()),
+    };
+    cleared?;
+    ensured
+}
+
 /// `exec-block`（sysext 合并、刷新之后；GDM 之前；`apply-local` 一开始）：持锁之后才读盘上的模式（应用正持锁改模式时
 /// 等它做完），按它收敛。没有状态（未受管的机器、还没应用过）或读不懂，什么都不做、什么都不建，返回 `None`。
 ///

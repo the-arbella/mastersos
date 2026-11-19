@@ -644,3 +644,83 @@ fn revert_with_deferred_cleanup_removes_the_layer() {
     assert!(!p.public_dir.join(STATE_SUB).exists());
     assert!(fs::symlink_metadata(p.public_dir.join("session")).is_err());
 }
+
+/// Writes the format 1/2 cleanup's deferral (R3).
+fn defer_cleanup(p: &SysPaths) {
+    fs::write(
+        p.var_dir
+            .join(STATE_SUB)
+            .join(crate::user_layer::render::CLEANUP_DEFERRED_FILE),
+        "",
+    )
+    .unwrap();
+}
+
+fn lifted_file(p: &SysPaths) -> std::path::PathBuf {
+    p.root
+        .join(exec_block::LOCK_DIR)
+        .join(exec_block::LIFTED_FILE)
+}
+
+/// The revert of a deferred cleanup forgets the session's lifts and converges to the mode word on disk: blocked
+/// (`browser`) mounts every stub again, open (`desktop`, a format 1/2 `full` Group) lifts everything.
+#[test]
+fn deferred_revert_drops_the_lifts_and_follows_the_mode_word() {
+    use crate::system::exec_block::tests::is_stub;
+    for open in [false, true] {
+        let (_root, p, index, r) = setup();
+        let a = signed_in(&p, &index, ActiveState::Closing, true);
+        exec_block::apply_lifted(&p, &r, &a.caps).unwrap();
+        assert!(a.caps.contains(&Capability::Terminal));
+        assert!(!is_stub(&p.root, "/usr/libexec/gnome-terminal-server"));
+        if open {
+            exec_block::write_mode(&p, false).unwrap();
+        }
+        defer_cleanup(&p);
+        list(&r, &[greeter()]);
+        assert!(matches!(
+            watch_at(&p, &r, at(T0 + 1)).unwrap(),
+            WatchOutcome::Reverted { .. }
+        ));
+        assert!(!lifted_file(&p).exists(), "open {open}");
+        assert_eq!(
+            is_stub(&p.root, "/usr/libexec/gnome-terminal-server"),
+            !open,
+            "open {open}"
+        );
+        assert_eq!(is_stub(&p.root, "/usr/bin/nautilus"), !open, "open {open}");
+    }
+}
+
+/// While the format 1/2 cleanup is deferred, a login's lift lifts nothing.
+#[test]
+fn after_login_with_deferred_cleanup_lifts_nothing() {
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Open, false);
+    assert!(!a.caps.is_empty());
+    defer_cleanup(&p);
+    list(&r, &[greeter()]);
+    after_login(&p, &r).unwrap();
+    assert_eq!(lifted(&p), Caps::new());
+}
+
+/// The deferred removal fails while the session link and the dconf profile are still there: the marker is kept (logins
+/// stay refused) and the failure is returned.
+#[test]
+fn deferred_revert_keeps_the_marker_when_the_removal_fails() {
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Closing, true);
+    defer_cleanup(&p);
+    // the profile cannot be removed (a directory where the file is)
+    let profile = p.root.join("etc/dconf/profile/user");
+    fs::remove_file(&profile).unwrap();
+    fs::create_dir_all(profile.join("x")).unwrap();
+    list(&r, &[greeter()]);
+    let e = watch_at(&p, &r, at(T0 + 1)).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("removing the user configs"),
+        "{e:#}"
+    );
+    assert_eq!(read_active(&p.root).unwrap(), a);
+    assert!(fs::symlink_metadata(p.public_dir.join("session")).is_ok());
+}

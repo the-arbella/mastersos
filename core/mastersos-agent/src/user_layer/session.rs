@@ -57,13 +57,17 @@ pub enum WatchOutcome {
 /// (those of the marker that the rules file's rendering of its config still grants)
 /// ([`exec_block::apply_lifted`]), under the marker's lock so that a lift never lands after a revert. When logind already
 /// lists a live session of the uid, the marker records it as seen (as [`watch`] does). A fallback reason in the marker
-/// is logged. Nothing to do without a marker; an unreadable marker is an error, a busy lock a
-/// [`switch::LockBusy`] error.
+/// is logged. Nothing to do without a marker, or while a format 1/2 apply has deferred its cleanup for the session
+/// ([`render::cleanup_deferred`]); an unreadable marker is an error, a busy lock a [`switch::LockBusy`] error.
 pub fn after_login(paths: &SysPaths, runner: &dyn Runner) -> Result<()> {
     let root = paths.root.as_path();
     let Some(before) = active_marker(root)? else {
         return Ok(());
     };
+    // Settings format 1/2 waiting for this session to end: nothing of format 3 is lifted any more
+    if render::cleanup_deferred(paths) {
+        return Ok(());
+    }
     // Asked outside the lock; only a help for `seen`, so a failure is only logged
     let live = match uid_has_live_session(runner, before.uid) {
         Ok(live) => live,
@@ -110,7 +114,8 @@ pub fn after_login(paths: &SysPaths, runner: &dyn Runner) -> Result<()> {
 /// closing marker whose uid still has a live session (R27: the same person signed in elsewhere, say on a tty) becomes
 /// open again, so logins stay refused until that session is gone too. The revert, in this order: neutral switched
 /// in, everything blocked (both skipped when the format 1/2 apply already removed this layer's files, R26; when a format
-/// 1/2 apply deferred that removal for this session, the removal instead, whose failure is only logged),
+/// 1/2 apply deferred that removal for this session, the lifts dropped and the removal instead, whose failure keeps the
+/// marker only while the session link or the dconf profile is still there),
 /// `loginctl disable-linger`, `systemctl stop user@<uid>.service`, and only when all of them worked the marker removed.
 /// Any failure keeps the marker (logins stay refused) and is returned. An unreadable marker or logind list is an error,
 /// never "no session". A busy lock is [`WatchOutcome::Busy`].
@@ -182,16 +187,24 @@ pub(crate) fn watch_at(
 fn revert(paths: &SysPaths, runner: &dyn Runner, a: &Active) -> Result<()> {
     let mut errs: Vec<String> = Vec::new();
     if render::cleanup_deferred(paths) {
-        // A format 1/2 apply waited for this session: its files go now instead of neutral being switched in (which would
-        // overwrite the format 1/2 steps' Chrome policy and exec-block state). A failure does not keep the marker: every
-        // format 1/2 apply tries again.
-        match render::remove_state(paths) {
-            Ok(_) => log::info!(
-                "user layer: settings format 1/2: removed the user configs after the session"
-            ),
-            Err(e) => log::warn!(
-                "user layer: settings format 1/2: removing the user configs after the session: {e:#}; retried at the next apply"
-            ),
+        // A format 1/2 apply waited for this session: its lifts are forgotten (the exec-block back to the format 1/2 mode
+        // word) and its files go now, instead of neutral being switched in (which would overwrite the format 1/2 steps'
+        // Chrome policy and exec-block mode).
+        if let Err(e) = exec_block::drop_lifts(paths, runner) {
+            errs.push(format!("dropping the session's lifts: {e:#}"));
+        }
+        if let Err(e) = render::remove_state(paths) {
+            // While the session link or the dconf profile is still there, the next login would get this layer's files:
+            // the marker stays (logins refused). Otherwise every format 1/2 apply tries again.
+            if session_files_present(paths) {
+                errs.push(format!(
+                    "removing the user configs of an earlier settings format 3: {e:#}"
+                ));
+            } else {
+                log::warn!(
+                    "user layer: settings format 1/2: removing the user configs after the session: {e:#}; retried at the next apply"
+                );
+            }
         }
     } else if layer_state_present(paths) {
         if let Err(e) = to_neutral(paths, runner) {
@@ -245,6 +258,22 @@ pub(crate) fn to_neutral(paths: &SysPaths, runner: &dyn Runner) -> Result<()> {
         (Err(e), Ok(())) | (Ok(()), Err(e)) => Err(e),
         (Err(a), Err(b)) => Err(anyhow!("{a:#}; {b:#}")),
     }
+}
+
+/// Whether a session still reads this layer's files: the session link or the dconf profile exists (or cannot be
+/// checked).
+fn session_files_present(paths: &SysPaths) -> bool {
+    let present = |p: std::path::PathBuf| match std::fs::symlink_metadata(p) {
+        Ok(_) => true,
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+    };
+    present(paths.public_dir.join(render::SESSION_LINK))
+        || present(
+            paths
+                .root
+                .join(render::PROFILE_DIR)
+                .join(render::PROFILE_FILE),
+        )
 }
 
 /// Whether this layer's pre-rendered state exists (`<var_dir>/user-layer`); only a missing one counts as gone.
