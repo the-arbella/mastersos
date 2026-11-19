@@ -2428,6 +2428,7 @@ mod tests {
             quiet: &std::sync::atomic::AtomicBool::new(false),
             device: None,
             ident: &crate::system::tests::test_ident(),
+            manifest: None,
         };
         (step().run)(&ctx, &mut env)
     }

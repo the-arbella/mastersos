@@ -55,7 +55,12 @@ pub const WRITE_ROOTS: &[&str] = &[
     "/var/lib/mastersos-public",
     "/etc/dconf/db/mastersos.d",
     "/etc/dconf/db/mastersos.d/locks",
+    // The user layer (format 3): per user config `mastersos-<dir>.d/` keyfiles and their compiled `mastersos-<dir>`.
+    "/etc/dconf/db",
     "/etc/opt/chrome/policies/managed",
+    // The user layer's staging copies of the managed policy (`.mastersos-staging/`, root 0700): on the file system
+    // of `managed/` so the switch is a rename, but never inside it (Chrome reads every file of `managed/`).
+    "/etc/opt/chrome/policies",
     "/var/lib/mastersos-public/xdg",
     "/etc/NetworkManager/system-connections",
     "/etc/netplan",
@@ -65,6 +70,8 @@ pub const WRITE_ROOTS: &[&str] = &[
     "/etc/sane.d/airscan.d",
     "/etc/dconf/db/gdm.d",
     "/var/lib/mastersos-public/login-scripts",
+    // The user layer's per user config session files (xdg dir, login scripts, session mode).
+    "/var/lib/mastersos-public/user-layer",
     // School name, logo and domains for the login screen and quick settings (branding.json, logo.png, logo-icon.png).
     "/var/lib/mastersos-public/branding",
     // 锁定应用（计划 9 Task 5）：启动描述与策略源、AccountsService 的记录、pam_namespace 的配置、user@<uid> 的 drop-in
@@ -262,6 +269,8 @@ pub fn steps() -> Vec<Step> {
         kiosk::step(),
         admins::step(),
         desktop::step(),
+        // Format 3: every reachable user config pre-rendered; runs the round's one `dconf update` (after desktop).
+        crate::user_layer::render::step(),
         chrome_policy::step(),
         chrome_policy::update_step(),
         update_channel::step(),
@@ -492,6 +501,7 @@ pub(crate) mod tests {
             quiet: &std::sync::atomic::AtomicBool::new(false),
             device: None,
             ident: &crate::system::tests::test_ident(),
+            manifest: None,
         })
     }
 

@@ -1118,6 +1118,7 @@ impl Agent {
                 quiet: &AtomicBool::new(false),
                 device: sel.device,
                 ident: &ident,
+                manifest: Some(m),
             })
         })
         .await

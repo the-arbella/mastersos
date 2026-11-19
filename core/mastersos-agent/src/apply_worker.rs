@@ -351,6 +351,7 @@ impl Worker {
                 quiet: &q,
                 device: sel.device,
                 ident: &ident,
+                manifest: Some(m),
             })
         })
         .await

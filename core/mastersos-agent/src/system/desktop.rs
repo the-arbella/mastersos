@@ -36,7 +36,9 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use mastersos_bundle::{checks, kiosk, Config, Interface, ItemResult, WebApp};
+use mastersos_bundle::{
+    checks, kiosk, Capability, Caps, Config, DebApp, Interface, ItemResult, WebApp, ALL_CAPS,
+};
 
 use super::text::{desktop_exec_arg, keyfile_escape, slug};
 use super::{exec_block, failed, ok, public_dir, Env, IconFailures, Step, SysPaths, SysState};
@@ -97,9 +99,34 @@ pub(crate) fn icon_budget() -> Duration {
 }
 
 /// 一轮里图标下载的共享状态：截止时刻与下载失败过的地址（存在 `SysState::icon_failures`）。
-struct Downloads<'a> {
+pub(crate) struct Downloads<'a> {
     deadline: std::time::Instant,
     failed: &'a mut BTreeSet<String>,
+    /// Icons downloaded in this round, by address: several user configs with the same web app download it once.
+    fetched: BTreeMap<String, Vec<u8>>,
+}
+
+impl<'a> Downloads<'a> {
+    /// The download state of one round. `key` names the web app lists of the round: the remembered failures are
+    /// cleared when it changes (复审 T13 发现 6).
+    pub(crate) fn new(sys: &'a mut SysState, key: String) -> Self {
+        if sys.icon_failures.key != key {
+            sys.icon_failures = IconFailures {
+                key,
+                urls: BTreeSet::new(),
+            };
+        }
+        Downloads {
+            deadline: std::time::Instant::now() + icon_budget(),
+            failed: &mut sys.icon_failures.urls,
+            fetched: BTreeMap::new(),
+        }
+    }
+}
+
+/// The key of [`Downloads::new`] for a web app list (or any serializable set of lists).
+pub(crate) fn icon_key(apps: &impl serde::Serialize) -> String {
+    slug(&serde_json::to_string(apps).unwrap_or_default())
 }
 
 /// dconf 的 keyfile 目录与 locks 目录（相对系统根）、我们的文件名。
@@ -139,7 +166,7 @@ pub const LOCKED_EXTENSIONS: &[&str] = &["ubuntu-appindicators@ubuntu.com", MANA
 pub const MANAGED_EXTENSION: &str = "mastersos-managed@mastersos.org";
 
 /// 锁住的会话（学习模式、旧的浏览器模式）锁住的键。
-const LOCKED_KEYS: &[&str] = &[
+pub const LOCKED_KEYS: &[&str] = &[
     "/org/gnome/shell/favorite-apps",
     "/org/gnome/desktop/lockdown/disable-command-line",
     "/org/gnome/desktop/lockdown/user-administration-disabled",
@@ -194,6 +221,35 @@ pub const FULL: Profile = Profile {
     flatpaks: true,
 };
 
+/// The keys of [`LOCKED_KEYS`] a user config with capabilities `caps` keeps locked (user layer design §2.3): those of
+/// the lifted capabilities are left out; the keys that belong to no capability stay locked unless every capability
+/// is lifted, so `full` locks nothing, as [`FULL`] does.
+pub fn session_locks(caps: &Caps) -> Vec<&'static str> {
+    let all = ALL_CAPS.iter().all(|c| caps.contains(c));
+    LOCKED_KEYS
+        .iter()
+        .copied()
+        .filter(|key| match lifted_by(key) {
+            Some(cap) => !caps.contains(&cap),
+            None => !all,
+        })
+        .collect()
+}
+
+/// The capability whose lift unlocks `key` of [`LOCKED_KEYS`]; `None` for the keys of no capability.
+fn lifted_by(key: &str) -> Option<Capability> {
+    match key {
+        "/org/gnome/desktop/lockdown/disable-command-line"
+        | "/org/gnome/settings-daemon/plugins/media-keys/terminal" => Some(Capability::Terminal),
+        "/org/gnome/desktop/lockdown/user-administration-disabled" => Some(Capability::Settings),
+        "/org/gnome/shell/disabled-extensions"
+        | "/org/gnome/shell/disable-user-extensions"
+        | "/org/gnome/shell/enabled-extensions"
+        | "/org/gnome/shell/allow-extension-installation" => Some(Capability::Extensions),
+        _ => None,
+    }
+}
+
 /// The row for `config`'s mode.
 pub fn profile(config: &Config) -> &'static Profile {
     match config.interface {
@@ -245,45 +301,121 @@ pub fn render_dconf(
     flatpaks: &[String],
 ) -> (String, String) {
     let p = profile(config);
+    let session = SessionDconf {
+        locks: p.locks,
+        dock_files: p.dock_files,
+        dock_apps: p.flatpaks,
+    };
+    render_session_dconf(&session, webapps, kiosk, debs, flatpaks)
+}
+
+/// The session part of the dconf files: which keys are locked, and what the Dash holds besides Chrome, the web
+/// apps and the locked apps.
+#[derive(Debug, Clone, Copy)]
+pub struct SessionDconf<'a> {
+    /// The keys locked, a subset of [`LOCKED_KEYS`]; each one's value is written only when it is locked.
+    pub locks: &'a [&'a str],
+    /// The file manager has a place in the Dash.
+    pub dock_files: bool,
+    /// The .deb apps and Flatpaks go into the Dash.
+    pub dock_apps: bool,
+}
+
+/// [`render_dconf`] for a given session part. With every key of [`LOCKED_KEYS`] or none locked the text is that of
+/// the locked modes or of `full`, byte for byte.
+pub fn render_session_dconf(
+    session: &SessionDconf,
+    webapps: &[String],
+    kiosk: &[String],
+    debs: &[String],
+    flatpaks: &[String],
+) -> (String, String) {
+    let locked = |key: &str| session.locks.contains(&key);
     let mut fav = vec![CHROME_DESKTOP.to_string()];
     fav.extend(webapps.iter().cloned());
     fav.extend(kiosk.iter().cloned());
-    if p.dock_files {
+    if session.dock_files {
         fav.push(NAUTILUS_DESKTOP.to_string());
     }
-    if p.flatpaks {
+    if session.dock_apps {
         fav.extend(debs.iter().cloned());
         fav.extend(flatpaks.iter().map(|id| format!("{id}.desktop")));
     }
     let fav: Vec<String> = fav.iter().map(|f| gv_str(f)).collect();
+    let enabled: Vec<String> = LOCKED_EXTENSIONS.iter().map(|e| gv_str(e)).collect();
+    let enabled = format!("enabled-extensions=[{}]", enabled.join(", "));
     let mut k = String::from(HEADER);
     k.push_str(&format!(
         "\n[org/gnome/shell]\nfavorite-apps=[{}]\n",
         fav.join(", ")
     ));
-    if p.locked() {
-        let enabled: Vec<String> = LOCKED_EXTENSIONS.iter().map(|e| gv_str(e)).collect();
-        k.push_str(&format!(
-            "disabled-extensions=@as []\n\
-             disable-user-extensions=true\n\
-             allow-extension-installation=false\n\
-             enabled-extensions=[{}]\n",
-            enabled.join(", ")
-        ));
+    for (key, line) in [
+        (
+            "/org/gnome/shell/disabled-extensions",
+            "disabled-extensions=@as []",
+        ),
+        (
+            "/org/gnome/shell/disable-user-extensions",
+            "disable-user-extensions=true",
+        ),
+        (
+            "/org/gnome/shell/allow-extension-installation",
+            "allow-extension-installation=false",
+        ),
+        ("/org/gnome/shell/enabled-extensions", enabled.as_str()),
+    ] {
+        if locked(key) {
+            k.push_str(line);
+            k.push('\n');
+        }
     }
     k.push_str("\n[org/gnome/desktop/screensaver]\nlock-enabled=true\n");
+    let sections: [(&str, [(&str, &str); 2]); 2] = [
+        (
+            "org/gnome/desktop/lockdown",
+            [
+                (
+                    "/org/gnome/desktop/lockdown/disable-command-line",
+                    "disable-command-line=true",
+                ),
+                (
+                    "/org/gnome/desktop/lockdown/user-administration-disabled",
+                    "user-administration-disabled=true",
+                ),
+            ],
+        ),
+        (
+            "org/gnome/settings-daemon/plugins/media-keys",
+            [
+                (
+                    "/org/gnome/settings-daemon/plugins/media-keys/terminal",
+                    "terminal=['']",
+                ),
+                (
+                    "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings",
+                    "custom-keybindings=@as []",
+                ),
+            ],
+        ),
+    ];
+    for (section, lines) in sections {
+        let lines: Vec<&str> = lines
+            .iter()
+            .filter(|(key, _)| locked(key))
+            .map(|(_, line)| *line)
+            .collect();
+        if !lines.is_empty() {
+            k.push_str(&format!("\n[{section}]\n"));
+            for line in lines {
+                k.push_str(line);
+                k.push('\n');
+            }
+        }
+    }
     let mut locks = String::new();
-    if p.locked() {
-        k.push_str(
-            "\n[org/gnome/desktop/lockdown]\n\
-             disable-command-line=true\n\
-             user-administration-disabled=true\n",
-        );
-        k.push_str(
-            "\n[org/gnome/settings-daemon/plugins/media-keys]\nterminal=['']\ncustom-keybindings=@as []\n",
-        );
+    if !session.locks.is_empty() {
         locks.push_str(HEADER);
-        for l in p.locks {
+        for l in LOCKED_KEYS.iter().filter(|l| locked(l)) {
             locks.push_str(l);
             locks.push('\n');
         }
@@ -385,10 +517,15 @@ pub fn hidden_overrides(
 /// (`mastersos-app-<id>.desktop`, by id; deb-apps design §4.7). Not ready, `kiosk = true` (no place in a normal
 /// session) or no longer in the settings (still merged until it is removed): left out.
 pub fn deb_dock_apps(config: &Config, public: &BTreeMap<String, PublicApp>) -> Vec<String> {
-    config
-        .apps
-        .deb
-        .iter()
+    deb_dock_from(&config.apps.deb, public)
+}
+
+/// [`deb_dock_apps`] of a list of .deb apps (a Config's or a user config's).
+pub fn deb_dock_from(
+    apps: &BTreeMap<String, DebApp>,
+    public: &BTreeMap<String, PublicApp>,
+) -> Vec<String> {
+    apps.iter()
         .filter(|(id, app)| {
             !app.kiosk
                 && kiosk::check_id(id).is_ok()
@@ -414,6 +551,9 @@ fn dbus_override(file: &str) -> String {
 }
 
 fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
+    if ctx.user_layer().is_some() {
+        return run_device_layer(ctx, env);
+    }
     let p = profile(ctx.config);
     let mut errs: Vec<String> = Vec::new();
     // Invariant 1: tightening is published before anything else can fail.
@@ -490,6 +630,51 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
     out
 }
 
+/// The step under a format 3 bundle: only what belongs to the Device. The session's dconf, xdg overrides, web apps,
+/// exec-block and session mode come from the user config switched in at login, pre-rendered by the `user-layer`
+/// step (which also runs the one `dconf update` of the round). Here: the locked-app launchers in [`XDG_DIR`], an
+/// empty `mastersos.d` keyfile without locks, and none of the web app launchers or overrides a format 1/2 bundle
+/// left in [`XDG_DIR`] (they sit behind the session's xdg dir and would still hide apps from it).
+fn run_device_layer(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
+    let mut errs: Vec<String> = Vec::new();
+    let admins = super::login::bundle_policy(ctx, env).admin_users;
+    if let Err(e) = super::home_tidy::linger_off_for_students(env.runner, &admins) {
+        errs.push(format!("linger: {e:#}"));
+    }
+    if let Err(e) = kiosk_launchers(env.paths, ctx.config) {
+        errs.push(format!("locked app launchers: {e:#}"));
+    }
+    if let Err(e) = clear_device_xdg(env.paths) {
+        errs.push(format!("web apps and overrides: {e:#}"));
+    }
+    match write_dconf(&env.paths.root, DCONF_DIR, HEADER, "") {
+        Ok(changed) => env.sys.dconf_update_pending |= changed,
+        Err(e) => errs.push(format!("dconf: {e:#}")),
+    }
+    let mut out: Vec<ItemResult> = home_tidy_item(env.paths).into_iter().collect();
+    out.push(if errs.is_empty() {
+        ok(ITEM)
+    } else {
+        failed(ITEM, errs.join("; "))
+    });
+    out
+}
+
+/// Removes the web app launchers and icons and every override from [`XDG_DIR`].
+fn clear_device_xdg(paths: &SysPaths) -> Result<()> {
+    let xdg = xdg_dir(paths)?;
+    for sub in ["applications", "icons"] {
+        if let Some(dir) = safefs::open_child_dir(&xdg, sub)? {
+            for name in safefs::list_at(&dir)? {
+                if name.starts_with(WEB_PREFIX) {
+                    safefs::remove_at(&dir, &name)?;
+                }
+            }
+        }
+    }
+    remove_overrides_in(&xdg)
+}
+
 /// The `home-tidy` report item from the latest login's result; none when no login has written one. The detail
 /// holds counts and reason names only.
 fn home_tidy_item(paths: &SysPaths) -> Option<ItemResult> {
@@ -537,21 +722,24 @@ fn webapps(
     sys: &mut SysState,
 ) -> Result<(Vec<String>, Vec<ItemResult>)> {
     // 下载失败过的图标地址，网页应用清单变了才清掉（复审 T13 发现 6）
-    let key = slug(&serde_json::to_string(&ctx.config.apps.web).unwrap_or_default());
-    if sys.icon_failures.key != key {
-        sys.icon_failures = IconFailures {
-            key,
-            urls: BTreeSet::new(),
-        };
-    }
-    let mut dl = Downloads {
-        deadline: std::time::Instant::now() + icon_budget(),
-        failed: &mut sys.icon_failures.urls,
-    };
+    let mut dl = Downloads::new(sys, icon_key(&ctx.config.apps.web));
     let xdg = xdg_dir(paths)?;
-    let apps_dir = sub_dir(&xdg, "applications")?;
-    let icons_dir = sub_dir(&xdg, "icons")?;
-    let apps = &ctx.config.apps.web;
+    let xdg_abs = paths.public_dir.join(XDG_SUB);
+    write_webapps(ctx, &ctx.config.apps.web, &xdg, &xdg_abs, &mut dl)
+}
+
+/// Writes the launchers and icons of `apps` into `applications/` and `icons/` of the xdg dir `xdg` (whose absolute
+/// path is `xdg_abs`: the launchers name their icons by it) and removes the web app launchers and icons not in
+/// `apps`. Returns the launcher file names (in list order) and one report item per web app.
+pub(crate) fn write_webapps(
+    ctx: &ApplyContext,
+    apps: &[WebApp],
+    xdg: &OwnedFd,
+    xdg_abs: &Path,
+    dl: &mut Downloads,
+) -> Result<(Vec<String>, Vec<ItemResult>)> {
+    let apps_dir = sub_dir(xdg, "applications")?;
+    let icons_dir = sub_dir(xdg, "icons")?;
     let present = bundle_icons(ctx.bundle_dir, apps);
     let mut ids = Vec::new();
     let mut seen = BTreeSet::new();
@@ -571,10 +759,10 @@ fn webapps(
             ));
             continue;
         }
-        let icon = place_icon(ctx, &icons_dir, app, &present, &mut dl);
+        let icon = place_icon(ctx, &icons_dir, app, &present, dl);
         let (detail, path) = match icon {
             Ok(Some(name)) => {
-                let abs = paths.public_dir.join(XDG_SUB).join("icons").join(&name);
+                let abs = xdg_abs.join("icons").join(&name);
                 keep_icons.insert(name);
                 (None, Some(abs.to_string_lossy().into_owned()))
             }
@@ -650,6 +838,21 @@ fn kiosk_launchers(paths: &SysPaths, config: &Config) -> Result<Vec<String>> {
         }
     }
     Ok(written)
+}
+
+/// The locked-app launchers the `desktop` step left in [`XDG_DIR`] (`mastersos-kiosk-*.desktop`, sorted): they go
+/// into the Dash of every user config. Unreadable: none.
+pub(crate) fn kiosk_dock(paths: &SysPaths) -> Vec<String> {
+    let dir = paths.public_dir.join(XDG_SUB).join("applications");
+    safefs::open_abs_dir(&dir, false)
+        .and_then(|d| safefs::list_at(&d))
+        .map(|names| {
+            names
+                .into_iter()
+                .filter(|n| n.starts_with(KIOSK_PREFIX) && n.ends_with(".desktop"))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// 清单里引用的、包里确实有的 `files/…` 图标（普通文件）。
@@ -754,6 +957,9 @@ fn place_icon(
                     return Ok(Some(name));
                 }
             }
+            if let Some(bytes) = dl.fetched.get(&url) {
+                return store_icon(icons_dir, &base, bytes).map(Some);
+            }
             if ctx.phase != Phase::Full {
                 return Err(
                     "icon not downloaded yet (the quick apply at boot does not download)".into(),
@@ -787,7 +993,11 @@ fn place_icon(
                 )),
                 Ok(bytes) => match icon_problem(&bytes) {
                     Some(p) => Err((p, true)),
-                    None => store_icon(icons_dir, &base, &bytes).map_err(|m| (m, false)),
+                    None => {
+                        let stored = store_icon(icons_dir, &base, &bytes).map_err(|m| (m, false));
+                        dl.fetched.insert(url.clone(), bytes);
+                        stored
+                    }
                 },
             };
             if let Err((_, true)) = &r {
@@ -880,10 +1090,19 @@ fn apply_dconf(
     keyfile: &str,
     locks: &str,
 ) -> Result<()> {
-    let dir = safefs::open_dir(root, Path::new(DCONF_DIR), true)?;
-    let mut changed = safefs::write_at(&dir, DCONF_FILE, keyfile.as_bytes(), 0o644)
-        .with_context(|| format!("write /{DCONF_DIR}/{DCONF_FILE}"))?;
-    let ld = safefs::open_dir(root, Path::new(DCONF_LOCKS_DIR), true)?;
+    if write_dconf(root, DCONF_DIR, keyfile, locks)? {
+        sys.dconf_update_pending = true;
+    }
+    dconf_update(runner, sys)
+}
+
+/// Writes [`DCONF_FILE`] with `keyfile` into the keyfile directory `dir` (relative to `root`) and with `locks` into
+/// its `locks/` (removed when `locks` is empty). Returns whether anything changed on disk.
+pub(crate) fn write_dconf(root: &Path, dir: &str, keyfile: &str, locks: &str) -> Result<bool> {
+    let fd = safefs::open_dir(root, Path::new(dir), true)?;
+    let mut changed = safefs::write_at(&fd, DCONF_FILE, keyfile.as_bytes(), 0o644)
+        .with_context(|| format!("write /{dir}/{DCONF_FILE}"))?;
+    let ld = safefs::open_dir_at(&fd, Path::new("locks"), true)?;
     if locks.is_empty() {
         if safefs::read_at(&ld, DCONF_FILE)?.is_some() {
             safefs::remove_at(&ld, DCONF_FILE)?;
@@ -891,11 +1110,13 @@ fn apply_dconf(
         }
     } else {
         changed |= safefs::write_at(&ld, DCONF_FILE, locks.as_bytes(), 0o644)
-            .with_context(|| format!("write /{DCONF_LOCKS_DIR}/{DCONF_FILE}"))?;
+            .with_context(|| format!("write /{dir}/locks/{DCONF_FILE}"))?;
     }
-    if changed {
-        sys.dconf_update_pending = true;
-    }
+    Ok(changed)
+}
+
+/// Runs `dconf update` when a keyfile changed since the last successful one (or the state could not be read).
+pub(crate) fn dconf_update(runner: &dyn Runner, sys: &mut SysState) -> Result<()> {
     if sys.dconf_update_pending || sys.load_failed {
         run_ok(runner, Cmd::new("dconf", &["update"]))?;
         sys.dconf_update_pending = false;
@@ -971,9 +1192,20 @@ fn is_override(name: &str) -> bool {
 }
 
 fn write_overrides(paths: &SysPaths, keep: &[String], keep_apps: &[String]) -> Result<()> {
-    let xdg = xdg_dir(paths)?;
-    let apps_dir = sub_dir(&xdg, "applications")?;
-    let hide = hidden_overrides(&visible_desktop_ids(&paths.root)?, keep, keep_apps);
+    write_overrides_in(&paths.root, &xdg_dir(paths)?, keep, keep_apps)?;
+    write_dbus_overrides(&xdg_dir(paths)?, DBUS_OVERRIDES)
+}
+
+/// Writes a `Hidden=true` override into `applications/` of the xdg dir `xdg` for every visible app of the system
+/// under `root` that [`hidden_overrides`] hides, and removes the overrides of the others.
+pub(crate) fn write_overrides_in(
+    root: &Path,
+    xdg: &OwnedFd,
+    keep: &[String],
+    keep_apps: &[String],
+) -> Result<()> {
+    let apps_dir = sub_dir(xdg, "applications")?;
+    let hide = hidden_overrides(&visible_desktop_ids(root)?, keep, keep_apps);
     for id in &hide {
         safefs::write_at(&apps_dir, id, HIDDEN_ENTRY.as_bytes(), 0o644)
             .with_context(|| format!("write the override for {id}"))?;
@@ -983,24 +1215,44 @@ fn write_overrides(paths: &SysPaths, keep: &[String], keep_apps: &[String]) -> R
             safefs::remove_at(&apps_dir, &name)?;
         }
     }
-    let services = sub_dir(&sub_dir(&xdg, "dbus-1")?, "services")?;
+    Ok(())
+}
+
+/// Writes the D-Bus overrides `wanted` (a subset of [`DBUS_OVERRIDES`]) into `dbus-1/services/` of the xdg dir
+/// `xdg` and removes the other ones of [`DBUS_OVERRIDES`].
+pub(crate) fn write_dbus_overrides(xdg: &OwnedFd, wanted: &[&str]) -> Result<()> {
+    let services = sub_dir(&sub_dir(xdg, "dbus-1")?, "services")?;
     for s in DBUS_OVERRIDES {
-        safefs::write_at(&services, s, dbus_override(s).as_bytes(), 0o644)
-            .with_context(|| format!("write D-Bus override {s}"))?;
+        if wanted.contains(s) {
+            safefs::write_at(&services, s, dbus_override(s).as_bytes(), 0o644)
+                .with_context(|| format!("write D-Bus override {s}"))?;
+        } else {
+            safefs::remove_at(&services, s)?;
+        }
     }
     Ok(())
 }
 
-fn remove_overrides(paths: &SysPaths) -> Result<()> {
-    let xdg = xdg_dir(paths)?;
-    if let Some(apps_dir) = safefs::open_child_dir(&xdg, "applications")? {
+/// Removes every `Hidden=true` override from `applications/` of the xdg dir `xdg`.
+pub(crate) fn remove_hidden_in(xdg: &OwnedFd) -> Result<()> {
+    if let Some(apps_dir) = safefs::open_child_dir(xdg, "applications")? {
         for name in safefs::list_at(&apps_dir)? {
             if is_override(&name) {
                 safefs::remove_at(&apps_dir, &name)?;
             }
         }
     }
-    match safefs::open_dir_at(&xdg, Path::new("dbus-1/services"), false) {
+    Ok(())
+}
+
+fn remove_overrides(paths: &SysPaths) -> Result<()> {
+    remove_overrides_in(&xdg_dir(paths)?)
+}
+
+/// Removes every `Hidden=true` override and D-Bus override from the xdg dir `xdg`.
+pub(crate) fn remove_overrides_in(xdg: &OwnedFd) -> Result<()> {
+    remove_hidden_in(xdg)?;
+    match safefs::open_dir_at(xdg, Path::new("dbus-1/services"), false) {
         Ok(services) => {
             for s in DBUS_OVERRIDES {
                 safefs::remove_at(&services, s)?;

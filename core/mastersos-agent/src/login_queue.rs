@@ -268,7 +268,12 @@ pub fn step() -> Step {
     }
 }
 
+/// Under a format 3 bundle the login scripts are the user config's, pre-rendered by the `user-layer` step: this
+/// step writes nothing.
 fn run_export(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
+    if ctx.user_layer().is_some() {
+        return vec![];
+    }
     export(ctx.config, ctx.bundle_dir, env.paths)
 }
 
@@ -288,11 +293,22 @@ pub fn export(config: &Config, bundle_dir: &Path, paths: &SysPaths) -> Vec<ItemR
 }
 
 fn export_list(scripts: &[&Script], bundle_dir: &Path, paths: &SysPaths) -> Vec<ItemResult> {
-    let dir = match public_dir(paths).and_then(|p| {
+    let dir = public_dir(paths).and_then(|p| {
         let d = safefs::open_dir_at(&p, Path::new(EXPORT_SUB), true)?;
         safefs::set_mode(&d, 0o755)?;
         Ok(d)
-    }) {
+    });
+    export_into(scripts, bundle_dir, dir)
+}
+
+/// Exports `scripts` into the directory `dir` (already 0755; an error fails every script) with [`INDEX`], and
+/// removes the files of `dir` that are not needed any more. Reports only the failed scripts (`<path>`).
+pub(crate) fn export_into(
+    scripts: &[&Script],
+    bundle_dir: &Path,
+    dir: Result<std::os::fd::OwnedFd>,
+) -> Vec<ItemResult> {
+    let dir = match dir {
         Ok(d) => d,
         Err(e) => {
             return scripts
