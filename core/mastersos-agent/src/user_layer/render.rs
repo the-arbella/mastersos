@@ -14,8 +14,7 @@
 //!   overrides), `login-scripts/` (with its index) and `session-mode` (`full` iff `user_apps` is lifted).
 //!
 //! And `<var_dir>/user-layer/index.json` (root 0600, [`Index`]): the rules of this Device's Group and where each
-//! config was rendered. Directories of configs no longer reachable are removed, except the one the signed-in
-//! session uses ([`read_active`]). Under format 3 the legacy `/var/lib/mastersos-public/session-mode` stays
+//! config was rendered. Under format 3 the legacy `/var/lib/mastersos-public/session-mode` stays
 //! `learning`: an older image after a rollback reads only that file.
 //!
 //! Last, the step follows the session (design §4.2: the reapply, and the boot apply, render from the active session's
@@ -30,8 +29,10 @@
 //! - a session being closed is left to the agent's revert; a marker that cannot be read changes nothing.
 //!
 //! The render creates a user config dir root-only (0700) and never changes the mode of an existing one (a login may
-//! open its dir after the step read the marker); this last part, under the lock, closes every user config dir that no
-//! session uses.
+//! open its dir while the step runs). This last part, under the same lock, also tidies the user config dirs no session
+//! uses (the marker, read under the lock, and the session link name the ones a session uses): those of configs no
+//! longer reachable are removed, the others closed. A busy lock or an unreadable marker leaves them all to the next
+//! round.
 //!
 //! With a format 1/2 bundle the step does nothing, unless an earlier format 3 bundle left its state: then it
 //! removes everything it created, and the format 1/2 steps own the session as before.
@@ -221,10 +222,6 @@ fn render_all(ctx: &ApplyContext, m: &Manifest, env: &mut Env) -> Vec<ItemResult
     let public =
         deb_apps::status::read_public(&paths.public_dir.join(deb_apps::status::PUBLIC_NAME));
     let neutral = neutral();
-    // The signed-in session's config dir is never removed. A marker that exists but cannot be read keeps every dir this
-    // round. Read without the lock: a login may switch a dir in after this, so the render never changes the mode of an
-    // existing dir; the end of the step closes the others (`follow_session`).
-    let active = active_marker(&paths.root).map(|a| a.map(|a| a.dir).filter(|d| is_config_dir(d)));
     let mut index = BTreeMap::new();
     {
         let lists: Vec<_> = configs.iter().map(|c| &c.web).collect();
@@ -251,21 +248,8 @@ fn render_all(ctx: &ApplyContext, m: &Manifest, env: &mut Env) -> Vec<ItemResult
         }
         errs.extend(r.errs.into_iter().map(|e| format!("neutral: {e}")));
     }
-    let mut keep: BTreeSet<String> = index.values().map(|r| r.dir.clone()).collect();
-    keep.insert(NEUTRAL_DIR.into());
     if let Err(e) = remove_old_dconf(paths) {
         errs.push(format!("removing the old dconf databases: {e:#}"));
-    }
-    match &active {
-        Ok(a) => {
-            keep.extend(a.iter().cloned());
-            if let Err(e) = remove_unreachable(paths, &keep) {
-                errs.push(format!("removing user configs no longer used: {e:#}"));
-            }
-        }
-        Err(e) => errs.push(format!(
-            "the signed-in session's marker cannot be read ({e:#}); kept every user config this round"
-        )),
     }
     // The device's `mastersos` database (the `desktop` step leaves its update to this step: one per round)
     if let Err(e) = desktop::dconf_update(runner, sys) {
@@ -296,12 +280,15 @@ fn render_all(ctx: &ApplyContext, m: &Manifest, env: &mut Env) -> Vec<ItemResult
     if let Err(e) = written {
         errs.push(format!("index: {e:#}"));
     }
+    // Last, under the marker's lock: the session follows, and the dirs no session uses are removed or closed
+    let followed = follow_session(paths, runner, &index, fallback.as_deref());
+    errs.extend(followed.tidy_errs);
     out.push(if errs.is_empty() {
         ok(ITEM)
     } else {
         failed(ITEM, errs.join("; "))
     });
-    out.extend(follow_session(paths, runner, &index, fallback.as_deref()));
+    out.extend(followed.active);
     out
 }
 
@@ -314,53 +301,92 @@ fn neutral_rendered() -> Rendered {
     }
 }
 
+/// What [`follow_session`] gives the step: the [`ACTIVE_ITEM`], if any, and what went wrong removing the config dirs no
+/// longer reachable (reported in [`ITEM`]).
+#[derive(Debug, Default)]
+struct Followed {
+    active: Option<ItemResult>,
+    tidy_errs: Vec<String>,
+}
+
+impl Followed {
+    fn active(item: Option<ItemResult>) -> Followed {
+        Followed {
+            active: item,
+            tidy_errs: Vec::new(),
+        }
+    }
+}
+
 /// The end of the step: the session follows the configs just rendered (see the module documentation). `configs` are
-/// this round's rendered user configs by id, `fallback` the rules' fallback (none without rules). Returns the
-/// [`ACTIVE_ITEM`], if any.
+/// this round's rendered user configs by id, `fallback` the rules' fallback (none without rules).
+///
+/// Also under the marker's lock, and only there: the user config dirs of no session are removed (no longer reachable)
+/// or closed ([`tidy`]). The lock is the one `on_open` holds while it switches a person in from the index it read, so a
+/// dir a login has just claimed is always named by the marker or the session link when this runs. A busy lock or a
+/// marker that cannot be read removes and closes nothing this round.
 fn follow_session(
     paths: &SysPaths,
     runner: &dyn Runner,
     configs: &BTreeMap<String, Rendered>,
     fallback: Option<&str>,
-) -> Option<ItemResult> {
+) -> Followed {
     let root = paths.root.as_path();
     let lock = match switch::lock_active(root, switch::LOCK_WAIT) {
         Ok(l) => l,
-        Err(e) if switch::is_lock_busy(&e) => return Some(busy(paths, configs, &e)),
-        Err(e) => return Some(failed(ACTIVE_ITEM, format!("{e:#}"))),
+        Err(e) if switch::is_lock_busy(&e) => {
+            return Followed::active(Some(busy(paths, configs, &e)))
+        }
+        Err(e) => return Followed::active(Some(failed(ACTIVE_ITEM, format!("{e:#}")))),
     };
     let a = match active_marker(root) {
         Ok(Some(a)) => a,
         Ok(None) => {
             let done = session::to_neutral(paths, runner);
-            close_others(paths, None);
-            return done
-                .err()
-                .map(|e| failed(ACTIVE_ITEM, format!("nobody is signed in: {e:#}")));
+            return Followed {
+                tidy_errs: tidy(paths, configs, &[]),
+                active: done
+                    .err()
+                    .map(|e| failed(ACTIVE_ITEM, format!("nobody is signed in: {e:#}"))),
+            };
         }
         Err(e) => {
-            return Some(failed(
-                ACTIVE_ITEM,
-                format!(
+            return Followed {
+                active: Some(failed(
+                    ACTIVE_ITEM,
+                    format!(
                     "the signed-in session's marker cannot be read ({e:#}); nothing was switched"
                 ),
-            ))
+                )),
+                tidy_errs: vec![
+                "the signed-in session's marker cannot be read; kept every user config this round"
+                    .into(),
+            ],
+            }
         }
     };
     if a.state == ActiveState::Closing {
-        close_others(paths, Some(&a.dir));
-        return None;
+        return Followed {
+            tidy_errs: tidy(paths, configs, &[&a.dir]),
+            active: None,
+        };
     }
+    let named = a.dir.clone();
     let Some(r) = configs.get(&a.user_config) else {
         let item = removed(paths, runner, a, configs, fallback);
-        // `removed` rewrote the marker's dir; read back what it now names (unreadable: nothing is closed)
-        if let Ok(Some(a)) = active_marker(root) {
-            close_others(paths, Some(&a.dir));
-        }
-        return Some(item);
+        // `removed` rewrote the marker's dir; the dir it named before stays this round too (unreadable now: nothing is
+        // removed or closed)
+        let tidy_errs = match active_marker(root) {
+            Ok(Some(now)) => tidy(paths, configs, &[&named, &now.dir]),
+            _ => Vec::new(),
+        };
+        return Followed {
+            active: Some(item),
+            tidy_errs,
+        };
     };
     let (mut errs, loosen) = keep(paths, runner, a, r);
-    close_others(paths, Some(&r.dir));
+    let tidy_errs = tidy(paths, configs, &[&named, &r.dir]);
     drop(lock);
     // A capability the config gained: lifted by the agent's after-login step, which takes the lock itself
     if loosen {
@@ -374,42 +400,108 @@ fn follow_session(
             Err(e) => errs.push(format!("{e:#}")),
         }
     }
-    (!errs.is_empty()).then(|| failed(ACTIVE_ITEM, errs.join("; ")))
+    Followed {
+        active: (!errs.is_empty()).then(|| failed(ACTIVE_ITEM, errs.join("; "))),
+        tidy_errs,
+    }
 }
 
-/// Closes (0700) every user config dir in the public [`STATE_SUB`] but `live` (the marker's dir) and the one the
-/// [`SESSION_LINK`] points at (a switch that failed half way may leave it there): the render never changes an existing
-/// dir's mode, since a login may open one after the step read the marker. Called under the marker's lock. Failures
-/// are logged: a dir left open is closed by the next round, and the session is never looser for it.
-fn close_others(paths: &SysPaths, live: Option<&str>) {
-    let closed = (|| -> Result<()> {
-        let Some(pub_fd) = open_existing_abs(&paths.public_dir)? else {
-            return Ok(());
-        };
-        let Some(parent) = safefs::open_child_dir(&pub_fd, STATE_SUB)? else {
-            return Ok(());
-        };
-        let linked = safefs::read_link_at(&pub_fd, SESSION_LINK);
-        let linked = linked
-            .as_deref()
-            .and_then(|l| l.strip_prefix(&format!("{STATE_SUB}/")));
-        for name in safefs::list_at(&parent)? {
-            if !is_config_dir(&name)
-                || name == NEUTRAL_DIR
-                || Some(name.as_str()) == live
-                || Some(name.as_str()) == linked
-            {
-                continue;
+/// The user config dirs no session uses, called under the marker's lock (see [`follow_session`]). A dir is spared when it
+/// is [`NEUTRAL_DIR`], in `live` (the dirs the marker names, read under the lock) or the [`SESSION_LINK`]'s target (a
+/// switch that failed half way may leave the session there). Of the others, those of no config in `configs` are removed
+/// everywhere the step writes them (the root-only state, the public dir, the staging copy), and those still reachable
+/// are closed (0700) in the public dir: the render never changes an existing dir's mode, since a login may open one while
+/// it runs. Only names of the exact shape of a config dir ([`is_config_dir`]) are touched. Each entry that fails is
+/// logged and the next one is still done; removal failures are returned for the step's report, close failures only
+/// logged (a dir left open is closed by the next round, and the session is never looser for it).
+fn tidy(paths: &SysPaths, configs: &BTreeMap<String, Rendered>, live: &[&str]) -> Vec<String> {
+    let reachable: BTreeSet<&str> = configs.values().map(|r| r.dir.as_str()).collect();
+    let mut errs = Vec::new();
+    let linked = open_existing_abs(&paths.public_dir)
+        .ok()
+        .flatten()
+        .and_then(|p| safefs::read_link_at(&p, SESSION_LINK));
+    let linked = linked
+        .as_deref()
+        .and_then(|l| l.strip_prefix(&format!("{STATE_SUB}/")));
+    let spared = |name: &str| name == NEUTRAL_DIR || live.contains(&name) || Some(name) == linked;
+    let gone = |name: &str| is_config_dir(name) && !spared(name) && !reachable.contains(name);
+    let mut remove_failed = |what: &str, e: anyhow::Error| {
+        let msg = format!("removing the user config {what} no longer used: {e:#}");
+        log::warn!("user layer: {msg}");
+        errs.push(msg);
+    };
+    match state_dir(paths) {
+        Ok(state) => remove_each(&state, &gone, |n, e| remove_failed(n, e)),
+        Err(e) => remove_failed("state", e),
+    }
+    match staging_dir(paths) {
+        Ok(staging) => match safefs::list_at(&staging) {
+            Ok(names) => {
+                for name in names {
+                    if name.strip_suffix(".json").is_some_and(gone) {
+                        if let Err(e) = safefs::remove_at(&staging, &name) {
+                            remove_failed(&name, e);
+                        }
+                    }
+                }
             }
-            let d = safefs::open_dir_at(&parent, Path::new(&name), false)?;
+            Err(e) => remove_failed("staging copies", e),
+        },
+        Err(e) => remove_failed("staging copies", e),
+    }
+    let public = match open_existing_abs(&paths.public_dir)
+        .and_then(|p| p.map(|p| safefs::open_child_dir(&p, STATE_SUB)).transpose())
+    {
+        Ok(p) => p.flatten(),
+        Err(e) => {
+            remove_failed("session files", e);
+            None
+        }
+    };
+    let Some(public) = public else {
+        return errs;
+    };
+    remove_each(&public, &gone, |n, e| remove_failed(n, e));
+    let names = match safefs::list_at(&public) {
+        Ok(n) => n,
+        Err(e) => {
+            log::warn!("user layer: closing the config directories no session uses: {e:#}");
+            return errs;
+        }
+    };
+    for name in names {
+        if !is_config_dir(&name) || spared(&name) {
+            continue;
+        }
+        let closed = safefs::open_dir_at(&public, Path::new(&name), false).and_then(|d| {
             if mode_of(&d)? != 0o700 {
                 safefs::set_mode(&d, 0o700)?;
             }
+            Ok(())
+        });
+        if let Err(e) = closed {
+            log::warn!("user layer: closing the config directory {name} no session uses: {e:#}");
         }
-        Ok(())
-    })();
-    if let Err(e) = closed {
-        log::warn!("user layer: closing the config directories no session uses: {e:#}");
+    }
+    errs
+}
+
+/// Removes every entry of `dir` that is `gone`; each failure goes to `failed` and the next entry is still done.
+fn remove_each(
+    dir: &OwnedFd,
+    gone: &dyn Fn(&str) -> bool,
+    mut failed: impl FnMut(&str, anyhow::Error),
+) {
+    match safefs::list_at(dir) {
+        Ok(names) => {
+            for name in names.iter().filter(|n| gone(n)) {
+                if let Err(e) = safefs::remove_tree_at(dir, name) {
+                    failed(name, e);
+                }
+            }
+        }
+        Err(e) => failed("directory listing", e),
     }
 }
 
@@ -809,28 +901,6 @@ fn write_index(paths: &SysPaths, index: &Index) -> Result<()> {
 
 fn remove_index(paths: &SysPaths) -> Result<()> {
     safefs::remove_at(&state_dir(paths)?, INDEX_FILE)
-}
-
-/// Removes the config directories not in `keep`, everywhere this step writes them. Only names of the exact shape
-/// of a config directory ([`is_config_dir`]) are touched.
-fn remove_unreachable(paths: &SysPaths, keep: &BTreeSet<String>) -> Result<()> {
-    let gone = |name: &str| is_config_dir(name) && !keep.contains(name);
-    let state = state_dir(paths)?;
-    let public = public_dir(paths).and_then(|p| sub(&p, STATE_SUB, PUBLIC_STATE_MODE))?;
-    for d in [&state, &public] {
-        for name in safefs::list_at(d)? {
-            if gone(&name) {
-                safefs::remove_tree_at(d, &name)?;
-            }
-        }
-    }
-    let staging = staging_dir(paths)?;
-    for name in safefs::list_at(&staging)? {
-        if name.strip_suffix(".json").is_some_and(gone) {
-            safefs::remove_at(&staging, &name)?;
-        }
-    }
-    Ok(())
 }
 
 /// Removes what the first layout put in `/etc/dconf/db` for any config dir: `mastersos-<d>.d` and the compiled

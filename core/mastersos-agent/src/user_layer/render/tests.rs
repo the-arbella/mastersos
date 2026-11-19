@@ -1312,7 +1312,7 @@ fn removed_config_without_fallback_goes_neutral() {
     let p = paths(root.path());
     let configs = read_index(&p.var_dir).unwrap().configs;
     let before = sign_in(root.path(), &r, "gone", &caps_of(&[Capability::Terminal]));
-    let item = follow_session(&p, &r, &configs, None).unwrap();
+    let item = follow_session(&p, &r, &configs, None).active.unwrap();
     assert!(!item.ok);
     assert_eq!(
         item.detail.as_deref(),
@@ -1352,7 +1352,9 @@ fn removed_config_with_broken_fallback_goes_neutral() {
     )
     .unwrap();
     let before = sign_in(root.path(), &r, "gone", &caps_of(&[Capability::Terminal]));
-    let item = follow_session(&p, &r, &configs, Some("primary")).unwrap();
+    let item = follow_session(&p, &r, &configs, Some("primary"))
+        .active
+        .unwrap();
     assert!(!item.ok);
     let detail = item.detail.as_deref().unwrap();
     assert!(
@@ -1510,4 +1512,190 @@ fn follow_session_closes_every_other_config_dir() {
     assert_eq!(mode(public(root.path()).join(&teacher)), 0o700);
     assert_eq!(mode(public(root.path()).join(&primary)), 0o700);
     assert_eq!(mode(public(root.path()).join(NEUTRAL_DIR)), 0o755);
+}
+
+// ---------------------------------------------------------------------------
+// A reapply never removes or closes a live config dir (coordinator fix CF1)
+// ---------------------------------------------------------------------------
+
+/// The spec example with `teacher` renamed `staff`: the settings no longer have `teacher` (its dir is unreachable).
+fn v3_without_teacher() -> Manifest {
+    let m = Manifest::parse(
+        &spec_example_v3()
+            .replace("id = \"teacher\"", "id = \"staff\"")
+            .replace("user_config = \"teacher\"", "user_config = \"staff\""),
+    )
+    .unwrap();
+    assert!(user_config(&m, "teacher").is_none());
+    assert!(user_config(&m, "staff").is_some());
+    m
+}
+
+/// An unreachable config's leftovers: its root-only dir, its public dir and its staging copy.
+fn put_stale(root: &Path, d: &str) {
+    fs::create_dir_all(var(root).join(d)).unwrap();
+    fs::write(var(root).join(d).join(CHROME_FILE), "{}").unwrap();
+    fs::create_dir_all(public(root).join(d).join("xdg")).unwrap();
+    fs::write(staging(root).join(format!("{d}.json")), "{}").unwrap();
+}
+
+/// Whether `d`'s root-only dir and public dir exist (a switch to `d` moves its staging copy into place, so a live dir has
+/// none between renders).
+fn dirs_left(root: &Path, d: &str) -> [bool; 2] {
+    [var(root).join(d).exists(), public(root).join(d).exists()]
+}
+
+/// [`dirs_left`] and whether `d`'s staging copy exists.
+fn stale_left(root: &Path, d: &str) -> [bool; 3] {
+    let [v, p] = dirs_left(root, d);
+    [v, p, staging(root).join(format!("{d}.json")).exists()]
+}
+
+/// [`LiveRunner`] that signs `UID` in to `teacher` from the index on disk (the previous round's, which still has it), as
+/// `on_open` does under the marker's lock, right after the step's first `dconf compile`: the step has started with a
+/// bundle that no longer has `teacher`, and has not yet written its index or removed anything.
+struct LoginFromOldIndex {
+    inner: LiveRunner,
+    root: PathBuf,
+    done: AtomicBool,
+}
+
+impl crate::runner::Runner for LoginFromOldIndex {
+    fn run(&self, cmd: &crate::runner::Cmd) -> anyhow::Result<crate::runner::Output> {
+        let out = self.inner.run(cmd)?;
+        let compile = cmd.program == "dconf" && cmd.args.first().is_some_and(|a| a == "compile");
+        if compile && !self.done.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            let p = paths(&self.root);
+            let _lock = switch::lock_active(&self.root, switch::LOCK_WAIT).unwrap();
+            let r = read_index(&p.var_dir).unwrap().configs["teacher"].clone();
+            switch_to(&p.root, &p.public_dir, &p.var_dir, &r, Some(UID)).unwrap();
+            switch::write_active(
+                &self.root,
+                &crate::user_layer::Active {
+                    uid: UID,
+                    user: "t1@school.ac.th".into(),
+                    user_config: "teacher".into(),
+                    dir: r.dir.clone(),
+                    caps: Caps::new(),
+                    state: ActiveState::Open,
+                    reason: None,
+                    opened_at: 0,
+                    seen: false,
+                    held: false,
+                },
+            )
+            .unwrap();
+        }
+        Ok(out)
+    }
+}
+
+/// A login from the old index while a reapply that drops its config runs: the dir the login took is not removed under
+/// the session (the removal runs under the marker's lock and spares the dir the marker names). The session itself is the
+/// removed-config case (R28): the fallback, held. Once the marker no longer names the dir, the next round removes it.
+#[test]
+fn reapply_never_removes_the_dir_a_login_took_from_the_old_index() {
+    let root = root();
+    render_live(root.path(), &v3(), &live(root.path()));
+    let teacher = config_dir_name("teacher");
+    let r = LoginFromOldIndex {
+        inner: live(root.path()),
+        root: root.path().to_path_buf(),
+        done: AtomicBool::new(false),
+    };
+    let out = run_step_with(
+        step(),
+        root.path(),
+        &v3_without_teacher(),
+        &r,
+        &mut SysState::default(),
+    );
+    assert!(r.done.load(std::sync::atomic::Ordering::SeqCst));
+    ok_item(&out, ITEM);
+    // the dir the session started on is still there
+    assert_eq!(dirs_left(root.path(), &teacher), [true; 2]);
+    assert!(var(root.path()).join(&teacher).join(CHROME_FILE).exists());
+    // the session: its config is no longer in the settings (R28)
+    let item = active_item(&out).unwrap();
+    assert_eq!(item.detail.as_deref(), Some(REMOVED_CONFIG));
+    let a = read_active(root.path()).unwrap();
+    assert!(a.held);
+    assert_eq!(a.user_config, "primary");
+    assert_eq!(a.dir, config_dir_name("primary"));
+    assert_eq!(
+        session_link(root.path()),
+        Some(format!("user-layer/{}", config_dir_name("primary")))
+    );
+    // the switch to the fallback closed the dir it left
+    assert_eq!(mode(public(root.path()).join(&teacher)), 0o700);
+    // the next round: no marker or link names it any more
+    let out = render_live(root.path(), &v3_without_teacher(), &live(root.path()));
+    ok_item(&out, ITEM);
+    assert_eq!(stale_left(root.path(), &teacher), [false; 3]);
+    assert!(read_active(root.path()).unwrap().held);
+}
+
+/// An unreachable config's dirs that no marker or link names go while someone is signed in; the session's dir stays open.
+#[test]
+fn unreachable_dir_goes_while_someone_is_signed_in() {
+    let root = root();
+    let r = live(root.path());
+    render_live(root.path(), &v3(), &r);
+    sign_in(root.path(), &r, "teacher", &Caps::new());
+    let old = config_dir_name("old");
+    put_stale(root.path(), &old);
+    let out = render_live(root.path(), &v3(), &r);
+    ok_item(&out, ITEM);
+    assert_eq!(stale_left(root.path(), &old), [false; 3]);
+    let teacher = config_dir_name("teacher");
+    assert_eq!(dirs_left(root.path(), &teacher), [true; 2]);
+    assert_eq!(mode(public(root.path()).join(&teacher)), 0o755);
+}
+
+/// The marker's lock is busy: nothing is removed and nothing closed this round; the next round does both.
+#[test]
+fn busy_lock_removes_and_closes_nothing() {
+    let root = root();
+    let r = live(root.path());
+    render_live(root.path(), &v3(), &r);
+    sign_in(root.path(), &r, "teacher", &Caps::new());
+    let old = config_dir_name("old");
+    put_stale(root.path(), &old);
+    let primary = public(root.path()).join(config_dir_name("primary"));
+    fs::set_permissions(&primary, fs::Permissions::from_mode(0o755)).unwrap();
+    let held = switch::lock_active(root.path(), std::time::Duration::ZERO).unwrap();
+    let out = render_live(root.path(), &v3(), &r);
+    ok_item(&out, ITEM);
+    assert_eq!(stale_left(root.path(), &old), [true; 3]);
+    assert_eq!(mode(primary.clone()), 0o755);
+    drop(held);
+    let out = render_live(root.path(), &v3(), &r);
+    ok_item(&out, ITEM);
+    assert_eq!(stale_left(root.path(), &old), [false; 3]);
+    assert_eq!(mode(primary), 0o700);
+}
+
+/// An entry that cannot be removed or closed (here a symlink of a config dir's name, listed first) is reported and the
+/// others are still done.
+#[test]
+fn a_failing_entry_does_not_stop_the_others() {
+    let root = root();
+    let r = live(root.path());
+    render_live(root.path(), &v3(), &r);
+    let first = "u-0000000000000000";
+    std::os::unix::fs::symlink(NEUTRAL_DIR, var(root.path()).join(first)).unwrap();
+    std::os::unix::fs::symlink(NEUTRAL_DIR, public(root.path()).join(first)).unwrap();
+    let old = config_dir_name("old");
+    put_stale(root.path(), &old);
+    let primary = public(root.path()).join(config_dir_name("primary"));
+    fs::set_permissions(&primary, fs::Permissions::from_mode(0o755)).unwrap();
+    let out = render_live(root.path(), &v3(), &r);
+    let main = out.iter().find(|i| i.item == ITEM).unwrap();
+    assert!(!main.ok, "{main:?}");
+    assert!(main.detail.as_deref().unwrap().contains(first), "{main:?}");
+    assert_eq!(stale_left(root.path(), &old), [false; 3]);
+    assert_eq!(mode(primary), 0o700);
+    // the symlinks are left as they are
+    assert!(fs::symlink_metadata(var(root.path()).join(first)).is_ok());
+    assert!(fs::symlink_metadata(public(root.path()).join(first)).is_ok());
 }
