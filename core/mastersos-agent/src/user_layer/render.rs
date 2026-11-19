@@ -43,7 +43,8 @@ use crate::system::{
     chrome_policy, exec_block, failed, flatpak, ok, public_dir, var_dir, Env, Step, SysPaths,
 };
 
-/// The report item of the step; each user config adds `user-layer:<id>`.
+/// The report item of the step; each user config adds `user-layer:config:<id>` (the `config:` keeps them apart from the
+/// agent's session items such as `user-layer:session`).
 pub const ITEM: &str = "user-layer";
 /// The step's directory under `var_dir` (root 0700) and under `public_dir` (0755).
 pub const STATE_SUB: &str = "user-layer";
@@ -297,7 +298,7 @@ fn render_all(ctx: &ApplyContext, m: &Manifest, env: &mut Env) -> Vec<ItemResult
 }
 
 fn item_of(id: &str) -> String {
-    format!("{ITEM}:{id}")
+    format!("{ITEM}:config:{id}")
 }
 
 fn item(name: &str, r: Outcome) -> ItemResult {

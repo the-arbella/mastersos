@@ -226,8 +226,8 @@ fn renders_every_reachable_config_and_neutral() {
     let (out, r) = render(root.path(), &v3());
     let (teacher, primary) = (config_dir_name("teacher"), config_dir_name("primary"));
     ok_item(&out, ITEM);
-    ok_item(&out, "user-layer:teacher");
-    ok_item(&out, "user-layer:primary");
+    ok_item(&out, "user-layer:config:teacher");
+    ok_item(&out, "user-layer:config:primary");
     let mut want = vec![teacher.clone(), primary.clone(), NEUTRAL_DIR.to_string()];
     want.sort();
     let mut with_index = want.clone();
@@ -586,7 +586,7 @@ fn recompiles_every_round_and_fails_closed() {
     // unchanged keyfiles: compiled again all the same (a crash between writing and compiling cannot leave a stale one)
     let (out, r) = render(root.path(), &v3());
     assert_eq!(compiles(&r).len(), 3, "{:?}", r.calls());
-    ok_item(&out, "user-layer:teacher");
+    ok_item(&out, "user-layer:config:teacher");
     // the compile fails: no database, the item fails
     let r = CompileRunner::default();
     for _ in 0..3 {
@@ -599,7 +599,10 @@ fn recompiles_every_round_and_fails_closed() {
     for d in &dirs {
         assert!(!db_of(d).exists(), "{d}");
     }
-    let teacher = out.iter().find(|i| i.item == "user-layer:teacher").unwrap();
+    let teacher = out
+        .iter()
+        .find(|i| i.item == "user-layer:config:teacher")
+        .unwrap();
     assert!(!teacher.ok, "{teacher:?}");
     // compiled again by the next round
     render(root.path(), &v3());
@@ -615,7 +618,10 @@ fn recompiles_every_round_and_fails_closed() {
     assert!(!db_of(&dirs[0]).exists());
     assert!(db_of(&dirs[1]).exists());
     assert_eq!(compiles(&r).len(), 2, "{:?}", r.calls());
-    let teacher = out.iter().find(|i| i.item == "user-layer:teacher").unwrap();
+    let teacher = out
+        .iter()
+        .find(|i| i.item == "user-layer:config:teacher")
+        .unwrap();
     assert!(!teacher.ok, "{teacher:?}");
 }
 

@@ -266,8 +266,15 @@ pub(crate) fn on_open_at(
     // Backstop of pam-check's one-session rule: another person's session, or any session being closed, is not touched.
     match active_marker(root) {
         Ok(None) => {}
-        Ok(Some(a)) if a.uid == uid && a.state == ActiveState::Open => {
+        Ok(Some(mut a)) if a.uid == uid && a.state == ActiveState::Open => {
             // A second session of the same person keeps the first one's config: nothing is resolved or switched again.
+            // The grace of the agent's watch starts again (R9): this login is not in logind yet either, and the first
+            // session may be gone already.
+            a.opened_at = now.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+            a.seen = false;
+            if let Err(e) = write_active(root, &a) {
+                log(&format!("restarting the session's grace failed: {e:#}"));
+            }
             let home = read_index(&paths.var_dir)
                 .and_then(|i| i.configs.get(&a.user_config).map(|r| r.home))
                 .unwrap_or(HomeMode::Keep);
@@ -443,13 +450,33 @@ pub fn lock_active(root: &Path, wait: Duration) -> Result<OwnedFd> {
         }
         let waited = start.elapsed();
         if waited >= wait {
-            bail!(
-                "{LOCK_FILE} is still held after {} ms (another sign-in or sign-out is changing the session)",
-                wait.as_millis()
-            );
+            return Err(LockBusy { wait }.into());
         }
         std::thread::sleep(Duration::from_millis(50).min(wait - waited));
     }
+}
+
+/// [`lock_active`] waited its whole time: another sign-in, sign-out or revert holds [`LOCK_FILE`].
+#[derive(Debug)]
+pub struct LockBusy {
+    pub wait: Duration,
+}
+
+impl std::fmt::Display for LockBusy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{LOCK_FILE} is still held after {} ms (another sign-in or sign-out is changing the session)",
+            self.wait.as_millis()
+        )
+    }
+}
+
+impl std::error::Error for LockBusy {}
+
+/// Whether `e` is (or wraps) a [`LockBusy`].
+pub fn is_lock_busy(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<LockBusy>().is_some()
 }
 
 /// Whether a marker exists under `root` (or cannot be read): some session is open or still being closed.

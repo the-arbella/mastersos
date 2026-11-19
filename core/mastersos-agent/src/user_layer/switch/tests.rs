@@ -525,7 +525,17 @@ fn other_uid_active_refuses() {
             home: index.configs["teacher"].home,
         }
     );
-    assert_eq!(read_active(&p.root).unwrap(), other);
+    // ... and restarts the grace of the agent's watch
+    let again = read_active(&p.root).unwrap();
+    assert!(again.opened_at > 1, "{again:?}");
+    assert_eq!(
+        again,
+        Active {
+            opened_at: again.opened_at,
+            seen: false,
+            ..other.clone()
+        }
+    );
     assert!(link(&p).is_none());
     assert!(!managed(&p).exists());
     // A session being closed refuses every uid, its own too
@@ -604,6 +614,36 @@ fn opened_at_is_the_login_time() {
     assert_eq!(read_active(&p.root).unwrap().opened_at, 1_800_000_000);
 }
 
+/// A re-login of the same person while their marker is open (their first session may have vanished without a
+/// close_session) restarts the watch's grace: `opened_at` is the new login and `seen` is cleared, so the agent does not
+/// revert the new login before pam_systemd registers it (R9).
+#[test]
+fn same_person_again_restarts_the_grace() {
+    let (_root, p, _) = rendered();
+    let t0 = UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+    on_open_at(&p.root, &p, &policy(), STUDENT, 20000, t0);
+    let mut first = read_active(&p.root).unwrap();
+    first.seen = true;
+    write_active(&p.root, &first).unwrap();
+    let later = t0 + Duration::from_secs(600);
+    switched(
+        &first.user_config,
+        first.reason.is_some(),
+        &on_open_at(&p.root, &p, &policy(), STUDENT, 20000, later),
+    );
+    let again = read_active(&p.root).unwrap();
+    assert_eq!(again.opened_at, 1_800_000_600);
+    assert!(!again.seen);
+    assert_eq!(
+        again,
+        Active {
+            opened_at: 1_800_000_600,
+            seen: false,
+            ..first
+        }
+    );
+}
+
 /// Back to format 1/2: the profile goes before the session database, and the image's profile applies again.
 #[test]
 fn format2_after_a_switch_removes_profile_and_session_db() {
@@ -647,7 +687,15 @@ fn same_person_again_keeps_the_first_sessions_config() {
             home: index.configs["primary"].home,
         }
     );
-    assert_eq!(read_active(&p.root).unwrap(), first);
+    let again = read_active(&p.root).unwrap();
+    assert!(again.opened_at >= first.opened_at);
+    assert_eq!(
+        again,
+        Active {
+            opened_at: again.opened_at,
+            ..first
+        }
+    );
     assert_eq!(tree(&p.root), before);
     assert_eq!(fs::read(managed(&p)).unwrap(), managed_before);
     assert_switched_to(&p, &dir_of("primary"));

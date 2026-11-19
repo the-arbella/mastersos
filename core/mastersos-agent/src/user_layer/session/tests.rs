@@ -128,6 +128,14 @@ fn revert_on_closing() {
     let a = signed_in(&p, &index, ActiveState::Closing, false);
     after_login(&p, &r).unwrap();
     exec_block::apply_lifted(&p, &r, &a.caps).unwrap();
+    // The closed session is gone from logind (or still closing)
+    list(
+        &r,
+        &[
+            greeter(),
+            row("3", UID, Some("seat0"), "user", Some("closing")),
+        ],
+    );
     assert_eq!(
         watch_at(&p, &r, at(T0 + 1)).unwrap(),
         WatchOutcome::Reverted {
@@ -137,10 +145,7 @@ fn revert_on_closing() {
     assert_neutral(&p);
     assert!(read_active(&p.root).is_none());
     assert!(!p.root.join(RUN_DIR).join(ACTIVE_FILE).exists());
-    let calls = r.calls();
-    // Closing reverts at once: logind is not asked
-    assert!(!calls.iter().any(|c| c.starts_with(LIST)), "{calls:?}");
-    assert_eq!(revert_cmds(&calls), expected_revert_cmds());
+    assert_eq!(revert_cmds(&r.calls()), expected_revert_cmds());
     // Nothing left to do
     assert_eq!(watch_at(&p, &r, at(T0 + 6)).unwrap(), WatchOutcome::Idle);
 }
@@ -248,6 +253,7 @@ fn revert_clears_marker_last() {
     let (_root, p, index, r) = setup();
     let a = signed_in(&p, &index, ActiveState::Closing, true);
     exec_block::apply_lifted(&p, &r, &a.caps).unwrap();
+    list(&r, &[greeter()]);
     r.fail_on("systemctl stop");
     let e = watch_at(&p, &r, at(T0 + 1)).unwrap_err();
     assert!(format!("{e:#}").contains("user@"), "{e:#}");
@@ -256,6 +262,7 @@ fn revert_clears_marker_last() {
     assert_eq!(revert_cmds(&r.calls()), expected_revert_cmds());
     // Next round it works and the marker goes
     let r2 = MountSim::new(&p.root);
+    list(&r2, &[greeter()]);
     assert_eq!(
         watch_at(&p, &r2, at(T0 + 6)).unwrap(),
         WatchOutcome::Reverted {
@@ -266,6 +273,7 @@ fn revert_clears_marker_last() {
     // A failing disable-linger keeps it too; the user manager is still stopped
     signed_in(&p, &index, ActiveState::Closing, true);
     let r3 = MountSim::new(&p.root);
+    list(&r3, &[greeter()]);
     r3.fail_on("loginctl disable-linger");
     assert!(watch_at(&p, &r3, at(T0 + 11)).is_err());
     assert!(read_active(&p.root).is_some());
@@ -318,6 +326,7 @@ fn stale_marker_after_format_change_is_cleared() {
     fs::remove_dir_all(p.var_dir.join(STATE_SUB)).unwrap();
     // The format 1/2 `desktop` step of a `full` Group
     exec_block::apply(&p, &r, false).unwrap();
+    list(&r, &[greeter()]);
     let mode_before = read_lifted(&p).unwrap();
     assert_eq!(
         watch_at(&p, &r, at(T0 + 1)).unwrap(),
@@ -352,4 +361,234 @@ fn boot_with_marker_keeps_the_session() {
     assert_switched_to(&p, &config_dir_name("teacher"));
     assert_eq!(lifted(&p), a.caps);
     assert_eq!(read_active(&p.root), Some(a));
+}
+
+/// R27: the same person still has a live session elsewhere (a tty login: pam-check lets the same uid in while the marker
+/// is open, and pam-session is only in the GDM stacks) when their GDM session closes. That session keeps its config and
+/// the marker becomes open (seen) again, so nobody else can sign in; it is reverted once logind shows none.
+#[test]
+fn closing_with_another_live_session_keeps_it() {
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Closing, false);
+    exec_block::apply_lifted(&p, &r, &a.caps).unwrap();
+    list(
+        &r,
+        &[
+            greeter(),
+            row("3", UID, Some("seat0"), "user", Some("closing")),
+            row("7", UID, None, "user", Some("active")),
+        ],
+    );
+    assert_eq!(
+        watch_at(&p, &r, at(T0 + 1)).unwrap(),
+        WatchOutcome::StillOpen
+    );
+    let mut want = a.clone();
+    want.state = ActiveState::Open;
+    want.seen = true;
+    assert_eq!(read_active(&p.root), Some(want));
+    assert_switched_to(&p, &config_dir_name("teacher"));
+    assert_eq!(lifted(&p), a.caps);
+    assert!(revert_cmds(&r.calls()).is_empty(), "{:?}", r.calls());
+    // A failing list keeps the closing marker as it is (fail closed); retried next round
+    write_active(&p.root, &a).unwrap();
+    r.fake
+        .respond(LIST, Output::fail(1, "Failed to connect to bus"));
+    assert!(watch_at(&p, &r, at(T0 + 6)).is_err());
+    assert_eq!(read_active(&p.root), Some(a.clone()));
+    assert!(revert_cmds(&r.calls()).is_empty(), "{:?}", r.calls());
+    // Once the other session is gone too: reverted
+    list(&r, &[greeter()]);
+    assert_eq!(
+        watch_at(&p, &r, at(T0 + 11)).unwrap(),
+        WatchOutcome::Reverted {
+            user_config: "teacher".into()
+        }
+    );
+    assert_neutral(&p);
+    assert!(read_active(&p.root).is_none());
+}
+
+/// After a login whose session logind already lists, the marker is seen at once (no 60 s window of refused logins
+/// should a close miss the lock); a failing list does not stop the lift.
+#[test]
+fn after_login_marks_a_listed_session_seen() {
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Open, false);
+    r.fake
+        .respond(LIST, Output::fail(1, "Failed to connect to bus"));
+    after_login(&p, &r).unwrap();
+    assert_eq!(lifted(&p), a.caps);
+    assert_eq!(read_active(&p.root), Some(a.clone()));
+    list(
+        &r,
+        &[
+            greeter(),
+            row("5", UID, Some("seat0"), "user", Some("active")),
+        ],
+    );
+    after_login(&p, &r).unwrap();
+    let mut want = a.clone();
+    want.seen = true;
+    assert_eq!(read_active(&p.root), Some(want));
+}
+
+/// A busy marker lock (a sign-in or sign-out changing the marker) is not a failure: nothing is done, next round retries.
+#[test]
+fn busy_lock_is_retried_not_failed() {
+    let (_root, p, index, r) = setup();
+    let a = signed_in(&p, &index, ActiveState::Closing, true);
+    let held = switch::lock_active(&p.root, Duration::ZERO).unwrap();
+    list(&r, &[greeter()]);
+    assert_eq!(watch_at(&p, &r, at(T0 + 1)).unwrap(), WatchOutcome::Busy);
+    assert_eq!(read_active(&p.root), Some(a.clone()));
+    assert!(revert_cmds(&r.calls()).is_empty(), "{:?}", r.calls());
+    let mut open = a.clone();
+    open.state = ActiveState::Open;
+    write_active(&p.root, &open).unwrap();
+    let e = after_login(&p, &r).unwrap_err();
+    assert!(switch::is_lock_busy(&e), "{e:#}");
+    drop(held);
+    write_active(&p.root, &a).unwrap();
+    list(&r, &[greeter()]);
+    assert_eq!(
+        watch_at(&p, &r, at(T0 + 6)).unwrap(),
+        WatchOutcome::Reverted {
+            user_config: "teacher".into()
+        }
+    );
+}
+
+/// A runner for the monitor: the logind list is whatever `sessions` holds (every call), bind mounts are simulated and
+/// fail while `fail_mounts` is set.
+struct Sim {
+    mounts: MountSim,
+    sessions: std::sync::Mutex<String>,
+    fail_mounts: std::sync::atomic::AtomicBool,
+}
+
+impl Sim {
+    fn set_sessions(&self, rows: &[String]) {
+        *self.sessions.lock().unwrap() = format!("[{}]\n", rows.join(","));
+    }
+}
+
+impl Runner for Sim {
+    fn run(&self, cmd: &crate::runner::Cmd) -> Result<Output> {
+        let line = cmd.line();
+        if line.starts_with(LIST) {
+            return Ok(Output::ok(&self.sessions.lock().unwrap()));
+        }
+        if self.fail_mounts.load(std::sync::atomic::Ordering::SeqCst)
+            && line.contains("mount --bind")
+        {
+            return Ok(Output::fail(32, "mount: permission denied"));
+        }
+        self.mounts.run(cmd)
+    }
+}
+
+fn item_of(side: &SideResults, name: &str) -> Option<ItemResult> {
+    side.lock().unwrap().get(name).cloned()
+}
+
+/// Waits (wall clock, letting the monitor run) until `cond` holds.
+async fn eventually(what: &str, cond: impl Fn() -> bool) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while !cond() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for {what}"
+        );
+        tokio::task::yield_now().await;
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// Whether `changed` was notified since the last time it was taken.
+async fn notified(changed: &Notify) -> bool {
+    tokio::time::timeout(Duration::from_millis(1), changed.notified())
+        .await
+        .is_ok()
+}
+
+/// The monitor: a failed lift is reported and retried every round; the fallback reason is reported once lifted; a
+/// failed watch is reported and cleared once it works; both items go with the revert; `changed` only on a difference.
+#[tokio::test(start_paused = true)]
+async fn monitor_lifts_reports_and_reverts() {
+    let (_root, p, index, _) = setup();
+    let mut a = signed_in(&p, &index, ActiveState::Open, true);
+    a.reason = Some("the issuer handed over no facts".into());
+    // Only the terminal: the lift mounts the stub over the rest, which can fail
+    a.caps = [Capability::Terminal].into_iter().collect();
+    write_active(&p.root, &a).unwrap();
+    let sim = Arc::new(Sim {
+        mounts: MountSim::new(&p.root),
+        sessions: Default::default(),
+        fail_mounts: true.into(),
+    });
+    sim.set_sessions(&[
+        greeter(),
+        row("5", UID, Some("seat0"), "user", Some("active")),
+    ]);
+    let side: SideResults = Default::default();
+    let (changed, kick) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let shutdown = CancellationToken::new();
+    let task = tokio::spawn(monitor(
+        p.clone(),
+        sim.clone(),
+        side.clone(),
+        changed.clone(),
+        kick.clone(),
+        shutdown.clone(),
+    ));
+    // The lift fails: reported
+    eventually("the failed lift", || {
+        item_of(&side, SESSION_ITEM).is_some_and(|i| !i.ok)
+    })
+    .await;
+    assert!(notified(&changed).await);
+    assert_eq!(item_of(&side, REVERT_ITEM), None);
+    // Retried on the next round: lifted, the reason reported
+    sim.fail_mounts
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    tokio::time::sleep(crate::quiet::POLL + Duration::from_secs(1)).await;
+    eventually("the lift", || {
+        item_of(&side, SESSION_ITEM).is_some_and(|i| i.ok)
+    })
+    .await;
+    let it = item_of(&side, SESSION_ITEM).unwrap();
+    assert!(
+        it.detail
+            .as_deref()
+            .is_some_and(|d| d.contains("the issuer handed over no facts")),
+        "{it:?}"
+    );
+    assert_eq!(lifted(&p), a.caps);
+    assert!(notified(&changed).await);
+    // Rounds and kicks that change nothing do not notify
+    kick.notify_one();
+    tokio::time::sleep(crate::quiet::POLL * 3).await;
+    assert!(!notified(&changed).await);
+    assert_eq!(item_of(&side, SESSION_ITEM), Some(it));
+    // A watch that fails is reported ...
+    *sim.sessions.lock().unwrap() = "not json".into();
+    tokio::time::sleep(crate::quiet::POLL + Duration::from_secs(1)).await;
+    eventually("the failed watch", || {
+        item_of(&side, REVERT_ITEM).is_some_and(|i| !i.ok)
+    })
+    .await;
+    assert!(notified(&changed).await);
+    // ... and cleared with the revert once logind shows no session, together with the session's item
+    sim.set_sessions(&[greeter()]);
+    tokio::time::sleep(crate::quiet::POLL + Duration::from_secs(1)).await;
+    eventually("the revert", || read_active(&p.root).is_none()).await;
+    eventually("the items cleared", || {
+        item_of(&side, REVERT_ITEM).is_none() && item_of(&side, SESSION_ITEM).is_none()
+    })
+    .await;
+    assert!(notified(&changed).await);
+    assert_neutral(&p);
+    shutdown.cancel();
+    task.await.unwrap();
 }
