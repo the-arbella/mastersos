@@ -8,7 +8,8 @@
 //! {"version":1,"user":"<login name>","granted_at":<unix seconds>,"error":"<text>"}
 //! ```
 //!
-//! `pam-session` calls [`take_facts`], which reads the file and deletes it in every case. This runs inside PAM: it is
+//! `pam-session` calls [`take_facts`], which reads the file and deletes it (a symlink in its place included: the link,
+//! never its target), unless the directory cannot be trusted or the name is not usable. This runs inside PAM: it is
 //! synchronous, spawns nothing, uses no network and never panics. Facts that are missing, in error or stale only disable
 //! the rules with fact conditions (design §5); the caller decides what to do with each [`FactsOutcome`].
 
@@ -52,8 +53,9 @@ struct Record {
     version: u64,
     user: String,
     granted_at: u64,
+    /// An object, read by [`issuer_facts`]: the broker passes on `null` for keys the issuer left out.
     #[serde(default)]
-    facts: Option<IssuerFacts>,
+    facts: Option<serde_json::Value>,
     #[serde(default)]
     error: Option<String>,
 }
@@ -102,8 +104,9 @@ pub fn take_facts(root: &Path, user: &str, now: SystemTime) -> FactsOutcome {
         Ok(Some(b)) => b,
         Ok(None) => return FactsOutcome::Missing,
         Err(e) => {
-            // Unreadable (a symlink, not a regular file, ...): still remove it, so nothing lingers.
-            let _ = safefs::remove_at(&dir, &name);
+            // Unreadable (a symlink, not a regular file, ...): still remove the entry, so nothing lingers. `unlinkat`
+            // removes a symlink itself, never what it points to (a directory is left: it fails with EISDIR).
+            let _ = rustix::fs::unlinkat(&dir, name.as_str(), rustix::fs::AtFlags::empty());
             return FactsOutcome::Error(format!("{e:#}"));
         }
     };
@@ -142,10 +145,23 @@ fn interpret(bytes: &[u8], user: &str, now: SystemTime) -> FactsOutcome {
         return FactsOutcome::Stale;
     }
     match (rec.facts, rec.error) {
-        (Some(f), None) => FactsOutcome::Facts(f),
+        (Some(f), None) => match issuer_facts(f) {
+            Ok(f) => FactsOutcome::Facts(f),
+            Err(e) => FactsOutcome::Error(format!("malformed facts: {e}")),
+        },
         (None, Some(e)) => FactsOutcome::Error(format!("the login broker reported: {e}")),
         _ => FactsOutcome::Error("the facts file must hold exactly one of facts and error".into()),
     }
+}
+
+/// The `facts` object as [`IssuerFacts`], a key whose value is `null` read as absent: Go marshals a nil slice as
+/// `null`, and an empty list must not void the whole record (`sub` and `org` are still required).
+fn issuer_facts(v: serde_json::Value) -> Result<IssuerFacts, String> {
+    let serde_json::Value::Object(mut m) = v else {
+        return Err("facts is not an object".into());
+    };
+    m.retain(|_, v| !v.is_null());
+    serde_json::from_value(serde_json::Value::Object(m)).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -341,7 +357,9 @@ mod tests {
             take_facts(t.path(), "ann", at(NOW)),
             FactsOutcome::Error(_)
         ));
-        assert!(target.exists());
+        // the link itself goes, never what it points to
+        assert!(fs::symlink_metadata(d.join("ann.json")).is_err());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "x");
     }
     /// The exact bytes patch 0007's `mastersosWriteFactsFile` writes: Go's `json.Marshal` of `mastersosFactsFile`, fields
     /// in struct order, the `facts` map with sorted keys, compact, a login name with its domain.
@@ -390,6 +408,63 @@ mod tests {
         };
         assert_eq!(f.age_band, None);
         assert!(f.org_nodes.is_empty());
+    }
+
+    /// Go marshals a nil slice as `null`: the broker passes on `null` for any key the issuer left out. A `null` list or
+    /// role reads as absent (empty); only `sub` and `org` must be there.
+    #[test]
+    fn broker_null_lists_and_role_read_as_absent() {
+        let base = r#"{"age_band":"13-17","classes":[{"id":"c","role":"student"}],"org":"org-1","org_nodes":["n"],"org_role":"member","sub":"alice-id"}"#;
+        let cases = [
+            base.replace(r#"[{"id":"c","role":"student"}]"#, "null"),
+            base.replace(r#"["n"]"#, "null"),
+            base.replace(r#""member""#, "null"),
+            r#"{"age_band":null,"classes":null,"org":"org-1","org_nodes":null,"org_role":null,"sub":"alice-id"}"#
+                .to_string(),
+        ];
+        for facts in cases {
+            let (t, d) = setup();
+            let body = format!(
+                r#"{{"version":1,"user":"alice@school.example","granted_at":1799999990,"facts":{facts}}}"#
+            );
+            put(&d, "alice@school.example.json", &body);
+            let FactsOutcome::Facts(f) = take_facts(t.path(), "alice@school.example", at(NOW))
+            else {
+                panic!("expected facts: {facts}");
+            };
+            assert_eq!((f.sub.as_str(), f.org.as_str()), ("alice-id", "org-1"));
+            if facts.contains(r#""classes":null"#) {
+                assert!(f.classes.is_empty(), "{facts}");
+            }
+            if facts.contains(r#""org_nodes":null"#) {
+                assert!(f.org_nodes.is_empty(), "{facts}");
+            }
+            if facts.contains(r#""org_role":null"#) {
+                assert_eq!(f.org_role, None, "{facts}");
+            }
+        }
+    }
+
+    /// `sub` and `org` are required: `null` for either is an error.
+    #[test]
+    fn null_sub_or_org_is_error() {
+        for facts in [
+            r#"{"org":"org-1","sub":null}"#,
+            r#"{"org":null,"sub":"alice-id"}"#,
+        ] {
+            let (t, d) = setup();
+            let body = format!(
+                r#"{{"version":1,"user":"alice@school.example","granted_at":1799999990,"facts":{facts}}}"#
+            );
+            put(&d, "alice@school.example.json", &body);
+            assert!(
+                matches!(
+                    take_facts(t.path(), "alice@school.example", at(NOW)),
+                    FactsOutcome::Error(_)
+                ),
+                "{facts}"
+            );
+        }
     }
 
     #[test]
