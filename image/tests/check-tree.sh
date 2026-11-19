@@ -3508,12 +3508,10 @@ grep -qxE 'd /run/mastersos 0700 root root -' "$tf" || {
 	bad 78 "$tf should create /run/mastersos at boot, mode 0700"
 	r=1
 }
-for l in 'd /run/mastersos/facts 0700 root root -' 'd /run/mastersos/user-layer 0700 root root -'; do
-	grep -qxF -- "$l" "$tf" || {
-		bad 78 "$tf should have: $l (issuer facts hand-over and user-layer session state)"
-		r=1
-	}
-done
+grep -qxF -- 'd /run/mastersos/user-layer 0700 root root -' "$tf" || {
+	bad 78 "$tf should have: d /run/mastersos/user-layer 0700 root root - (user-layer session state)"
+	r=1
+}
 # The image's list of /usr: without it a vendor package could cover /usr/bin/mastersos-agent (not in any dpkg list);
 # written as the last step of mkosi.finalize, listing itself, and read by the agent at that path
 # shellcheck disable=SC2016 # literal text on purpose
@@ -3619,5 +3617,28 @@ if ! { grep -qxF 'const CARD_LIFETIME_S = 10 * 60;' "$card" &&
 	r=1
 fi
 [ "$r" = 0 ] && ok 80 "sign-in card: its policies are checked in a real Chrome from fixtures kept equal to the agent's code; it closes after 10 minutes"
+
+# 81. The broker's facts directory (2026-11-19, user layer plan C): tmpfiles makes /run/mastersos/facts root 0700, and the
+#     broker's drop-in lets the broker write there. The "-" prefix: a missing directory must not stop the broker, so school
+#     sign-in keeps working and the person just gets the fallback config. No other drop-in may open a writable path.
+r=0
+grep -qxF 'd /run/mastersos/facts 0700 root root -' image/mkosi.extra/usr/lib/tmpfiles.d/mastersos.conf || {
+	bad 81 "image/mkosi.extra/usr/lib/tmpfiles.d/mastersos.conf should have the line d /run/mastersos/facts 0700 root root -"
+	r=1
+}
+fd=image/mkosi.extra/usr/lib/systemd/system/authd-oidc.service.d/50-mastersos-facts.conf
+# shellcheck disable=SC2016 # the $ in the grep pattern is a regex anchor, not an expansion
+if [ "$(grep -vE '^[[:space:]]*(#|$)' "$fd" 2>/dev/null)" != "$(printf '%s\n' '[Service]' 'ReadWritePaths=-/run/mastersos/facts')" ]; then
+	bad 81 "$fd should hold only [Service] and ReadWritePaths=-/run/mastersos/facts (comments aside)"
+	r=1
+fi
+for d in image/mkosi.extra/usr/lib/systemd/system/authd-oidc.service.d/*.conf; do
+	[ "$d" = "$fd" ] && continue
+	grep -q '^ReadWritePaths=' "$d" && {
+		bad 81 "$d should not set ReadWritePaths= (only the facts drop-in opens a writable path)"
+		r=1
+	}
+done
+[ "$r" = 0 ] && ok 81 "broker may write /run/mastersos/facts (root 0700 via tmpfiles, optional via ReadWritePaths=-), and no other drop-in opens a writable path"
 
 exit $fail

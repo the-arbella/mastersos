@@ -164,3 +164,94 @@ test('other messages are no refusal of the person', () => {
         agentRefusal('DENY_LOCKED'), agentRefusal('DENY_SSO')])
         assert.equal(refusalKind(m), null, String(m));
 });
+
+test('the broker refusing another organisation is a not-allowed refusal', () => {
+    assert.equal(refusalKind('Authentication failure: this account is not a member of this school'), 'not-allowed');
+});
+
+test('a bare name is offered at every school domain, and Enter alone takes it as typed', () => {
+    const D = ['school.example', 'students.example'];
+    assert.deepEqual(suggestDomains('alice', D), ['alice@school.example', 'alice@students.example']);
+    // A bare name nobody on this computer has: nobody preselected, so Enter takes the typed name (a local account).
+    assert.equal(preselect('alice', matchPeople([], 'alice').shown), -1);
+});
+
+test('an exact user name before the @ wins over a prefix match', () => {
+    const D = ['school.example', 'students.example'];
+    const bobby = person('bobby@school.example', 'Bobby Lee', 9);
+    const bob = person('bob@school.example', 'Bob Stone', 1);
+    const r = matchPeople([bobby, bob], 'bob', D);
+    assert.deepEqual(names(r), ['bob@school.example', 'bobby@school.example']);
+    assert.equal(r.shown[preselect('bob', r.shown, D)].userName, 'bob@school.example');
+    assert.equal(r.shown[preselect('Bob', matchPeople([bobby, bob], 'Bob', D).shown, D)].userName, 'bob@school.example');
+    // Only at a school domain: another domain's bob is a prefix match like any other.
+    const other = person('bob@other.example', 'Bob Other', 1);
+    assert.deepEqual(names(matchPeople([bobby, other], 'bob', D)), ['bobby@school.example', 'bob@other.example']);
+});
+
+test('a bare name that only starts a school account preselects nobody and offers the school addresses', () => {
+    const D = ['school.example', 'students.example'];
+    const bobby = person('bobby@school.example', 'Bobby Lee', 9);
+    const r = matchPeople([bobby], 'bob', D);
+    assert.deepEqual(names(r), ['bobby@school.example']);
+    assert.equal(preselect('bob', r.shown, D), -1);
+    assert.deepEqual(suggestDomains('bob', D, r.shown.map(p => p.userName)), ['bob@school.example', 'bob@students.example']);
+    // Without school domains, the old rule.
+    assert.equal(preselect('bob', matchPeople([bobby], 'bob').shown), 0);
+});
+
+test('a local account named exactly as typed still wins', () => {
+    const D = ['school.example'];
+    const people = [person('bobby@school.example', 'Bobby Lee', 9), person('bob@school.example', 'Bob Stone', 5),
+        person('bob', 'Bob Local', 1)];
+    const r = matchPeople(people, 'bob', D);
+    assert.equal(r.shown[0].userName, 'bob');
+    assert.equal(r.shown[preselect('bob', r.shown, D)].userName, 'bob');
+    // A local account that the text only starts is preselected as before.
+    const local = [person('bobby', 'Bobby Local', 9)];
+    assert.equal(preselect('bob', matchPeople(local, 'bob', D).shown, D), 0);
+});
+
+test('a school account found by real name is preselected as before', () => {
+    const D = ['school.example'];
+    const bobby = person('bobby@school.example', 'Bobby Lee', 9);
+    // A surname: not the start of the user name, so the old rule.
+    const r = matchPeople([bobby], 'lee', D);
+    assert.deepEqual(names(r), ['bobby@school.example']);
+    assert.equal(preselect('lee', r.shown, D), 0);
+    // A query of several words of the real name.
+    const ann = person('ann.lim@school.example', 'Ann Lim', 3);
+    assert.equal(preselect('Ann Lim', matchPeople([ann], 'Ann Lim', D).shown, D), 0);
+    assert.equal(preselect('bobby lee', matchPeople([bobby], 'bobby lee', D).shown, D), 0);
+});
+
+test('only a school domain itself makes the part before the @ exact', () => {
+    const D = ['school.example'];
+    const evil = person('bob@evilschool.example', 'Bob Evil', 1);
+    const bobby = person('bobby@school.example', 'Bobby Lee', 9);
+    // bob@evilschool.example ends with school.example but is not at it: no exact match, so recency decides.
+    const r = matchPeople([evil, bobby], 'bob', D);
+    assert.deepEqual(names(r), ['bobby@school.example', 'bob@evilschool.example']);
+    assert.equal(preselect('bob', r.shown, D), -1);
+    assert.deepEqual(suggestDomains('bob', D, names(r)), ['bob@school.example']);
+});
+
+test('school domains in the settings match whatever their case', () => {
+    const D = ['School.Example'];
+    const people = [person('bobby@school.example', 'Bobby Lee', 9), person('Bob@school.example', 'Bob Stone', 1)];
+    const r = matchPeople(people, 'BOB', D);
+    assert.deepEqual(names(r), ['Bob@school.example', 'bobby@school.example']);
+    assert.equal(preselect('BOB', r.shown, D), 0);
+});
+
+test('a user name with regex characters is compared as text', () => {
+    const D = ['school.example'];
+    const people = [person('bxb@school.example', 'X', 9), person('b.bby@school.example', 'Y', 8),
+        person('b.b@school.example', 'Z', 1)];
+    const r = matchPeople(people, 'b.b', D);
+    assert.deepEqual(names(r), ['b.b@school.example', 'b.bby@school.example']);
+    assert.equal(preselect('b.b', r.shown, D), 0);
+    // Only b.bby: a user-name prefix, nobody preselected.
+    assert.equal(preselect('b.b', matchPeople([people[1]], 'b.b', D).shown, D), -1);
+});
+

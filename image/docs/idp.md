@@ -19,6 +19,7 @@ MastersOS 只认标准 OIDC，判断账号一律看 `email`，不写任何一家
 |---|---|
 | **授权码 + PKCE，允许回环回调** `http://127.0.0.1:48123/callback` | 回调地址写死在补丁 0003，身份系统要逐字登记。broker 只在本机回环上监听 |
 | **ID token 里有 `email` 与 `email_verified = true`** | broker 用 `email` 当本机用户名，`email_verified` 不是 `true` 就拒绝（authd-oidc 的 genericprovider）。**`admin_users` 按这个名字认**（Ruling 6）：身份系统若允许用户把邮箱改成别人的、又标成已验证，他就成了管理员。身份系统一侧必须保证 `email` 只能由管理员设，或改了之后要重新验证 |
+| **With the issuer profile: a `login_name` and an `org` claim in the ID token** | `email_verified` is not needed then: the user name comes from `login_name` and the email is not read. See "Issuer profile (patch 0007)" |
 | **返回的邮箱就是学校主邮箱** | 学校返回的邮箱必须等于请求的账号，否则拒绝。这条防止在学校页面换账号回到别人的桌面，代价是用别名登录也被拒：要告诉学生用学校主邮箱 |
 | **公网信任的证书**（见下） | 镜像不带、agent 也不下发任何额外的 CA（Ruling 3） |
 | **登录页能在卡片里打开** | 卡片的 Chrome 只放行 issuer 的主机和 `card_hosts`。页面要用别的主机（CDN、上游身份系统）就写进 `card_hosts` |
@@ -176,7 +177,7 @@ Kanidm 的 `authsession_expiry`、`oauth2_refresh_token_expiry`、Dex 的 `expir
 
 ## broker 的补丁
 
-MastersOS 带六个补丁（`patches/authd-oidc/`，按文件名顺序打）。
+MastersOS 带七个补丁（`patches/authd-oidc/`，按文件名顺序打）。
 
 | 补丁 | 内容 | 现状 |
 |---|---|---|
@@ -186,6 +187,7 @@ MastersOS 带六个补丁（`patches/authd-oidc/`，按文件名顺序打）。
 | `0004-card-only-login.patch` | 见下 | 卡片的基础 |
 | `0005-follow-reselected-sign-in.patch` | 同一会话再次选登录方式时，新流程接替旧流程：已经在等旧流程的 `IsAuthenticated` 改等新流程（用新流程的 PKCE verifier 换令牌）；被取消的等待不关掉它跟过去的新流程 | 修重新登录卡在「Signed in. Starting your session…」：authd 0.6.1 的 PAM 模块在 GDM 回显自己的选择时会再选一次（canonical/authd#1121，authd 0.7.0 修了），`IsAuthenticated` 落在两次选择之间就会一直等已关掉的旧监听，而卡片里的页面回调到新监听（VM 123，2026-11-05）。自带测试 `TestMastersOSAuthCodeWaitFollowsHandOver`、`TestMastersOSAuthCodeCancelledFollowerKeepsNewFlow`、`TestMastersOSAuthCodeHandOverOfNothing`、`TestMastersOSReselectedSignInIsFollowed`、`TestMastersOSCancelledWaitLeavesNewSignIn`。authd 升到带 #1623 的版本后仍无害 |
 | `0006-allowed-domains.patch` | broker 启动时读 `broker.conf` 旁边的 `mastersos-allowed-domains`（不是 `broker.conf`、也不在 `broker.conf.d/`：不带补丁的 broker 永远不读它）。有这个文件时只有 `allowed_users` 里点名的用户（不分大小写）和用户名最后一个 `@` 之后正好是其中一个域名的账号能通过，`ALL`、`OWNER` 只对通过的人生效；drop-in 里有标记行而文件不在、或文件读不了时只放点名的用户；既没有文件也没有标记时与上游一样。上游 `TestParseConfig` 的 golden 不含这个字段 | 别的域名的账号在授权之前被拒，authd 不建用户（见上面的「域名限制」）。自带测试 `TestMastersOSAllowedDomainsLimitAllUsers`、`TestMastersOSNoDomainFileKeepsAll`、`TestMastersOSEmptyDomainFileLetsOnlyListedUsers`、`TestMastersOSUnreadableDomainFileFailsClosed`、`TestMastersOSMissingRequiredFileFailsClosed`、`TestMastersOSRequiredMarker`、`TestMastersOSAllowedDomainsWithoutAll`、`TestMastersOSAllowedDomainsSurviveClone`、`TestMastersOSDomainFileIsOutsideTheConfig`、`TestMastersOSLegacyDomainsKeyIsIgnored`、`TestMastersOSOtherDomainIsDeniedBeforeGrant`、`TestMastersOSSchoolDomainIsGranted` |
+| `0007-mastersos-issuer-profile.patch` | Only with `school.oidc.mastersos_claims = true` (see "Issuer profile (patch 0007)" below): the broker names the local user from the `login_name` claim instead of `email`, needs no `email_verified`, asks for the scopes `mastersos.facts` and `org:<school id>`, denies a token of another organisation before grant, and after a card login hands the person's facts to `pam-session` through `/run/mastersos/facts`. Profile off (no expected-org file, no marker): the broker behaves as before | Sign-in with an issuer that is not a MastersOS issuer is unchanged. Own tests: `TestMastersOSMissingExpectedOrgDeniesEveryone`, `TestMastersOSBadLoginNameIsDenied`, `TestMastersOSFactsDeletedAtNewSession`, `TestMastersOSUserinfoFailureWritesError`, `TestMastersOSUserinfoSubjectMismatchWritesError`, `TestMastersOSFactsNeverLeaveTheDirectory` and others (the list is in the patch) |
 
 `0004` 在 `MASTERSOS_AUTH_CODE=1` 时生效：
 
@@ -201,6 +203,31 @@ MastersOS 带六个补丁（`patches/authd-oidc/`，按文件名顺序打）。
 自带测试 `TestMastersOSCardOnly*`、`TestMastersOSBCP47Tags`、`TestMastersOSSystemLangFallsBackToEnvironment`。
 
 怎么带：`mkosi.build` 核对固定的 commit 之后按文件名顺序对每个补丁先 `git apply --check` 再 `git apply`，不再适用就构建失败；`go build` 之前跑补丁自带的 `TestMastersOS*`（在 chroot 里以 root 跑，上游有几个只读目录的用例以 root 跑不过，所以只跑这些）；版本号记成 `0.5.2+mastersos`，`authd-oidc.build-info` 记 `authd_oidc_patches=<文件名>:<sha256> …`。`build.sh` 要求镜像里有这一行、而且与构建树里的 `patches/authd-oidc/` 逐个一致；`tests/check-tree.sh` 第 32 条管目录里只有 `NNNN-<名字>.patch`、每个只改 `authd-oidc-brokers/` 并自带 `TestMastersOS` 测试。换 tag 时补丁要重新做。
+
+## Issuer profile (patch 0007)
+
+The profile is for an issuer that names every person itself (a MastersOS issuer). It is off unless the school sets `[school.oidc] mastersos_claims = true`, which needs `[school] id`. An issuer that is not a MastersOS issuer (Google, a lab issuer) sends neither claim and rejects the extra scopes, so it must stay on the plain `email` path. With the switch off nothing below applies: no extra scopes, no org check, no facts, and the user name comes from `email` as described above.
+
+**Claims and scopes (profile on)**
+
+- The authorization request carries two more scopes, `mastersos.facts` and `org:<school id>`. With the profile on but no usable school id (the expected-org file has comments only) it carries neither: every school sign-in is then denied after the school's page and before grant (`school sign-in is not set up on this device`, see below).
+- The ID token must carry `org`, equal to the school's id, and `login_name`: lowercase, exactly one `@`, local part `[a-z0-9._-]{1,64}`, domain `[a-z0-9.-]{1,253}`. It is the local user name. The broker reads no `email` and does not need `email_verified`. The "returned account = requested account" check compares `login_name`, and the login hint is the `login_name`. Everything keyed on the name (a name with `@` is a school account, patch 0006's domains, `admin_users`, and `signin-import`, which hands the card's cookies to the new session) works as before.
+- Denied before grant, so authd registers nobody (the refusal texts are shown on the login screen): no `sub` (`the ID token has no sub claim`), an `org` that is not the school's (`this account is not a member of this school`), a missing or wrongly shaped `login_name` (`this account has no valid login name`), no ID token (`no ID token`). The login screen shows the "not a member" refusal as the not-allowed kind, with the school's domains.
+
+**The expected-org file and the marker**
+
+- `/etc/authd/oidc/mastersos-expected-org`, beside `broker.conf` (0644, outside `broker.conf.d/`, like patch 0006's domain file): exactly one lowercase UUID line, the school's id, plus blank lines and `#` comments; at most 4096 bytes. The broker reads it once, at start.
+- The drop-in `10-mastersos.conf` carries the comment line `# mastersos: issuer profile required (patch 0007)` (after the domains marker). A broker without the patch reads it as a comment and starts as before.
+- The profile is on when the file exists or the marker is in a drop-in. Fail closed: on, but the file missing, unreadable, over 4096 bytes, or not exactly one lowercase UUID: every school sign-in is denied before grant (`school sign-in is not set up on this device`), administrators included. A broker told to use the profile never falls back to email names. With neither file nor marker the broker behaves as upstream.
+- The agent (`system/login.rs`) writes the file before the drop-in and removes it after it. With the switch on and no usable `[school] id` it writes a comments-only file and reports that school sign-in is denied until the school has an id. When the file cannot be written the drop-in keeps the marker (there is no administrator exception, the org check covers them too), a stale file is removed and the broker restarted, and `login` reports `broker expected-org file: ...; school sign-in is off until it is written`. A change of the school id rewrites the file and restarts the broker.
+
+**The facts file (consume once)**
+
+- Only after a card login was granted, the broker asks the issuer's userinfo endpoint with this login's access token and writes `/run/mastersos/facts/<login_name>.json`, mode 0600, by rename, in a directory that must be root's own (0700, not a symlink; created by tmpfiles). The authd-oidc unit gets `ReadWritePaths=-/run/mastersos/facts` from the drop-in `50-mastersos-facts.conf` (the `-` keeps a missing directory from stopping the broker). The file name is built only from a `login_name` of the checked shape, so no path character gets in.
+- Content, one of `{"version":1,"user":"<login_name>","granted_at":<unix seconds>,"facts":{...}}` or the same with `"error":"<text>"` instead of `facts`. `facts` keeps only `sub`, `org`, `org_role`, `org_nodes`, `classes`, `age_band`.
+- The error form is written when the login has no access token (`the login has no access token`), the issuer is not reachable (`the issuer is not reachable`), the userinfo request fails or answers with a status other than 200 (`the userinfo request failed`), takes longer than 5 s (`the userinfo request did not finish in time`), answers with more than 64 KiB (`the userinfo response is too large`) or with something that is not a JSON object (`the userinfo response is not a JSON object`), when the answer has no `sub` or `org`, for instance because the issuer did not grant `mastersos.facts` (`the userinfo answer has no sub or org`), and when its `sub` or `org` differs from the ID token's (`the userinfo sub or org does not match the ID token`). The text is the broker's own, never the answer's body or a token. If the file cannot be written at all there is no file.
+- The broker deletes `<login_name>.json` at the start of every `NewSession` (login or unlock), so a login whose facts could not be fetched never hands over an earlier login's. The facts never decide the login: nothing in this step can deny it.
+- The reader is `pam-session` (user layer, Plan B): it reads the file, deletes it, and ignores one older than 120 s. A missing, error or stale file means no facts: fact conditions never match, rules without fact conditions (`admin`, `device_group`, `kind`, `user`) still apply in order, and `[user] fallback` applies when none matches (user-layer design §5). Facts the reader cannot take, for instance an `org_role`, a class `role` or an `age_band` outside the values the design lists (§2.1), count as no facts too. This reader is Plan B's work; the broker only writes the file.
 
 ## 用户看到的流程
 
@@ -242,6 +269,8 @@ MastersOS 带六个补丁（`patches/authd-oidc/`，按文件名顺序打）。
 | `/etc/authd/oidc/broker.conf` | 骨架（0600，跟着镜像走）：没有 issuer，`allowed_users = ALL` |
 | `/etc/authd/oidc/broker.conf.d/` | 0700，agent 写 `10-mastersos.conf`（0600）。目录空时 broker 不启动（`ConditionDirectoryNotEmpty=`） |
 | `/etc/authd/oidc/mastersos-allowed-domains` | 0644，agent 写学校的 `allowed_domains`（每行一个），学校没设域名或没有 SSO 时删掉。broker（补丁 0006）启动时读；drop-in 有标记行时必须在。不在 `broker.conf.d/` 里，不带补丁的 broker 不读它 |
+| `/etc/authd/oidc/mastersos-expected-org` | 0644, written by the agent only with `mastersos_claims` (the school's id, one lowercase UUID line). The broker (patch 0007) reads it at start; with the profile marker in the drop-in it must exist. Removed with the drop-in |
+| `/run/mastersos/facts/` | tmpfiles, root 0700. The broker writes `<login_name>.json` (0600) here after a card login (patch 0007); `pam-session` will read and delete it (user layer Plan B, not built yet). The unit's `ReadWritePaths=` comes from `authd-oidc.service.d/50-mastersos-facts.conf` |
 | `/var/lib/authd-oidc/` | broker 的数据（token 缓存），0700 |
 | `authd-oidc.service` | D-Bus 激活，`ProtectSystem=strict`、只能写自己的状态目录、没有任何 capability |
 | `/usr/share/dbus-1/system.d/com.ubuntu.authd.Oidc.conf` | 系统总线策略：只有 root 能拥有这个名字、只有 root（authd）能调它 |

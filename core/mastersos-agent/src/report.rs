@@ -455,8 +455,6 @@ mod tests {
         assert!(SUPPORTED_FEATURES.contains(&mastersos_bundle::FEATURE_FORMAT_2));
         assert!(SUPPORTED_FEATURES.contains(&mastersos_bundle::FEATURE_FORMAT_3));
         assert!(SUPPORTED_FEATURES.contains(&mastersos_bundle::FEATURE_OIDC_MASTERSOS_CLAIMS));
-        // login_domain is not part of the product.
-        assert!(!SUPPORTED_FEATURES.contains(&"oidc_login_domain"));
         assert_eq!(
             mastersos_bundle::format_feature(mastersos_bundle::MAX_FORMAT),
             mastersos_bundle::FEATURE_FORMAT_3

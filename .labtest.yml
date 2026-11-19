@@ -17,18 +17,24 @@ suites:
     cpus: 2
     timeout: 10m
     paths: [image/tests/card-policy-chrome-test.*, image/tests/fixtures/card-policy/**]
+  broker:
+    run: bash image/tests/authd-oidc-patch-test.sh
+    mem: 2G
+    cpus: 4
+    timeout: 20m
+    paths: [image/patches/authd-oidc/**, image/tests/authd-oidc-patch-test.sh, image/mkosi.build]
   image-tests:
     # Shell and node tests of image/ (CI's image-lint job runs the same scripts). LABTEST_ARGS picks tests by name;
-    # "msgfmt" checks every system-i18n catalogue with gettext's msgfmt unpacked by setup. check-tree needs a git
-    # index: the synced tree has none, so a throwaway repository is made from it.
+    # "msgfmt" checks every system-i18n catalogue with gettext's msgfmt unpacked by setup. The synced tree has no .git
+    # and check-tree reads `git ls-files`, so every test runs in a throwaway repo over a copy.
     setup: d=$HOME/.cache/mastersos-gettext && rm -rf $d && mkdir -p $d && cd $d && apt-get download gettext && dpkg-deb -x gettext_*.deb root
     setup_key: [.labtest.yml]
     run: >-
-      g=$HOME/.cache/mastersos-gettext/root; [ -d .git ] || { git init -q && git add -A && git -c user.name=t -c user.email=t@t commit -qm t; };
-      rc=0; for t in ${LABTEST_ARGS:-check-tree user-env-test pam-hooks-test browser-wait-test login-people-test msgfmt}; do
-      if [ "$t" = msgfmt ]; then for po in image/system-i18n/*.po; do LD_LIBRARY_PATH=$g/usr/lib/x86_64-linux-gnu $g/usr/bin/msgfmt --check -o /dev/null "$po" || { echo "FAIL msgfmt $po"; rc=1; }; done;
-      else bash image/tests/$t.sh || { echo "FAIL $t"; rc=1; }; fi; echo "== $t done"; done; exit $rc
+      g=$HOME/.cache/mastersos-gettext/root; t=$(mktemp -d) && trap 'rm -rf -- "$t"' EXIT && cp -a . "$t" && cd "$t" && git init -q && git add -A || exit 1;
+      rc=0; for n in ${LABTEST_ARGS:-check-tree login-people-test user-env-test pam-hooks-test browser-wait-test notice-lib-test msgfmt}; do
+      if [ "$n" = msgfmt ]; then for po in image/system-i18n/*.po; do LD_LIBRARY_PATH=$g/usr/lib/x86_64-linux-gnu $g/usr/bin/msgfmt --check -o /dev/null "$po" || { echo "FAIL msgfmt $po"; rc=1; }; done;
+      else bash image/tests/$n.sh || { echo "FAIL $n"; rc=1; }; fi; echo "== $n done"; done; exit $rc
     mem: 1G
     cpus: 4
     timeout: 30m
-    paths: [image/**]
+    paths: [image/**, skills/**, tools/**, core/**, .github/**, docs/**]

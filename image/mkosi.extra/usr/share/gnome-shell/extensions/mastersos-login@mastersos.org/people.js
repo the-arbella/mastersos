@@ -20,18 +20,30 @@ function matches(p, q) {
     return UNSPACED.test(real) && real.includes(q);
 }
 
-// Typing someone's whole user name or name signs that person in, not a more recent "Bobby" for "bob".
-const exact = (p, q) => p.userName.toLowerCase() === q || (p.realName || '').toLowerCase() === q;
+// Typing someone's whole user name or name signs that person in, not a more recent "Bobby" for "bob". Text without '@' is
+// also exactly a school account whose part before the '@' it is, at one of the school domains: "bob" is
+// bob@<school domain>. 2: the whole user name (a local "bob" first); 1: the real name or the part before the '@'; 0: neither.
+const exact = (p, q, domains = []) => {
+    const user = p.userName.toLowerCase();
+    if (user === q)
+        return 2;
+    if ((p.realName || '').toLowerCase() === q)
+        return 1;
+    const at = user.indexOf('@');
+    return !q.includes('@') && at > 0 && user.slice(0, at) === q &&
+        (domains ?? []).some(d => typeof d === 'string' && d.toLowerCase() === user.slice(at + 1)) ? 1 : 0;
+};
 
 // people: [{userName, realName, loginTime}]. Nothing before the first character; an exact match, then the most recent
-// sign-in first.
-export function matchPeople(people, query) {
+// sign-in first. domains: the school domains (see exact).
+export function matchPeople(people, query, domains = []) {
     const q = (query ?? '').trim().toLowerCase();
     if (!q)
         return {shown: [], more: false};
     const found = people
         .filter(p => !HIDDEN(p.userName) && matches(p, q))
-        .sort((a, b) => (exact(b, q) - exact(a, q)) || (b.loginTime - a.loginTime) || (a.realName || '').localeCompare(b.realName || ''));
+        .sort((a, b) => (exact(b, q, domains) - exact(a, q, domains)) || (b.loginTime - a.loginTime) ||
+            (a.realName || '').localeCompare(b.realName || ''));
     return {shown: found.slice(0, LIMIT), more: found.length > LIMIT};
 }
 
@@ -55,19 +67,35 @@ export function suggestDomains(query, domains, taken = []) {
         .slice(0, LIMIT);
 }
 
-// The person Enter signs in without arrow keys: none while an address is being typed (it may be someone new).
-export function preselect(query, shown) {
-    return shown.length && !(query ?? '').includes('@') ? 0 : -1;
+// The person Enter signs in without arrow keys: none while an address is being typed (it may be someone new). With school
+// domains, a name that could be the part before the '@' never preselects a school account whose part before the '@' it
+// only starts: "bob" is not a more recent bobby@<school domain>, whose sign-in the school's page would refuse for bob; the
+// school addresses bob@<domain> are offered under the people instead (suggestDomains). A person found by real name ("lee"
+// for "Bobby Lee") and a local account are preselected as before.
+export function preselect(query, shown, domains = []) {
+    const t = (query ?? '').trim();
+    if (!shown.length || t.includes('@'))
+        return -1;
+    const first = shown[0];
+    const q = t.toLowerCase();
+    const user = first.userName.toLowerCase();
+    const at = user.indexOf('@');
+    const local = at > 0 ? user.slice(0, at) : null;
+    if (domains?.length && LOCAL_PART.test(t) && local !== null && local !== q && local.startsWith(q) &&
+        !exact(first, q, domains))
+        return -1;
+    return 0;
 }
 
 // Why the person was refused for who they are rather than for what they typed, from the broker's or the agent's English text:
-//   'not-allowed'   not of the school's domains: the broker's allowed_domains (patch 0006) or the agent's pam-check
+//   'not-allowed'   not of the school's domains: the broker's allowed_domains (patch 0006) or the agent's pam-check, or another
+//                   organisation than this school's (the issuer profile, patch 0007)
 //                   (DENY_DOMAIN in core/mastersos-agent/src/system/login.rs, checked by login-people-test.mjs);
 //   'unverified'    the school's provider does not say the email address is verified (authd-oidc's generic provider);
 //   'wrong-account' the school's page signed in another account than the one picked here (patch 0004);
 //   null            anything else.
 const REFUSALS = [
-    ['not-allowed', /not allowed in broker configuration|Accounts from this domain cannot sign in/i],
+    ['not-allowed', /not allowed in broker configuration|Accounts from this domain cannot sign in|not a member of this school/i],
     ['unverified', /email not verified/i],
     ['wrong-account', /does not match the authenticated user/i],
 ];

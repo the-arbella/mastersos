@@ -36,7 +36,7 @@ One signed `manifest.toml` holds Groups, device configs, user configs and rules.
 ```toml
 format = 3
 
-[school]                      # unchanged; new optional key school.oidc.login_domain (§2.5)
+[school]                      # unchanged
 
 # ---------- device layer ----------
 [device_defaults]             # was [defaults]
@@ -108,8 +108,7 @@ fallback = "primary"          # required
 - `check` errors: unknown user config; a rule after an unconditional rule; an id (class, node, sub) that is
   not a lowercase UUID; an unknown value of an enumerated condition; an unknown key; `scripts` with
   `when = "apply"` in a user config; `scripts` with `when = "login"` in a device config; a missing
-  `[user] fallback`; `school.oidc.login_domain` not in `allowed_domains`; `school.oidc.mastersos_claims =
-  true` without `[school] id`.
+  `[user] fallback`; `school.oidc.mastersos_claims = true` without `[school] id`.
 - `check` warnings: a user config that no rule or fallback reaches; a user config whose effective
   capabilities include `terminal` ("terminal defeats every other lock: environment, user Flatpaks,
   `.desktop` files; the session is effectively full").
@@ -154,9 +153,7 @@ unchanged.
 
 ### 2.5 `school.oidc.login_domain`
 
-Optional; must be in `allowed_domains`. On the login screen an entry without `@` that is not a local
-account on this Device is treated as `<entry>@<login_domain>`, so young children type only their
-username. A local account with that exact name keeps precedence.
+Removed by the owner on 2026-11-19: the login screen's domain suggestions (from `allowed_domains`) already let a person type only their user name and pick the school domain.
 
 ## 3. Layer of each format-2 setting
 
