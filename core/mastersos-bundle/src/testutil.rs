@@ -193,6 +193,75 @@ locked = {{ message = "本机已挂失，请交回 IT 办公室" }}
     )
 }
 
+/// The `format = 3` example of the user layer design §2 (device layer, user layer, rules), plus
+/// the `version`, `[[trust]]`, `[school] id` and `[school.oidc]` a publishable text carries: one
+/// device config `classroom` used by Group `default`, user configs `primary` and `teacher`, three
+/// rules (administrators, class teachers and assistants, one org node) and fallback `primary`.
+pub fn spec_example_v3() -> String {
+    format!(
+        r#"format = 3
+version = 7
+issued_at = "2026-11-19T07:00:00Z"
+
+[[trust]]
+id = "school-2026"
+alg = "ed25519"
+public_key = "{SPEC_KEY}"
+
+[school]
+id = "0193a0c2-0000-7000-8000-0000000000aa"
+oidc = {{ issuer = "https://sso.school.ac.th", client_id = "mastersos" }}
+allowed_domains = ["school.ac.th"]
+admin_users = ["it@school.ac.th"]
+
+# ---------- device layer ----------
+[device_defaults]
+login_methods = ["sso", "guest"]
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+# ---------- user layer ----------
+[user_defaults]
+preset = "learning"
+chrome_policy = {{ URLBlocklist = ["tiktok.com"] }}
+apps.web = [{{ name = "Classroom", url = "https://classroom.google.com" }}]
+
+[[user_config]]
+id = "primary"
+name = "Grade 1-6"
+
+[[user_config]]
+id = "teacher"
+name = "Teachers"
+preset = "full"
+drop.chrome_policy = ["URLBlocklist"]
+
+# ---------- who gets what (first match wins) ----------
+[[assign]]
+user_config = "teacher"
+admin = true
+
+[[assign]]
+user_config = "teacher"
+class_role = ["teacher", "assistant"]
+
+[[assign]]
+user_config = "primary"
+org_node = ["0193a0c2-0000-7000-8000-000000000001"]
+
+[user]
+fallback = "primary"
+"#
+    )
+}
+
 /// The same settings as [`spec_example`] in the legacy shape (`[[group]]`s carrying the
 /// settings, `mode`), as Versions signed before config profiles are written.
 pub fn legacy_spec_example() -> String {

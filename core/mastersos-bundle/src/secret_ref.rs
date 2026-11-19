@@ -1,9 +1,12 @@
 //! Secrets kept out of the settings text: `split` swaps each secret field's value for a
 //! `"secret:<name>"` reference, `fill` puts the values back, `lints` checks the pairing.
 //!
-//! The layers and fields walked are those of the private server's `mask_toml`: `[school]`,
-//! `[defaults]`, each `[[config]]` and each legacy `[[group]]`, their `wifi` entries and
-//! `it_account`.
+//! The whole document is walked for `wifi` entries and `it_account`; a secret's name and route
+//! start with its layer: `[school]` is `school`, `[defaults]` and format 3 `[device_defaults]`
+//! are both `defaults`, each `[[config]]` and format 3 `[[device_config]]` is its id, each legacy
+//! `[[group]]` is `group-<id>`, and anything else is `other-<path>`. Format 3 tables take the
+//! format 2 names, so a text migrated to format 3 keeps every reference's route. The settings
+//! server's `mask_toml` must apply the same naming.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -80,8 +83,8 @@ fn layer_for(root: bool, key: &str, elem: &dyn TableLike, path: &str) -> String 
     let id = id.filter(|s| !s.is_empty());
     match (root, key) {
         (true, "school") => "school".into(),
-        (true, "defaults") => "defaults".into(),
-        (true, "config") => id.unwrap_or_else(|| "config".into()),
+        (true, "defaults" | "device_defaults") => "defaults".into(),
+        (true, "config" | "device_config") => id.unwrap_or_else(|| "config".into()),
         (true, "group") => format!("group-{}", id.unwrap_or_default())
             .trim_end_matches('-')
             .to_owned(),
@@ -659,6 +662,56 @@ password = "eappass"
         let t = "[defaults]\nwifi = [{ ssid = \"A\", psk = \"secret:nope\" }, { ssid = \"B\", psk = \"secret:nope2\" }]\n";
         let errs = fill(t, &BTreeMap::new()).unwrap_err();
         assert_eq!(codes(&errs), ["secret_unknown", "secret_unknown"]);
+    }
+
+    #[test]
+    fn format3_tables_take_format2_names() {
+        let t = "format = 3\nversion = 1\n\
+                 [device_defaults]\nwifi = [{ ssid = \"Guest\", psk = \"guestpass\" }]\n\
+                 [[device_config]]\nid = \"lab\"\nname = \"Lab\"\n\
+                 wifi = [{ ssid = \"Net\", psk = \"labpass1\" }]\n\
+                 [[device_config]]\nid = \"hall\"\nname = \"Hall\"\n\
+                 wifi = [{ ssid = \"Net\", psk = \"hallpass\" }]\n";
+        let (text, secrets) = split(t).unwrap();
+        assert_eq!(
+            secrets.keys().collect::<Vec<_>>(),
+            ["defaults-guest-psk", "hall-net-psk", "lab-net-psk"]
+        );
+        assert_eq!(secrets["lab-net-psk"], "labpass1");
+        assert_eq!(secrets["hall-net-psk"], "hallpass");
+        assert_eq!(fill(&text, &secrets).unwrap(), t);
+    }
+
+    /// A format 2 text with references, migrated to format 3, keeps every route: nothing is
+    /// rerouted against the published (filled) format 2 version.
+    #[test]
+    fn migrated_references_keep_their_routes() {
+        let base = "format = 2\nversion = 1\n\
+                    [defaults]\nwifi = [{ ssid = \"Guest\", psk = \"guestpass\" }]\n\
+                    it_account = { password_hash = \"$y$hash\" }\n\
+                    [[config]]\nid = \"lab\"\nname = \"Lab\"\n\
+                    wifi = [{ ssid = \"Corp\", eap = \"peap\", identity = \"lab\", \
+                    server_domain = \"a.example\", password = \"eappass\" }]\n\
+                    [[config]]\nid = \"hall\"\nname = \"Hall\"\n\
+                    wifi = [{ ssid = \"Corp\", psk = \"hallpass\" }]\n\
+                    [[group]]\nid = \"hall\"\nname = \"Hall\"\nconfig = \"hall\"\n\
+                    [[group]]\nid = \"default\"\nname = \"D\"\nconfig = \"lab\"\n";
+        let (text, secrets) = split(base).unwrap();
+        assert_eq!(secrets.len(), 4, "{secrets:?}");
+        let migrated = crate::migrate::to_format3(&text).unwrap();
+        assert!(migrated.contains("[[device_config]]"), "{migrated}");
+        let l = lints(&migrated, &secrets, Some(base));
+        assert!(l.is_empty(), "{l:?}\n{migrated}");
+        // The control: a format 3 table named otherwise would have been rerouted.
+        let renamed = migrated.replacen(
+            "id = \"hall\"\nname = \"Hall\"",
+            "id = \"hall2\"\nname = \"Hall\"",
+            1,
+        );
+        assert_eq!(
+            codes(&lints(&renamed, &secrets, Some(base))),
+            ["secret_rerouted"]
+        );
     }
 
     #[test]

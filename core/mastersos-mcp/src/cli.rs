@@ -11,6 +11,9 @@ use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
+use mastersos_bundle::{AgeBand, ClassRole, Kind, OrgRole};
+
+use crate::explain::{self as explain_mod, UserQuery};
 use crate::publish::SignWith;
 use crate::workdir::{self, Meta, Workdir};
 use crate::{call, check_server, connect, serve_stdio, Api, OpError, Req, TokenUse};
@@ -107,6 +110,18 @@ enum Cmd {
         /// The settings directory (default: the current directory)
         dir: Option<PathBuf>,
     },
+    /// Explain the local settings (no network): which user config a person gets, or what a Device gets
+    #[command(subcommand)]
+    Explain(ExplainCmd),
+    /// Rewrite the local settings as format 3 (Device configs and user configs) with the same behaviour, then check them (no network)
+    Migrate {
+        /// The settings directory (default: the current directory)
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Write manifest.toml instead of printing the new text
+        #[arg(long)]
+        write: bool,
+    },
     /// Devices and their latest reports
     #[command(subcommand)]
     Devices(DevicesCmd),
@@ -147,6 +162,60 @@ enum Cmd {
         #[arg(long)]
         dir: Option<PathBuf>,
     },
+}
+
+#[derive(Subcommand)]
+enum ExplainCmd {
+    /// The user config a person gets on each Group, and the rule (with its line in manifest.toml) that gives it
+    User {
+        /// The settings directory (default: the current directory)
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// The account kind: sso, local or guest
+        #[arg(long, value_parser = parse_enum::<Kind>)]
+        kind: Kind,
+        /// The person is an administrator on the Device (not with --kind guest)
+        #[arg(long)]
+        admin: bool,
+        /// The login name (default: `guest` with --kind guest, otherwise none, so no `user` condition matches)
+        #[arg(long)]
+        user: Option<String>,
+        /// The person's role in the organisation: owner, admin or member (sso only)
+        #[arg(long, value_parser = parse_enum::<OrgRole>)]
+        org_role: Option<OrgRole>,
+        /// A role in a class: teacher, assistant or student; give it once per --class (pairs by position), or once for every class. A role without a class matches only class_role conditions (sso only)
+        #[arg(long, value_parser = parse_enum::<ClassRole>)]
+        class_role: Vec<ClassRole>,
+        /// A class id the person is in (sso only)
+        #[arg(long)]
+        class: Vec<String>,
+        /// An org-tree node of the person, and each of its parents (sso only)
+        #[arg(long)]
+        org_node: Vec<String>,
+        /// The person's age band: under13, 13-17 or 18+ (sso only)
+        #[arg(long, value_parser = parse_enum::<AgeBand>)]
+        age_band: Option<AgeBand>,
+        /// The person's subject id at the sign-in service (sso only)
+        #[arg(long)]
+        sub: Option<String>,
+        /// Only this Group (default: every Group)
+        #[arg(long)]
+        device_group: Option<String>,
+    },
+    /// The Group, device config, reachable user configs and installed apps of the Device with this serial number
+    Device {
+        /// The serial number
+        serial: String,
+        /// The settings directory (default: the current directory)
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
+}
+
+/// A value of one of the settings' lowercase names (`sso`, `teacher`, `13-17`, ...).
+fn parse_enum<T: serde::de::DeserializeOwned>(s: &str) -> Result<T, String> {
+    serde_json::from_value(Value::String(s.to_owned()))
+        .map_err(|_| format!("{s:?} is not one of the values listed in --help"))
 }
 
 #[derive(Subcommand)]
@@ -280,6 +349,8 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
     match &cmd {
         Cmd::Check { dir } => return local_check(dir.as_deref(), json),
         Cmd::Diff { dir } => return local_diff(dir.as_deref()),
+        Cmd::Explain(c) => return explain(c, json),
+        Cmd::Migrate { dir, write } => return migrate(dir.as_deref(), *write, json),
         // A directory with unpublished changes is refused before the network is touched.
         Cmd::Pull { dir, force, .. } => {
             let dir = dir.as_deref().unwrap_or_else(|| Path::new("."));
@@ -389,6 +460,8 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         | Cmd::Mcp { .. }
         | Cmd::Check { .. }
         | Cmd::Diff { .. }
+        | Cmd::Explain(_)
+        | Cmd::Migrate { .. }
         | Cmd::Keys(KeysCmd::Remove { .. }) => {
             unreachable!("handled above")
         }
@@ -815,6 +888,227 @@ fn local_check(dir: Option<&Path>, json: bool) -> Result<ExitCode, OpError> {
 fn local_diff(dir: Option<&Path>) -> Result<ExitCode, OpError> {
     print!("{}", workdir::diff(&open_dir(dir)?).map_err(fail)?);
     Ok(ExitCode::SUCCESS)
+}
+
+/// The local directory's manifest.toml, as text and parsed as a draft (`version` and `issued_at`
+/// may be left out). A text that does not parse is refused with its issue.
+fn local_manifest(
+    dir: Option<&Path>,
+) -> Result<(Workdir, String, mastersos_bundle::Manifest), OpError> {
+    let w = open_dir(dir)?;
+    let text = w.manifest().map_err(fail)?;
+    let m = mastersos_bundle::check::parse_draft(&text).map_err(|l| OpError::Refused {
+        message: "manifest.toml does not parse (see `mastersos check`)".into(),
+        issues: Some(lint_values(&[l])),
+    })?;
+    Ok((w, text, m))
+}
+
+/// `mastersos explain user` and `mastersos explain device`.
+fn explain(c: &ExplainCmd, json: bool) -> Result<ExitCode, OpError> {
+    match c {
+        ExplainCmd::User {
+            dir,
+            kind,
+            admin,
+            user,
+            org_role,
+            class_role,
+            class,
+            org_node,
+            age_band,
+            sub,
+            device_group,
+        } => {
+            // As on a Device (`guest_user_config`): the guest session is never an administrator.
+            if *kind == Kind::Guest && *admin {
+                return Err(OpError::Failed(
+                    "--admin does not apply to --kind guest: the guest session is never an administrator on a Device".into(),
+                ));
+            }
+            let (_, text, m) = local_manifest(dir.as_deref())?;
+            if let Some(g) = device_group {
+                if !m.groups.iter().any(|x| &x.id == g) {
+                    return Err(OpError::Failed(format!(
+                        "there is no Group {g:?} in manifest.toml"
+                    )));
+                }
+            }
+            if m.user_layer.as_ref().is_some_and(|u| u.fallback.is_none()) {
+                let loc = mastersos_bundle::check::Locator::new(&text);
+                let issues: Vec<_> = m
+                    .validate_all(&Default::default())
+                    .into_iter()
+                    .filter(|l| l.code == "user_fallback_missing")
+                    .map(|mut l| {
+                        if let (Some(loc), Some(p)) = (&loc, &l.path) {
+                            l.span = loc.locate(p);
+                        }
+                        l
+                    })
+                    .collect();
+                return Err(OpError::Refused {
+                    message: "manifest.toml has no [user] fallback (see `mastersos check`)".into(),
+                    issues: Some(lint_values(&issues)),
+                });
+            }
+            let classes = explain_mod::class_facts(class, class_role).map_err(OpError::Failed)?;
+            let any_fact = org_role.is_some()
+                || !classes.is_empty()
+                || !org_node.is_empty()
+                || age_band.is_some()
+                || sub.is_some();
+            if any_fact && *kind != Kind::Sso {
+                eprintln!(
+                    "mastersos: issuer facts count only for sso accounts; they are ignored here"
+                );
+            }
+            // As on a Device (design §5): without `mastersos_claims = true` the issuer sends no
+            // facts, so fact conditions never match.
+            let claims = m.school.oidc.as_ref().is_some_and(|o| o.mastersos_claims);
+            if any_fact && *kind == Kind::Sso && !claims {
+                eprintln!("mastersos: fact flags ignored: school.oidc.mastersos_claims is not true, so Devices receive no facts");
+            }
+            let facts =
+                (any_fact && *kind == Kind::Sso && claims).then(|| mastersos_bundle::IssuerFacts {
+                    sub: sub.clone().unwrap_or_default(),
+                    org: m.school.id.clone().unwrap_or_default(),
+                    org_role: *org_role,
+                    org_nodes: org_node.clone(),
+                    classes,
+                    age_band: *age_band,
+                });
+            let q = UserQuery {
+                kind: *kind,
+                admin: *admin,
+                // A Device signs the guest session in as user "guest".
+                user: user.clone().unwrap_or_else(|| {
+                    if *kind == Kind::Guest {
+                        "guest".into()
+                    } else {
+                        String::new()
+                    }
+                }),
+                facts,
+            };
+            let out = explain_mod::explain_user(&m, &text, &q, device_group.as_deref());
+            if let Some(e) = out
+                .iter()
+                .find(|e| mastersos_bundle::user_config(&m, &e.user_config).is_none())
+            {
+                return Err(OpError::Failed(format!(
+                    "Group {:?} gives user config {:?}, which does not exist (see `mastersos check`)",
+                    e.group, e.user_config
+                )));
+            }
+            if json {
+                println!("{}", serde_json::to_value(&out).map_err(fail)?);
+                return Ok(ExitCode::SUCCESS);
+            }
+            for e in &out {
+                let why = match (e.rule, e.line) {
+                    _ if m.user_layer.is_none() => format!("implied: format {}", m.format),
+                    (Some(i), Some(l)) => format!("rule assign[{i}], manifest.toml:{l}"),
+                    (Some(i), None) => format!("rule assign[{i}]"),
+                    (None, _) => "fallback".into(),
+                };
+                println!("group {}: {} ({why})", e.group, e.user_config);
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        ExplainCmd::Device { serial, dir } => {
+            let (_, _, m) = local_manifest(dir.as_deref())?;
+            let d = explain_mod::explain_device(&m, serial).map_err(OpError::Failed)?;
+            if json {
+                println!("{}", serde_json::to_value(&d).map_err(fail)?);
+                return Ok(ExitCode::SUCCESS);
+            }
+            let list = |v: &[String]| {
+                if v.is_empty() {
+                    "(none)".to_owned()
+                } else {
+                    v.join(", ")
+                }
+            };
+            let how = match d.source {
+                mastersos_bundle::GroupSource::Bundle => "its [[device]] entry",
+                _ => "no [[device]] entry: the default Group",
+            };
+            println!("group: {} ({how})", d.group);
+            println!("device config: {}", d.device_config);
+            println!("user configs: {}", list(&d.user_configs));
+            println!("flatpak: {}", list(&d.flatpak));
+            println!("deb: {}", list(&d.deb));
+            Ok(ExitCode::SUCCESS)
+        }
+    }
+}
+
+/// What `mastersos migrate` tells IT on stderr about the format 3 text.
+fn migrate_notes(legacy: bool) -> String {
+    let mut notes = vec![
+        "The keys that moved into [[device_config]], [[user_config]] and the defaults lose their comments.",
+        "Every Device also installs the Flatpak and .deb apps of the fallback user config (the default Group's), legacy browser Groups included; once Devices run a format 3 agent, those apps show in the Dash only where a user config lists them.",
+        "Publishing a format 3 text is refused (`feature_unsupported` for `format_3`, or `format_unsupported`) until every Device seen in the last 30 days reports `format_3`; the refusal names the Devices that are too old.",
+    ];
+    if legacy {
+        notes.push("The settings were in the legacy shape (Groups holding the settings): the secret references now belong to configs, so the first publish needs `--allow-reroute` for each secret it names.");
+    }
+    notes.iter().map(|n| format!("note: {n}\n")).collect()
+}
+
+/// `mastersos migrate`: the format 3 text on stdout (or written with `--write`), then the local
+/// check of that text; exit code 2 when the check finds errors or the text is already format 3.
+fn migrate(dir: Option<&Path>, write: bool, json: bool) -> Result<ExitCode, OpError> {
+    let w = open_dir(dir)?;
+    let text = w.manifest().map_err(fail)?;
+    let new = mastersos_bundle::migrate::to_format3(&text).map_err(|e| match e {
+        mastersos_bundle::migrate::MigrateError::AlreadyFormat3 => OpError::Refused {
+            message: e.to_string(),
+            issues: None,
+        },
+        e => fail(e),
+    })?;
+    let legacy = mastersos_bundle::check::parse_draft(&text)
+        .is_ok_and(|m| m.shape == mastersos_bundle::Shape::Legacy);
+    let lints = if write {
+        w.write_manifest(&new).map_err(fail)?;
+        workdir::check(&w).map_err(fail)?
+    } else {
+        workdir::check_manifest(&w, &new).map_err(fail)?
+    };
+    if json {
+        let mut v = json!({
+            "written": write,
+            "check": crate::tools::check_result(&lints),
+        });
+        if !write {
+            v["text"] = Value::String(new);
+        }
+        println!("{v}");
+    } else {
+        let mut report = issues_text(&lint_values(&lints));
+        if let Some(n) = reroute_notice(&lints) {
+            report.push_str(&format!("{n}\n"));
+        }
+        if write {
+            println!(
+                "Wrote format 3 settings to {}.",
+                w.root.join("manifest.toml").display()
+            );
+            print!("{report}");
+        } else {
+            // stdout holds only the text, so it can be redirected to a file.
+            print!("{new}");
+            eprint!("{report}");
+        }
+    }
+    eprint!("{}", migrate_notes(legacy));
+    Ok(if mastersos_bundle::has_errors(&lints) {
+        ExitCode::from(2)
+    } else {
+        ExitCode::SUCCESS
+    })
 }
 
 /// The school id the server says this token belongs to.
@@ -1334,6 +1628,12 @@ async fn pull_dir(
 
 /// Issues for people: one per line (level, code, where, message), then a count.
 fn print_issues(issues: &[Value]) {
+    print!("{}", issues_text(issues));
+}
+
+/// [`print_issues`]'s text.
+fn issues_text(issues: &[Value]) -> String {
+    let mut out = String::new();
     let mut counts = [0usize; 3];
     for i in issues {
         let level = i["level"].as_str().unwrap_or("info");
@@ -1349,17 +1649,18 @@ fn print_issues(issues: &[Value]) {
         if let Some(p) = i["path"].as_str() {
             place.push_str(p);
         }
-        println!(
-            "{level:<7} {:<24} {:<28} {}",
+        out.push_str(&format!(
+            "{level:<7} {:<24} {:<28} {}\n",
             cell(&i["code"]),
             place.trim_end(),
             cell(&i["message"])
-        );
+        ));
     }
-    println!(
-        "{} error(s), {} warning(s), {} note(s)",
+    out.push_str(&format!(
+        "{} error(s), {} warning(s), {} note(s)\n",
         counts[0], counts[1], counts[2]
-    );
+    ));
+    out
 }
 
 /// The logo upload body, after both PNGs passed the size checks.

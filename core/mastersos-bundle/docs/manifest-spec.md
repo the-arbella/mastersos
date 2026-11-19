@@ -24,6 +24,9 @@ has four layers:
 finds its own Group and applies only that Group's Config (the Defaults with what the Config writes
 laid over them). The same Config applies whoever signs in on the Device.
 
+In a `format = 3` file the Configs are split into **device configs** and **user configs**, and rules pick the
+user config of whoever signs in; see [Format 3](#format-3-device-layer-and-user-layer).
+
 The settings file can also carry files (`files/…`, such as wallpapers or icons) and scripts
 (`scripts/…`). The settings file plus these files is the **settings bundle**.
 
@@ -86,11 +89,185 @@ when the meaning of what is written changes (for example with `[defaults]`, a Co
 to the Defaults' list instead of standing alone); a new key alone does not raise it, it goes through
 the feature check (`feature_unsupported`). The server writes the lowest format the text needs: `2`
 once it uses `[defaults]`, `drop`, `it_account` or `[school]` `name` / `logo_sha256` / `logo_icon_sha256`, and leaves `1`
-when it uses none of them, so old files stay readable. A Device whose OS reads an older format does
+when it uses none of them, so old files stay readable. `3` is the device layer and user layer shape of
+[Format 3](#format-3-device-layer-and-user-layer); `mastersos migrate` writes it, and nothing else raises a text to it. A Device whose OS reads an older format does
 not apply the Version, reports "the settings use a newer format than this OS; update the OS first",
 and keeps the previous one; the server therefore refuses to publish a text whose format a Device
-seen in the last 30 days does not read (`format_unsupported`). A `format` newer than 2 is reported
+seen in the last 30 days does not read (`format_unsupported`). A `format` newer than 3 is reported
 the same way. Leave `format` as the server wrote it.
+
+### Format 3: device layer and user layer
+
+A `format = 3` text splits every setting by who it is about. The **device layer** is what the
+institution owns about the machine (network, printers, who may sign in, OS updates, kiosk apps,
+installs); it is applied at boot, before anyone signs in, and chosen by Group as before. The **user
+layer** is what the person sees and may do in their session (capabilities, visible apps, web apps,
+Chrome policy, login scripts, home clean-up); it is chosen at login, for that person, by **rules**
+(`[[assign]]`) that IT writes in the signed file.
+
+<!-- prompt:omit -->
+| Format 2 | Format 3 |
+|---|---|
+| `[defaults]` | `[device_defaults]` and `[user_defaults]` |
+| `[[config]]` | `[[device_config]]` and `[[user_config]]` (migrate gives them the same id) |
+| `[[group]]` `config` | the same, and names a `[[device_config]]` |
+| one Config per Device, whoever signs in | the Group picks the device config; the first matching `[[assign]]` rule (else `[user] fallback`) picks the user config |
+<!-- /prompt:omit -->
+
+The layer of each format 2 setting:
+
+| Setting | Layer |
+|---|---|
+| `school.*`, `trust`, `[[device]]`, `locked` | device |
+| `login_methods`, `local_users_admin`, `it_account` | device |
+| `wifi`, `printers`, `scanners` | device |
+| `update_channel`, `chrome.update_window`, `chrome.pause_until` | device |
+| `support.enabled` | device |
+| `apps.kiosk`, `apps.deb.<id>` with `kiosk = true` | device |
+| `files`, `downloads`, `scripts` with `when = "apply"` | device |
+| `interface` | user (`preset`, `allow`, `deny`) |
+| `apps.web`, `chrome_policy`, `scripts` with `when = "login"` | user |
+| `apps.flatpak`, `apps.deb` without `kiosk` | user (what the Dash shows); device (what is installed: the union, below) |
+| home clean-up | user (`home`) |
+
+The operating system knows no "student" or "teacher". At login it receives **facts** about the person
+from the identity issuer (organisation role, classes, org-tree node, age band) and evaluates the
+rules you wrote; a rule names a user config. All settings content stays in the signed file: a wrong
+fact can only move a person to another user config IT already signed, and a user config can never
+make anyone an administrator (that stays `admin_users`, `itadmin` and `local_users_admin`). Facts
+exist only when `[school.oidc]` has `mastersos_claims = true`; with `false` the issuer is a plain
+OIDC provider, fact conditions never match, and `facts_without_mastersos_claims` warns.
+
+<!-- prompt:omit -->
+What a Device does with a format 3 file:
+
+- **Boot and apply:** the device layer comes from the Group's device config. The session state is
+  neutral (everything blocked, no web apps, baseline Chrome policy). For every user config the Device
+  can reach, the agent prepares the session state ahead of time, plus a compact copy of the rules.
+- **Login:** the rules and the facts pick the user config; the Device switches to its prepared state.
+  If that fails the person gets `[user] fallback`; if that fails too the login is refused.
+- **Logout:** the Device returns to the neutral state and stops the person's user manager. The next
+  login waits until that is confirmed.
+- **One person at a time:** while a person (SSO, local, guest or `itadmin`) is signed in, another
+  login is refused with "Someone is still signed in on this device. They need to sign out first, or
+  restart the device." Nobody is named and there is no administrator override.
+- **Installs:** a Device installs the union of `apps.flatpak` and the non-kiosk `apps.deb` over the
+  user configs it can reach: those named by rules whose `device_group` is absent or lists the
+  Device's Group, plus the fallback. The first definition of an id wins; Flatpak removes only what it
+  installed. A user config shows in the Dash only its own apps.
+- **Guest and the sign-in card:** the guest session gets the user config a `kind = "guest"` login
+  resolves to on that Device. The sign-in card (open mode) takes its `URLBlocklist` from that same
+  user config, so the card opens no site the Device's guest could not.
+- **Status:** a Device's report names the user config of the current session (no facts, no names).
+<!-- /prompt:omit -->
+
+**Compatibility.** Devices report the feature `format_3`. Publishing a `format = 3` text is refused
+(`feature_unsupported` for the feature `format_3`, or `format_unsupported`) while a Device seen in
+the last 30 days does not report it; the refusal names those Devices and the OS image each last
+reported, so update them first. Until the agent that
+applies user configs ships, current agents refuse a format 3 bundle outright. A Device that reads
+format 3 still accepts format 1 and 2 texts and behaves exactly as before with them (every login gets
+the Device's single Config).
+
+**Three commands help with the move:**
+
+- `mastersos explain user --kind <sso|local|guest> [--admin] [--user <login name>] [--org-role <owner|admin|member>]
+  [--class-role <teacher|assistant|student>] [--class <id>] [--org-node <id>] [--age-band <under13|13-17|18+>]
+  [--sub <id>] [--device-group <id>] [--dir <dir>]` works offline on the local `manifest.toml`. For each Group (or
+  the one named by `--device-group`) it prints the user config that person would get and the rule that
+  gave it (`rule assign[<n>], manifest.toml:<line>`, or `fallback`). The fact flags count only for
+  `--kind sso`, and only when `school.oidc.mastersos_claims = true`: otherwise they are ignored with a
+  note, because the Devices receive no facts. `--class-role` pairs with `--class` by position, or is
+  given once for every class. `--kind guest` is the guest session as a Device signs it in: user `guest`
+  unless `--user` says otherwise, never `--admin` (refused). For a format 1 or 2 text it says `implied` and shows the Group's Config.
+  It refuses a text without `[user] fallback`.
+- `mastersos explain device <serial> [--dir <dir>]` prints the Group of that Device (its `[[device]]`
+  entry, else `default`), its device config, the user configs a person can get on it, and the Flatpak
+  and `.deb` ids it installs (kiosk `.deb` apps included).
+- `mastersos migrate [--dir <dir>] [--write]` rewrites a format 1 or 2 text as format 3 with the same
+  behaviour, then checks the result. It prints the new text on stdout (the check and notes go to
+  stderr) or, with `--write`, replaces `manifest.toml`. It refuses a text that is already format 3,
+  and exits with status 2 when the check reports errors.
+
+<!-- prompt:omit -->
+What `mastersos migrate` writes:
+
+- each Config (or legacy Group) is split key by key into a `[[device_config]]` and a `[[user_config]]`
+  with the same `id` and `name`; `[defaults]` is split into `[device_defaults]` and `[user_defaults]`;
+- one `[[assign]]` rule with `device_group = ["<group id>"]` per Group, in Group order, names that
+  Group's user config; `[user] fallback` is the `default` Group's;
+- `interface` becomes `preset`; `home` is not written (it follows the preset, as today);
+- a legacy `mode = "browser"` Group becomes preset `learning` with no Flatpak and no `.deb` apps (a
+  kiosk `.deb` included), exactly as that mode behaved;
+- every Device also installs the Flatpak and `.deb` apps of the fallback user config (the `default`
+  Group's), because installs are the union over the user configs a Device can reach; nobody sees an
+  app in the Dash unless their own user config lists it. Migrate refuses when that union would make a
+  Group install two different `.deb` apps of one id (`user_deb_conflict`);
+- the moved keys are written anew and lose their comments; `[school]`, `[[trust]]`, `[[device]]` and
+  the `[[group]]` headers keep theirs;
+- secret references (`secret:<name>`) of a text in the legacy shape now belong to configs, so the
+  first publish after migrating such a text needs `--allow-reroute=<name>` for each secret it names
+  (`secret_rerouted`). A format 2 text in the Config shape keeps its secret names.
+
+A complete format 3 file: two user configs, three rules and a fallback. The rule on `org_node`
+matches that node and every node below it. Teachers get the full desktop, children the learning one.
+
+```toml check=ok
+format = 3
+
+[school]
+allowed_domains = ["school.ac.th"]
+admin_users = ["it.admin@school.ac.th"]
+
+[school.oidc]
+issuer = "https://sso.school.ac.th"
+client_id = "mastersos"
+login_domain = "school.ac.th"
+mastersos_claims = true
+
+[device_defaults]
+login_methods = ["sso", "guest"]
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[user_defaults]
+preset = "learning"
+chrome_policy = { URLBlocklist = ["tiktok.com"] }
+apps.web = [{ name = "Classroom", url = "https://classroom.google.com" }]
+
+[[user_config]]
+id = "primary"
+name = "Grade 1-6"
+
+[[user_config]]
+id = "teacher"
+name = "Teachers"
+preset = "full"
+drop.chrome_policy = ["URLBlocklist"]
+
+[[assign]]
+user_config = "teacher"
+admin = true
+
+[[assign]]
+user_config = "teacher"
+class_role = ["teacher", "assistant"]
+
+[[assign]]
+user_config = "primary"
+org_node = ["0193a0c2-0000-7000-8000-000000000001"]
+
+[user]
+fallback = "primary"
+```
+<!-- /prompt:omit -->
 
 <!-- prompt:omit -->
 ### TOML in one paragraph
@@ -168,7 +345,7 @@ Columns: **Key**, **Type**, **Required / default** (what happens when the key is
 
 | Key | Type | Required / default | Allowed values | Example | Notes |
 |---|---|---|---|---|---|
-| `format` | integer | `1` when left out; written by `init`/`pull` | `1`, `2` | `format = 2` | The settings syntax version, on the first line. `init` and `pull` write the lowest one the text needs: `2` once `[defaults]`, `drop`, `it_account` or `[school]` `name` / `logo_sha256` / `logo_icon_sha256` are used (they are `invalid_value` under `1`). A Device whose OS reads an older format does not apply the Version and asks to update the OS first. Leave it as `init` or `pull` wrote it. |
+| `format` | integer | `1` when left out; written by `init`/`pull` | `1`, `2`, `3` | `format = 2` | The settings syntax version, on the first line. `init` and `pull` write the lowest one the text needs: `2` once `[defaults]`, `drop`, `it_account` or `[school]` `name` / `logo_sha256` / `logo_icon_sha256` are used (they are `invalid_value` under `1`). A Device whose OS reads an older format does not apply the Version and asks to update the OS first. `3` is the device layer and user layer shape, written by `mastersos migrate` (see [Format 3](#format-3-device-layer-and-user-layer)). Leave it as `init`, `pull` or `migrate` wrote it. |
 | `version` | integer | written by `publish` | a positive integer, higher than the last Version | `version = 42` | `mastersos publish` writes it (the pulled version plus one). |
 | `issued_at` | string | written by `publish` | RFC 3339 time | `issued_at = "2026-10-10T07:00:00Z"` | `mastersos publish` writes it. |
 | `trust` | list of tables | required, at least one key | see [`[[trust]]`](#trust) | — | Listed in `manifest.toml` (see `mastersos keys list`); IT changes it. Empty is `trust_empty`. |
@@ -177,6 +354,12 @@ Columns: **Key**, **Type**, **Required / default** (what happens when the key is
 | `config` | list of tables | required: at least the Config of the `default` Group | see [`[[config]]`](#config) | — | Each `[[config]]` header adds one Config. |
 | `group` | list of tables | required: the `default` Group | see [`[[group]]`](#group) | — | Each `[[group]]` header adds one Group. |
 | `device` | list of tables | optional, empty | see [`[[device]]`](#device) | — | Each `[[device]]` header adds one Device entry. |
+| `device_defaults` | table | optional; nothing inherited | see [`[device_defaults]`](#device_defaults) | — | `format = 3` only: what every device config starts from. Replaces `[defaults]`. |
+| `device_config` | list of tables | required in `format = 3`: at least the one of the `default` Group | see [`[[device_config]]`](#device_config) | — | `format = 3` only: each header adds one device config. Replaces `[[config]]`. |
+| `user_defaults` | table | optional; nothing inherited | see [`[user_defaults]`](#user_defaults) | — | `format = 3` only: what every user config starts from. |
+| `user_config` | list of tables | required in `format = 3`: at least the fallback | see [`[[user_config]]`](#user_config) | — | `format = 3` only: each header adds one user config. |
+| `assign` | list of tables | optional, empty | see [`[[assign]]`](#assign) | — | `format = 3` only: the rules that pick a person's user config; first match wins. |
+| `user` | table | required in `format = 3` | see [`[user]`](#user) | — | `format = 3` only: `fallback`, the user config no rule matched. |
 
 ### `[school]`
 
@@ -236,6 +419,8 @@ with PKCE and the fixed redirect `http://127.0.0.1:48123/callback`.
 | `card_hosts` | list of strings | optional; only the issuer's host | lowercase hostnames with at least two labels; no scheme, port, path, wildcard or IP address; none twice; at most 20 | `card_hosts = ["sso.school.ac.th"]` | Only with `card_navigation = "listed"`: the hosts the sign-in card may open besides the issuer, for example an upstream provider. Each is reached over `https` on port 443, and its subdomains are not included. With `"open"` they change nothing. Feature `oidc_card`, like `client_secret`. |
 | `card_navigation` | string | `"open"` | `"open"`, `"listed"` | `card_navigation = "listed"` | Which pages the sign-in card may open. `open`: any `https` page the sign-in pages link or redirect to (an upstream provider, a captcha, a help page), except what the Device's own `chrome_policy` `URLBlocklist` blocks. `listed`: only the issuer and `card_hosts`; a Device whose `URLBlocklist` contains `"*"` always gets a listed card. See [The sign-in card](#the-sign-in-card). Devices whose OS predates this key reject the whole Version (feature `oidc_card_navigation`) and keep the card `listed`. |
 | `idp_hint` | string | optional; none | 1 to 64 of `A-Z a-z 0-9 _ -` | `idp_hint = "school-sso"` | Only when `issuer` is a broker in front of the school's SSO: the broker's id for that upstream provider. Feature `oidc_idp_hint`. |
+| `login_domain` | string | optional; none | lowercase letters, digits, `.` and `-`, like an `allowed_domains` entry; must be one of `allowed_domains` | `login_domain = "students.school.ac.th"` | On the login screen an entry without `@` that is not a local account on the Device is read as `<entry>@<login_domain>`, so young children type only their user name; a local account with that exact name keeps precedence (`login_domain_not_allowed`). Feature `oidc_login_domain`. |
+| `mastersos_claims` | boolean | `false` | `true`, `false` | `mastersos_claims = true` | `true`: the issuer follows the MastersOS issuer profile: the Device asks for the school's organisation (needs `[school] id`, `mastersos_claims_without_school_id`), takes the user name from `login_name` and reads the facts that `[[assign]]` rules use. `false`: a plain OIDC issuer; no facts, the user name comes from `email`. Feature `oidc_mastersos_claims`. |
 
 ```toml check=ok
 [school.oidc]
@@ -603,7 +788,7 @@ assignment use it.
 |---|---|---|---|---|---|
 | `id` | string | required | unique among Groups | `id = "grade-3-cart"` | `[[device]]` entries refer to it. One Group must be `"default"`. |
 | `name` | string | required | any text; unique among Groups, ignoring case and surrounding spaces | `name = "Grade 3 cart"` | Shown in the console. A name another Group already has is `group_name_duplicate`. |
-| `config` | string | required | the `id` of a `[[config]]` | `config = "student"` | A missing Config is `group_unknown_config`. Several Groups may name the same Config. |
+| `config` | string | required | the `id` of a `[[config]]` (format 3: of a `[[device_config]]`) | `config = "student"` | A missing Config is `group_unknown_config`. Several Groups may name the same Config. |
 
 Two carts share the student Config; teachers get the full desktop:
 
@@ -656,6 +841,302 @@ with the same id and name, write `interface = "full"` for `mode = "desktop"` and
 `interface = "learning"` otherwise, and leave `id`, `name` and `config` in the `[[group]]`. A
 Config converted from browser mode starts installing its `apps.flatpak` (`flatpak_now_installed`).
 <!-- /prompt:omit -->
+
+### `[device_defaults]`
+
+The device layer's defaults (`format = 3`): what every `[[device_config]]` starts from. The same keys as
+[`[[device_config]]`](#device_config) without `id`, `name` and `drop`, merged exactly like
+[`[defaults]`](#defaults): a single value written in a device config replaces the default as a whole; a
+collection adds to it, an entry with the same name replaces the inherited one, and `drop` removes. The
+sub-tables are written like the Config ones (`[[device_defaults.wifi]]` like
+[`[[config.wifi]]`](#configwifi), `[device_defaults.apps]` like [`[config.apps]`](#configapps), and so on).
+
+| Key | Type | Required / default | Allowed values | Example | Notes |
+|---|---|---|---|---|---|
+| `login_methods` | list of strings | `[]`: guest only | as in `[[config]]` | `login_methods = ["sso", "guest"]` | Who can sign in on the Device. |
+| `local_users_admin` | boolean | `false` | as in `[[config]]` | — | |
+| `it_account` | table | none: no IT account | see [`[config.it_account]`](#configit_account) | — | |
+| `wifi` | list of tables | `[]` | as `[[config.wifi]]` | — | |
+| `apps` | table | none | `kiosk`, `deb` (only with `kiosk = true`) and `ubuntu_mirror`, as `[config.apps]`; no `web` or `flatpak` | — | Those two are user-layer keys; a non-kiosk `.deb` here is `deb_not_kiosk_in_device_config`. |
+| `printers` | list of tables | `[]` | as `[[config.printers]]` | — | |
+| `scanners` | list of tables | `[]` | as `[[config.scanners]]` | — | |
+| `chrome` | table | no limit | as `[config.chrome]` | — | When Chrome may update. |
+| `support` | table | "Get help" shown | as `[config.support]` | — | |
+| `update_channel` | string | `[school] update_channel` | `"stable"`, `"beta"` | — | |
+| `files` | list of tables | `[]` | as `[[config.files]]` | — | |
+| `downloads` | list of tables | `[]` | as `[[config.downloads]]` | — | |
+| `scripts` | list of tables | `[]` | as `[[config.scripts]]`, only `when = "apply"` | — | A `when = "login"` script here is `script_login_in_device_config`. |
+
+### `[[device_config]]`
+
+A device config (`format = 3`): what a Device looks like before anyone signs in, on top of
+[`[device_defaults]`](#device_defaults). It is today's [`[[config]]`](#config) without the user-layer
+keys (`interface`, `chrome_policy`, `apps.web`, `apps.flatpak`, login scripts); writing one of the
+keys is `unknown_field`, and a `when = "login"` script is `script_login_in_device_config`. Groups name it by `id` (`[[group]] config`). A device config no Group names is
+`config_unused`. The Group, `[[device]]`, `[device.locked]`, `[school]` and `[[trust]]` tables are
+unchanged.
+
+| Key | Type | Required / default | Allowed values | Example | Notes |
+|---|---|---|---|---|---|
+| `id` | string | required | unique among device configs | `id = "classroom"` | `[[group]]` entries refer to it. |
+| `name` | string | required | any text | `name = "Classroom laptops"` | Shown in the console. |
+| `login_methods` | list of strings | the defaults' value, else `[]`: guest only | any of `"guest"`, `"local"`, `"sso"` | `login_methods = ["sso", "guest"]` | As in `[[config]]`. |
+| `local_users_admin` | boolean | the defaults' value, else `false` | `true`, `false` | — | As in `[[config]]`. |
+| `it_account` | table | the defaults' account, else none | see [`[config.it_account]`](#configit_account) | — | Replaces the defaults' IT account. |
+| `wifi` | list of tables | `[]` | see [`[[config.wifi]]`](#configwifi) | — | |
+| `apps` | table | none | `kiosk`, `deb` (only with `kiosk = true`) and `ubuntu_mirror`, as `[config.apps]` | — | |
+| `printers` | list of tables | `[]` | see [`[[config.printers]]`](#configprinters) | — | |
+| `scanners` | list of tables | `[]` | see [`[[config.scanners]]`](#configscanners) | — | |
+| `chrome` | table | the defaults' window and pause | see [`[config.chrome]`](#configchrome) | — | |
+| `support` | table | the defaults' value, else "Get help" shown | see [`[config.support]`](#configsupport) | — | |
+| `update_channel` | string | the defaults' value, else `[school] update_channel` | `"stable"`, `"beta"` | — | |
+| `files` | list of tables | `[]` | see [`[[config.files]]`](#configfiles) | — | |
+| `downloads` | list of tables | `[]` | see [`[[config.downloads]]`](#configdownloads) | — | |
+| `scripts` | list of tables | `[]` | see [`[[config.scripts]]`](#configscripts); `when = "apply"` only | — | |
+| `drop` | table | nothing dropped | as [`[config.drop]`](#configdrop), without `chrome_policy` | `drop.wifi = ["Campus-IoT"]` | Inherited entries to leave out: `wifi`, `apps.kiosk`, `apps.deb`, `printers`, `scanners`, `files`, `downloads`, `scripts`. |
+
+<!-- prompt:omit -->
+```toml check=ok
+format = 3
+
+[device_defaults]
+login_methods = ["guest", "local"]
+wifi = [{ ssid = "School-Staff", psk = "example-password-not-real" }]
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+printers = [{ name = "Library", uri = "ipp://lib.school.ac.th/ipp/print" }]
+
+[[device_config]]
+id = "exam"
+name = "Exam room"
+login_methods = ["guest", "local"]
+drop.wifi = ["School-Staff"]
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[group]]
+id = "exam-room"
+name = "Exam room"
+config = "exam"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
+### `[user_defaults]`
+
+The user layer's defaults (`format = 3`): what every [`[[user_config]]`](#user_config) starts from. The
+same keys as `[[user_config]]` without `id`, `name` and `drop`. Left out entirely, a user config
+starts from nothing. The merge is the one of [`[defaults]`](#defaults): single values (`preset`,
+`home`) replace; collections add, and an entry with the same name replaces the inherited one as a
+whole; `drop` removes. `allow` and `deny` are collections too. The sub-tables are written like the
+Config ones (`[[user_defaults.apps.web]]` like [`[[config.apps.web]]`](#configappsweb),
+`[user_defaults.apps.deb.<id>]` like [`[config.apps.deb.<id>]`](#configappsdebid), `[[user_defaults.scripts]]`
+like [`[[config.scripts]]`](#configscripts)).
+
+| Key | Type | Required / default | Allowed values | Example | Notes |
+|---|---|---|---|---|---|
+| `preset` | string | `"learning"` | `"learning"`, `"full"` | `preset = "learning"` | The starting point of the capabilities, see [Capabilities](#capabilities). |
+| `allow` | list of strings | `[]` | capabilities: `terminal`, `file_manager`, `settings`, `extensions`, `all_apps`, `user_apps` | `allow = ["file_manager"]` | Added to the preset. |
+| `deny` | list of strings | `[]` | the same capabilities | `deny = ["terminal"]` | Removed from the preset; deny wins over allow. |
+| `apps` | table | none | `web`, `flatpak` and `deb` (not kiosk), as `[config.apps]` | — | What the Dash shows. |
+| `chrome_policy` | table | `{}`: the baseline only | as `chrome_policy` in `[[config]]` | `chrome_policy = { URLBlocklist = ["tiktok.com"] }` | Chrome policies on top of the baseline, by policy name. |
+| `scripts` | list of tables | `[]` | as `[[config.scripts]]`, only `when = "login"` | — | Run as the person at sign-in. A script without `when = "login"` is `script_apply_in_user_config`. |
+| `home` | string | follows `preset` | `"tidy"`, `"keep"` | `home = "keep"` | What happens to the home folder. Without it: `learning` tidies, `full` keeps. |
+
+### `[[user_config]]`
+
+A user config (`format = 3`): what a person sees and may do in their session, on top of
+[`[user_defaults]`](#user_defaults). [`[[assign]]`](#assign) rules and `[user] fallback` name it by `id`. A
+user config no rule and not the fallback names is `user_config_unreached`.
+
+| Key | Type | Required / default | Allowed values | Example | Notes |
+|---|---|---|---|---|---|
+| `id` | string | required | unique among user configs; 1 to 64 bytes | `id = "teacher"` | Rules and `[user] fallback` refer to it (`user_config_duplicate_id`, `user_config_id_invalid`, `user_config_unknown`). |
+| `name` | string | required | any text | `name = "Teachers"` | Shown in the console. |
+| `preset` | string | the defaults' value, else `"learning"` | `"learning"`, `"full"` | `preset = "full"` | See [Capabilities](#capabilities). |
+| `allow` | list of strings | `[]` | `terminal`, `file_manager`, `settings`, `extensions`, `all_apps`, `user_apps` | `allow = ["file_manager"]` | Added after the defaults' `allow`. |
+| `deny` | list of strings | `[]` | the same capabilities | `deny = ["terminal"]` | Added after the defaults' `deny`; deny wins. |
+| `apps` | table | none | `web`, `flatpak`, `deb` (not kiosk), as `[config.apps]` | — | Added to the defaults' apps. A kiosk `.deb` here is `deb_kiosk_in_user_config`. The Device installs the Flatpak and `.deb` apps of every user config it can reach. |
+| `chrome_policy` | table | `{}` | as in `[[config]]` | — | Added to the defaults' policies by name. |
+| `scripts` | list of tables | `[]` | as `[[config.scripts]]`, only `when = "login"` | — | Login scripts run as the person. |
+| `home` | string | the defaults' value, else follows `preset` | `"tidy"`, `"keep"` | — | |
+| `drop` | table | nothing dropped | see [`[user_config.drop]`](#user_configdrop) | `drop.chrome_policy = ["URLBlocklist"]` | Entries inherited from `[user_defaults]` to leave out. |
+
+A user config can only change what the person sees and may do. It never grants administrator rights
+and never changes Wi-Fi, who may sign in, or what is installed beyond its own apps.
+
+#### Capabilities
+
+The effective capabilities of a user config are the preset's, plus `allow`, minus `deny`
+(`deny` wins). Preset `learning` has none and preset `full` has all six. Each capability lifts a
+part of what the learning lock blocks:
+
+| Capability | Lifts |
+|---|---|
+| `terminal` | the terminal programs, the command-line restriction and the terminal keyboard shortcut |
+| `file_manager` | the file manager (Files), including its entry in the Dash |
+| `settings` | the system settings, including user administration |
+| `extensions` | user GNOME extensions and installing them |
+| `all_apps` | every installed app, not only those in the Dash |
+| `user_apps` | the person's own Flatpaks, and the person's `~/.config/environment.d` |
+
+Settings that belong to no capability (the Dash favourites and custom keyboard shortcuts) stay locked
+unless every capability is lifted, so preset `full` locks nothing, exactly as `full` does today. The
+screen lock stays on everywhere. Keeping a person's user manager running after logout (linger) is
+not a capability: a human session never gets it.
+
+`terminal` defeats every other lock (environment, user Flatpaks, `.desktop` files), so a user config
+with it is effectively `full`: the check warns with `user_config_terminal`.
+
+<!-- prompt:omit -->
+```toml check=ok
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[user_defaults]
+allow = ["file_manager"]
+apps.flatpak = ["org.libreoffice.LibreOffice"]
+
+[[user_config]]
+id = "student"
+name = "Students"
+drop.allow = ["file_manager"]
+
+[[user_config]]
+id = "staff"
+name = "Staff"
+preset = "full"
+deny = ["terminal", "extensions"]
+home = "tidy"
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
+### `[user_config.drop]`
+
+Entries a user config inherits from [`[user_defaults]`](#user_defaults) but does not want (`format = 3`),
+each named as in the defaults' collection. A name the defaults do not have is `drop_unknown` (a
+warning); a name the user config also writes itself is `drop_conflict` (an error).
+
+| Key | Type | Required / default | Allowed values | Example | Notes |
+|---|---|---|---|---|---|
+| `apps` | table | none | see [`[user_config.drop.apps]`](#user_configdropapps) | — | |
+| `chrome_policy` | list of strings | `[]` | policy names | `drop.chrome_policy = ["URLBlocklist"]` | |
+| `scripts` | list of strings | `[]` | script `path`s | — | |
+| `allow` | list of strings | `[]` | capabilities | `drop.allow = ["file_manager"]` | Removes an inherited `allow` entry. |
+| `deny` | list of strings | `[]` | capabilities | `drop.deny = ["terminal"]` | Removes an inherited `deny` entry. |
+
+### `[user_config.drop.apps]`
+
+| Key | Type | Required / default | Allowed values | Example | Notes |
+|---|---|---|---|---|---|
+| `web` | list of strings | `[]` | web app names | `drop.apps.web = ["Classroom"]` | |
+| `flatpak` | list of strings | `[]` | Flatpak app ids | — | |
+| `deb` | list of strings | `[]` | `.deb` app ids | — | |
+
+### `[[assign]]`
+
+A rule (`format = 3`): it names the user config of the people it matches. Rules are the only place
+that decides who gets which user config.
+
+- Each rule has `user_config` (required) and any of the conditions below. Every condition written must
+  hold (AND); a list matches when any of its entries does (OR). An empty list never matches
+  (`assign_empty_list`).
+- Rules are tried in file order and the first match wins; nobody matched gets `[user] fallback`. A rule
+  after one with no condition at all is never reached (`assign_unreachable`).
+- Conditions the Device evaluates from the signed file alone are `kind`, `admin`, `user` and
+  `device_group`. The others are **issuer facts** (see [`[school.oidc]`](#schooloidc)
+  `mastersos_claims`): they never match for `local` and `guest` logins, nor when the facts are
+  missing, an error or older than 120 seconds. That person then falls through to later rules, and
+  finally the fallback.
+
+| Key | Type | Required / default | Allowed values | Example | Notes |
+|---|---|---|---|---|---|
+| `user_config` | string | required | the `id` of a `[[user_config]]` | `user_config = "teacher"` | A missing one is `user_config_unknown`. |
+| `kind` | list of strings | any | `"sso"`, `"local"`, `"guest"` | `kind = ["guest"]` | The kind of account signing in. |
+| `admin` | boolean | any | `true`, `false` | `admin = true` | `true` for `[school] admin_users`, `itadmin`, and local accounts when `local_users_admin = true`. |
+| `user` | list of strings | any | login names | `user = ["itadmin"]` | The person's login name, compared ignoring ASCII case. Entries are login names, which can differ from a person's current email. |
+| `device_group` | list of strings | any | ids of `[[group]]` | `device_group = ["exam-room"]` | The Group of this Device. A Group that does not exist is `assign_device_group_unknown`. |
+| `org_role` | list of strings | any | `"owner"`, `"admin"`, `"member"` | `org_role = ["owner", "admin"]` | Fact: the role in the organisation. |
+| `class_role` | list of strings | any | `"teacher"`, `"assistant"`, `"student"` | `class_role = ["teacher"]` | Fact: the role in at least one class. |
+| `class` | list of strings | any | class ids: lowercase UUIDs | `class = ["0193a0c2-0000-7000-8000-000000000002"]` | Fact: a class the person is in. |
+| `org_node` | list of strings | any | org-tree node ids: lowercase UUIDs | `org_node = ["0193a0c2-0000-7000-8000-000000000001"]` | Fact: the person's node and all its ancestors are listed, so a rule on a node matches its sub-nodes. |
+| `age_band` | list of strings | any | `"under13"`, `"13-17"`, `"18+"` | `age_band = ["under13"]` | Fact. |
+| `sub` | list of strings | any | the issuer's subject ids: lowercase UUIDs | `sub = ["0193a0c2-0000-7000-8000-000000000003"]` | Fact. |
+
+An id that is not a lowercase UUID in `class`, `org_node` or `sub` is `assign_id_invalid`. An unknown
+key or an unknown value of an enumerated condition (such as `kind = ["teacher"]`) is reported as
+`unknown_field` or `invalid_value`. Rules that use a fact condition without
+`mastersos_claims = true` are `facts_without_mastersos_claims`. Other checks of the user layer:
+`user_fallback_missing`, `user_config_unreached`, `user_config_terminal`,
+`script_apply_in_user_config`, `script_login_in_device_config`, `deb_kiosk_in_user_config`,
+`deb_not_kiosk_in_device_config`, `user_deb_conflict`, `login_domain_not_allowed` and
+`mastersos_claims_without_school_id`.
+
+The entry-level rules of a Config apply to the user layer at `user_defaults.…` and
+`user_config.<id>.…`: `web_app_invalid`, `web_app_not_https`, `icon_invalid`, the `deb_*` codes,
+`drop_conflict`, `drop_unknown`. In a format 3 text the errors among them (`web_app_invalid`,
+`icon_invalid`, the `deb_*` errors, `drop_conflict`) make the whole bundle invalid: the check
+reports them, publishing is refused, and a Device would not apply it. In format 2 the same errors
+only block publishing.
+
+`user_deb_conflict` is reported once per `.deb` app id, even when several Groups clash on it, at the
+second user config's entry (or at `user_defaults.apps.deb.<id>` when that config inherits it).
+
+<!-- prompt:omit -->
+```toml check=user_config_unknown
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "primary"
+name = "Grade 1-6"
+
+[[assign]]
+user_config = "teacher"
+class_role = ["teacher"]
+
+[user]
+fallback = "primary"
+```
+<!-- /prompt:omit -->
+
+### `[user]`
+
+The fallback of the rules (`format = 3`).
+
+| Key | Type | Required / default | Allowed values | Example | Notes |
+|---|---|---|---|---|---|
+| `fallback` | string | required | the `id` of a `[[user_config]]` | `fallback = "primary"` | The user config of a person no rule matches, and of a person whose facts are missing, an error or stale. A missing `[user]` is `user_fallback_missing`; an unknown id is `user_config_unknown`. |
 
 ### `[[config.wifi]]`
 
@@ -1557,6 +2038,153 @@ config = "standard"
 **How to fix:** keep at most 200 domains. Triggered by any list of 201 or more domains (no example,
 for length).
 
+### `assign_device_group_unknown`
+
+**Level:** error. **Meaning:** an `[[assign]]` rule's `device_group` names a Group id that no `[[group]]` has.
+
+<!-- prompt:omit -->
+**Why:** the condition can never hold for that id, so the rule does not do what it says.
+<!-- /prompt:omit -->
+
+**How to fix:** name an existing `[[group]]` id, or remove the entry.
+
+<!-- prompt:omit -->
+```toml check=assign_device_group_unknown
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[[assign]]
+user_config = "student"
+device_group = ["library"]
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
+### `assign_empty_list`
+
+**Level:** error. **Meaning:** an `[[assign]]` rule writes a condition as an empty list (for example `kind = []`).
+
+<!-- prompt:omit -->
+**Why:** a list matches when any of its entries does, so an empty list never matches and the rule is dead.
+<!-- /prompt:omit -->
+
+**How to fix:** list the values the rule is for, or leave the key out to match everyone.
+
+<!-- prompt:omit -->
+```toml check=assign_empty_list
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[[assign]]
+user_config = "student"
+kind = []
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
+### `assign_id_invalid`
+
+**Level:** error. **Meaning:** a `class`, `org_node` or `sub` entry of an `[[assign]]` rule is not a lowercase UUID.
+
+<!-- prompt:omit -->
+**Why:** the issuer sends these ids as lowercase UUIDs, so any other spelling never matches.
+<!-- /prompt:omit -->
+
+**How to fix:** copy the id exactly as the settings server shows it (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`).
+
+<!-- prompt:omit -->
+```toml check=assign_id_invalid
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[[assign]]
+user_config = "student"
+class = ["Class-7A"]
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
+### `assign_unreachable`
+
+**Level:** error. **Meaning:** an `[[assign]]` rule comes after a rule that has no condition at all.
+
+<!-- prompt:omit -->
+**Why:** rules are tried in order and the first match wins; a rule without conditions matches everyone, so no later rule is ever reached.
+<!-- /prompt:omit -->
+
+**How to fix:** move the rule without conditions to the end, or remove it and use `[user] fallback` instead. Every later rule is reported.
+
+<!-- prompt:omit -->
+```toml check=assign_unreachable
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[[assign]]
+user_config = "student"
+
+[[assign]]
+user_config = "student"
+kind = ["guest"]
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
 ### `chrome_pause_invalid`
 
 **Level:** error. **Meaning:** `[config.chrome] pause_until` is not a real date in the form
@@ -1870,6 +2498,43 @@ config = "standard"
 ```
 <!-- /prompt:omit -->
 
+### `deb_kiosk_in_user_config`
+
+**Level:** error. **Meaning:** a `.deb` app in `[user_defaults]` or a `[[user_config]]` has `kiosk = true`.
+
+<!-- prompt:omit -->
+**Why:** kiosk apps run in their own session before anyone signs in, which is the device layer.
+<!-- /prompt:omit -->
+
+**How to fix:** move the app to the `apps.deb` of a `[[device_config]]` (or `[device_defaults]`), or remove `kiosk = true`.
+
+<!-- prompt:omit -->
+```toml check=deb_kiosk_in_user_config
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[user_config.apps.deb.testnav]
+name = "TestNav"
+url = "https://download.testnav.com/testnav.deb"
+kiosk = true
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
 ### `deb_name_invalid`
 
 **Level:** error. **Meaning:** a `.deb` app's `name` is empty, longer than 64 characters, or contains `:`, `,` or a control character.
@@ -1894,6 +2559,42 @@ url = "https://download.testnav.com/testnav.deb"
 id = "default"
 name = "Unassigned"
 config = "standard"
+```
+<!-- /prompt:omit -->
+
+### `deb_not_kiosk_in_device_config`
+
+**Level:** error. **Meaning:** a `.deb` app in `[device_defaults]` or a `[[device_config]]` does not have `kiosk = true`.
+
+<!-- prompt:omit -->
+**Why:** a device config holds only kiosk apps; the apps people see in their session belong to user configs, and the Device installs every app of the user configs it can give.
+<!-- /prompt:omit -->
+
+**How to fix:** move the app to the `apps.deb` of a `[[user_config]]` (or `[user_defaults]`), or write `kiosk = true` if it is a kiosk app.
+
+<!-- prompt:omit -->
+```toml check=deb_not_kiosk_in_device_config
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[device_config.apps.deb.zoom]
+name = "Zoom"
+url = "https://zoom.us/client/latest/zoom_amd64.deb"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[user]
+fallback = "student"
 ```
 <!-- /prompt:omit -->
 
@@ -2376,6 +3077,42 @@ password could not be recovered.
 **How to fix:** put the recipients back (`mastersos keys add` writes them). Needs the school's state, so
 there is no standalone example.
 
+### `facts_without_mastersos_claims`
+
+**Level:** warning. **Meaning:** an `[[assign]]` rule uses `org_role`, `class_role`, `class`, `org_node`, `age_band` or `sub` while `school.oidc.mastersos_claims` is not `true` (or there is no `[school.oidc]`). The message says: this rule never matches: the issuer sends no facts unless school.oidc.mastersos_claims = true.
+
+<!-- prompt:omit -->
+**Why:** those conditions read facts that only an issuer with the MastersOS issuer profile sends.
+<!-- /prompt:omit -->
+
+**How to fix:** set `mastersos_claims = true` in `[school.oidc]` if the issuer supports it, or use the Device conditions (`kind`, `admin`, `user`, `device_group`).
+
+<!-- prompt:omit -->
+```toml check=facts_without_mastersos_claims
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[[assign]]
+user_config = "student"
+age_band = ["under13"]
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
 ### `feature_unsupported`
 
 **Level:** error (server). **Meaning:** the settings use a key that was added later
@@ -2384,7 +3121,7 @@ with Configs counts as using it, `wifi_ext`: any `[[school.wifi]]`, or a Wi-Fi e
 `wpa3_only` (either value), `eap` or an enterprise key, or `oidc_card`: `client_secret` or
 `card_hosts` in `[school.oidc]`, or `support`: `[config.support]` or `support` in `[defaults]`, or
 `config_update_channel`: `update_channel` in `[defaults]` or a `[[config]]`, or `oidc_idp_hint`:
-`idp_hint` in `[school.oidc]`, or `oidc_card_navigation`: `card_navigation` in `[school.oidc]`, or `deb_apps`: `apps.deb` or `ubuntu_mirror` in `[defaults]` or a `[[config]]`, or `device_annotations`: `asset_id` or `location` in a `[[device]]`, or `kiosk_platform`, `kiosk_inject`, `kiosk_device_attributes`, `kiosk_managed_config`: the kiosk app keys `platform`, `inject`, `device_attributes = true` and `managed_config`),
+`idp_hint` in `[school.oidc]`, or `oidc_card_navigation`: `card_navigation` in `[school.oidc]`, or `deb_apps`: `apps.deb` or `ubuntu_mirror` in `[defaults]` or a `[[config]]`, or `device_annotations`: `asset_id` or `location` in a `[[device]]`, or `kiosk_platform`, `kiosk_inject`, `kiosk_device_attributes`, `kiosk_managed_config`: the kiosk app keys `platform`, `inject`, `device_attributes = true` and `managed_config`, or `format_3`: `format = 3`, or `oidc_login_domain`: `login_domain` in `[school.oidc]`, or `oidc_mastersos_claims`: `mastersos_claims = true` in `[school.oidc]`),
 and some Devices seen in the last 30 days have not reported that they understand it.
 
 <!-- prompt:omit -->
@@ -2538,11 +3275,11 @@ refuse new Versions.
 **Why:** a Device whose OS reads an older format does not apply the Version at all, so they would all stay on the previous settings.
 <!-- /prompt:omit -->
 
-**How to fix:** for a `format` newer than 2, put back the value the server wrote. When Devices are too old, the console names them and the OS image each last reported: update them to an image that reads the format (the message says when no Device of the school runs one yet), or take them out of use and wait until they have been silent for 30 days (the message gives the date); texts that need only format 1 publish as before. The console's version of this Issue carries `found`, `devices`, `device_list`, `more`, `until` and `supported_in` params.
+**How to fix:** for a `format` newer than 3, put back the value the server wrote. When Devices are too old, the console names them and the OS image each last reported: update them to an image that reads the format (the message says when no Device of the school runs one yet), or take them out of use and wait until they have been silent for 30 days (the message gives the date); texts that need only format 1 publish as before. The console's version of this Issue carries `found`, `devices`, `device_list`, `more`, `until` and `supported_in` params.
 
 <!-- prompt:omit -->
 ```toml check=format_unsupported
-format = 3
+format = 4
 [[group]]
 id = "default"
 name = "Unassigned"
@@ -3431,6 +4168,42 @@ locked = { message = "This Device was reported lost. Please bring it to the IT o
 ```
 <!-- /prompt:omit -->
 
+### `login_domain_not_allowed`
+
+**Level:** error. **Meaning:** `school.oidc.login_domain` is not one of `allowed_domains` (compared ignoring case). Any format.
+
+<!-- prompt:omit -->
+**Why:** the rule is that `login_domain` must be one of `school.allowed_domains`.
+<!-- /prompt:omit -->
+
+**How to fix:** add the domain to `allowed_domains`, or change `login_domain` to one of them.
+
+<!-- prompt:omit -->
+```toml check=login_domain_not_allowed
+format = 3
+
+[school]
+oidc = { issuer = "https://sso.school.ac.th", client_id = "mastersos", login_domain = "students.school.ac.th" }
+allowed_domains = ["school.ac.th"]
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
 ### `logo_incomplete`
 
 **Level:** error. **Meaning:** `[school]` has one of `logo_sha256` (the sign-in screen logo) and `logo_icon_sha256` (the quick menu icon) but not the other.
@@ -3495,6 +4268,16 @@ config = "standard"
 <!-- /prompt:omit -->
 
 **How to fix:** ask IT to run `mastersos logo upload` and paste its output; or remove the key. Needs the school's stored logos, so there is no standalone example.
+
+### `mastersos_claims_without_school_id`
+
+**Level:** error. **Meaning:** `school.oidc.mastersos_claims = true` but `[school]` has no `id`.
+
+<!-- prompt:omit -->
+**Why:** the Device asks the issuer for the school's organisation and checks the token names it; without an id there is nothing to ask for.
+<!-- /prompt:omit -->
+
+**How to fix:** add the school's `id` to `[school]` (the settings server writes it), or remove `mastersos_claims`.
 
 ### `missing_field`
 
@@ -3749,6 +4532,72 @@ name = "Standard"
 id = "default"
 name = "Unassigned"
 config = "standard"
+```
+<!-- /prompt:omit -->
+
+### `script_apply_in_user_config`
+
+**Level:** error. **Meaning:** a script in `[user_defaults]` or a `[[user_config]]` runs `when = "apply"` (the default when `when` is left out).
+
+<!-- prompt:omit -->
+**Why:** apply scripts run as root when the Device applies its settings, which is the device layer.
+<!-- /prompt:omit -->
+
+**How to fix:** write `when = "login"` to run it as the person at sign-in, or move it to a device config.
+
+<!-- prompt:omit -->
+```toml check=script_apply_in_user_config files=scripts/hello.sh
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+scripts = [{ path = "scripts/hello.sh" }]
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
+### `script_login_in_device_config`
+
+**Level:** error. **Meaning:** a script in `[device_defaults]` or a `[[device_config]]` has `when = "login"`.
+
+<!-- prompt:omit -->
+**Why:** login scripts run as the person who signs in, which is the user layer.
+<!-- /prompt:omit -->
+
+**How to fix:** move it to a `[[user_config]]` (or `[user_defaults]`), or make it an apply script.
+
+<!-- prompt:omit -->
+```toml check=script_login_in_device_config files=scripts/hello.sh
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+scripts = [{ path = "scripts/hello.sh", when = "login" }]
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[user]
+fallback = "student"
 ```
 <!-- /prompt:omit -->
 
@@ -4187,6 +5036,256 @@ name = "Standard"
 id = "default"
 name = "Unassigned"
 config = "standard"
+```
+<!-- /prompt:omit -->
+
+### `user_config_duplicate_id`
+
+**Level:** error. **Meaning:** two `[[user_config]]` tables have the same `id`.
+
+<!-- prompt:omit -->
+**Why:** rules and `[user] fallback` name a user config by id, so the id must pick one.
+<!-- /prompt:omit -->
+
+**How to fix:** give each user config its own id.
+
+<!-- prompt:omit -->
+```toml check=user_config_duplicate_id
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
+### `user_config_id_invalid`
+
+**Level:** error. **Meaning:** a `[[user_config]]` `id` is empty or longer than 64 bytes.
+
+<!-- prompt:omit -->
+**Why:** rules and `[user] fallback` name it.
+<!-- /prompt:omit -->
+
+**How to fix:** write a short id, for example `student`.
+
+<!-- prompt:omit -->
+```toml check=user_config_id_invalid
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[[user_config]]
+id = ""
+name = "Nameless"
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
+### `user_config_terminal`
+
+**Level:** warning. **Meaning:** the effective capabilities of a user config (its preset, plus `allow`, minus `deny`, after `[user_defaults]`) include `terminal`. The message says: terminal defeats every other lock: environment, user Flatpaks, .desktop files; the session is effectively full.
+
+<!-- prompt:omit -->
+**Why:** with a terminal a person can undo the other locks of the session.
+<!-- /prompt:omit -->
+
+**How to fix:** nothing, when the session is meant to be full (preset `full`); otherwise add `terminal` to `deny`.
+
+<!-- prompt:omit -->
+```toml check=user_config_terminal
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+allow = ["terminal"]
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
+### `user_config_unknown`
+
+**Level:** error. **Meaning:** an `[[assign]]` rule's `user_config`, or `[user] fallback`, names a user config id that no `[[user_config]]` has.
+
+<!-- prompt:omit -->
+**Why:** a person matched there would get no user config.
+<!-- /prompt:omit -->
+
+**How to fix:** name an existing `[[user_config]]` id, or add the user config.
+
+<!-- prompt:omit -->
+```toml check=user_config_unknown
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[user]
+fallback = "students"
+```
+<!-- /prompt:omit -->
+
+### `user_config_unreached`
+
+**Level:** warning. **Meaning:** no `[[assign]]` rule names a `[[user_config]]` and it is not `[user] fallback`.
+
+<!-- prompt:omit -->
+**Why:** nobody can get it, so it is probably left over or misspelt.
+<!-- /prompt:omit -->
+
+**How to fix:** name it in a rule, or remove it.
+
+<!-- prompt:omit -->
+```toml check=user_config_unreached
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[[user_config]]
+id = "teacher"
+name = "Teachers"
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
+### `user_deb_conflict`
+
+**Level:** error. **Meaning:** two user configs that can both apply on one Group define a non-kiosk `.deb` app with the same id differently, or a user config's `.deb` app has the id of a kiosk `.deb` app of that Group's device config. Reported once per app id. The same definition in two user configs is fine.
+
+<!-- prompt:omit -->
+**Why:** a Device installs one `.deb` per app id: the union of the apps of every user config it can give.
+<!-- /prompt:omit -->
+
+**How to fix:** give the two entries the same definition (put it in `[user_defaults]`), or use different app ids.
+
+<!-- prompt:omit -->
+```toml check=user_deb_conflict
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
+
+[user_config.apps.deb.zoom]
+name = "Zoom"
+url = "https://zoom.us/client/latest/zoom_amd64.deb"
+
+[[user_config]]
+id = "teacher"
+name = "Teachers"
+
+[user_config.apps.deb.zoom]
+name = "Zoom"
+url = "https://mirror.school.ac.th/zoom_amd64.deb"
+
+[[assign]]
+user_config = "teacher"
+admin = true
+
+[user]
+fallback = "student"
+```
+<!-- /prompt:omit -->
+
+### `user_fallback_missing`
+
+**Level:** error. **Meaning:** a `format = 3` text has no `[user]` table with `fallback`.
+
+<!-- prompt:omit -->
+**Why:** the fallback is the user config of everyone no rule matches; without it nobody can be given a session.
+<!-- /prompt:omit -->
+
+**How to fix:** add `[user]` with `fallback = "<user config id>"`.
+
+<!-- prompt:omit -->
+```toml check=user_fallback_missing
+format = 3
+
+[[device_config]]
+id = "classroom"
+name = "Classroom laptops"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "classroom"
+
+[[user_config]]
+id = "student"
+name = "Students"
 ```
 <!-- /prompt:omit -->
 

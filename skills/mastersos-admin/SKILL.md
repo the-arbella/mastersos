@@ -59,6 +59,12 @@ after installing (the installer adds `%LOCALAPPDATA%\Programs\mastersos` to the 
 - **Config** (`[[config]]`): what Devices get: mode (`interface`: `learning` or `full`), login methods, apps,
   Wi-Fi, printers, Chrome update window and more. Several Groups can share one Config.
 - **Group** (`[[group]]`): only `id`, `name` and `config` (the Config its Devices use). The `default` Group must exist.
+- **Format 3** (`format = 3`) splits the Config into device configs (`[[device_config]]`: Wi-Fi, who may sign in,
+  kiosk apps) and user configs (`[[user_config]]`: capabilities, apps, Chrome policy), and `[[assign]]` rules plus
+  `[user] fallback` choose the user config of whoever signs in. `mastersos migrate` converts a format 1 or 2 text,
+  and `mastersos explain user|device` shows what a person or a Device gets. Do not hand-convert. Publishing a
+  format 3 text is refused (`feature_unsupported` for `format_3`, or `format_unsupported`) until every Device seen
+  in the last 30 days reports `format_3`; the refusal names the Devices that are too old. See the reference.
 - `[[device]]`: which Group a Device is in. Written in the file like everything else: look up the id with
   `mastersos devices list`, and change only the `group` of the Devices you were asked to move.
 

@@ -170,7 +170,9 @@ fn parse_ranged(text: &str) -> Result<Manifest, RangedIssue> {
 
 /// Span of the key (or table header) a lint path names, in the original text.
 /// Paths: `trust`, `school.<key>`, `config.<id>[.<key>|[i]…]`, `group.<id>[.<key>…]`,
-/// `device[i][.<key>…]`; `config.<id>` / `group.<id>` pick the first table with that id. In a
+/// `device[i][.<key>…]`, and in a format 3 text `device_config.<id>…`, `user_config.<id>…`,
+/// `assign[i]…`, `user.<key>`; `config.<id>` / `group.<id>` / `device_config.<id>` /
+/// `user_config.<id>` pick the first table with that id. In a
 /// legacy text (no `[[config]]`) `config.<id>` is looked up among the `[[group]]`s, where those
 /// settings are written.
 ///
@@ -193,6 +195,10 @@ pub struct Locator {
     groups: IdIndex,
     /// The same for `[[config]]`.
     configs: IdIndex,
+    /// The same for `[[device_config]]` (format 3).
+    device_configs: IdIndex,
+    /// The same for `[[user_config]]` (format 3).
+    user_configs: IdIndex,
 }
 
 /// Indices into an array of tables by the tables' `id`, in order.
@@ -217,11 +223,15 @@ impl Locator {
         let doc = toml_edit::Document::parse(text.to_owned()).ok()?;
         let groups = ids_of(&doc, "group");
         let configs = ids_of(&doc, "config");
+        let device_configs = ids_of(&doc, "device_config");
+        let user_configs = ids_of(&doc, "user_config");
         Some(Locator {
             lines: LineIndex::new(doc.raw()),
             doc,
             groups,
             configs,
+            device_configs,
+            user_configs,
         })
     }
 
@@ -245,7 +255,8 @@ impl Locator {
         self.locate_nth(path, 0)
     }
 
-    /// [`locate`] where `group.<id>` / `config.<id>` picks the `nth` (0-based) table with that id.
+    /// [`locate`] where `group.<id>` / `config.<id>` (and the format 3 `device_config.<id>` /
+    /// `user_config.<id>`) picks the `nth` (0-based) table with that id.
     fn locate_nth(&self, path: &str, nth: usize) -> Option<Span> {
         let text = self.text();
         let mut node = Node::Table(self.doc.as_table());
@@ -298,12 +309,19 @@ impl Locator {
         })
     }
 
-    /// For a path starting `group.` or `config.`: the root key to look in, the rest of the path
-    /// after the prefix, and the id index of that key. A `config.` path in a text without
-    /// `[[config]]` (the legacy shape) looks among the `[[group]]`s.
+    /// For a path starting `group.`, `config.`, `device_config.` or `user_config.`: the root key
+    /// to look in, the rest of the path after the prefix, and the id index of that key. A
+    /// `config.` path in a text without `[[config]]` (the legacy shape) looks among the
+    /// `[[group]]`s.
     fn table_list<'p>(&self, path: &'p str) -> Option<(&'static str, &'p str, &IdIndex)> {
         if let Some(after) = path.strip_prefix("group.") {
             return Some(("group", after, &self.groups));
+        }
+        if let Some(after) = path.strip_prefix("device_config.") {
+            return Some(("device_config", after, &self.device_configs));
+        }
+        if let Some(after) = path.strip_prefix("user_config.") {
+            return Some(("user_config", after, &self.user_configs));
         }
         let after = path.strip_prefix("config.")?;
         if self.has_root_key("config") {
@@ -447,8 +465,9 @@ fn parse_stamped(text: &str, loc: Option<&Locator>) -> Result<Manifest, Lint> {
 ///
 /// A parse failure is the only issue. Otherwise [`Manifest::validate_all`]'s issues come first,
 /// then [`crate::lint_at`]'s, each in its own order; a path that [`locate`] cannot place keeps
-/// `span: None`. `group_duplicate_id` (`config_duplicate_id`) points at the repeated `[[group]]`
-/// (`[[config]]`), not the first one.
+/// `span: None`. `group_duplicate_id` (`config_duplicate_id`, `user_config_duplicate_id`) points
+/// at the repeated `[[group]]` (`[[config]]` or `[[device_config]]`, `[[user_config]]`), not the
+/// first one.
 /// At most [`MAX_ISSUES`] issues, then `issues_truncated` ([`cap_issues`]).
 pub fn check_text(text: &str, present: &BTreeSet<String>, today: chrono::NaiveDate) -> Checked {
     let (mut checked, _) = check_text_located(text, present, today);
@@ -483,7 +502,10 @@ pub fn check_text_located(
             let (Some(path), None) = (&lint.path, lint.span) else {
                 continue;
             };
-            let nth = if matches!(lint.code, "group_duplicate_id" | "config_duplicate_id") {
+            let nth = if matches!(
+                lint.code,
+                "group_duplicate_id" | "config_duplicate_id" | "user_config_duplicate_id"
+            ) {
                 let n = repeats.entry(path.clone()).or_default();
                 *n += 1;
                 *n
@@ -546,9 +568,9 @@ mod tests {
 
     #[test]
     fn newer_format_is_format_unsupported() {
-        let e = parse_issue("format = 3\nversion = 1\n[school]\ncolour = 1\n").unwrap_err();
+        let e = parse_issue("format = 4\nversion = 1\n[school]\ncolour = 1\n").unwrap_err();
         assert_eq!(e.code, "format_unsupported");
-        assert_eq!(e.params["found"], "3");
+        assert_eq!(e.params["found"], "4");
         assert_eq!(e.span.unwrap().line, 1);
         // A wrong value is still an invalid value.
         let e = parse_issue("format = \"x\"\nversion = 1\n").unwrap_err();

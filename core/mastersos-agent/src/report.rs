@@ -434,10 +434,10 @@ mod tests {
     /// Defaults and IT account design §15: this agent reads every `format = 2` construct.
     #[test]
     fn supported_features_include_format_2() {
-        assert!(SUPPORTED_FEATURES.contains(&mastersos_bundle::FEATURE_FORMAT_2));
-        assert_eq!(
-            mastersos_bundle::format_feature(mastersos_bundle::MAX_FORMAT),
-            mastersos_bundle::FEATURE_FORMAT_2
+        // Plan B (user layer) adds FEATURE_FORMAT_3 once the agent applies user configs.
+        assert!(
+            SUPPORTED_FEATURES.contains(&mastersos_bundle::FEATURE_FORMAT_2)
+                && !SUPPORTED_FEATURES.contains(&mastersos_bundle::FEATURE_FORMAT_3)
         );
     }
 
