@@ -106,11 +106,13 @@ Steps:
 1. After sign-in (allow up to ~10 s for the agent to lift): open Files from the Dash; open a terminal.
 2. As root: `cat /var/lib/mastersos-system/exec-block-mode /run/mastersos/exec-block-lifted`; `findmnt` probe.
 3. Force a Chrome sysext refresh during the session (`systemctl reload systemd-sysext.service` as the root shell, or `mastersos-agent exec-block`, the hook the sysext merge runs); repeat 1-2.
+4. Refresh concurrent with a login (final review FR-M3): sign A out and wait for neutral. From the root shell start `time systemctl reload systemd-sysext.service` and, while it runs (immediately after starting it), sign A in at the greeter; repeat with a reapply (`mastersos-agent once`) started just before the reload. Record the reload's duration, whether the login is accepted or refused with the busy message, and the journal lines of `pam-session` and the agent (`journalctl -b -o short-precise | grep -E 'pam-session|user layer|exec-block'`).
 
 Expected:
 - Files opens (`/usr/bin/nautilus` not stubbed), terminal and Settings still the stub. `exec-block-lifted` is `lifted:file_manager`; `exec-block-mode` stays `browser`.
 - After the sysext refresh the exec-block re-assert keeps the same set: nautilus unstubbed, terminal stubbed.
 - The Files entry is in the Dash; the FileManager1 D-Bus override is lifted.
+- Step 4 (record, behaviour note): the agent's `follow_session`, `after_login` and revert hold `active.lock` while `apply_lifted` waits for the exec-block lock, and the exec-block re-assert after a sysext refresh can hold that lock while it mounts (up to about 10 s per mount). A login during that waits 2 s for `active.lock` and is refused with the busy message; a second attempt after the refresh succeeds. Record what actually happens and how long the window is.
 
 Screenshots: `13-allow-files-open.png`, `14-allow-terminal-stub.png`, `15-allow-after-sysext-refresh.png`.
 
@@ -180,6 +182,7 @@ Expected:
 - Step 2: the terminal is stubbed at once (tighten now).
 - Step 3: a gained capability is lifted within the apply (the render step loosens through `session::after_login`), or on the agent's retry if the marker lock was busy; Files appears within one poll (about 5 s). Only the `held` case of step 4 waits for the next login.
 - Step 4: the session is switched to the fallback with nothing lifted and `held = true` in `active.json`; report item `user-layer:active` fails with "the signed-in person's user config was removed; they get it at their next login"; at the next login they get what the rules now say.
+- Step 4, behaviour note (final review FR-M6, R28): while held, the xdg files (Dash, `Hidden` overrides), the dconf session database and the managed Chrome policy switch to the fallback config at once; only the exec-block capabilities stay at nothing lifted. A fallback wider than the removed config (more web apps, fewer Chrome blocks, unlocked dconf keys) therefore loosens those parts mid-session; schools should keep the fallback no wider than any config. Record what the session can see and open after step 4: Dash entries, `chrome://policy` (`URLBlocklist`), `gsettings get org.gnome.desktop.lockdown disable-command-line`, and the exec stubs.
 - The dconf change reaches running apps without a re-login (`gsettings monitor` shows the change, or `gsettings get` is correct after a new `dconf-service` start).
 
 Screenshots: `25-bundle-update-policy.png`, `26-capability-removed-blocked.png`, `27-config-removed-held.png`.
@@ -195,7 +198,8 @@ Steps:
 4. Normal login with fresh facts; then lock and unlock repeatedly.
 
 Expected:
-- 1-3: the fallback config, or the first fact-free rule that matches (such as `admin`). The reason (missing, stale, error text) is logged, stored in `active.json` `reason` and shown in report item `user-layer:session` only when the fallback applies; a matching fact-free rule leaves `reason` null. The file is deleted in every case. The login is not refused for that.
+- 1-3: the fallback config, or the first fact-free rule that matches (such as `admin`). The full reason (with the broker's error text) is logged in the journal; `active.json` `reason` and report item `user-layer:session` carry only a fixed category ("the issuer handed over no facts", "the issuer facts are stale", "the issuer facts are unusable"), never the login name or the error text, and only when the fallback applies; a matching fact-free rule leaves `reason` null. The file is deleted (a symlink in its place too: the link, not its target). The login is not refused for that.
+- A facts file whose lists are `null` (an issuer that sends `"classes": null` for a person with no class) still gives facts: the empty list, not an error.
 - 4: the session keeps its config; an unlock does not re-resolve (the broker rewrites the facts file on unlock; `pam-session` does not run for it). A leftover facts file after unlock is harmless: confirm it is deleted by the next authentication start.
 - The report names no facts and no person (spec §4.10).
 
