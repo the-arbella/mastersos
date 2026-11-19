@@ -119,6 +119,7 @@ async fn report_posts_json_with_token() {
         manifest_features: vec![],
         os_pending_version: None,
         quiet_since: None,
+        user_config: None,
     };
     f.report(&r, None, false).await.unwrap();
     let body: serde_json::Value =
@@ -162,6 +163,7 @@ async fn report_carries_device_headers_where_the_secret_may_travel() {
         manifest_features: vec![],
         os_pending_version: None,
         quiet_since: None,
+        user_config: None,
     };
     f.report(&r, Some(&cred), true).await.unwrap();
     f.report(&r, Some(&cred), false).await.unwrap();
@@ -240,6 +242,7 @@ async fn report_rejection_is_error() {
         manifest_features: vec![],
         os_pending_version: None,
         quiet_since: None,
+        user_config: None,
     };
     assert!(f.report(&r, None, false).await.is_err());
 }

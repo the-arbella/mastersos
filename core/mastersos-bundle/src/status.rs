@@ -56,6 +56,11 @@ pub struct StatusReport {
     /// None when it is not, and from agents that predate the field.
     #[serde(default)]
     pub quiet_since: Option<String>,
+    /// The user config id of the signed-in session (user layer design §4.10), only while that
+    /// session is open: never the facts or the person's name. Left out of the JSON when there is
+    /// no such session, and from agents that predate the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_config: Option<String>,
 }
 
 /// `StatusReport::manifest_features` has at most this many entries.
@@ -115,6 +120,7 @@ mod tests {
             manifest_features: vec!["update_mirror".into()],
             os_pending_version: Some("20261106.1".into()),
             quiet_since: Some("2026-11-10T08:00:00Z".into()),
+            user_config: None,
         }
     }
 

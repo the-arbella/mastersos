@@ -1479,6 +1479,7 @@ impl Agent {
         // read for every report: update-run writes it whenever a round installs a newer version
         r.os_pending_version = report::os_pending_version(&self.cfg.root, r.os_version.as_deref());
         r.quiet_since = self.quiet.borrow().map(|t| t.to_rfc3339());
+        r.user_config = report::active_user_config(&self.cfg.root);
         r
     }
 
