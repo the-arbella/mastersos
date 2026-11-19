@@ -1,7 +1,8 @@
 //! `mastersos migrate`: rewrite a format 1/2 settings text as `format = 3` with unchanged
 //! behaviour (user layer design §6).
 //!
-//! The semantics come from [`Manifest::parse`]: each Config (or each legacy Group's implied
+//! The semantics come from [`crate::check::parse_draft`] (a draft may leave out `version` and
+//! `issued_at`; the output then leaves them out too): each Config (or each legacy Group's implied
 //! Config) is split key by key into a `[[device_config]]` and a `[[user_config]]` with the same
 //! `id` and `name` (design §3), `[defaults]` into `[device_defaults]` and `[user_defaults]`, and
 //! one `[[assign]] device_group` rule per Group names the Group's Config; `[user] fallback` is the
@@ -419,7 +420,8 @@ pub fn to_format3(text: &str) -> Result<String, MigrateError> {
             return Err(MigrateError::AlreadyFormat3);
         }
     }
-    let m = Manifest::parse(text).map_err(|e| MigrateError::Parse(e.to_string()))?;
+    // A draft may leave out `version` and `issued_at` (the server stamps them on publish).
+    let m = crate::check::parse_draft(text).map_err(|l| MigrateError::Parse(l.message))?;
     let mut doc: DocumentMut = text
         .parse()
         .map_err(|e: toml_edit::TomlError| MigrateError::Parse(e.to_string()))?;
@@ -510,8 +512,9 @@ pub fn to_format3(text: &str) -> Result<String, MigrateError> {
     let out = doc.to_string();
 
     // The result must read back, and must not make one Group install two .deb apps of one id.
-    let new = Manifest::parse(&out)
-        .map_err(|e| MigrateError::Invalid(format!("the migrated text does not parse: {e}")))?;
+    let new = crate::check::parse_draft(&out).map_err(|l| {
+        MigrateError::Invalid(format!("the migrated text does not parse: {}", l.message))
+    })?;
     let mut issues = Vec::new();
     validate_user_layer(&new, &mut issues);
     if let Some(l) = issues.iter().find(|l| l.code == "user_deb_conflict") {
@@ -1019,6 +1022,17 @@ config = "student"
                 .collect()
         };
         assert_eq!(codes(&out), codes(&text));
+    }
+
+    #[test]
+    fn migrates_a_draft_without_version() {
+        let draft = legacy_spec_example().replacen("version = 42\n", "", 1);
+        assert!(!draft.contains("version ="));
+        let out = to_format3(&draft).unwrap();
+        assert!(!out.contains("version ="), "{out}");
+        let m = crate::check::parse_draft(&out).unwrap();
+        assert_eq!(m.format, 3);
+        assert_eq!(m.groups.len(), 3);
     }
 
     #[test]

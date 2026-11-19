@@ -37,8 +37,10 @@ pub struct Explained {
 }
 
 /// The classes the `--class` and `--class-role` flags describe. One role applies to every class;
-/// otherwise they pair by position. A role with no class left is a class with an unknown id
-/// (`""`, matching only `class_role` conditions); a class with no role is an error.
+/// otherwise they pair by position. A role with no class left becomes a class with the id `""`:
+/// it satisfies `class_role` conditions only, because `check` requires every `class` id in a
+/// rule to be a lowercase UUID, so no checked text has a `class` condition `""` can equal. A
+/// class with no role is an error.
 pub fn class_facts(classes: &[String], roles: &[ClassRole]) -> Result<Vec<ClassFact>, String> {
     if roles.len() == 1 && !classes.is_empty() {
         return Ok(classes

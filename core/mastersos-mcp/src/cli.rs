@@ -957,14 +957,21 @@ fn explain(c: &ExplainCmd, json: bool) -> Result<ExitCode, OpError> {
                     "mastersos: issuer facts count only for sso accounts; they are ignored here"
                 );
             }
-            let facts = (any_fact && *kind == Kind::Sso).then(|| mastersos_bundle::IssuerFacts {
-                sub: sub.clone().unwrap_or_default(),
-                org: m.school.id.clone().unwrap_or_default(),
-                org_role: *org_role,
-                org_nodes: org_node.clone(),
-                classes,
-                age_band: *age_band,
-            });
+            // As on a Device (design §5): without `mastersos_claims = true` the issuer sends no
+            // facts, so fact conditions never match.
+            let claims = m.school.oidc.as_ref().is_some_and(|o| o.mastersos_claims);
+            if any_fact && *kind == Kind::Sso && !claims {
+                eprintln!("mastersos: fact flags ignored: school.oidc.mastersos_claims is not true, so Devices receive no facts");
+            }
+            let facts =
+                (any_fact && *kind == Kind::Sso && claims).then(|| mastersos_bundle::IssuerFacts {
+                    sub: sub.clone().unwrap_or_default(),
+                    org: m.school.id.clone().unwrap_or_default(),
+                    org_role: *org_role,
+                    org_nodes: org_node.clone(),
+                    classes,
+                    age_band: *age_band,
+                });
             let q = UserQuery {
                 kind: *kind,
                 admin: *admin,
@@ -1049,7 +1056,7 @@ fn migrate(dir: Option<&Path>, write: bool, json: bool) -> Result<ExitCode, OpEr
         },
         e => fail(e),
     })?;
-    let legacy = mastersos_bundle::Manifest::parse(&text)
+    let legacy = mastersos_bundle::check::parse_draft(&text)
         .is_ok_and(|m| m.shape == mastersos_bundle::Shape::Legacy);
     let lints = if write {
         w.write_manifest(&new).map_err(fail)?;

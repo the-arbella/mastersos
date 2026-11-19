@@ -51,6 +51,18 @@ fn assign_line(text: &str, nth: usize) -> usize {
         .unwrap()
 }
 
+/// The spec example with `mastersos_claims = true`: Devices receive issuer facts.
+fn v3_with_claims() -> String {
+    let text = spec_example_v3();
+    let out = text.replacen(
+        "client_id = \"mastersos\" }",
+        "client_id = \"mastersos\", mastersos_claims = true }",
+        1,
+    );
+    assert_ne!(out, text);
+    out
+}
+
 /// The spec example plus Group `lab` (Device ABC123 is in it) and a Flatpak and a .deb app in
 /// user config `teacher`.
 fn v3_with_lab() -> String {
@@ -115,7 +127,7 @@ config = "student"
 
 #[test]
 fn explain_user_prints_rule_and_line() {
-    let manifest = spec_example_v3();
+    let manifest = v3_with_claims();
     let (home, dir) = settings(&manifest);
     let d = dir.to_str().unwrap();
     let o = mastersos(
@@ -190,7 +202,7 @@ fn explain_user_json_shape() {
 
 #[test]
 fn explain_user_org_node_and_class_facts() {
-    let manifest = spec_example_v3();
+    let manifest = v3_with_claims();
     let (home, dir) = settings(&manifest);
     let d = dir.to_str().unwrap();
     let o = mastersos(
@@ -439,11 +451,16 @@ fn migrate_writes_format3_and_checks_clean() {
 
 #[test]
 fn migrate_legacy_shape_mentions_allow_reroute() {
-    let (home, dir) = settings(&legacy_spec_example());
-    let o = mastersos(home.path(), &["migrate", "--dir", dir.to_str().unwrap()]);
-    let (out, err) = text(&o);
-    assert!(out.contains("format = 3"), "{out}{err}");
-    assert!(err.contains("--allow-reroute"), "{err}");
+    // A draft: no `version` line (the server stamps it on publish).
+    let draft = legacy_spec_example().replacen("version = 42\n", "", 1);
+    assert!(!draft.contains("version ="));
+    for manifest in [legacy_spec_example(), draft] {
+        let (home, dir) = settings(&manifest);
+        let o = mastersos(home.path(), &["migrate", "--dir", dir.to_str().unwrap()]);
+        let (out, err) = text(&o);
+        assert!(out.starts_with("format = 3\n"), "{out}{err}");
+        assert!(err.contains("--allow-reroute"), "{err}");
+    }
 }
 
 #[test]
@@ -457,4 +474,119 @@ fn migrate_refuses_format3() {
         std::fs::read_to_string(dir.join("manifest.toml")).unwrap(),
         spec_example_v3()
     );
+}
+
+#[test]
+fn explain_user_ignores_facts_without_mastersos_claims() {
+    let (home, dir) = settings(&spec_example_v3());
+    let o = mastersos(
+        home.path(),
+        &[
+            "explain",
+            "user",
+            "--dir",
+            dir.to_str().unwrap(),
+            "--kind",
+            "sso",
+            "--class-role",
+            "teacher",
+        ],
+    );
+    let (out, err) = text(&o);
+    assert!(o.status.success(), "{out}{err}");
+    assert_eq!(out.trim(), "group default: primary (fallback)");
+    assert!(
+        err.contains(
+            "fact flags ignored: school.oidc.mastersos_claims is not true, so Devices receive no facts"
+        ),
+        "{err}"
+    );
+}
+
+#[test]
+fn explain_user_class_without_role_fails() {
+    let (home, dir) = settings(&v3_with_claims());
+    let d = dir.to_str().unwrap();
+    let a = "0193a0c2-0000-7000-8000-0000000000c1";
+    let b = "0193a0c2-0000-7000-8000-0000000000c2";
+    let c = "0193a0c2-0000-7000-8000-0000000000c3";
+    for args in [
+        vec!["--class", a],
+        vec![
+            "--class",
+            a,
+            "--class",
+            b,
+            "--class",
+            c,
+            "--class-role",
+            "student",
+            "--class-role",
+            "teacher",
+        ],
+    ] {
+        let mut all = vec!["explain", "user", "--dir", d, "--kind", "sso"];
+        all.extend(args);
+        let o = mastersos(home.path(), &all);
+        let (out, err) = text(&o);
+        assert_eq!(o.status.code(), Some(1), "{out}{err}");
+        assert!(err.contains("has no --class-role"), "{err}");
+    }
+}
+
+#[test]
+fn explain_device_on_format2() {
+    let (home, dir) = settings(&defaults_example());
+    let o = mastersos(
+        home.path(),
+        &[
+            "--json",
+            "explain",
+            "device",
+            "NOPE-1",
+            "--dir",
+            dir.to_str().unwrap(),
+        ],
+    );
+    let (out, err) = text(&o);
+    assert!(o.status.success(), "{out}{err}");
+    let v: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(
+        v,
+        json!({
+            "group": "default",
+            "device_config": "student",
+            "user_configs": ["student"],
+            "flatpak": ["org.libreoffice.LibreOffice"],
+            "deb": [],
+        })
+    );
+}
+
+#[test]
+fn migrate_json_shape() {
+    let (home, dir) = settings(&clean_v2());
+    let d = dir.to_str().unwrap();
+    let o = mastersos(home.path(), &["--json", "migrate", "--dir", d]);
+    let (out, err) = text(&o);
+    assert!(o.status.success(), "{out}{err}");
+    let v: Value = serde_json::from_str(&out).unwrap();
+    let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["check", "text", "written"]);
+    assert_eq!(v["written"], false);
+    assert!(v["text"].as_str().unwrap().starts_with("format = 3\n"));
+    assert_eq!(v["check"]["publishable"], true);
+    assert!(v["check"]["issues"].is_array());
+    assert_eq!(v["check"]["rerouted_secrets"], json!([]));
+    assert!(err.contains("lose their comments"), "{err}");
+
+    let o = mastersos(home.path(), &["--json", "migrate", "--dir", d, "--write"]);
+    let (out, err) = text(&o);
+    assert!(o.status.success(), "{out}{err}");
+    let v: Value = serde_json::from_str(&out).unwrap();
+    let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["check", "written"]);
+    assert_eq!(v["written"], true);
 }
