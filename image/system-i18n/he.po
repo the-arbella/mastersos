@@ -37,3 +37,6 @@ msgstr "כבר %s ימים לא אושר שההגדרות עדכניות. נא �
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "צוות ה-IT אוסף מידע אבחוני מהמחשב הזה."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "מישהו עדיין מחובר למכשיר הזה. עליו להתנתק קודם, או שיש להפעיל מחדש את המכשיר."

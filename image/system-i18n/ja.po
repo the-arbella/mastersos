@@ -37,3 +37,6 @@ msgstr "設定が最新であることが %s 日間確認されていません�
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT 担当者がこのコンピューターの診断情報を収集しています。"
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "このデバイスにはまだ誰かがサインインしています。先にサインアウトしてもらうか、デバイスを再起動してください。"

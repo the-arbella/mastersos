@@ -37,3 +37,6 @@ msgstr "Už %s dní nebolo potvrdené, že nastavenia sú aktuálne. Pripojte sa
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "Oddelenie IT zhromažďuje diagnostické údaje z tohto počítača."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "V tomto zariadení je stále niekto prihlásený. Musí sa najprv odhlásiť, alebo zariadenie reštartujte."

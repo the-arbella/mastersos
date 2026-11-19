@@ -37,3 +37,6 @@ msgstr "%s दिनदेखि सेटिङहरू अद्यावध�
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT ले यो कम्प्युटरबाट निदान जानकारी सङ्कलन गर्दैछ।"
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "कोही अझै यो उपकरणमा साइन इन छ। उनले पहिले साइन आउट गर्नुपर्छ, वा उपकरण रिस्टार्ट गर्नुहोस्।"

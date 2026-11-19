@@ -37,3 +37,6 @@ msgstr "Hai %s díes que nun se confirma que la configuración tea anovada. Con�
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "TI ta recoyendo información de diagnósticu d'esti ordenador."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Daquién entá tien la sesión aniciada nesti preséu. Tien de zarrar la sesión primero, o reaniciar el preséu."

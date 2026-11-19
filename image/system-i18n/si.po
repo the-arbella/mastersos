@@ -37,3 +37,6 @@ msgstr "සැකසුම් යාවත්කාලීන බව දින %s
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT මෙම පරිගණකයෙන් දෝෂ නිර්ණ තොරතුරු රැස් කරමින් සිටී."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "යමෙක් තවමත් මෙම උපාංගයට පුරනය වී සිටී. ඔවුන් මුලින් වරන්න ඕනෑ, නැතහොත් උපාංගය නැවත ආරම්භ කරන්න."

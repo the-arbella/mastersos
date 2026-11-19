@@ -37,3 +37,6 @@ msgstr "Već %s dana nije potvrđeno da su postavke ažurne. Povežite se s mre�
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT služba prikuplja dijagnostičke podatke s ovog računala."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Netko je još prijavljen na ovom uređaju. Mora se prvo odjaviti ili ponovno pokrenite uređaj."

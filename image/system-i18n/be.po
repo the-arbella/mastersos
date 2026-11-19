@@ -37,3 +37,6 @@ msgstr "Ужо %s дзён не пацверджана, што налады ак
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "ІТ-служба збірае дыягнастычныя даныя з гэтага кампутара."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Хтосьці ўсё яшчэ ўвайшоў у гэтую прыладу. Спачатку ён павінен выйсці з сістэмы, або перазапусціце прыладу."

@@ -37,3 +37,6 @@ msgstr "%s روز است که به‌روز بودن تنظیمات تأیید �
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "فناوری اطلاعات در حال جمع‌آوری اطلاعات عیب‌یابی از این رایانه است."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "هنوز کسی در این دستگاه وارد شده است. او باید ابتدا خارج شود، یا دستگاه را راه‌اندازی مجدد کنید."

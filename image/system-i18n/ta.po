@@ -37,3 +37,6 @@ msgstr "அமைப்புகள் புதுப்பித்த நி�
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT இந்தக் கணினியிலிருந்து கண்டறிதல் தகவல்களைச் சேகரிக்கிறது."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "யாரோ ஒருவர் இன்னும் இந்தச் சாதனத்தில் உள்நுழைந்துள்ளார். அவர் முதலில் வெளியேற வேண்டும், அல்லது சாதனத்தை மறுதொடக்கம் செய்யவும்."

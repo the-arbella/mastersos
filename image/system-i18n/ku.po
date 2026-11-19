@@ -37,3 +37,6 @@ msgstr "%s roj in nehatiye piştrastkirin ku mîheng rojane ne. Ji kerema xwe bi
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT ji vî komputerî agahiyên teşhîsê berhev dike."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Kesek hê jî di vê cîhazê de têketî ye. Pêdivî ye ku pêşî derkeve, an jî cîhazê ji nû ve bide destpêkirin."

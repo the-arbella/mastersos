@@ -37,3 +37,6 @@ msgstr "ቅንብሮቹ ወቅታዊ መሆናቸው ለ%s ቀናት አልተ�
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "አይቲ ከዚህ ኮምፒውተር የምርመራ መረጃ እየሰበሰበ ነው።"
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "አንድ ሰው አሁንም በዚህ መሣሪያ ገብቷል። መጀመሪያ መውጣት አለበት፣ ወይም መሣሪያውን እንደገና ያስጀምሩ።"

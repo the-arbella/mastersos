@@ -37,3 +37,6 @@ msgstr "Duela %s egun ez da baieztatu ezarpenak eguneratuta daudenik. Konektatu 
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT saila ordenagailu honetako diagnostiko-informazioa biltzen ari da."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Norbait oraindik saioa hasita dago gailu honetan. Lehenik saioa itxi behar du, edo berrabiarazi gailua."

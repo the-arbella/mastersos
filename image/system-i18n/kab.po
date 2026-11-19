@@ -37,3 +37,6 @@ msgstr "Ɛeddan %s n wussan ur yettwasentem ara d akken iɣewwaren ttwaleqqmen. 
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT la yesseggra talɣut n usenqed seg uselkim-agi."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Yella win i yettwasekren yakan ɣef yibenk-a. Yessefk ad d-yeffeɣ uqbel, neɣ ales asenker n yibenk."

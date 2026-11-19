@@ -37,3 +37,6 @@ msgstr "Dempuèi %s jorns, res confirma pas que los paramètres son a jorn. Conn
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "Lo servici informatic recampa d'informacions de diagnostic d'aqueste ordenador."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Qualqu'un es encara connectat sus aqueste periferic. Cal que se desconnècte d'en primièr, o tornatz amodar lo periferic."

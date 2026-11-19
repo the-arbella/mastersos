@@ -37,3 +37,6 @@ msgstr "تەڭشەكلەرنىڭ ئەڭ يېڭى ئىكەنلىكى %s كۈند�
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT بۇ كومپيۇتېردىن دىياگنوز ئۇچۇرى توپلاۋاتىدۇ."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "بۇ ئۈسكۈنىگە يەنىلا بىرسى كىرگەن. ئۇ ئالدى بىلەن چىقىشى كېرەك، ياكى ئۈسكۈنىنى قايتا قوزغىتىڭ."

@@ -37,3 +37,6 @@ msgstr "Hace %s días que no se confirma que la configuración esté actualizada
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "TI está recopilando información de diagnóstico de este equipo."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Alguien sigue con la sesión iniciada en este dispositivo. Esa persona debe cerrar sesión primero, o reinicie el dispositivo."

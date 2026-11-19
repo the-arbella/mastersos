@@ -37,3 +37,6 @@ msgstr "Ayarların güncel olduğu %s gündür doğrulanmadı. Lütfen ağa bağ
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "BT bu bilgisayardan tanılama bilgisi topluyor."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Bu cihazda hâlâ oturum açmış biri var. Önce oturumu kapatması gerekir ya da cihazı yeniden başlatın."

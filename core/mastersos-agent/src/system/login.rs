@@ -230,6 +230,17 @@ impl UserClass {
     }
 }
 
+/// What [`decide`] knows of the user layer's session marker (read by [`pam_check_main`]).
+#[derive(Debug, Clone, Copy)]
+pub enum Marker<'a> {
+    /// No session is signed in.
+    Absent,
+    /// A marker exists but cannot be read or parsed: fails closed.
+    Unreadable,
+    /// A session is open or being closed.
+    Present(&'a crate::user_layer::Active),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
     Allow,
@@ -355,6 +366,7 @@ pub fn decide(
     policy: Option<&LoginPolicy>,
     user: &str,
     uid: Option<u32>,
+    marker: Marker,
 ) -> Decision {
     if !user_name_ok(user) {
         return Decision::Deny(DENY_BAD_USER);
@@ -387,6 +399,20 @@ pub fn decide(
     // 所有学校账号都绕过方式、域名与锁定（authd 0.6.1 实测从 10000 起分，S1 与 Task 8）。
     if class != UserClass::Sso && uid.is_some_and(is_system_uid) {
         return Decision::Allow;
+    }
+    // One human session at a time (user layer design §4.7): another uid's marker (open or closing), a closing marker of
+    // the same uid, and a marker that cannot be read all refuse; no admin override. Format 2 policies ignore the marker.
+    if policy.is_some_and(|p| p.user_layer) {
+        let busy = match marker {
+            Marker::Absent => false,
+            Marker::Unreadable => true,
+            Marker::Present(a) => {
+                uid != Some(a.uid) || a.state != crate::user_layer::ActiveState::Open
+            }
+        };
+        if busy {
+            return Decision::Deny(DENY_SESSION_BUSY);
+        }
     }
     if class == UserClass::Guest && !GUEST_SERVICES.contains(&service) {
         return Decision::Deny(DENY_GUEST_SERVICE);
@@ -1316,6 +1342,15 @@ fn env_str(name: &str) -> Option<String> {
     std::env::var_os(name)?.into_string().ok()
 }
 
+/// The busy refusal in the system language.
+///
+/// The language is the system's (`<root>/etc/locale.conf`; the root process's own `LANG` is not the user's). English
+/// when it cannot be translated. Runs `gettext` only for a non-English system language.
+pub(crate) fn busy_message(runner: &dyn crate::runner::Runner, root: &Path) -> String {
+    let locale = crate::i18n::system_language(None, root);
+    crate::i18n::text(runner, locale.as_ref(), DENY_SESSION_BUSY)
+}
+
 /// 拒绝：原因打到 stdout（pam_exec 的 `stdout` 交给 GDM 显示），退出 1。写失败也照样拒绝。
 fn deny(msg: &str) -> ExitCode {
     let mut out = std::io::stdout().lock();
@@ -1341,8 +1376,17 @@ pub fn pam_check_main(args: impl Iterator<Item = OsString>) -> ExitCode {
         None
     };
     let (managed, policy) = load_policy(&paths);
-    match decide(&service, managed, policy.as_ref(), &user, uid) {
+    let marker = crate::user_layer::active_marker(Path::new("/"));
+    let marker = match &marker {
+        Ok(None) => Marker::Absent,
+        Ok(Some(a)) => Marker::Present(a),
+        Err(_) => Marker::Unreadable,
+    };
+    match decide(&service, managed, policy.as_ref(), &user, uid, marker) {
         Decision::Allow => ExitCode::SUCCESS,
+        Decision::Deny(DENY_SESSION_BUSY) => {
+            deny(&busy_message(&crate::runner::RealRunner, Path::new("/")))
+        }
         Decision::Deny(msg) => deny(msg),
     }
 }
@@ -1616,6 +1660,217 @@ client_id = "laptops"
         for svc in ["cron", "systemd-user", "sudo", "sudo-i", "polkit-1"] {
             assert!(PASSTHROUGH_SERVICES.contains(&svc));
         }
+    }
+
+    fn decide(
+        service: &str,
+        managed: bool,
+        policy: Option<&LoginPolicy>,
+        user: &str,
+        uid: Option<u32>,
+    ) -> Decision {
+        super::decide(service, managed, policy, user, uid, Marker::Absent)
+    }
+
+    fn layer_pol() -> LoginPolicy {
+        let mut p = all();
+        p.user_layer = true;
+        p
+    }
+
+    fn active(uid: u32, state: crate::user_layer::ActiveState) -> crate::user_layer::Active {
+        crate::user_layer::Active {
+            uid,
+            user: "bob".into(),
+            user_config: "teacher".into(),
+            dir: crate::user_layer::config_dir_name("teacher"),
+            caps: mastersos_bundle::Caps::new(),
+            state,
+            reason: None,
+            opened_at: 1,
+            seen: true,
+        }
+    }
+
+    fn busy_for(
+        service: &str,
+        p: &LoginPolicy,
+        user: &str,
+        uid: Option<u32>,
+        m: Marker,
+    ) -> Decision {
+        super::decide(service, true, Some(p), user, uid, m)
+    }
+
+    #[test]
+    fn busy_while_active_marker_present() {
+        use crate::user_layer::ActiveState::{Closing, Open};
+        let p = layer_pol();
+        for state in [Open, Closing] {
+            let a = active(2000, state);
+            // every service class that reaches pam-check: GDM (password and authd), tty login, ssh, su
+            for svc in [GDM, "gdm-authd", "login", "sshd", "su"] {
+                for (user, uid) in [
+                    ("alice", Some(1001)),
+                    ("alice@school.ac.th", Some(20000)),
+                    ("alice@school.ac.th", None),
+                    ("guest", Some(1999)),
+                ] {
+                    if user == "guest" && svc != GDM {
+                        continue;
+                    }
+                    assert_eq!(
+                        busy_for(svc, &p, user, uid, Marker::Present(&a)),
+                        Decision::Deny(DENY_SESSION_BUSY),
+                        "{svc} {user} {state:?}"
+                    );
+                }
+            }
+        }
+        // an unreadable marker fails closed
+        assert_eq!(
+            busy_for("login", &p, "alice", Some(1001), Marker::Unreadable),
+            Decision::Deny(DENY_SESSION_BUSY)
+        );
+        // the message never names the other person
+        assert!(!DENY_SESSION_BUSY.contains("bob"));
+    }
+
+    #[test]
+    fn same_uid_allowed() {
+        use crate::user_layer::ActiveState::{Closing, Open};
+        let p = layer_pol();
+        let a = active(20000, Open);
+        // unlock and reauth of the signed-in person
+        assert_eq!(
+            busy_for(
+                GDM,
+                &p,
+                "alice@school.ac.th",
+                Some(20000),
+                Marker::Present(&a)
+            ),
+            Decision::Allow
+        );
+        // the usual rules still apply to the same uid
+        let mut locked = layer_pol();
+        locked.locked = true;
+        assert_eq!(
+            busy_for(
+                GDM,
+                &locked,
+                "alice@school.ac.th",
+                Some(20000),
+                Marker::Present(&a)
+            ),
+            Decision::Deny(DENY_LOCKED)
+        );
+        // a session that is closing refuses everybody
+        let c = active(20000, Closing);
+        assert_eq!(
+            busy_for(
+                GDM,
+                &p,
+                "alice@school.ac.th",
+                Some(20000),
+                Marker::Present(&c)
+            ),
+            Decision::Deny(DENY_SESSION_BUSY)
+        );
+    }
+
+    #[test]
+    fn no_marker_or_passthrough_is_not_busy() {
+        let p = layer_pol();
+        let a = active(2000, crate::user_layer::ActiveState::Open);
+        for svc in [GDM, "login", "sshd", "su"] {
+            assert_eq!(
+                busy_for(svc, &p, "alice", Some(1001), Marker::Absent),
+                Decision::Allow,
+                "{svc}"
+            );
+        }
+        for svc in PASSTHROUGH_SERVICES {
+            assert_eq!(
+                busy_for(svc, &p, "alice", Some(1001), Marker::Present(&a)),
+                Decision::Allow,
+                "{svc}"
+            );
+        }
+        // system accounts are not human sessions
+        assert_eq!(
+            busy_for("su", &p, "root", Some(0), Marker::Present(&a)),
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn format2_policy_ignores_marker() {
+        let a = active(2000, crate::user_layer::ActiveState::Open);
+        let p = all();
+        assert!(!p.user_layer);
+        assert_eq!(
+            busy_for("login", &p, "alice", Some(1001), Marker::Present(&a)),
+            Decision::Allow
+        );
+        assert_eq!(
+            busy_for("login", &p, "alice", Some(1001), Marker::Unreadable),
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn admin_has_no_override() {
+        let a = active(2000, crate::user_layer::ActiveState::Open);
+        let mut p = layer_pol();
+        p.admin_users = vec![ADMIN.into()];
+        p.it_account = true;
+        p.it_account_uid = Some(1500);
+        assert_eq!(
+            busy_for("login", &p, "itadmin", Some(1500), Marker::Present(&a)),
+            Decision::Deny(DENY_SESSION_BUSY)
+        );
+        assert_eq!(
+            busy_for(GDM, &p, ADMIN, Some(20001), Marker::Present(&a)),
+            Decision::Deny(DENY_SESSION_BUSY)
+        );
+        // nobody signed in: tty login of the IT account works as before
+        assert_eq!(
+            busy_for("login", &p, "itadmin", Some(1500), Marker::Absent),
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn kiosk_rules_unchanged() {
+        let a = active(2000, crate::user_layer::ActiveState::Open);
+        let mut p = layer_pol();
+        p.kiosk_users = vec![KioskUser {
+            user: "kiosk-exam".into(),
+            name: "Exam".into(),
+        }];
+        // the kiosk's own rules decide (pam-session checks the marker for it)
+        assert_eq!(
+            busy_for(GDM, &p, "kiosk-exam", Some(1990), Marker::Present(&a)),
+            decide(GDM, true, Some(&p), "kiosk-exam", Some(1990))
+        );
+        assert_eq!(
+            busy_for("login", &p, "kiosk-exam", Some(1990), Marker::Present(&a)),
+            Decision::Deny(DENY_KIOSK)
+        );
+    }
+
+    #[test]
+    fn busy_message_is_translated_with_the_system_language() {
+        let root = tempfile::tempdir().unwrap();
+        let r = FakeRunner::new();
+        assert_eq!(busy_message(&r, root.path()), DENY_SESSION_BUSY);
+        assert!(r.calls().is_empty());
+        std::fs::create_dir_all(root.path().join("etc")).unwrap();
+        std::fs::write(root.path().join("etc/locale.conf"), "LANG=th_TH.UTF-8\n").unwrap();
+        r.respond("/usr/bin/env", Output::ok("มีคนยังไม่ได้ออกจากระบบ"));
+        assert_eq!(busy_message(&r, root.path()), "มีคนยังไม่ได้ออกจากระบบ");
+        assert!(r.calls()[0].contains("LANGUAGE=th_TH"));
     }
 
     #[test]

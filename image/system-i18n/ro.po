@@ -37,3 +37,6 @@ msgstr "De %s zile nu s-a confirmat că setările sunt la zi. Conectați-vă la 
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "Departamentul IT colectează informații de diagnosticare de la acest computer."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Cineva este încă autentificat pe acest dispozitiv. Trebuie să se deconecteze mai întâi sau reporniți dispozitivul."

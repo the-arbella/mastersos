@@ -37,3 +37,6 @@ msgstr "Juba %s päeva pole kinnitatud, et seaded on ajakohased. Palun loo võrg
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT-osakond kogub sellest arvutist diagnostikateavet."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Keegi on sellesse seadmesse endiselt sisse logitud. Ta peab enne välja logima või seade tuleb taaskäivitada."

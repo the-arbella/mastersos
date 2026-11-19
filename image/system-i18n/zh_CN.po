@@ -37,3 +37,6 @@ msgstr "设置已 %s 天未确认是最新的，请连上网络；一直这样�
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT 正在收集这台电脑的诊断信息。"
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "这台设备上还有人没有退出登录。他们需要先退出登录，或者重新启动设备。"

@@ -37,3 +37,6 @@ msgstr "Al %s dagen is niet bevestigd dat de instellingen actueel zijn. Maak ver
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "ICT verzamelt diagnostische gegevens van deze computer."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Er is nog iemand aangemeld op dit apparaat. Die persoon moet zich eerst afmelden, of start het apparaat opnieuw op."

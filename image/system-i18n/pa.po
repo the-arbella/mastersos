@@ -37,3 +37,6 @@ msgstr "%s ਦਿਨਾਂ ਤੋਂ ਪੁਸ਼ਟੀ ਨਹੀਂ ਹੋਈ �
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT ਇਸ ਕੰਪਿਊਟਰ ਤੋਂ ਨਿਦਾਨ ਜਾਣਕਾਰੀ ਇਕੱਠੀ ਕਰ ਰਿਹਾ ਹੈ।"
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "ਕੋਈ ਅਜੇ ਵੀ ਇਸ ਡਿਵਾਈਸ ਉੱਤੇ ਸਾਈਨ ਇਨ ਹੈ। ਉਸਨੂੰ ਪਹਿਲਾਂ ਸਾਈਨ ਆਊਟ ਕਰਨਾ ਪਵੇਗਾ, ਜਾਂ ਡਿਵਾਈਸ ਨੂੰ ਮੁੜ ਚਾਲੂ ਕਰੋ।"

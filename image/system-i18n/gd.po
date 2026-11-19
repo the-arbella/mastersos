@@ -37,3 +37,6 @@ msgstr "Cha deach dearbhadh fad %s là gu bheil na roghainnean cho ùr 's a ghab
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "Tha IT a’ cruinneachadh fiosrachadh breithneachaidh on choimpiutair seo."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Tha cuideigin fhathast clàraichte a-steach air an uidheam seo. Feumaidh iad clàradh a-mach an toiseach, no ath-thòisich an t-uidheam."

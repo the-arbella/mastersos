@@ -37,3 +37,6 @@ msgstr "От %s дни не е потвърдено, че настройките
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "ИТ отделът събира диагностична информация от този компютър."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Някой все още е влязъл в това устройство. Първо трябва да излезе или да рестартирате устройството."

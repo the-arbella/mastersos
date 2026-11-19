@@ -699,7 +699,7 @@ pub(crate) fn user_layer_decision(
 ) -> LayerDecision {
     use crate::user_layer::switch;
     let refuse = |out: &mut dyn Write| {
-        let _ = writeln!(out, "{}", login::DENY_SESSION_BUSY);
+        let _ = writeln!(out, "{}", login::busy_message(runner, root));
         let _ = out.flush();
         LayerDecision::Deny
     };

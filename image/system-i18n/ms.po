@@ -37,3 +37,6 @@ msgstr "Sudah %s hari tetapan tidak disahkan terkini. Sila sambung ke rangkaian;
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT sedang mengumpul maklumat diagnostik daripada komputer ini."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Seseorang masih log masuk pada peranti ini. Mereka perlu log keluar dahulu, atau mulakan semula peranti."

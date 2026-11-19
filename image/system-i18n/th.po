@@ -37,3 +37,6 @@ msgstr "การตั้งค่ายังไม่ได้รับกา
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "ฝ่าย IT กำลังเก็บข้อมูลการวินิจฉัยจากคอมพิวเตอร์เครื่องนี้"
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "ยังมีคนเข้าสู่ระบบอยู่บนอุปกรณ์นี้ ผู้นั้นต้องออกจากระบบก่อน หรือรีสตาร์ทอุปกรณ์"

@@ -48,3 +48,7 @@ msgstr ""
 #. mastersos-agent: diagnostics are being collected (also in mastersos-login)
 msgid "IT is collecting diagnostic info from this computer."
 msgstr ""
+
+#. mastersos-agent pam-check / pam-session: another person is still signed in (one session at a time)
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr ""

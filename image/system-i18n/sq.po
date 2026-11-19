@@ -37,3 +37,6 @@ msgstr "Prej %s ditësh nuk është konfirmuar që cilësimet janë të përdit�
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT-ja po mbledh të dhëna diagnostikuese nga ky kompjuter."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Dikush është ende i identifikuar në këtë pajisje. Ai duhet të dalë së pari, ose rinisni pajisjen."

@@ -37,3 +37,6 @@ msgstr "Đã %s ngày chưa xác nhận được cài đặt là mới nhất. V
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "Bộ phận IT đang thu thập thông tin chẩn đoán từ máy tính này."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Vẫn còn người đang đăng nhập trên thiết bị này. Họ cần đăng xuất trước, hoặc hãy khởi động lại thiết bị."

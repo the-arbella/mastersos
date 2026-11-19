@@ -37,3 +37,6 @@ msgstr "སྒྲིག་སྟངས་ཚུ་ དུས་མཐུན་�
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT གིས་ གློག་ཀླད་འདི་ལས་ བརྟག་དཔྱད་ཀྱི་ བརྡ་དོན་ བསྡུ་དོ།"
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "མི་ཅིག་གིས་ད་ལྟོ་ཡང་འཕྲུལ་ཆས་འདི་ནང་ལོགས་འཛུལ་འབད་དེ་ཡོདཔ་ཨིན། དང་པ་ཕྱིར་འཐོན་འབད་དགོ ཡང་ན་འཕྲུལ་ཆས་ལོག་འགོ་བཙུགས་གནང་།"

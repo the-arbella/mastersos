@@ -37,3 +37,6 @@ msgstr "Sudah %s hari pengaturan tidak terkonfirmasi terbaru. Silakan sambungkan
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT sedang mengumpulkan info diagnostik dari komputer ini."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Seseorang masih masuk di perangkat ini. Orang tersebut harus keluar terlebih dahulu, atau mulai ulang perangkat."

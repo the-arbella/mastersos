@@ -37,3 +37,6 @@ msgstr "Jau %s dienas nav apstiprināts, ka iestatījumi ir aktuāli. Lūdzu, pi
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT speciālisti vāc diagnostikas informāciju no šī datora."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Kāds joprojām ir pieteicies šajā ierīcē. Viņam vispirms jāiziet no sistēmas, vai restartējiet ierīci."

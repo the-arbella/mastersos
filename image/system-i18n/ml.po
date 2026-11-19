@@ -37,3 +37,6 @@ msgstr "%s ദിവസമായി ക്രമീകരണങ്ങൾ കാ�
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT ഈ കമ്പ്യൂട്ടറിൽ നിന്ന് ഡയഗ്നോസ്റ്റിക് വിവരങ്ങൾ ശേഖരിക്കുന്നു."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "ആരോ ഇപ്പോഴും ഈ ഉപകരണത്തിൽ സൈൻ ഇൻ ചെയ്തിട്ടുണ്ട്. അവർ ആദ്യം സൈൻ ഔട്ട് ചെയ്യണം, അല്ലെങ്കിൽ ഉപകരണം റീസ്റ്റാർട്ട് ചെയ്യുക."

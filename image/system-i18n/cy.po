@@ -37,3 +37,6 @@ msgstr "Nid yw wedi'i gadarnhau ers %s diwrnod fod y gosodiadau'n gyfredol. Cysy
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "Mae TG yn casglu gwybodaeth ddiagnostig o'r cyfrifiadur hwn."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Mae rhywun yn dal i fod wedi mewngofnodi ar y ddyfais hon. Mae angen iddynt allgofnodi yn gyntaf, neu ailgychwyn y ddyfais."

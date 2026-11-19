@@ -37,3 +37,6 @@ msgstr "Jam de %s tagoj ne estas konfirmite, ke la agordoj estas ĝisdataj. Bonv
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT kolektas diagnozajn informojn de ĉi tiu komputilo."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Iu ankoraŭ estas ensalutinta en ĉi tiu aparato. Tiu devas unue elsaluti, aŭ restartigu la aparaton."

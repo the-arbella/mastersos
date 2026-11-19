@@ -37,3 +37,6 @@ msgstr "Параметрлердің өзекті екені %s күн бойы 
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT бөлімі осы компьютерден диагностикалық деректер жинап жатыр."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Бұл құрылғыға әлі біреу кірген. Ол алдымен шығуы керек немесе құрылғыны қайта қосыңыз."

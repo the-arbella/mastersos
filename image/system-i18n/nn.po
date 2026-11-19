@@ -37,3 +37,6 @@ msgstr "Det er ikkje stadfesta på %s dagar at innstillingane er oppdaterte. Kop
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "IT samlar inn diagnoseinformasjon frå denne datamaskina."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Nokon er framleis logga inn på denne eininga. Dei må logge ut først, eller start eininga på nytt."

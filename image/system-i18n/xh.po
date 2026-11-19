@@ -37,3 +37,6 @@ msgstr "Kudlule iintsuku eziyi-%s kungaqinisekiswanga ukuba iisetingi zihlaziyiw
 
 msgid "IT is collecting diagnostic info from this computer."
 msgstr "I-IT iqokelela ulwazi lokuxilonga kule khompyutha."
+
+msgid "Someone is still signed in on this device. They need to sign out first, or restart the device."
+msgstr "Umntu usangene kweli sixhobo. Kufuneka aphume kuqala, okanye uqale kwakhona isixhobo."
