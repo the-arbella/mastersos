@@ -8,7 +8,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::lint::{lint_app_formats, lint_deb_entries, lint_drop_sets, lint_web_app_entries};
+use crate::lint::{DropOwner, DropSet};
 use crate::manifest::*;
+use crate::Lint;
 
 /// What a user config lifts from the learning lock (design §2.3). Effective capabilities are
 /// the preset's, plus `allow`, minus `deny` (deny wins).
@@ -29,6 +32,20 @@ pub enum Capability {
     AllApps,
     /// User Flatpaks and `~/.config/environment.d`.
     UserApps,
+}
+
+impl Capability {
+    /// As written in the settings file.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Capability::Terminal => "terminal",
+            Capability::FileManager => "file_manager",
+            Capability::Settings => "settings",
+            Capability::Extensions => "extensions",
+            Capability::AllApps => "all_apps",
+            Capability::UserApps => "user_apps",
+        }
+    }
 }
 
 /// A set of capabilities.
@@ -85,6 +102,12 @@ pub struct UserApps {
     pub deb: BTreeMap<String, DebApp>,
 }
 
+impl UserApps {
+    pub fn is_empty(&self) -> bool {
+        self.web.is_empty() && self.flatpak.is_empty() && self.deb.is_empty()
+    }
+}
+
 /// `drop.apps` of a user config: inherited apps to leave out.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -101,13 +124,19 @@ pub struct UserDropApps {
     pub deb: Vec<String>,
 }
 
+impl UserDropApps {
+    pub fn is_empty(&self) -> bool {
+        self.web.is_empty() && self.flatpak.is_empty() && self.deb.is_empty()
+    }
+}
+
 /// `drop` of a user config: entries inherited from `[user_defaults]` to leave out.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct UserDrop {
     /// Inherited apps to leave out.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "UserDropApps::is_empty")]
     pub apps: UserDropApps,
     /// Names of inherited Chrome policies to leave out.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -121,6 +150,16 @@ pub struct UserDrop {
     /// Inherited `deny` capabilities to leave out.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deny: Vec<Capability>,
+}
+
+impl UserDrop {
+    pub fn is_empty(&self) -> bool {
+        self.apps.is_empty()
+            && self.chrome_policy.is_empty()
+            && self.scripts.is_empty()
+            && self.allow.is_empty()
+            && self.deny.is_empty()
+    }
 }
 
 /// `[user_defaults]`: what every user config starts from; the keys of `[[user_config]]` without
@@ -140,7 +179,7 @@ pub struct UserDefaults {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deny: Vec<Capability>,
     /// Apps every user config shows.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "UserApps::is_empty")]
     pub apps: UserApps,
     /// Chrome managed policies every user config gets, by policy name, on top of the baseline.
     #[serde(default, skip_serializing_if = "toml::Table::is_empty")]
@@ -178,7 +217,7 @@ pub struct UserConfigLayer {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deny: Vec<Capability>,
     /// Apps shown, added to the user defaults' ones.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "UserApps::is_empty")]
     pub apps: UserApps,
     /// Chrome managed policies, added to the user defaults' ones by policy name.
     #[serde(default, skip_serializing_if = "toml::Table::is_empty")]
@@ -194,7 +233,7 @@ pub struct UserConfigLayer {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub home: Option<HomeMode>,
     /// Entries inherited from `[user_defaults]` this user config leaves out.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "UserDrop::is_empty")]
     pub drop: UserDrop,
 }
 
@@ -332,6 +371,12 @@ pub struct DeviceApps {
     pub ubuntu_mirror: Option<String>,
 }
 
+impl DeviceApps {
+    pub fn is_empty(&self) -> bool {
+        self.kiosk.is_empty() && self.deb.is_empty() && self.ubuntu_mirror.is_none()
+    }
+}
+
 /// `drop.apps` of a device config: inherited device apps to leave out.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -345,6 +390,12 @@ pub struct DeviceDropApps {
     pub deb: Vec<String>,
 }
 
+impl DeviceDropApps {
+    pub fn is_empty(&self) -> bool {
+        self.kiosk.is_empty() && self.deb.is_empty()
+    }
+}
+
 /// `drop` of a device config: entries inherited from `[device_defaults]` to leave out.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -354,7 +405,7 @@ pub struct DeviceDrop {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wifi: Vec<String>,
     /// Inherited device apps to leave out.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "DeviceDropApps::is_empty")]
     pub apps: DeviceDropApps,
     /// Names of inherited printers to leave out.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -371,6 +422,18 @@ pub struct DeviceDrop {
     /// `path`s of inherited scripts to leave out.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scripts: Vec<String>,
+}
+
+impl DeviceDrop {
+    pub fn is_empty(&self) -> bool {
+        self.wifi.is_empty()
+            && self.apps.is_empty()
+            && self.printers.is_empty()
+            && self.scanners.is_empty()
+            && self.files.is_empty()
+            && self.downloads.is_empty()
+            && self.scripts.is_empty()
+    }
 }
 
 /// `[device_defaults]`: what every device config starts from; `[defaults]` of format 2 without
@@ -394,7 +457,7 @@ pub struct DeviceDefaults {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wifi: Vec<Wifi>,
     /// Kiosk apps, kiosk .deb apps and the Ubuntu mirror every device config gets.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "DeviceApps::is_empty")]
     pub apps: DeviceApps,
     /// Network printers every device config gets.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -446,7 +509,7 @@ pub struct DeviceConfigLayer {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wifi: Vec<Wifi>,
     /// Kiosk apps, kiosk .deb apps and the Ubuntu mirror, added to the device defaults' ones.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "DeviceApps::is_empty")]
     pub apps: DeviceApps,
     /// Network printers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -474,7 +537,7 @@ pub struct DeviceConfigLayer {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scripts: Vec<Script>,
     /// Entries inherited from `[device_defaults]` this device config leaves out.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "DeviceDrop::is_empty")]
     pub drop: DeviceDrop,
 }
 
@@ -605,8 +668,13 @@ impl DeviceConfigLayer {
 
 impl V3Manifest {
     /// The device layer as the existing [`Manifest`] structure (no mode, no Chrome policy, no
-    /// web or Flatpak apps), plus the user layer.
-    pub fn into_manifest(self) -> Manifest {
+    /// web or Flatpak apps), plus the user layer. Only for a text whose `format` is 3, which
+    /// [`parse_v3`]'s caller has checked.
+    fn into_manifest(self) -> Manifest {
+        debug_assert_eq!(
+            self.format, 3,
+            "V3Manifest read from a text that is not format 3"
+        );
         Manifest {
             format: self.format,
             version: self.version,
@@ -636,6 +704,81 @@ impl V3Manifest {
 /// [`Manifest::user_layer`] set.
 pub(crate) fn parse_v3(text: &str) -> Result<Manifest, toml::de::Error> {
     toml::from_str::<V3Manifest>(text).map(V3Manifest::into_manifest)
+}
+
+/// The entry rules of a Config's `apps.web`, `apps.flatpak`, `apps.deb` and `drop`, with the
+/// same codes and levels, run over `[user_defaults]` and every `[[user_config]]` at
+/// `user_defaults.…` / `user_config.<id>.…` (scripts are checked in `validate_all` itself).
+/// [`Manifest::validate_all`] keeps the errors, [`crate::lint_at`] the rest.
+pub(crate) fn entry_lints(u: &UserLayer, present: &BTreeSet<String>) -> Vec<Lint> {
+    let mut out = Vec::new();
+    let d = &u.defaults;
+    let tag_defaults = |l: Lint| l.param("layer", "user_defaults");
+    lint_user_apps("user_defaults", &d.apps, present, &tag_defaults, &mut out);
+    for c in &u.configs {
+        let base = format!("user_config.{}", c.id);
+        let tag = |l: Lint| l.param("user_config", &c.id);
+        lint_user_apps(&base, &c.apps, present, &tag, &mut out);
+        let caps = |v: &[Capability]| v.iter().map(|c| c.as_str().to_owned()).collect::<Vec<_>>();
+        let (drop_allow, drop_deny) = (caps(&c.drop.allow), caps(&c.drop.deny));
+        let names = |v: &[WebApp]| v.iter().map(|a| a.name.clone()).collect::<Vec<_>>();
+        let paths = |v: &[Script]| v.iter().map(|s| s.path.clone()).collect::<Vec<_>>();
+        let sets: Vec<DropSet> = vec![
+            (
+                "apps.web",
+                &c.drop.apps.web,
+                names(&d.apps.web),
+                names(&c.apps.web),
+            ),
+            (
+                "apps.flatpak",
+                &c.drop.apps.flatpak,
+                d.apps.flatpak.clone(),
+                c.apps.flatpak.clone(),
+            ),
+            (
+                "apps.deb",
+                &c.drop.apps.deb,
+                d.apps.deb.keys().cloned().collect(),
+                c.apps.deb.keys().cloned().collect(),
+            ),
+            (
+                "scripts",
+                &c.drop.scripts,
+                paths(&d.scripts),
+                paths(&c.scripts),
+            ),
+            (
+                "chrome_policy",
+                &c.drop.chrome_policy,
+                d.chrome_policy.keys().cloned().collect(),
+                c.chrome_policy.keys().cloned().collect(),
+            ),
+            ("allow", &drop_allow, caps(&d.allow), caps(&c.allow)),
+            ("deny", &drop_deny, caps(&d.deny), caps(&c.deny)),
+        ];
+        let who = DropOwner {
+            path: format!("{base}.drop"),
+            subject: format!("User config {}", c.id),
+            defaults: "[user_defaults]",
+            defaults_word: "the user defaults",
+        };
+        lint_drop_sets(&who, &sets, &tag, &mut out);
+    }
+    out
+}
+
+/// The app rules of one user-layer table at `base`.
+fn lint_user_apps(
+    base: &str,
+    apps: &UserApps,
+    present: &BTreeSet<String>,
+    tag: &dyn Fn(Lint) -> Lint,
+    out: &mut Vec<Lint>,
+) {
+    lint_web_app_entries(&format!("{base}.apps.web"), &apps.web, present, tag, out);
+    lint_deb_entries(&format!("{base}.apps.deb"), &apps.deb, present, tag, out);
+    lint_app_formats(base, &apps.web, &apps.flatpak, out);
 }
 
 #[cfg(test)]
@@ -755,6 +898,279 @@ mod tests {
             ]
         );
         assert!(toml::from_str::<Assign>("user_config = \"x\"\ncolour = 1").is_err());
+        let a: Assign = toml::from_str("user_config = \"x\"\nclass_role = [\"student\"]").unwrap();
+        assert_eq!(a.class_role.unwrap(), [ClassRole::Student]);
+        let c: UserConfigLayer =
+            toml::from_str("id = \"a\"\nname = \"a\"\npreset = \"learning\"\nhome = \"tidy\"")
+                .unwrap();
+        assert_eq!(
+            (c.preset, c.home),
+            (Some(Preset::Learning), Some(HomeMode::Tidy))
+        );
+        let c: UserConfigLayer =
+            toml::from_str("id = \"a\"\nname = \"a\"\npreset = \"full\"\nhome = \"keep\"").unwrap();
+        assert_eq!(
+            (c.preset, c.home),
+            (Some(Preset::Full), Some(HomeMode::Keep))
+        );
+        assert!(
+            toml::from_str::<UserConfigLayer>("id = \"a\"\nname = \"a\"\nhome = \"wipe\"").is_err()
+        );
+        for cap in ALL_CAPS {
+            assert_eq!(
+                toml::Value::try_from(cap).unwrap().as_str(),
+                Some(cap.as_str())
+            );
+        }
+    }
+
+    /// Written apps and drops serialize; empty ones are left out (Task 5's migrate writes them).
+    #[test]
+    fn empty_sub_tables_are_not_serialized() {
+        let c: UserConfigLayer = toml::from_str("id = \"a\"\nname = \"A\"").unwrap();
+        assert_eq!(toml::to_string(&c).unwrap(), "id = \"a\"\nname = \"A\"\n");
+        let d: DeviceConfigLayer = toml::from_str("id = \"a\"\nname = \"A\"").unwrap();
+        assert_eq!(toml::to_string(&d).unwrap(), "id = \"a\"\nname = \"A\"\n");
+        assert!(toml::to_string(&UserDefaults::default())
+            .unwrap()
+            .is_empty());
+        assert!(toml::to_string(&DeviceDefaults::default())
+            .unwrap()
+            .is_empty());
+        let c: UserConfigLayer =
+            toml::from_str("id = \"a\"\nname = \"A\"\ndrop.allow = [\"terminal\"]").unwrap();
+        let back: UserConfigLayer = toml::from_str(&toml::to_string(&c).unwrap()).unwrap();
+        assert_eq!(back, c);
+    }
+
+    /// `(code, path)` of every issue `validate_all` and lint give for the v3 example with
+    /// `user_defaults` and `primary` extended by the given lines.
+    fn issues(defaults_extra: &str, primary_extra: &str) -> Vec<(String, String)> {
+        let text = v3_example()
+            .replacen(
+                "preset = \"learning\"\n",
+                &format!("preset = \"learning\"\n{defaults_extra}\n"),
+                1,
+            )
+            .replacen(
+                "name = \"Grade 1-6\"\n",
+                &format!("name = \"Grade 1-6\"\n{primary_extra}\n"),
+                1,
+            );
+        let m = Manifest::parse(&text).unwrap();
+        let present = ["scripts/ok.sh", "files/icon.png"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 11, 19).unwrap();
+        m.validate_all(&present)
+            .into_iter()
+            .chain(crate::lint_at(&m, &present, today))
+            .map(|l| (l.code.to_string(), l.path.unwrap_or_default()))
+            .collect()
+    }
+
+    fn has(all: &[(String, String)], code: &str, path: &str) -> bool {
+        all.iter().any(|(c, p)| c == code && p == path)
+    }
+
+    #[test]
+    fn spec_example_v3_validates_clean() {
+        let m = Manifest::parse(&v3_example()).unwrap();
+        assert_eq!(m.validate_all(&Default::default()), []);
+        let all = issues("", "");
+        assert!(!all.iter().any(|(_, p)| p.starts_with("user_")), "{all:?}");
+    }
+
+    #[test]
+    fn user_layer_scripts_follow_the_script_rules() {
+        let all = issues(
+            "scripts = [{ path = \"scripts/missing.sh\", when = \"login\" }]",
+            "scripts = [{ path = \"files/icon.png\", when = \"login\" }, \
+             { path = \"scripts/ok.sh\", when = \"login\", timeout_secs = 99999 }]",
+        );
+        assert!(
+            has(&all, "file_missing", "user_defaults.scripts[0].path"),
+            "{all:?}"
+        );
+        assert!(
+            has(
+                &all,
+                "file_outside_dir",
+                "user_config.primary.scripts[0].path"
+            ),
+            "{all:?}"
+        );
+        assert!(
+            has(
+                &all,
+                "script_timeout_too_long",
+                "user_config.primary.scripts[1].timeout_secs"
+            ),
+            "{all:?}"
+        );
+        // A script that exists and is in place passes.
+        let all = issues(
+            "scripts = [{ path = \"scripts/ok.sh\", when = \"login\" }]",
+            "",
+        );
+        assert!(!all.iter().any(|(_, p)| p.starts_with("user_")), "{all:?}");
+    }
+
+    #[test]
+    fn user_layer_web_apps_follow_the_web_app_rules() {
+        let all = issues(
+            "apps.flatpak = [\"not an id\"]",
+            "apps.web = [{ name = \"A\", url = \"ftp://a\" }, \
+             { name = \"B\", url = \"http://b.org\", icon = \"files/none.png\" }]",
+        );
+        assert!(
+            has(&all, "web_app_invalid", "user_config.primary.apps.web[0]"),
+            "{all:?}"
+        );
+        assert!(
+            has(&all, "icon_invalid", "user_config.primary.apps.web[1].icon"),
+            "{all:?}"
+        );
+        assert!(
+            has(
+                &all,
+                "web_app_not_https",
+                "user_config.primary.apps.web[1].url"
+            ),
+            "{all:?}"
+        );
+        assert!(
+            has(&all, "flatpak_id_invalid", "user_defaults.apps.flatpak[0]"),
+            "{all:?}"
+        );
+        let all = issues("", "apps.flatpak = [\"org.ok.App\", \"bad/id\"]");
+        assert!(
+            has(
+                &all,
+                "flatpak_id_invalid",
+                "user_config.primary.apps.flatpak[1]"
+            ),
+            "{all:?}"
+        );
+        // `[user_defaults]` already writes `apps.web`: change its entry.
+        let m = Manifest::parse(&v3_example().replacen(
+            "url = \"https://classroom.google.com\"",
+            "url = \"nope\"",
+            1,
+        ))
+        .unwrap();
+        let v = m.validate_all(&Default::default());
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert_eq!(
+            (v[0].code, v[0].path.as_deref()),
+            ("web_app_invalid", Some("user_defaults.apps.web[0]"))
+        );
+        // The errors stop validate, the warning does not.
+        let m = Manifest::parse(&v3_example().replacen(
+            "name = \"Grade 1-6\"\n",
+            "name = \"Grade 1-6\"\napps.web = [{ name = \"H\", url = \"http://h.org\" }]\n",
+            1,
+        ))
+        .unwrap();
+        assert_eq!(m.validate_all(&Default::default()), []);
+    }
+
+    #[test]
+    fn user_layer_deb_apps_follow_the_deb_rules() {
+        let all = issues(
+            "apps.deb.Bad = { name = \"X\", url = \"https://x.org/x.deb\" }",
+            "apps.deb.zoom = { name = \"Zoom\", url = \"http://x.org/z.deb\" }\n\
+             apps.deb.ok = { name = \"Ok\", url = \"https://x.org/o.deb\", icon = \"files/none.png\" }",
+        );
+        assert!(
+            has(&all, "deb_id_invalid", "user_defaults.apps.deb.Bad.id"),
+            "{all:?}"
+        );
+        assert!(
+            has(
+                &all,
+                "deb_url_invalid",
+                "user_config.primary.apps.deb.zoom.url"
+            ),
+            "{all:?}"
+        );
+        assert!(
+            has(
+                &all,
+                "deb_icon_invalid",
+                "user_config.primary.apps.deb.ok.icon"
+            ),
+            "{all:?}"
+        );
+    }
+
+    #[test]
+    fn user_layer_drops_follow_the_drop_rules() {
+        let all = issues(
+            "allow = [\"file_manager\"]",
+            "chrome_policy = { URLBlocklist = [] }\n\
+             drop.chrome_policy = [\"URLBlocklist\"]\n\
+             drop.apps.web = [\"Nope\"]\n\
+             drop.allow = [\"file_manager\", \"terminal\"]",
+        );
+        assert!(
+            has(
+                &all,
+                "drop_conflict",
+                "user_config.primary.drop.chrome_policy[0]"
+            ),
+            "{all:?}"
+        );
+        assert!(
+            has(&all, "drop_unknown", "user_config.primary.drop.apps.web[0]"),
+            "{all:?}"
+        );
+        assert!(
+            has(&all, "drop_unknown", "user_config.primary.drop.allow[1]"),
+            "{all:?}"
+        );
+        assert!(
+            !has(&all, "drop_unknown", "user_config.primary.drop.allow[0]"),
+            "{all:?}"
+        );
+        // The teacher's drop of the inherited URLBlocklist (the spec example) is fine.
+        assert!(
+            !all.iter()
+                .any(|(_, p)| p.starts_with("user_config.teacher")),
+            "{all:?}"
+        );
+        let m = Manifest::parse(&v3_example().replacen(
+            "name = \"Grade 1-6\"\n",
+            "name = \"Grade 1-6\"\nchrome_policy = { A = 1 }\ndrop.chrome_policy = [\"A\"]\n",
+            1,
+        ))
+        .unwrap();
+        let v = m.validate_all(&Default::default());
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert_eq!(v[0].code, "drop_conflict");
+        assert!(
+            v[0].message.starts_with("User config primary both drops"),
+            "{v:?}"
+        );
+    }
+
+    /// The device layer of a format 3 text goes through the Config rules (it is `configs`).
+    #[test]
+    fn device_layer_goes_through_config_rules() {
+        let m = Manifest::parse(&v3_example().replacen(
+            "name = \"Classroom laptops\"\n",
+            "name = \"Classroom laptops\"\nscripts = [{ path = \"scripts/missing.sh\" }]\n",
+            1,
+        ))
+        .unwrap();
+        let v = m.validate_all(&Default::default());
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert_eq!(v[0].code, "file_missing");
+        assert_eq!(
+            v[0].path.as_deref(),
+            Some("config.classroom.scripts[0].path")
+        );
     }
 
     #[test]

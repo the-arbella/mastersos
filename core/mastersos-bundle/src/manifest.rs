@@ -84,8 +84,8 @@ pub struct Manifest {
     /// The settings syntax version: absent is 1. The server writes the lowest one the text needs
     /// (2 once `[defaults]`, `drop`, `it_account` or `[school] name`/`logo_sha256`/
     /// `logo_icon_sha256` are used);
-    /// leave it as the server wrote it. A `format = 3` text (device layer and user layer) is
-    /// read through [`crate::V3Manifest`].
+    /// leave it as the server wrote it.
+    // A `format = 3` text (device layer and user layer) is read through `crate::V3Manifest`.
     #[serde(default = "format_one")]
     #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 3)))]
     pub format: u32,
@@ -2278,6 +2278,37 @@ impl Manifest {
                 downloads: &c.downloads,
             };
             layer.validate(&mut out, present);
+        }
+        // The user layer of a format 3 text: the same entry rules as a Config's scripts and
+        // apps, at `user_defaults.…` and `user_config.<id>.…` (cross-references: Task 4).
+        if let Some(u) = &self.user_layer {
+            let layers = std::iter::once((
+                "user_defaults".to_owned(),
+                "[user_defaults]".to_owned(),
+                &u.defaults.scripts,
+            ))
+            .chain(u.configs.iter().map(|c| {
+                (
+                    format!("user_config.{}", c.id),
+                    format!("user config {}", c.id),
+                    &c.scripts,
+                )
+            }));
+            for (base, owner, scripts) in layers {
+                let layer = Layer {
+                    base,
+                    owner,
+                    files: &[],
+                    scripts,
+                    downloads: &[],
+                };
+                layer.validate(&mut out, present);
+            }
+            out.extend(
+                crate::user_layer::entry_lints(u, present)
+                    .into_iter()
+                    .filter(|l| l.level == LintLevel::Error),
+            );
         }
 
         // 一个文件的路径不能同时是另一个文件的上级目录（`files/a` 与 `files/a/b`）：

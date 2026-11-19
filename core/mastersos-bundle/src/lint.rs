@@ -10,8 +10,8 @@ use serde::Serialize;
 #[cfg(test)]
 use crate::ResetRequest;
 use crate::{
-    checks, deb, effective_config, kiosk, Apps, ChromeUpdate, Config, ConfigLayer, Defaults,
-    ItAccount, LoginMethod, Manifest, NetDevice, Shape, Wifi,
+    checks, deb, effective_config, kiosk, Apps, ChromeUpdate, Config, ConfigLayer, DebApp,
+    Defaults, ItAccount, LoginMethod, Manifest, NetDevice, Shape, WebApp, Wifi,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -162,6 +162,14 @@ pub fn lint_at(m: &Manifest, present: &BTreeSet<String>, today: chrono::NaiveDat
         lint_web_apps(v, present, &mut out);
         lint_kiosk(v, present, &mut out);
         lint_deb(v, present, &mut out);
+    }
+    // The user layer's entry warnings (its entry errors are in `validate_all`).
+    if let Some(u) = &m.user_layer {
+        out.extend(
+            crate::user_layer::entry_lints(u, present)
+                .into_iter()
+                .filter(|l| l.level != LintLevel::Error),
+        );
     }
     lint_kiosk_semantics(m, &configs, &mut out);
     lint_deb_semantics(m, &configs, &mut out);
@@ -700,11 +708,24 @@ fn icon_ok(icon: &str, present: &BTreeSet<String>) -> bool {
 /// Web apps of one layer: icon and https rules (their format rule, `web_app_invalid`, is in
 /// [`lint_formats`]).
 fn lint_web_apps(v: &View, present: &BTreeSet<String>, out: &mut Vec<Lint>) {
-    for (i, w) in v.apps.web.iter().enumerate() {
-        let base = format!("{}.apps.web[{i}]", v.base);
+    let base = format!("{}.apps.web", v.base);
+    lint_web_app_entries(&base, &v.apps.web, present, &|l| v.tag(l), out);
+}
+
+/// [`lint_web_apps`] for any list of web apps: `base` is the list's path (`<layer>.apps.web`),
+/// `tag` adds the layer's params. Also used for the user layer of `format = 3`.
+pub(crate) fn lint_web_app_entries(
+    base: &str,
+    web: &[WebApp],
+    present: &BTreeSet<String>,
+    tag: &dyn Fn(Lint) -> Lint,
+    out: &mut Vec<Lint>,
+) {
+    for (i, w) in web.iter().enumerate() {
+        let base = format!("{base}[{i}]");
         if let Some(icon) = &w.icon {
             if !icon_ok(icon, present) {
-                out.push(v.tag(
+                out.push(tag(
                     Lint::new(
                         LintLevel::Error,
                         "icon_invalid",
@@ -720,7 +741,7 @@ fn lint_web_apps(v: &View, present: &BTreeSet<String>, out: &mut Vec<Lint>) {
             }
         }
         if !w.url.starts_with("https://") {
-            out.push(v.tag(
+            out.push(tag(
                 Lint::new(
                     LintLevel::Warning,
                     "web_app_not_https",
@@ -860,19 +881,34 @@ fn lint_kiosk(v: &View, present: &BTreeSet<String>, out: &mut Vec<Lint>) {
 /// the mirror address. The id space shared with kiosk apps is in [`lint_deb_semantics`].
 fn lint_deb(v: &View, present: &BTreeSet<String>, out: &mut Vec<Lint>) {
     let base = format!("{}.apps.deb", v.base);
-    for (id, app) in &v.apps.deb {
+    lint_deb_entries(&base, &v.apps.deb, present, &|l| v.tag(l), out);
+    if let Some(Err(why)) = v.apps.ubuntu_mirror.as_deref().map(deb::check_mirror) {
+        out.push(v.tag(err(
+            "ubuntu_mirror_invalid",
+            why,
+            format!("{}.apps.ubuntu_mirror", v.base),
+        )));
+    }
+}
+
+/// [`deb::check`] errors and the icon file of each .deb app at `base` (`<layer>.apps.deb`);
+/// `tag` adds the layer's params. Also used for the user layer of `format = 3`.
+pub(crate) fn lint_deb_entries(
+    base: &str,
+    deb: &BTreeMap<String, DebApp>,
+    present: &BTreeSet<String>,
+    tag: &dyn Fn(Lint) -> Lint,
+    out: &mut Vec<Lint>,
+) {
+    for (id, app) in deb {
         let at = format!("{base}.{id}");
         if let Err(e) = deb::check(id, app) {
-            out.push(
-                v.tag(
-                    err(e.code, e.message, format!("{at}.{}", e.field))
-                        .param("app_id", id)
-                        .param("field", e.field),
-                ),
-            );
+            out.push(tag(err(e.code, e.message, format!("{at}.{}", e.field))
+                .param("app_id", id)
+                .param("field", e.field)));
         } else if let Some(icon) = app.icon.as_deref().filter(|i| !icon_ok(i, present)) {
             out.push(
-                v.tag(
+                tag(
                     err(
                         "deb_icon_invalid",
                         format!(
@@ -887,13 +923,6 @@ fn lint_deb(v: &View, present: &BTreeSet<String>, out: &mut Vec<Lint>) {
                 ),
             );
         }
-    }
-    if let Some(Err(why)) = v.apps.ubuntu_mirror.as_deref().map(deb::check_mirror) {
-        out.push(v.tag(err(
-            "ubuntu_mirror_invalid",
-            why,
-            format!("{}.apps.ubuntu_mirror", v.base),
-        )));
     }
 }
 
@@ -1338,7 +1367,7 @@ fn lint_wifi(list: &[Wifi], base: &str, tag: &dyn Fn(Lint) -> Lint, out: &mut Ve
 }
 
 /// One `drop` list: its collection name, the names dropped, the inherited names, the Config's own.
-type DropSet<'a> = (&'a str, &'a [String], Vec<String>, Vec<String>);
+pub(crate) type DropSet<'a> = (&'a str, &'a [String], Vec<String>, Vec<String>);
 
 /// A path of `flatpak_now_installed`: its Configs, their Groups and the Flatpak ids they install.
 type FlatpakHit<'a> = (String, Vec<&'a ConfigLayer>, Vec<&'a str>, Vec<String>);
@@ -1427,16 +1456,46 @@ fn lint_drop(m: &Manifest, g: &ConfigLayer, out: &mut Vec<Lint>) {
             g.chrome_policy.keys().cloned().collect(),
         ),
     ];
-    for (collection, dropped, inherited, own) in &sets {
+    let who = DropOwner {
+        path: format!("config.{}.drop", g.id),
+        subject: format!("Config {}", g.id),
+        defaults: "[defaults]",
+        defaults_word: "the Defaults",
+    };
+    lint_drop_sets(&who, &sets, &|l| about(l, g), out);
+}
+
+/// Whose `drop` [`lint_drop_sets`] looks at, as paths and messages name it.
+pub(crate) struct DropOwner {
+    /// The `drop` table's path: `config.<id>.drop`, `user_config.<id>.drop`.
+    pub path: String,
+    /// The owner in messages: `Config <id>`, `User config <id>`.
+    pub subject: String,
+    /// The table inherited from: `[defaults]`, `[user_defaults]`.
+    pub defaults: &'static str,
+    /// The same, as a noun in a sentence: `the Defaults`, `the user defaults`.
+    pub defaults_word: &'static str,
+}
+
+/// `drop` entries that do nothing: a name the inherited table does not have is `drop_unknown`
+/// (a warning), a name the owner also writes itself is `drop_conflict` (an error). `tag` adds
+/// the owner's params. Also used for the user layer of `format = 3`.
+pub(crate) fn lint_drop_sets(
+    who: &DropOwner,
+    sets: &[DropSet],
+    tag: &dyn Fn(Lint) -> Lint,
+    out: &mut Vec<Lint>,
+) {
+    let (subject, defaults, defaults_word) = (&who.subject, who.defaults, who.defaults_word);
+    for (collection, dropped, inherited, own) in sets {
         for (i, name) in dropped.iter().enumerate() {
-            let path = format!("config.{}.drop.{collection}[{i}]", g.id);
+            let path = format!("{}.{collection}[{i}]", who.path);
             let (level, code, message) = if own.contains(name) {
                 (
                     LintLevel::Error,
                     "drop_conflict",
                     format!(
-                        "Config {} both drops {name:?} and writes it in {collection}: remove it from drop, or from its own {collection} if the inherited one is wanted.",
-                        g.id
+                        "{subject} both drops {name:?} and writes it in {collection}: remove it from drop, or from its own {collection} if the inherited one is wanted."
                     ),
                 )
             } else if !inherited.contains(name) {
@@ -1444,19 +1503,39 @@ fn lint_drop(m: &Manifest, g: &ConfigLayer, out: &mut Vec<Lint>) {
                     LintLevel::Warning,
                     "drop_unknown",
                     format!(
-                        "Config {} drops {name:?} from {collection}, but [defaults] has no such entry: the drop does nothing (the Defaults may have been renamed); remove it or fix the name.",
-                        g.id
+                        "{subject} drops {name:?} from {collection}, but {defaults} has no such entry: the drop does nothing ({defaults_word} may have been renamed); remove it or fix the name."
                     ),
                 )
             } else {
                 continue;
             };
-            out.push(about(
-                Lint::new(level, code, message)
-                    .at(path)
-                    .param("collection", collection)
-                    .param("name", name),
-                g,
+            out.push(tag(Lint::new(level, code, message)
+                .at(path)
+                .param("collection", collection)
+                .param("name", name)));
+        }
+    }
+}
+
+/// `web_app_invalid` and `flatpak_id_invalid` of one layer's `apps.web` and `apps.flatpak`;
+/// `base` is the layer's path. Also used for the user layer of `format = 3`.
+pub(crate) fn lint_app_formats(
+    base: &str,
+    web: &[WebApp],
+    flatpak: &[String],
+    out: &mut Vec<Lint>,
+) {
+    for (i, a) in web.iter().enumerate() {
+        if let Err(e) = checks::web_app(a) {
+            out.push(err("web_app_invalid", e, format!("{base}.apps.web[{i}]")));
+        }
+    }
+    for (i, id) in flatpak.iter().enumerate() {
+        if let Err(e) = checks::flatpak_id(id) {
+            out.push(err(
+                "flatpak_id_invalid",
+                e,
+                format!("{base}.apps.flatpak[{i}]"),
             ));
         }
     }
@@ -1745,20 +1824,7 @@ fn lint_formats(
                 );
             }
         }
-        for (i, a) in v.apps.web.iter().enumerate() {
-            if let Err(e) = checks::web_app(a) {
-                out.push(err("web_app_invalid", e, format!("{base}.apps.web[{i}]")));
-            }
-        }
-        for (i, id) in v.apps.flatpak.iter().enumerate() {
-            if let Err(e) = checks::flatpak_id(id) {
-                out.push(err(
-                    "flatpak_id_invalid",
-                    e,
-                    format!("{base}.apps.flatpak[{i}]"),
-                ));
-            }
-        }
+        lint_app_formats(base, &v.apps.web, &v.apps.flatpak, out);
         if let Some(Err(e)) = v
             .it_account
             .map(|a| checks::it_password_hash(&a.password_hash))
