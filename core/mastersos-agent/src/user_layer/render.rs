@@ -7,8 +7,9 @@
 //! - `<var_dir>/user-layer/<d>/chrome.json`: the managed Chrome policy ([`chrome_policy::render_policy`]), plus a
 //!   copy `/etc/opt/chrome/policies/.mastersos-staging/<d>.json` (root 0700, on the file system of `managed/` so the
 //!   switch is a rename; never inside `managed/`, which Chrome reads in full);
-//! - `/etc/dconf/db/mastersos-<d>.d/50-mastersos` and `locks/50-mastersos`, compiled into `/etc/dconf/db/mastersos-<d>`
-//!   by the one `dconf update` of the round (this step runs it, after `desktop`);
+//! - `<var_dir>/user-layer/<d>/dconf.d/50-mastersos` and `locks/50-mastersos`, compiled by `dconf compile` into
+//!   `<var_dir>/user-layer/<d>/dconf.db` (root only; never in `/etc/dconf/db`, where `dconf update` would compile
+//!   them world-readable); the step also runs the round's one `dconf update` (the device database, after `desktop`);
 //! - `/var/lib/mastersos-public/user-layer/<d>/`: `xdg/` (web app launchers and icons, `Hidden=true` overrides, D-Bus
 //!   overrides), `login-scripts/` (with its index) and `session-mode` (`full` iff `user_apps` is lifted).
 //!
@@ -24,7 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::os::fd::OwnedFd;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use mastersos_bundle::{
     reachable_user_configs, user_config, Capability, Caps, HomeMode, ItemResult, Manifest, Preset,
     UserConfig, UserRules,
@@ -35,6 +36,7 @@ use super::{active_marker, config_dir_name, is_config_dir, NEUTRAL_DIR};
 use crate::apply::{is_not_found, ApplyContext};
 use crate::deb_apps;
 use crate::deb_apps::status::PublicApp;
+use crate::runner::{run_ok, Cmd, Runner};
 use crate::safefs;
 use crate::system::desktop::{self, Downloads, SessionDconf};
 use crate::system::{
@@ -72,15 +74,22 @@ pub const XDG_SUB: &str = "xdg";
 pub const PUBLIC_STATE_MODE: u32 = 0o711;
 pub const SCRIPTS_SUB: &str = "login-scripts";
 
-/// The dconf database name of a config directory: `mastersos-<d>` (keyfiles in `mastersos-<d>.d`).
+/// The dconf database name of a config directory in the first layout: `/etc/dconf/db/mastersos-<d>` (keyfiles in
+/// `mastersos-<d>.d`). Nothing is written there any more (`dconf update` compiles every `.d` there world-readable);
+/// leftovers are removed.
 pub fn db_name(dir: &str) -> String {
     format!("mastersos-{dir}")
 }
 
-/// The compiled dconf database of the config directory `dir` (root 0600), which the switch copies to [`SESSION_DB`].
-/// The one place that names it; `_var_dir` is where it will live once it moves out of `/etc/dconf/db`.
-pub fn compiled_db(root: &Path, _var_dir: &Path, dir: &str) -> std::path::PathBuf {
-    root.join(DCONF_DB_DIR).join(db_name(dir))
+/// A config's dconf keyfile directory (with `locks/`) and its compiled database, in its `var_dir` directory (root
+/// 0700). `dconf compile` writes the database there, where no one else can read it and `dconf update` never looks.
+pub const DCONF_KEYFILE_SUB: &str = "dconf.d";
+pub const DCONF_DB_FILE: &str = "dconf.db";
+
+/// The compiled dconf database of the config directory `dir` (root only), which the switch copies to [`SESSION_DB`].
+/// The one place that names it.
+pub fn compiled_db(_root: &Path, var_dir: &Path, dir: &str) -> std::path::PathBuf {
+    var_dir.join(STATE_SUB).join(dir).join(DCONF_DB_FILE)
 }
 
 /// The configuration of a session without a user config: everything blocked, no apps, the baseline Chrome policy.
@@ -158,7 +167,7 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
 struct Outcome {
     errs: Vec<String>,
     notes: Vec<String>,
-    dconf_changed: bool,
+    keyfiles_changed: bool,
 }
 
 fn render_all(ctx: &ApplyContext, m: &Manifest, env: &mut Env) -> Vec<ItemResult> {
@@ -190,13 +199,13 @@ fn render_all(ctx: &ApplyContext, m: &Manifest, env: &mut Env) -> Vec<ItemResult
     let active = active_marker(&paths.root).map(|a| a.map(|a| a.dir).filter(|d| is_config_dir(d)));
     let active_dir = active.as_ref().ok().cloned().flatten();
     let mut index = BTreeMap::new();
-    let mut dconf_changed = false;
+    let recompile = sys.load_failed;
     {
         let lists: Vec<_> = configs.iter().map(|c| &c.web).collect();
         let mut dl = Downloads::new(sys, desktop::icon_key(&lists));
         for c in &configs {
             let dir = config_dir_name(&c.id);
-            let r = render_one(
+            let mut r = render_one(
                 ctx,
                 paths,
                 c,
@@ -206,7 +215,9 @@ fn render_all(ctx: &ApplyContext, m: &Manifest, env: &mut Env) -> Vec<ItemResult
                 &public,
                 &mut dl,
             );
-            dconf_changed |= r.dconf_changed;
+            if let Err(e) = compile_db(paths, runner, &dir, r.keyfiles_changed || recompile) {
+                r.errs.push(format!("dconf: {e:#}"));
+            }
             out.push(item(&item_of(&c.id), r));
             index.insert(
                 c.id.clone(),
@@ -217,7 +228,7 @@ fn render_all(ctx: &ApplyContext, m: &Manifest, env: &mut Env) -> Vec<ItemResult
                 },
             );
         }
-        let r = render_one(
+        let mut r = render_one(
             ctx,
             paths,
             &neutral,
@@ -227,7 +238,9 @@ fn render_all(ctx: &ApplyContext, m: &Manifest, env: &mut Env) -> Vec<ItemResult
             &public,
             &mut dl,
         );
-        dconf_changed |= r.dconf_changed;
+        if let Err(e) = compile_db(paths, runner, NEUTRAL_DIR, r.keyfiles_changed || recompile) {
+            r.errs.push(format!("dconf: {e:#}"));
+        }
         errs.extend(r.errs.into_iter().map(|e| format!("neutral: {e}")));
     }
     let mut keep: BTreeSet<String> = index.values().map(|r| r.dir.clone()).collect();
@@ -243,12 +256,8 @@ fn render_all(ctx: &ApplyContext, m: &Manifest, env: &mut Env) -> Vec<ItemResult
             "the signed-in session's marker cannot be read ({e:#}); kept every user config this round"
         )),
     }
-    sys.dconf_update_pending |= dconf_changed;
+    // The device's `mastersos` database (the `desktop` step leaves its update to this step: one per round)
     if let Err(e) = desktop::dconf_update(runner, sys) {
-        errs.push(format!("dconf: {e:#}"));
-    }
-    // `dconf update` writes the compiled databases world-readable; only the switch may publish one.
-    if let Err(e) = close_databases(paths, &keep) {
         errs.push(format!("dconf: {e:#}"));
     }
     // The index last: it names only directories rendered above.
@@ -403,14 +412,15 @@ fn render_one(
     };
     let (keyfile, lockfile) =
         desktop::render_session_dconf(&session, &webapps, kiosk, &debs, &flatpaks);
-    let keydir = format!("{DCONF_DB_DIR}/{}.d", db_name(dir));
-    let written = desktop::write_dconf(&paths.root, &keydir, &keyfile, &lockfile).and_then(|c| {
-        let d = safefs::open_dir(&paths.root, Path::new(&keydir), false)?;
-        safefs::set_mode(&d, 0o700)?;
-        Ok(c)
-    });
+    let written = state_dir(paths)
+        .and_then(|s| sub(&s, dir, 0o700))
+        .and_then(|c| sub(&c, DCONF_KEYFILE_SUB, 0o700))
+        .and_then(|k| {
+            let shown = format!("{dir}/{DCONF_KEYFILE_SUB}");
+            desktop::write_dconf_at(&k, &shown, &keyfile, &lockfile)
+        });
     match written {
-        Ok(changed) => r.dconf_changed = changed,
+        Ok(changed) => r.keyfiles_changed = changed,
         Err(e) => r.errs.push(format!("dconf: {e:#}")),
     }
     r
@@ -433,17 +443,28 @@ fn mode_of(fd: &OwnedFd) -> Result<u32> {
     Ok(st.st_mode & 0o7777)
 }
 
-/// Makes each existing compiled database `mastersos-<d>` of the dirs `dirs` 0600.
-fn close_databases(paths: &SysPaths, dirs: &BTreeSet<String>) -> Result<()> {
-    let Some(db) = open_existing(&paths.root, DCONF_DB_DIR)? else {
+/// Compiles the keyfiles of the config dir `dir` into its [`DCONF_DB_FILE`] (`dconf compile`, which reads the
+/// keyfile directory and its `locks/` exactly as `dconf update` does) when they changed (`changed`) or the database is
+/// missing; then makes it 0600. A failed compile removes the database, so that the switch to this config fails
+/// (closed) instead of using an older one; the next round compiles again.
+fn compile_db(paths: &SysPaths, runner: &dyn Runner, dir: &str, changed: bool) -> Result<()> {
+    let cdir = sub(&state_dir(paths)?, dir, 0o700)?;
+    if !changed && safefs::open_file_at(&cdir, DCONF_DB_FILE)?.is_some() {
         return Ok(());
+    }
+    let abs = paths.var_dir.join(STATE_SUB).join(dir);
+    let (out, src) = (abs.join(DCONF_DB_FILE), abs.join(DCONF_KEYFILE_SUB));
+    let (Some(out), Some(src)) = (out.to_str(), src.to_str()) else {
+        bail!("the state directory's path is not UTF-8");
     };
-    for d in dirs {
-        if let Some(f) = safefs::open_file_at(&db, &db_name(d))? {
-            rustix::fs::fchmod(&f, rustix::fs::Mode::from_raw_mode(0o600))
-                .map_err(std::io::Error::from)
-                .with_context(|| format!("making {} root-only", db_name(d)))?;
-        }
+    if let Err(e) = run_ok(runner, Cmd::new("dconf", &["compile", out, src])) {
+        safefs::remove_at(&cdir, DCONF_DB_FILE)?;
+        return Err(e);
+    }
+    if let Some(f) = safefs::open_file_at(&cdir, DCONF_DB_FILE)? {
+        rustix::fs::fchmod(&f, rustix::fs::Mode::from_raw_mode(0o600))
+            .map_err(std::io::Error::from)
+            .context("making the compiled database root-only")?;
     }
     Ok(())
 }
@@ -524,24 +545,30 @@ fn remove_unreachable(paths: &SysPaths, keep: &BTreeSet<String>) -> Result<()> {
             }
         }
     }
-    if let Some(db) = open_existing(&paths.root, DCONF_DB_DIR)? {
-        for name in safefs::list_at(&db)? {
-            let Some(rest) = name.strip_prefix("mastersos-") else {
-                continue;
-            };
-            if let Some(d) = rest.strip_suffix(".d") {
-                if gone(d) {
-                    safefs::remove_tree_at(&db, &name)?;
-                }
-            } else if gone(rest) {
-                safefs::remove_at(&db, &name)?;
-            }
-        }
-    }
+    remove_old_dconf(paths)?;
     let staging = staging_dir(paths)?;
     for name in safefs::list_at(&staging)? {
         if name.strip_suffix(".json").is_some_and(gone) {
             safefs::remove_at(&staging, &name)?;
+        }
+    }
+    Ok(())
+}
+
+/// Removes what the first layout put in `/etc/dconf/db` for any config dir: `mastersos-<d>.d` and the compiled
+/// `mastersos-<d>`, `<d>` of the exact shape of [`is_config_dir`] (never `mastersos`, `mastersos-session`, ...).
+fn remove_old_dconf(paths: &SysPaths) -> Result<()> {
+    let Some(db) = open_existing(&paths.root, DCONF_DB_DIR)? else {
+        return Ok(());
+    };
+    for name in safefs::list_at(&db)? {
+        let Some(rest) = name.strip_prefix("mastersos-") else {
+            continue;
+        };
+        match rest.strip_suffix(".d") {
+            Some(d) if is_config_dir(d) => safefs::remove_tree_at(&db, &name)?,
+            None if is_config_dir(rest) => safefs::remove_at(&db, &name)?,
+            _ => {}
         }
     }
     Ok(())
@@ -565,24 +592,12 @@ fn remove_state(paths: &SysPaths) -> Result<bool> {
     let Some(state) = safefs::open_child_dir(&var, STATE_SUB)? else {
         return Ok(false);
     };
-    let mut dirs: BTreeSet<String> = safefs::list_at(&state)?
-        .into_iter()
-        .filter(|n| is_config_dir(n))
-        .collect();
-    if let Some(index) = read_index(&paths.var_dir) {
-        dirs.extend(index.configs.into_values().map(|r| r.dir));
-        dirs.insert(index.neutral.dir);
-    }
-    dirs.insert(NEUTRAL_DIR.into());
     // The profile first: it must never name a database that is gone.
     if let Some(profile) = open_existing(&paths.root, PROFILE_DIR)? {
         safefs::remove_at(&profile, PROFILE_FILE)?;
     }
+    remove_old_dconf(paths)?;
     if let Some(db) = open_existing(&paths.root, DCONF_DB_DIR)? {
-        for d in dirs.iter().filter(|d| is_config_dir(d)) {
-            safefs::remove_tree_at(&db, &format!("{}.d", db_name(d)))?;
-            safefs::remove_at(&db, &db_name(d))?;
-        }
         safefs::remove_at(&db, SESSION_DB)?;
     }
     if let Some(policies) = open_existing(&paths.root, POLICIES_DIR)? {

@@ -130,11 +130,41 @@ fn read(p: PathBuf) -> String {
 }
 
 fn keyfile(root: &Path, d: &str) -> String {
-    read(db(root).join(format!("{}.d/50-mastersos", db_name(d))))
+    read(
+        var(root)
+            .join(d)
+            .join(DCONF_KEYFILE_SUB)
+            .join("50-mastersos"),
+    )
 }
 
 fn lockfile(root: &Path, d: &str) -> Option<String> {
-    fs::read_to_string(db(root).join(format!("{}.d/locks/50-mastersos", db_name(d)))).ok()
+    fs::read_to_string(
+        var(root)
+            .join(d)
+            .join(DCONF_KEYFILE_SUB)
+            .join("locks/50-mastersos"),
+    )
+    .ok()
+}
+
+fn compiles(r: &FakeRunner) -> Vec<String> {
+    r.calls()
+        .into_iter()
+        .filter(|c| c.starts_with("dconf compile"))
+        .collect()
+}
+
+/// Every file of this layer's first layout in `/etc/dconf/db` (`mastersos-<config dir>` and its `.d`).
+fn old_layout(root: &Path) -> Vec<String> {
+    names(&db(root))
+        .into_iter()
+        .filter(|n| {
+            n.strip_prefix("mastersos-")
+                .map(|r| r.strip_suffix(".d").unwrap_or(r))
+                .is_some_and(crate::user_layer::is_config_dir)
+        })
+        .collect()
 }
 
 fn apps_of(root: &Path, d: &str) -> Vec<String> {
@@ -184,8 +214,10 @@ fn renders_every_reachable_config_and_neutral() {
             staging(root.path()).join(format!("{d}.json")).is_file(),
             "{d}"
         );
-        assert!(db(root.path())
-            .join(format!("{}.d/50-mastersos", db_name(d)))
+        assert!(var(root.path())
+            .join(d)
+            .join(DCONF_KEYFILE_SUB)
+            .join("50-mastersos")
             .is_file());
         assert!(public(root.path())
             .join(d)
@@ -222,8 +254,34 @@ fn renders_every_reachable_config_and_neutral() {
     assert!(apps_of(root.path(), &teacher).contains(&launcher));
     assert!(!apps_of(root.path(), NEUTRAL_DIR).contains(&launcher));
     assert!(keyfile(root.path(), &primary).contains(&launcher));
-    // one dconf update for the whole round; the legacy session mode stays learning
-    assert_eq!(dconf_updates(&r), 1, "{:?}", r.calls());
+    // each config compiled root-only into its own var dir; nothing per config in /etc/dconf/db, no dconf update
+    // (only the device database's, when the desktop step asks for it)
+    let mut want_compiles: Vec<String> = want
+        .iter()
+        .map(|d| {
+            let v = var(root.path()).join(d);
+            format!(
+                "dconf compile {} {}",
+                v.join(DCONF_DB_FILE).display(),
+                v.join(DCONF_KEYFILE_SUB).display()
+            )
+        })
+        .collect();
+    want_compiles.sort();
+    let mut got = compiles(&r);
+    got.sort();
+    assert_eq!(got, want_compiles);
+    assert_eq!(dconf_updates(&r), 0, "{:?}", r.calls());
+    assert!(names(&db(root.path())).is_empty());
+    assert_eq!(
+        compiled_db(
+            root.path(),
+            &root.path().join("var/lib/mastersos-system"),
+            &primary
+        ),
+        var(root.path()).join(&primary).join(DCONF_DB_FILE)
+    );
+    // the legacy session mode stays learning
     assert_eq!(
         read(root.path().join("var/lib/mastersos-public/session-mode")),
         "learning\n"
@@ -369,17 +427,15 @@ fn unreachable_dirs_are_removed_but_active_is_kept() {
     ok_item(&out, ITEM);
     assert!(!var(root.path()).join(&old).exists());
     assert!(!public(root.path()).join(&old).exists());
-    assert!(!db(root.path())
-        .join(format!("{}.d", db_name(&old)))
-        .exists());
-    assert!(!db(root.path()).join(db_name(&old)).exists());
     assert!(!staging(root.path()).join(format!("{old}.json")).exists());
     assert!(var(root.path()).join(&gone).join(CHROME_FILE).exists());
     assert!(public(root.path()).join(&gone).join("xdg").exists());
-    assert!(db(root.path())
-        .join(format!("{}.d", db_name(&gone)))
-        .exists());
-    assert!(db(root.path()).join(db_name(&gone)).exists());
+    // the first layout's files in /etc/dconf/db go for every config dir, the active one's too
+    assert!(
+        old_layout(root.path()).is_empty(),
+        "{:?}",
+        names(&db(root.path()))
+    );
     assert!(staging(root.path()).join(format!("{gone}.json")).exists());
     for other in [
         "mastersos.d",
@@ -452,26 +508,78 @@ fn write_marker(root: &Path, dir: &str) {
 fn config_dirs_are_root_only() {
     let root = root();
     let (teacher, primary) = (config_dir_name("teacher"), config_dir_name("primary"));
-    // what `dconf update` leaves: world-readable compiled databases
-    fs::create_dir_all(db(root.path())).unwrap();
+    // the first layout's world-readable databases and keyfiles in /etc/dconf/db
+    fs::create_dir_all(db(root.path()).join(format!("{}.d/locks", db_name(&teacher)))).unwrap();
     for d in [teacher.as_str(), NEUTRAL_DIR] {
         let f = db(root.path()).join(db_name(d));
         fs::write(&f, "gvdb").unwrap();
         fs::set_permissions(&f, fs::Permissions::from_mode(0o644)).unwrap();
     }
+    // a compiled database as `dconf compile` leaves it (umask 022)
+    fs::create_dir_all(var(root.path()).join(&teacher)).unwrap();
+    let compiled = var(root.path()).join(&teacher).join(DCONF_DB_FILE);
+    fs::write(&compiled, "gvdb").unwrap();
+    fs::set_permissions(&compiled, fs::Permissions::from_mode(0o644)).unwrap();
     render(root.path(), &v3());
     assert_eq!(mode(public(root.path())), 0o711);
+    assert_eq!(mode(var(root.path())), 0o700);
     for d in [&teacher, &primary] {
         assert_eq!(mode(public(root.path()).join(d)), 0o700, "{d}");
+        assert_eq!(mode(var(root.path()).join(d)), 0o700, "{d}");
         assert_eq!(
-            mode(db(root.path()).join(format!("{}.d", db_name(d)))),
+            mode(var(root.path()).join(d).join(DCONF_KEYFILE_SUB)),
             0o700,
             "{d}"
         );
     }
     assert_eq!(mode(public(root.path()).join(NEUTRAL_DIR)), 0o755);
-    assert_eq!(mode(db(root.path()).join(db_name(&teacher))), 0o600);
-    assert_eq!(mode(db(root.path()).join(db_name(NEUTRAL_DIR))), 0o600);
+    assert_eq!(mode(compiled), 0o600);
+    assert!(
+        old_layout(root.path()).is_empty(),
+        "{:?}",
+        names(&db(root.path()))
+    );
+}
+
+#[test]
+fn compiles_only_changed_or_missing_databases() {
+    let root = root();
+    let (_, r) = render(root.path(), &v3());
+    assert_eq!(compiles(&r).len(), 3);
+    // compiled (the fake runner writes nothing) and unchanged: nothing to compile
+    let dirs = [
+        config_dir_name("teacher"),
+        config_dir_name("primary"),
+        NEUTRAL_DIR.into(),
+    ];
+    for d in &dirs {
+        fs::write(var(root.path()).join(d).join(DCONF_DB_FILE), "gvdb").unwrap();
+    }
+    let (_, r) = render(root.path(), &v3());
+    assert!(compiles(&r).is_empty(), "{:?}", r.calls());
+    // a database gone missing is compiled again
+    fs::remove_file(var(root.path()).join(&dirs[0]).join(DCONF_DB_FILE)).unwrap();
+    let (_, r) = render(root.path(), &v3());
+    assert_eq!(compiles(&r).len(), 1);
+    // changed keyfiles and a failing compile: the old database goes, so the switch cannot use it
+    fs::write(var(root.path()).join(&dirs[0]).join(DCONF_DB_FILE), "gvdb").unwrap();
+    fs::write(
+        var(root.path())
+            .join(&dirs[0])
+            .join(DCONF_KEYFILE_SUB)
+            .join("50-mastersos"),
+        "stale",
+    )
+    .unwrap();
+    let r = FakeRunner::new();
+    r.respond(
+        "dconf compile",
+        crate::runner::Output::fail(1, "bad keyfile"),
+    );
+    let out = run_step_with(step(), root.path(), &v3(), &r, &mut SysState::default());
+    assert!(!var(root.path()).join(&dirs[0]).join(DCONF_DB_FILE).exists());
+    let teacher = out.iter().find(|i| i.item == "user-layer:teacher").unwrap();
+    assert!(!teacher.ok, "{teacher:?}");
 }
 
 #[test]
@@ -525,6 +633,7 @@ fn format3_then_format2_cleans_up() {
             .join(SESSION_LINK),
     )
     .unwrap();
+    fs::create_dir_all(db(root.path())).unwrap();
     fs::write(db(root.path()).join(SESSION_DB), "gvdb").unwrap();
     for d in [config_dir_name("teacher"), NEUTRAL_DIR.into()] {
         fs::write(db(root.path()).join(db_name(&d)), "gvdb").unwrap();

@@ -139,7 +139,7 @@ fn switch_dconf(root: &Path, var: &Path, d: &str) -> Result<()> {
     let Some(bytes) = safefs::read_at(&from, name)? else {
         bail!("{name} is missing (not compiled)");
     };
-    let db = safefs::open_dir(root, Path::new(render::DCONF_DB_DIR), false)?;
+    let db = safefs::open_dir(root, Path::new(render::DCONF_DB_DIR), true)?;
     safefs::write_at(&db, SESSION_DB_TMP, &bytes, 0o644)?;
     safefs::rename_at(&db, SESSION_DB_TMP, SESSION_DB)?;
     // Only now that the database exists may the profile name it (unchanged after the first switch).

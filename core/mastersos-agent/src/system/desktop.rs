@@ -1100,9 +1100,14 @@ fn apply_dconf(
 /// its `locks/` (removed when `locks` is empty). Returns whether anything changed on disk.
 pub(crate) fn write_dconf(root: &Path, dir: &str, keyfile: &str, locks: &str) -> Result<bool> {
     let fd = safefs::open_dir(root, Path::new(dir), true)?;
-    let mut changed = safefs::write_at(&fd, DCONF_FILE, keyfile.as_bytes(), 0o644)
-        .with_context(|| format!("write /{dir}/{DCONF_FILE}"))?;
-    let ld = safefs::open_dir_at(&fd, Path::new("locks"), true)?;
+    write_dconf_at(&fd, &format!("/{dir}"), keyfile, locks)
+}
+
+/// [`write_dconf`] into the open keyfile directory `fd` (shown as `dir` in errors).
+pub(crate) fn write_dconf_at(fd: &OwnedFd, dir: &str, keyfile: &str, locks: &str) -> Result<bool> {
+    let mut changed = safefs::write_at(fd, DCONF_FILE, keyfile.as_bytes(), 0o644)
+        .with_context(|| format!("write {dir}/{DCONF_FILE}"))?;
+    let ld = safefs::open_dir_at(fd, Path::new("locks"), true)?;
     if locks.is_empty() {
         if safefs::read_at(&ld, DCONF_FILE)?.is_some() {
             safefs::remove_at(&ld, DCONF_FILE)?;
@@ -1110,7 +1115,7 @@ pub(crate) fn write_dconf(root: &Path, dir: &str, keyfile: &str, locks: &str) ->
         }
     } else {
         changed |= safefs::write_at(&ld, DCONF_FILE, locks.as_bytes(), 0o644)
-            .with_context(|| format!("write /{dir}/locks/{DCONF_FILE}"))?;
+            .with_context(|| format!("write {dir}/locks/{DCONF_FILE}"))?;
     }
     Ok(changed)
 }
