@@ -1215,3 +1215,167 @@ fn busy_lock_waits_for_the_next_round() {
     assert!(active_item(&out).is_none(), "{out:?}");
     assert!(terminal_blocked(root.path()));
 }
+
+// ---------------------------------------------------------------------------
+// A failed reapply leaves the session stricter, never looser (fix round 1)
+// ---------------------------------------------------------------------------
+
+/// Makes the next marker write fail: a directory where its temporary file goes.
+fn break_marker_write(root: &Path) {
+    fs::create_dir_all(root.join(RUN_DIR).join(".active.json.mastersos-tmp/x")).unwrap();
+}
+
+/// Makes the next switch fail at its last move (the session link): a directory where the new link is made.
+fn break_session_link(root: &Path) {
+    fs::create_dir_all(root.join("var/lib/mastersos-public/session.tmp/x")).unwrap();
+}
+
+fn teacher_caps(root: &Path) -> Caps {
+    read_index(&root.join("var/lib/mastersos-system"))
+        .unwrap()
+        .configs["teacher"]
+        .caps
+        .clone()
+}
+
+/// The marker cannot be narrowed: the removed capability is blocked all the same, and the agent's after-login step never
+/// lifts it again from the stale marker.
+#[test]
+fn failed_marker_write_never_relifts_a_removed_capability() {
+    let root = root();
+    let r = live(root.path());
+    render_live(root.path(), &v3(), &r);
+    let caps = teacher_caps(root.path());
+    let before = sign_in(root.path(), &r, "teacher", &caps);
+    break_marker_write(root.path());
+    let out = render_live(root.path(), &v3_teacher_no_terminal(), &r);
+    let item = active_item(&out).unwrap();
+    assert!(!item.ok, "{item:?}");
+    assert!(terminal_blocked(root.path()));
+    // the stale marker still names the terminal ...
+    assert_eq!(read_active(root.path()).unwrap(), before);
+    // ... which the agent's after-login step does not lift
+    session::after_login(&paths(root.path()), &r).unwrap();
+    assert!(!lifted(root.path()).contains(&Capability::Terminal));
+    assert!(terminal_blocked(root.path()));
+}
+
+/// A capability the config gained is not lifted when the switch to its new rendering failed.
+#[test]
+fn failed_switch_lifts_nothing_new() {
+    let root = root();
+    let r = live(root.path());
+    render_live(root.path(), &v3(), &r);
+    let before = sign_in(root.path(), &r, "primary", &Caps::new());
+    break_session_link(root.path());
+    let out = render_live(root.path(), &v3_primary_files(), &r);
+    let item = active_item(&out).unwrap();
+    assert!(!item.ok, "{item:?}");
+    assert_eq!(lifted(root.path()), Caps::new());
+    // the marker only narrows after a failure: no file manager in it either
+    assert_eq!(read_active(root.path()).unwrap(), before);
+    session::after_login(&paths(root.path()), &r).unwrap();
+    assert_eq!(lifted(root.path()), Caps::new());
+    // once the switch works the gained capability is lifted
+    fs::remove_dir_all(root.path().join("var/lib/mastersos-public/session.tmp")).unwrap();
+    let out = render_live(root.path(), &v3_primary_files(), &r);
+    assert!(active_item(&out).is_none(), "{out:?}");
+    assert_eq!(lifted(root.path()), caps_of(&[Capability::FileManager]));
+}
+
+/// The removed config's marker cannot be rewritten: everything is blocked and stays so, as the marker names a config
+/// the rules file no longer has.
+#[test]
+fn removed_config_with_failed_marker_write_stays_blocked() {
+    let root = root();
+    let r = live(root.path());
+    render_live(root.path(), &v3(), &r);
+    let before = sign_in(root.path(), &r, "gone", &caps_of(&[Capability::Terminal]));
+    break_marker_write(root.path());
+    let out = render_live(root.path(), &v3(), &r);
+    let item = active_item(&out).unwrap();
+    assert!(!item.ok);
+    assert!(item.detail.as_deref().unwrap().starts_with(REMOVED_CONFIG));
+    assert_eq!(read_active(root.path()).unwrap(), before);
+    assert_eq!(lifted(root.path()), Caps::new());
+    session::after_login(&paths(root.path()), &r).unwrap();
+    assert_eq!(lifted(root.path()), Caps::new());
+    assert!(terminal_blocked(root.path()));
+}
+
+/// Settings without a fallback: the session of a removed config goes neutral (nobody's), held, everything blocked.
+#[test]
+fn removed_config_without_fallback_goes_neutral() {
+    let root = root();
+    let r = live(root.path());
+    render_live(root.path(), &v3(), &r);
+    let p = paths(root.path());
+    let configs = read_index(&p.var_dir).unwrap().configs;
+    let before = sign_in(root.path(), &r, "gone", &caps_of(&[Capability::Terminal]));
+    let item = follow_session(&p, &r, &configs, None).unwrap();
+    assert!(!item.ok);
+    assert_eq!(
+        item.detail.as_deref(),
+        Some("the signed-in person's user config was removed; they get it at their next login; the settings have no fallback user config")
+    );
+    assert_eq!(
+        read_active(root.path()).unwrap(),
+        crate::user_layer::Active {
+            dir: NEUTRAL_DIR.into(),
+            caps: Caps::new(),
+            reason: Some(REMOVED_CONFIG.into()),
+            held: true,
+            ..before
+        }
+    );
+    assert_eq!(
+        session_link(root.path()).as_deref(),
+        Some("user-layer/neutral")
+    );
+    assert_eq!(session_uid(root.path()), None);
+    assert_eq!(lifted(root.path()), Caps::new());
+    assert!(terminal_blocked(root.path()));
+}
+
+/// A fallback that cannot be switched in: neutral instead, held, everything blocked, and why in the item.
+#[test]
+fn removed_config_with_broken_fallback_goes_neutral() {
+    let root = root();
+    let r = live(root.path());
+    render_live(root.path(), &v3(), &r);
+    let p = paths(root.path());
+    let configs = read_index(&p.var_dir).unwrap().configs;
+    fs::remove_file(
+        var(root.path())
+            .join(config_dir_name("primary"))
+            .join(CHROME_FILE),
+    )
+    .unwrap();
+    let before = sign_in(root.path(), &r, "gone", &caps_of(&[Capability::Terminal]));
+    let item = follow_session(&p, &r, &configs, Some("primary")).unwrap();
+    assert!(!item.ok);
+    let detail = item.detail.as_deref().unwrap();
+    assert!(
+        detail.starts_with(&format!(
+            "{REMOVED_CONFIG}; switching to the fallback \"primary\": "
+        )),
+        "{detail}"
+    );
+    assert_eq!(
+        read_active(root.path()).unwrap(),
+        crate::user_layer::Active {
+            dir: NEUTRAL_DIR.into(),
+            caps: Caps::new(),
+            reason: Some(REMOVED_CONFIG.into()),
+            held: true,
+            ..before
+        }
+    );
+    assert_eq!(
+        session_link(root.path()).as_deref(),
+        Some("user-layer/neutral")
+    );
+    assert_eq!(session_uid(root.path()), None);
+    assert_eq!(lifted(root.path()), Caps::new());
+    assert!(terminal_blocked(root.path()));
+}

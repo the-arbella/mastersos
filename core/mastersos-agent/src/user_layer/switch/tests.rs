@@ -788,6 +788,16 @@ fn switch_invalidates_the_old_session_db() {
     assert_eq!(&old[..8], &[0u8; 8]);
     assert_eq!(&old[8..], &b"db of neutral"[8..]);
     assert_switched_to(&p, &dir_of("teacher"));
+    // A replaced database still linked elsewhere is not an orphan: left alone
+    let other = p.root.join("etc/dconf/db/elsewhere");
+    fs::hard_link(session_db(&p), &other).unwrap();
+    let mut linked = fs::File::open(session_db(&p)).unwrap();
+    switch_to(&p.root, &p.public_dir, &p.var_dir, &index.neutral, None).unwrap();
+    let mut kept = Vec::new();
+    linked.read_to_end(&mut kept).unwrap();
+    assert_eq!(kept, fs::read(&other).unwrap());
+    assert_eq!(kept, format!("db of {}", dir_of("teacher")).into_bytes());
+    fs::remove_file(&other).unwrap();
     // No database before (first switch): nothing to invalidate
     fs::remove_file(session_db(&p)).unwrap();
     switch_to(&p.root, &p.public_dir, &p.var_dir, &index.neutral, None).unwrap();

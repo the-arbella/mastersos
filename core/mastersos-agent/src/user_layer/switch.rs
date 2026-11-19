@@ -151,8 +151,11 @@ fn switch_dconf(root: &Path, var: &Path, d: &str) -> Result<()> {
     let old = open_old_db(&db);
     safefs::write_at(&db, SESSION_DB_TMP, &bytes, 0o644)?;
     safefs::rename_at(&db, SESSION_DB_TMP, SESSION_DB)?;
+    // The new database is in place: a failure here only leaves running clients on the old one until they reopen it
     if let Some(old) = old {
-        invalidate_old_db(&db, old).context("invalidating the previous session database")?;
+        if let Err(e) = invalidate_old_db(old) {
+            eprintln!("mastersos-agent: user layer: invalidating the previous {SESSION_DB}: {e:#}");
+        }
     }
     // Only now that the database exists may the profile name it (unchanged after the first switch).
     let profile = safefs::open_dir(root, Path::new(render::PROFILE_DIR), true)?;
@@ -190,17 +193,14 @@ fn open_old_db(db: &OwnedFd) -> Option<OwnedFd> {
 /// `update_directory`) opens the old file `O_WRONLY` before writing the new one (line 852) and, once the new one is in
 /// place, writes `"\0\0\0\0\0\0\0\0"` (8 zero bytes) at its start (lines 870-874). A client's system source reopens
 /// when `gvdb_table_is_valid` is false (`engine/dconf-engine-source-system.c` lines 38-41), and that is
-/// `!!*table->data`, the first byte of the file (GNOME/gvdb `gvdb/gvdb-reader.c` lines 826-829). Skipped when `old`
-/// is not a regular file or is the new database itself.
-fn invalidate_old_db(db: &OwnedFd, old: OwnedFd) -> Result<()> {
+/// `!!*table->data`, the first byte of the file (GNOME/gvdb `gvdb/gvdb-reader.c` lines 826-829). Only a regular
+/// file that the rename orphaned (no link left) is touched: never the new database, nor a file still linked elsewhere.
+fn invalidate_old_db(old: OwnedFd) -> Result<()> {
     use std::os::unix::fs::FileExt;
     let st = rustix::fs::fstat(&old).map_err(std::io::Error::from)?;
-    if rustix::fs::FileType::from_raw_mode(st.st_mode) != rustix::fs::FileType::RegularFile {
-        return Ok(());
-    }
-    let new = rustix::fs::statat(db, SESSION_DB, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
-        .map_err(std::io::Error::from)?;
-    if (new.st_dev, new.st_ino) == (st.st_dev, st.st_ino) {
+    if rustix::fs::FileType::from_raw_mode(st.st_mode) != rustix::fs::FileType::RegularFile
+        || st.st_nlink != 0
+    {
         return Ok(());
     }
     std::fs::File::from(old).write_all_at(&[0u8; 8], 0)?;

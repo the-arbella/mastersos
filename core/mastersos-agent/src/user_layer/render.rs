@@ -405,7 +405,8 @@ fn lifted_now(paths: &SysPaths) -> Caps {
 
 /// The signed-in session `a` keeps its config `r`, under the marker's lock: what is lifted and no longer allowed is
 /// blocked first (even when the switch then fails), then `r` is switched in and the marker updated. Returns the errors
-/// and whether something allowed is not lifted yet.
+/// and whether something allowed is not lifted yet; never that after an error (a failed step leaves the session
+/// stricter, never looser, §4.4), and after an error the marker's capabilities only narrow.
 fn keep(paths: &SysPaths, runner: &dyn Runner, mut a: Active, r: &Rendered) -> (Vec<String>, bool) {
     let mut errs = Vec::new();
     let caps = allowed(&a, r);
@@ -424,14 +425,22 @@ fn keep(paths: &SysPaths, runner: &dyn Runner, mut a: Active, r: &Rendered) -> (
     ) {
         errs.push(format!("switching to the re-rendered user config: {e:#}"));
     }
-    if a.caps != caps || a.dir != r.dir {
-        a.caps = caps.clone();
+    let record: Caps = if errs.is_empty() {
+        caps.clone()
+    } else {
+        a.caps.intersection(&caps).copied().collect()
+    };
+    if a.caps != record || a.dir != r.dir {
+        a.caps = record;
         a.dir = r.dir.clone();
+        // A marker that cannot be written keeps its old capabilities; `session::after_login` lifts only what the
+        // rendered config still grants, so a capability removed here is never lifted from it.
         if let Err(e) = switch::write_active(&paths.root, &a) {
             errs.push(format!("updating the session marker: {e:#}"));
         }
     }
-    (errs, !a.held && !caps.is_subset(&kept))
+    let loosen = errs.is_empty() && !a.held && !caps.is_subset(&kept);
+    (errs, loosen)
 }
 
 /// The signed-in session `a` lost its user config: everything blocked, the fallback switched in (neutral when there is
@@ -479,6 +488,7 @@ fn removed(
     a.caps = Caps::new();
     a.held = true;
     a.reason = Some(REMOVED_CONFIG.into());
+    // Unwritten, the marker still names the removed config, which `session::after_login` never lifts anything for
     if let Err(e) = switch::write_active(&paths.root, &a) {
         errs.push(format!("updating the session marker: {e:#}"));
     }

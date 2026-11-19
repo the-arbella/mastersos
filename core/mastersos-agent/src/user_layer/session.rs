@@ -21,7 +21,7 @@ use mastersos_bundle::{Caps, HomeMode, ItemResult};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
-use super::render::{Rendered, STATE_SUB};
+use super::render::{read_index, Rendered, STATE_SUB};
 use super::switch::{self, lock_active, switch_to, write_active, LOCK_WAIT};
 use super::{active_marker, Active, ActiveState, ACTIVE_FILE, NEUTRAL_DIR, RUN_DIR};
 use crate::jobs::SideResults;
@@ -54,6 +54,7 @@ pub enum WatchOutcome {
 }
 
 /// After a login: when the marker says a session is open (and not [`Active::held`]), lift its config's capabilities
+/// (those of the marker that the rules file's rendering of its config still grants)
 /// ([`exec_block::apply_lifted`]), under the marker's lock so that a lift never lands after a revert. When logind already
 /// lists a live session of the uid, the marker records it as seen (as [`watch`] does). A fallback reason in the marker
 /// is logged. Nothing to do without a marker; an unreadable marker is an error, a busy lock a
@@ -94,7 +95,13 @@ pub fn after_login(paths: &SysPaths, runner: &dyn Runner) -> Result<()> {
     if a.held {
         return Ok(());
     }
-    exec_block::apply_lifted(paths, runner, &a.caps).context("lifting the session's capabilities")
+    // Only what the rendered config still grants: a marker a failed reapply could not narrow (or that still names a
+    // removed config) never lifts a capability the settings took away. No rules file: nothing.
+    let granted = read_index(&paths.var_dir)
+        .and_then(|i| i.configs.get(&a.user_config).map(|r| r.caps.clone()))
+        .unwrap_or_default();
+    let caps: Caps = a.caps.intersection(&granted).copied().collect();
+    exec_block::apply_lifted(paths, runner, &caps).context("lifting the session's capabilities")
 }
 
 /// Checks the session of the marker and reverts to neutral when it is over, that is when logind lists no live `user*`
