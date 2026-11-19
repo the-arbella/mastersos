@@ -1013,7 +1013,7 @@ pub fn effective_device_config(m: &Manifest, group: &Group) -> Option<Config> {
 }
 
 /// What the Device knows about the person signing in, without asking the issuer.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeviceFacts<'a> {
     /// The account kind.
     pub kind: Kind,
@@ -1027,6 +1027,7 @@ pub struct DeviceFacts<'a> {
 
 /// One class of the person, from the issuer facts (design §5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ClassFact {
     /// The class id, a lowercase UUID.
     pub id: String,
@@ -1037,6 +1038,7 @@ pub struct ClassFact {
 /// The issuer facts of one login: the userinfo JSON of design §5. Unknown claims are ignored
 /// because the issuer may add some.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct IssuerFacts {
     /// The issuer subject id.
     pub sub: String,
@@ -1061,7 +1063,9 @@ pub struct IssuerFacts {
 pub struct Resolution {
     /// The id of the user config the person gets.
     pub user_config: String,
-    /// The index of the rule that matched; `None` when the fallback applies.
+    /// The index of the rule that matched in the slice passed to [`resolve`]; `None` when the
+    /// fallback applies. For [`UserRules::resolve`] it indexes `UserRules.rules` (renumbered),
+    /// not the manifest's `[[assign]]` list.
     pub rule: Option<usize>,
 }
 
@@ -1071,11 +1075,9 @@ fn cond<T>(c: &Option<Vec<T>>, any: impl Fn(&T) -> bool) -> bool {
 }
 
 fn rule_matches(r: &Assign, d: &DeviceFacts, facts: Option<&IssuerFacts>) -> bool {
-    // `user` is compared with Unicode lowercasing on both sides.
-    let user = d.user.to_lowercase();
     if !(cond(&r.kind, |k| *k == d.kind)
         && r.admin.is_none_or(|a| a == d.admin)
-        && cond(&r.user, |u| u.to_lowercase() == user)
+        && cond(&r.user, |u| u.eq_ignore_ascii_case(d.user))
         && cond(&r.device_group, |g| g == d.device_group))
     {
         return false;
@@ -1102,7 +1104,8 @@ fn rule_matches(r: &Assign, d: &DeviceFacts, facts: Option<&IssuerFacts>) -> boo
 
 /// The user config of a person: the first rule whose every written condition holds, else
 /// `fallback`. Within a list any element matches, so an empty list never matches. `user` is
-/// compared case-insensitively (Unicode lowercase on both sides); ids and `sub` compare exactly.
+/// compared ASCII-case-insensitively (login names are ASCII, and this rules out Unicode
+/// collisions such as the Kelvin sign); ids and `sub` compare exactly.
 /// Fact conditions hold only when `facts` is `Some` and the account is `sso`.
 pub fn resolve(
     rules: &[Assign],
@@ -1124,6 +1127,7 @@ pub fn resolve(
 
 /// What a Device of one Group needs at login (design §4): written root-only by the agent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct UserRules {
     /// The Group of this Device.
@@ -1160,8 +1164,10 @@ impl UserRules {
         })
     }
 
-    /// [`resolve`] over these rules and fallback.
+    /// [`resolve`] over these rules and fallback. `device.device_group` must be this file's
+    /// Group (checked in debug builds); the returned `rule` indexes `self.rules`.
     pub fn resolve(&self, device: &DeviceFacts, facts: Option<&IssuerFacts>) -> Resolution {
+        debug_assert_eq!(device.device_group, self.group);
         resolve(&self.rules, &self.fallback, device, facts)
     }
 }
@@ -2067,6 +2073,16 @@ mod tests {
             Some(0)
         );
         assert_eq!(run(&rules, &sso("bob@s.ac.th", false), None).rule, None);
+    }
+
+    #[test]
+    fn user_condition_ignores_only_ascii_case() {
+        let rules = [assign("user = [\"kim@s.ac.th\"]")];
+        assert_eq!(
+            run(&rules, &sso("\u{212A}im@s.ac.th", false), None).rule,
+            None
+        );
+        assert_eq!(run(&rules, &sso("KIM@s.ac.th", false), None).rule, Some(0));
     }
 
     #[test]
