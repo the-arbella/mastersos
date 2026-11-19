@@ -66,7 +66,11 @@ fi
 gotar=$cache/go${GO_VERSION}.linux-amd64.tar.gz
 if ! echo "$GO_SHA256  $gotar" | sha256sum -c --strict --status - 2>/dev/null; then
 	rm -f "$gotar"
-	curl -fsSL --proto '=https' --tlsv1.2 -o "$gotar.part" "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz"
+	curl -fsSL --proto '=https' --tlsv1.2 -o "$gotar.part" "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" || {
+		rm -f "$gotar.part"
+		echo "authd-oidc-patch-test: could not download go${GO_VERSION}.linux-amd64.tar.gz" >&2
+		exit 1
+	}
 	mv "$gotar.part" "$gotar"
 fi
 echo "$GO_SHA256  $gotar" | sha256sum -c --strict - || {
