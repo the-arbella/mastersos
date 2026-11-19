@@ -3508,6 +3508,12 @@ grep -qxE 'd /run/mastersos 0700 root root -' "$tf" || {
 	bad 78 "$tf should create /run/mastersos at boot, mode 0700"
 	r=1
 }
+for l in 'd /run/mastersos/facts 0700 root root -' 'd /run/mastersos/user-layer 0700 root root -'; do
+	grep -qxF -- "$l" "$tf" || {
+		bad 78 "$tf should have: $l (issuer facts hand-over and user-layer session state)"
+		r=1
+	}
+done
 # The image's list of /usr: without it a vendor package could cover /usr/bin/mastersos-agent (not in any dpkg list);
 # written as the last step of mkosi.finalize, listing itself, and read by the agent at that path
 # shellcheck disable=SC2016 # literal text on purpose

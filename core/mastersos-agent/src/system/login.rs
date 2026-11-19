@@ -289,7 +289,7 @@ pub fn is_system_uid(uid: u32) -> bool {
 }
 
 /// `PAM_USER` 能不能拿去判断（以及交给 `getent`）：非空、不以 `-` 开头、不含控制字符。
-fn user_name_ok(user: &str) -> bool {
+pub(crate) fn user_name_ok(user: &str) -> bool {
     !user.is_empty()
         && user.len() <= 256
         && !user.starts_with('-')
