@@ -1,0 +1,778 @@
+diff --git a/authd-oidc-brokers/internal/broker/broker.go b/authd-oidc-brokers/internal/broker/broker.go
+index ad401ac..c74bac3 100644
+--- a/authd-oidc-brokers/internal/broker/broker.go
++++ b/authd-oidc-brokers/internal/broker/broker.go
+@@ -299,6 +299,8 @@ func loadBrokerConfig(cfg Config, p provider) (Config, error) {
+ 	}
+ 	// MastersOS (0006): the school's domains sit beside broker.conf, never in it (mastersos_domains.go).
+ 	parsedConfig.mastersosDomains = mastersosLoadDomains(cfg.ConfigFile)
++	// MastersOS (0007): so does the school's expected organisation, which turns the issuer profile on (mastersos_profile.go).
++	parsedConfig.mastersosProfile = mastersosLoadProfile(cfg.ConfigFile)
+ 	cfg.userConfig = parsedConfig
+ 	return cfg, nil
+ }
+@@ -864,6 +866,11 @@ func (b *Broker) NewSession(username, lang, mode, providerID string) (sessionID,
+ 	}
+ 	// Append extra scopes from config
+ 	scopes = append(scopes, b.cfg.extraScopes...)
++	// MastersOS (0007): the issuer profile asks for the person's facts and for the school's organisation. A fresh slice:
++	// scopes may still share the package's DefaultScopes array.
++	if extra := mastersosScopes(b.cfg.mastersosProfile); extra != nil {
++		scopes = append(slices.Clone(scopes), extra...)
++	}
+ 	if s.oidcServer != nil {
+ 		s.oauth2Config = oauth2.Config{
+ 			ClientID:     b.oidcCfg.ClientID,
+@@ -3141,6 +3148,12 @@ func (b *Broker) getUserInfo(ctx context.Context, session *session, token *oauth
+ 		err      error
+ 	)
+ 
++	// MastersOS (0007): with the issuer profile, the verified ID token alone names the person (mastersos_profile.go);
++	// no UserInfo endpoint fallback.
++	if b.cfg.mastersosProfile.active && rawIDToken == "" {
++		return info.User{}, mastersosDenial("Authentication failure: no ID token", errors.New("the issuer profile needs an ID token"))
++	}
++
+ 	if rawIDToken == "" {
+ 		claims, err = session.oidcServer.UserInfo(ctx, oauth2.StaticTokenSource(token))
+ 		if err != nil {
+@@ -3155,9 +3168,13 @@ func (b *Broker) getUserInfo(ctx context.Context, session *session, token *oauth
+ 		claims = idToken
+ 	}
+ 
+-	userInfo, err = b.provider.GetUserInfo(claims, isRefresh)
++	if b.cfg.mastersosProfile.active {
++		userInfo, _, err = mastersosUserInfo(b.cfg.mastersosProfile, idToken)
++	} else {
++		userInfo, err = b.provider.GetUserInfo(claims, isRefresh)
++	}
+ 	var missingClaimErr *providerErrors.MissingClaimError
+-	if rawIDToken != "" && errors.As(err, &missingClaimErr) {
++	if !b.cfg.mastersosProfile.active && rawIDToken != "" && errors.As(err, &missingClaimErr) {
+ 		// The ID token is missing a required claim. Try fetching the claims from the UserInfo endpoint.
+ 		log.Infof(context.Background(), "ID token is missing claim %q. Fetching claims from UserInfo endpoint.", missingClaimErr.Claim)
+ 		var userInfoClaims info.Claimer
+diff --git a/authd-oidc-brokers/internal/broker/config.go b/authd-oidc-brokers/internal/broker/config.go
+index 0444556..79ff8b6 100644
+--- a/authd-oidc-brokers/internal/broker/config.go
++++ b/authd-oidc-brokers/internal/broker/config.go
+@@ -149,6 +149,8 @@ type userConfig struct {
+ 
+ 	// MastersOS (0006): the school's domains, from a file outside the broker's configuration (mastersos_domains.go).
+ 	mastersosDomains mastersosDomainFilter
++	// MastersOS (0007): the school's issuer profile, from a file outside the broker's configuration (mastersos_profile.go).
++	mastersosProfile mastersosProfile
+ 
+ 	flows flowsConfig
+ 
+diff --git a/authd-oidc-brokers/internal/broker/config_test.go b/authd-oidc-brokers/internal/broker/config_test.go
+index 20b4f5e..d2d9b3a 100644
+--- a/authd-oidc-brokers/internal/broker/config_test.go
++++ b/authd-oidc-brokers/internal/broker/config_test.go
+@@ -150,7 +150,8 @@ func TestParseConfig(t *testing.T) {
+ 	t.Parallel()
+ 	p := &testutils.MockProvider{}
+ 	// MastersOS (0006): the domain file has its own tests (mastersos_domains_internal_test.go) and stays out of the golden files.
+-	ignoredFields := map[string]struct{}{"provider": {}, "ownerMutex": {}, "mastersosDomains": {}}
++	// MastersOS (0007): so does the issuer profile (mastersos_profile_internal_test.go).
++	ignoredFields := map[string]struct{}{"provider": {}, "ownerMutex": {}, "mastersosDomains": {}, "mastersosProfile": {}}
+ 
+ 	tests := map[string]struct {
+ 		configType        string
+diff --git a/authd-oidc-brokers/internal/broker/mastersos_profile.go b/authd-oidc-brokers/internal/broker/mastersos_profile.go
+new file mode 100644
+index 0000000..2f058de
+--- /dev/null
++++ b/authd-oidc-brokers/internal/broker/mastersos_profile.go
+@@ -0,0 +1,200 @@
++package broker
++
++// MastersOS carried patch (image/patches/authd-oidc/0007-mastersos-issuer-profile.patch): the school's issuer profile.
++//
++// A MastersOS issuer names every person with a login_name claim (lowercase, one '@', admin-controlled, never reused) and
++// says which organisation the person belongs to with an org claim. With the profile on, the broker:
++//   - asks for the scopes mastersos.facts and org:<the school's id>;
++//   - takes the local user name from login_name instead of email, and needs neither email nor email_verified;
++//   - denies, before access is granted (so authd registers nobody), a token whose org is not the school's id or whose
++//     login_name is not of the expected shape.
++// Everything keyed on the user name stays as it is: the requested account must equal the authenticated one (upstream's
++// VerifyUsername, now comparing login_name), patch 0006's allowed domains, admin_users and the login hint.
++//
++// The school's id is in a plain file beside the configuration, mastersos-expected-org in the directory of broker.conf
++// (/etc/authd/oidc/mastersos-expected-org): exactly one lowercase UUID line, plus blank lines and lines starting with
++// '#'. As with patch 0006's domain file, it is not a key of broker.conf.d (a broker without this patch would refuse to
++// start), and the drop-in says the file is required with a comment line (mastersosProfileMarker). The profile is on when
++// the file is there or the marker asks for it. On, with no usable id (file missing, unreadable, too large, or not exactly
++// one lowercase UUID), every login is denied: a broker that was told to use the profile never falls back to email names.
++// With neither file nor marker nothing changes, exactly as upstream. Both are read once, when the broker starts.
++
++import (
++	"bufio"
++	"bytes"
++	"context"
++	"errors"
++	"fmt"
++	"io/fs"
++	"os"
++	"path/filepath"
++	"regexp"
++	"strings"
++
++	providerErrors "github.com/canonical/authd/authd-oidc-brokers/internal/providers/errors"
++	"github.com/canonical/authd/authd-oidc-brokers/internal/providers/info"
++	"github.com/canonical/authd/log"
++	"github.com/coreos/go-oidc/v3/oidc"
++)
++
++// mastersosExpectedOrgFile is the file's name, in the directory of broker.conf.
++const mastersosExpectedOrgFile = "mastersos-expected-org"
++
++// mastersosProfileMarker, a whole line of a broker.conf.d file, says the issuer profile is on.
++const mastersosProfileMarker = "# mastersos: issuer profile required (patch 0007)"
++
++// mastersosMaxExpectedOrgFile caps what is read: the agent writes one id and a comment or two.
++const mastersosMaxExpectedOrgFile = 4096
++
++// mastersosFactsScope asks the issuer for the person's facts at its userinfo endpoint.
++const mastersosFactsScope = "mastersos.facts"
++
++var (
++	mastersosUUID      = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
++	mastersosLoginName = regexp.MustCompile(`^[a-z0-9._-]{1,64}@[a-z0-9.-]{1,253}$`)
++)
++
++// mastersosProfile is the issuer profile; the zero value (no file, no marker) is off. Active with an empty org denies
++// every login.
++type mastersosProfile struct {
++	active bool
++	org    string
++}
++
++// mastersosIDClaims are the profile's claims of a verified ID token.
++type mastersosIDClaims struct {
++	Sub       string
++	Org       string
++	LoginName string
++}
++
++func mastersosExpectedOrgPath(cfgPath string) string {
++	return filepath.Join(filepath.Dir(cfgPath), mastersosExpectedOrgFile)
++}
++
++// mastersosProfileRequired reports whether any file in the drop-in directory carries mastersosProfileMarker. The broker
++// has already parsed every one of them, so a directory or file that cannot be read here counts as requiring the profile.
++func mastersosProfileRequired(dropInDir string) bool {
++	entries, err := os.ReadDir(dropInDir)
++	if errors.Is(err, fs.ErrNotExist) {
++		return false
++	}
++	if err != nil {
++		return true
++	}
++	for _, e := range entries {
++		if e.IsDir() {
++			continue
++		}
++		content, err := os.ReadFile(filepath.Join(dropInDir, e.Name()))
++		if err != nil {
++			return true
++		}
++		for _, line := range strings.Split(string(content), "\n") {
++			if strings.TrimSpace(line) == mastersosProfileMarker {
++				return true
++			}
++		}
++	}
++	return false
++}
++
++// mastersosReadProfile reads the expected-org file. Missing: on (with no id) only when required. There but unusable: on,
++// with no id, marker or not.
++func mastersosReadProfile(path string, required bool) mastersosProfile {
++	const denyAll = "every school sign-in is denied"
++	content, err := os.ReadFile(path)
++	if errors.Is(err, fs.ErrNotExist) {
++		if required {
++			log.Warningf(context.Background(), "%s is missing but the issuer profile is on: %s", path, denyAll)
++		}
++		return mastersosProfile{active: required}
++	}
++	if err == nil && len(content) > mastersosMaxExpectedOrgFile {
++		err = errors.New("too large")
++	}
++	if err != nil {
++		log.Warningf(context.Background(), "could not read %s (%v): %s", path, err, denyAll)
++		return mastersosProfile{active: true}
++	}
++	var ids []string
++	s := bufio.NewScanner(bytes.NewReader(content))
++	for s.Scan() {
++		line := strings.TrimSpace(s.Text())
++		if line != "" && !strings.HasPrefix(line, "#") {
++			ids = append(ids, line)
++		}
++	}
++	if s.Err() != nil || len(ids) != 1 || !mastersosUUID.MatchString(ids[0]) {
++		log.Warningf(context.Background(), "%s does not hold exactly one lowercase UUID: %s", path, denyAll)
++		return mastersosProfile{active: true}
++	}
++	return mastersosProfile{active: true, org: ids[0]}
++}
++
++// mastersosLoadProfile is what the broker reads at start: the marker in broker.conf.d, then the expected-org file.
++func mastersosLoadProfile(cfgPath string) mastersosProfile {
++	return mastersosReadProfile(mastersosExpectedOrgPath(cfgPath), mastersosProfileRequired(GetDropInDir(cfgPath)))
++}
++
++// mastersosScopes are the scopes the profile adds to the authorization request: none when it is off, or when there is
++// no organisation to ask for (every login is then denied after the page, with the broker's own message).
++func mastersosScopes(p mastersosProfile) []string {
++	if !p.active || p.org == "" {
++		return nil
++	}
++	return []string{mastersosFactsScope, "org:" + p.org}
++}
++
++// mastersosLoginNameValid reports whether name has the shape of a login_name: lowercase, exactly one '@', a local part of
++// [a-z0-9._-]{1,64} and a domain of [a-z0-9.-]{1,253}. Such a name has no '/', so it is safe as a file name too.
++func mastersosLoginNameValid(name string) bool {
++	return mastersosLoginName.MatchString(name)
++}
++
++// mastersosUserInfo is used instead of the provider's GetUserInfo when the profile is on, with the verified ID token.
++func mastersosUserInfo(p mastersosProfile, idToken *oidc.IDToken) (info.User, mastersosIDClaims, error) {
++	if idToken == nil {
++		return info.User{}, mastersosIDClaims{}, mastersosDenial("Authentication failure: no ID token", errors.New("the issuer profile needs an ID token"))
++	}
++	return mastersosUserInfoFromClaims(p, idToken)
++}
++
++// mastersosUserInfoFromClaims fills the info.User fields genericprovider.GetUserInfo fills (name, home, provider ID,
++// shell, gecos), with the name from login_name. Every error is for display: the login screen shows it as the refusal.
++func mastersosUserInfoFromClaims(p mastersosProfile, claimer info.Claimer) (info.User, mastersosIDClaims, error) {
++	if p.org == "" {
++		return info.User{}, mastersosIDClaims{}, mastersosDenial("Authentication failure: school sign-in is not set up on this device",
++			errors.New("the issuer profile is on but the expected organisation is unknown"))
++	}
++
++	var claims map[string]interface{}
++	if err := claimer.Claims(&claims); err != nil {
++		return info.User{}, mastersosIDClaims{}, fmt.Errorf("failed to get ID token claims: %v", err)
++	}
++	sub, _ := claims["sub"].(string)
++	org, _ := claims["org"].(string)
++	loginName, _ := claims["login_name"].(string)
++	idClaims := mastersosIDClaims{Sub: sub, Org: org, LoginName: loginName}
++
++	if sub == "" {
++		return info.User{}, idClaims, mastersosDenial("Authentication failure: the ID token has no sub claim", errors.New("missing sub"))
++	}
++	if org != p.org {
++		return info.User{}, idClaims, mastersosDenial("Authentication failure: this account is not a member of this school",
++			fmt.Errorf("org %q is not the expected %q", org, p.org))
++	}
++	if !mastersosLoginNameValid(loginName) {
++		return info.User{}, idClaims, mastersosDenial("Authentication failure: this account has no valid login name",
++			fmt.Errorf("login_name %q does not have the expected shape", loginName))
++	}
++
++	home, _ := claims["home"].(string)
++	shell, _ := claims["shell"].(string)
++	gecos, _ := claims["name"].(string)
++	return info.NewUser(loginName, home, sub, shell, gecos, nil), idClaims, nil
++}
++
++func mastersosDenial(message string, err error) error {
++	return &providerErrors.ForDisplayError{Message: message, Err: err}
++}
+diff --git a/authd-oidc-brokers/internal/broker/mastersos_profile_export_test.go b/authd-oidc-brokers/internal/broker/mastersos_profile_export_test.go
+new file mode 100644
+index 0000000..29cd410
+--- /dev/null
++++ b/authd-oidc-brokers/internal/broker/mastersos_profile_export_test.go
+@@ -0,0 +1,19 @@
++package broker
++
++// MastersOS carried patch (image/patches/authd-oidc/0007-mastersos-issuer-profile.patch): the helpers its broker tests reach.
++
++// SetMastersOSProfile turns on the issuer profile of patch 0007 with this expected organisation ("" denies every login).
++func (cfg *Config) SetMastersOSProfile(org string) {
++	cfg.mastersosProfile = mastersosProfile{active: true, org: org}
++}
++
++// LoadMastersOSProfile reads the profile the way the broker does at start, for a broker.conf at cfgPath.
++func (cfg *Config) LoadMastersOSProfile(cfgPath string) {
++	cfg.mastersosProfile = mastersosLoadProfile(cfgPath)
++}
++
++// MastersOSExpectedOrgFile and MastersOSProfileMarker are the file name and the drop-in marker line.
++const (
++	MastersOSExpectedOrgFile = mastersosExpectedOrgFile
++	MastersOSProfileMarker   = mastersosProfileMarker
++)
+diff --git a/authd-oidc-brokers/internal/broker/mastersos_profile_internal_test.go b/authd-oidc-brokers/internal/broker/mastersos_profile_internal_test.go
+new file mode 100644
+index 0000000..ad1030c
+--- /dev/null
++++ b/authd-oidc-brokers/internal/broker/mastersos_profile_internal_test.go
+@@ -0,0 +1,174 @@
++package broker
++
++// MastersOS carried patch (image/patches/authd-oidc/0007-mastersos-issuer-profile.patch): the expected-org file beside
++// broker.conf, the marker that makes it required, the scopes, and the shape of login_name.
++
++import (
++	"encoding/json"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++
++	"github.com/canonical/authd/authd-oidc-brokers/internal/testutils"
++	"github.com/stretchr/testify/require"
++)
++
++const testOrg = "0193abcd-ef01-7000-8000-00000000a001"
++
++// profileLoad writes broker.conf, a drop-in (with the marker when marked) and, unless org is nil, the expected-org file,
++// then loads them the way the broker does when it starts.
++func profileLoad(t *testing.T, marked bool, org *string) Config {
++	t.Helper()
++	dir := t.TempDir()
++	cfgPath := filepath.Join(dir, "broker.conf")
++	require.NoError(t, os.WriteFile(cfgPath, []byte("[oidc]\n\n[users]\nallowed_users = ALL\n"), 0o600))
++	require.NoError(t, os.Mkdir(cfgPath+".d", 0o700))
++	dropIn := "# Generated by mastersos-agent\n[oidc]\nissuer = https://issuer.example\nclient_id = laptops\n"
++	if marked {
++		dropIn = "# Generated by mastersos-agent\n" + mastersosProfileMarker + "\n[oidc]\nissuer = https://issuer.example\nclient_id = laptops\n"
++	}
++	require.NoError(t, os.WriteFile(filepath.Join(cfgPath+".d", "10-mastersos.conf"), []byte(dropIn), 0o600))
++	if org != nil {
++		require.NoError(t, os.WriteFile(filepath.Join(dir, mastersosExpectedOrgFile), []byte(*org), 0o644))
++	}
++	cfg, err := loadBrokerConfig(Config{ConfigFile: cfgPath}, &testutils.MockProvider{})
++	require.NoError(t, err, "the drop-in with the marker must parse strictly: the marker is a comment")
++	return cfg
++}
++
++func TestMastersOSProfileOffWithoutFileAndMarker(t *testing.T) {
++	cfg := profileLoad(t, false, nil)
++	require.Equal(t, mastersosProfile{}, cfg.mastersosProfile)
++	require.Nil(t, mastersosScopes(cfg.mastersosProfile))
++}
++
++func TestMastersOSProfileReadsTheExpectedOrg(t *testing.T) {
++	for name, content := range map[string]string{
++		"bare":                testOrg,
++		"newline":             testOrg + "\n",
++		"comments and blanks": "# written by mastersos-agent\n\n  " + testOrg + "  \r\n# end\n",
++	} {
++		for _, marked := range []bool{true, false} {
++			cfg := profileLoad(t, marked, &content)
++			require.Equal(t, mastersosProfile{active: true, org: testOrg}, cfg.mastersosProfile, "%s, marked %v", name, marked)
++		}
++	}
++}
++
++// Marker without a usable file, or a file that is there but unusable: on, with no organisation, so everyone is denied.
++func TestMastersOSProfileFailsClosed(t *testing.T) {
++	require.Equal(t, mastersosProfile{active: true}, profileLoad(t, true, nil).mastersosProfile, "marker, no file")
++	for name, content := range map[string]string{
++		"empty":         "",
++		"only comments": "# no school id\n",
++		"upper case":    strings.ToUpper(testOrg),
++		"two ids":       testOrg + "\n" + testOrg + "\n",
++		"trailing text": testOrg + " x",
++		"short":         testOrg[:35],
++		"not hex":       "0193abcg-ef01-7000-8000-00000000a001",
++		"no dashes":     strings.ReplaceAll(testOrg, "-", "") + "1234",
++		"braces":        "{" + testOrg + "}",
++		"too large":     "#" + strings.Repeat(" ", mastersosMaxExpectedOrgFile) + "\n" + testOrg,
++	} {
++		require.Equal(t, mastersosProfile{active: true}, profileLoad(t, true, &content).mastersosProfile, name)
++		require.Equal(t, mastersosProfile{active: true}, profileLoad(t, false, &content).mastersosProfile, "%s without the marker", name)
++	}
++
++	path := filepath.Join(t.TempDir(), mastersosExpectedOrgFile)
++	require.NoError(t, os.Mkdir(path, 0o755))
++	require.Equal(t, mastersosProfile{active: true}, mastersosReadProfile(path, false), "unreadable")
++}
++
++func TestMastersOSProfileMarkerIsAWholeLine(t *testing.T) {
++	dir := t.TempDir()
++	require.False(t, mastersosProfileRequired(filepath.Join(dir, "absent")))
++	require.NoError(t, os.WriteFile(filepath.Join(dir, "10-mastersos.conf"), []byte("# mastersos: issuer profile\n"+mastersosRequiredMarker+"\n"), 0o600))
++	require.False(t, mastersosProfileRequired(dir), "patch 0006's marker is not this one")
++	require.NoError(t, os.WriteFile(filepath.Join(dir, "20-other.conf"), []byte("[oidc]\n  "+mastersosProfileMarker+"  \r\n"), 0o600))
++	require.True(t, mastersosProfileRequired(dir))
++}
++
++func TestMastersOSExpectedOrgFileIsOutsideTheConfig(t *testing.T) {
++	require.Equal(t, "/etc/authd/oidc/mastersos-expected-org", mastersosExpectedOrgPath("/etc/authd/oidc/broker.conf"))
++}
++
++func TestMastersOSScopes(t *testing.T) {
++	require.Equal(t, []string{"mastersos.facts", "org:" + testOrg}, mastersosScopes(mastersosProfile{active: true, org: testOrg}))
++	require.Nil(t, mastersosScopes(mastersosProfile{}))
++	require.Nil(t, mastersosScopes(mastersosProfile{active: true}), "no organisation to ask for: the login is denied anyway")
++}
++
++func TestMastersOSLoginNameShape(t *testing.T) {
++	for name, want := range map[string]bool{
++		"alice@school.example":                      true,
++		"a.b_c-d9@sub.school.example":               true,
++		strings.Repeat("a", 64) + "@school.example": true,
++		"a@" + strings.Repeat("b", 253):             true,
++		strings.Repeat("a", 65) + "@school.example": false,
++		"a@" + strings.Repeat("b", 254):             false,
++		"Alice@school.example":                      false,
++		"alice@School.example":                      false,
++		"a/b@school.example":                        false,
++		"alice@school/example":                      false,
++		"a@b@c":                                     false,
++		"alice":                                     false,
++		"":                                          false,
++		"@school.example":                           false,
++		"alice@":                                    false,
++		"al ice@school.example":                     false,
++		"alice@school.example\n":                    false,
++		"alice@school_example":                      false,
++		"ålice@school.example":                      false,
++		"alice@school.example\x00":                  false,
++	} {
++		require.Equal(t, want, mastersosLoginNameValid(name), "%q", name)
++	}
++}
++
++// claimsMap stands in for a verified ID token.
++type claimsMap map[string]interface{}
++
++func (c claimsMap) Claims(v any) error {
++	b, err := json.Marshal(c)
++	if err != nil {
++		return err
++	}
++	return json.Unmarshal(b, v)
++}
++
++func TestMastersOSUserInfoFromClaims(t *testing.T) {
++	p := mastersosProfile{active: true, org: testOrg}
++	u, c, err := mastersosUserInfoFromClaims(p, claimsMap{
++		"sub": "alice-id", "org": testOrg, "login_name": "alice@school.example",
++		"email": "other@elsewhere.example", "name": "Alice", "home": "/home/alice", "shell": "/bin/sh",
++	})
++	require.NoError(t, err)
++	require.Equal(t, "alice@school.example", u.Name, "login_name, never email")
++	require.Equal(t, "alice-id", u.ProviderID)
++	require.Equal(t, "Alice", u.Gecos)
++	require.Equal(t, "/home/alice", u.Home)
++	require.Equal(t, "/bin/sh", u.Shell)
++	require.Equal(t, mastersosIDClaims{Sub: "alice-id", Org: testOrg, LoginName: "alice@school.example"}, c)
++
++	u, _, err = mastersosUserInfoFromClaims(p, claimsMap{"sub": "alice-id", "org": testOrg, "login_name": "alice@school.example"})
++	require.NoError(t, err)
++	require.Equal(t, "alice@school.example", u.Home, "the broker puts it under its home base directory, as for email names")
++	require.Equal(t, "/usr/bin/bash", u.Shell)
++
++	for name, tc := range map[string]struct {
++		p      mastersosProfile
++		claims claimsMap
++		want   string
++	}{
++		"no expected org": {mastersosProfile{active: true}, claimsMap{"sub": "s", "org": testOrg, "login_name": "a@b"}, "not set up"},
++		"other org":       {p, claimsMap{"sub": "s", "org": "x", "login_name": "a@b"}, "not a member of this school"},
++		"no org":          {p, claimsMap{"sub": "s", "login_name": "a@b"}, "not a member of this school"},
++		"no sub":          {p, claimsMap{"org": testOrg, "login_name": "a@b"}, "sub"},
++		"bad login_name":  {p, claimsMap{"sub": "s", "org": testOrg, "login_name": "A@b"}, "login name"},
++		"no login_name":   {p, claimsMap{"sub": "s", "org": testOrg}, "login name"},
++	} {
++		_, _, err := mastersosUserInfoFromClaims(tc.p, tc.claims)
++		require.ErrorContains(t, err, tc.want, name)
++	}
++}
+diff --git a/authd-oidc-brokers/internal/broker/mastersos_profile_test.go b/authd-oidc-brokers/internal/broker/mastersos_profile_test.go
+new file mode 100644
+index 0000000..c18d643
+--- /dev/null
++++ b/authd-oidc-brokers/internal/broker/mastersos_profile_test.go
+@@ -0,0 +1,280 @@
++package broker_test
++
++// MastersOS carried patch (image/patches/authd-oidc/0007-mastersos-issuer-profile.patch): with the school's issuer
++// profile on, the local user name is the ID token's login_name, the request asks for the school's organisation and the
++// facts scope, and an account of another organisation is denied before access is granted, so authd registers nobody.
++// Not parallel: these tests set the process environment and share the card's fixed ports.
++
++import (
++	"net/http"
++	"net/url"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++
++	"github.com/canonical/authd/authd-oidc-brokers/internal/broker"
++	"github.com/canonical/authd/authd-oidc-brokers/internal/broker/authmodes"
++	"github.com/canonical/authd/authd-oidc-brokers/internal/testutils"
++	"github.com/stretchr/testify/require"
++)
++
++const (
++	mastersosOrg      = "0193abcd-ef01-7000-8000-00000000a001"
++	mastersosOtherOrg = "0193abcd-ef01-7000-8000-00000000a002"
++)
++
++// profileBroker is a card-only broker whose provider issues one ID token with these claims and no email: the issuer
++// profile needs neither email nor email_verified. setup turns the profile on (or leaves it off).
++func profileBroker(t *testing.T, claims map[string]interface{}, setup func(cfg *brokerForTestConfig)) *broker.Broker {
++	t.Helper()
++	cfg := &brokerForTestConfig{
++		Config:                 broker.Config{DataDir: t.TempDir()},
++		allUsersAllowed:        true,
++		supportsFetchingGroups: true,
++		listenAddress:          cardOnlyAddress,
++		customHandlers: map[string]testutils.EndpointHandler{
++			"/token": testutils.TokenHandler("http://"+cardOnlyAddress, &testutils.TokenHandlerOptions{
++				IDTokenClaims: []map[string]interface{}{claims},
++				DeleteClaims:  []string{"email", "email_verified"},
++			}),
++		},
++	}
++	if setup != nil {
++		setup(cfg)
++	}
++	return newBrokerForTests(t, cfg)
++}
++
++// schoolClaims are the claims of a member of mastersosOrg.
++func schoolClaims(loginName string) map[string]interface{} {
++	return map[string]interface{}{"sub": "alice-id", "org": mastersosOrg, "login_name": loginName}
++}
++
++func withProfile(org string) func(cfg *brokerForTestConfig) {
++	return func(cfg *brokerForTestConfig) { cfg.SetMastersOSProfile(org) }
++}
++
++// cardURL selects the web mode and returns the school's page the card would open, without signing in.
++func cardURL(t *testing.T, b *broker.Broker, sessionID string) *url.URL {
++	t.Helper()
++	requireAuthModes(t, b, sessionID, authmodes.DeviceQr)
++	require.NoError(t, b.SetAvailableMode(sessionID, authmodes.DeviceQr))
++	layout, err := b.SelectAuthenticationMode(sessionID, authmodes.DeviceQr)
++	require.NoError(t, err, "selecting the web mode should start the sign-in")
++	u, err := url.Parse(layout["content"])
++	require.NoError(t, err)
++	return u
++}
++
++// finishOnCard plays the browser coming back from the page at u, and returns what the broker answers.
++func finishOnCard(t *testing.T, b *broker.Broker, sessionID string, u *url.URL) (string, string) {
++	t.Helper()
++	res, err := http.Get("http://127.0.0.1:48123/callback?code=c&state=" + u.Query().Get("state"))
++	require.NoError(t, err)
++	require.NoError(t, res.Body.Close())
++	require.Equal(t, http.StatusOK, res.StatusCode)
++	access, data, err := b.IsAuthenticated(sessionID, "{}")
++	require.NoError(t, err)
++	return access, data
++}
++
++// requireDeniedBeforeGrant checks a refusal that leaves authd nothing to register and no token behind.
++func requireDeniedBeforeGrant(t *testing.T, b *broker.Broker, sessionID, access, data string) {
++	t.Helper()
++	require.Equal(t, broker.AuthDenied, access, "data: %s", data)
++	require.NotContains(t, data, "userinfo", "a denied login hands authd no user to register")
++	_, statErr := os.Stat(b.TokenPathForSession(sessionID))
++	require.ErrorIs(t, statErr, os.ErrNotExist, "a refused login must not leave a token")
++}
++
++func scopesOf(u *url.URL) []string {
++	return strings.Fields(u.Query().Get("scope"))
++}
++
++// Without the profile nothing changes: the name is the email, and the request asks for nothing of the school's.
++func TestMastersOSNoProfileKeepsEmailNames(t *testing.T) {
++	t.Setenv("MASTERSOS_AUTH_CODE", "1")
++	b := newBrokerForTests(t, &brokerForTestConfig{
++		Config:                 broker.Config{DataDir: t.TempDir()},
++		allUsersAllowed:        true,
++		supportsFetchingGroups: true,
++		listenAddress:          cardOnlyAddress,
++		customHandlers: map[string]testutils.EndpointHandler{
++			"/token": testutils.TokenHandler("http://"+cardOnlyAddress, &testutils.TokenHandlerOptions{
++				IDTokenClaims: []map[string]interface{}{{"sub": "user-id", "login_name": "alice@school.example", "org": mastersosOrg}},
++			}),
++		},
++	})
++
++	sessionID, _ := newSessionForTests(t, b, "test-user@email.com", "")
++	u := cardURL(t, b, sessionID)
++	for _, s := range scopesOf(u) {
++		require.NotEqual(t, "mastersos.facts", s)
++		require.False(t, strings.HasPrefix(s, "org:"), "scope %q", s)
++	}
++	access, data := finishOnCard(t, b, sessionID, u)
++	require.Equal(t, broker.AuthGranted, access, "data: %s", data)
++	require.Contains(t, data, "test-user@email.com")
++	require.NotContains(t, data, "alice@school.example", "login_name means nothing without the profile")
++}
++
++// The profile takes the user name from login_name, with no email and no email_verified in the token. The domain filter
++// of patch 0006 checks that name.
++func TestMastersOSLoginNameIsTheUserName(t *testing.T) {
++	t.Setenv("MASTERSOS_AUTH_CODE", "1")
++	b := profileBroker(t, schoolClaims("alice@school.example"), func(cfg *brokerForTestConfig) {
++		cfg.SetMastersOSProfile(mastersosOrg)
++		cfg.SetMastersOSAllowedDomains([]string{"school.example"})
++	})
++
++	sessionID, _ := newSessionForTests(t, b, "alice@school.example", "")
++	access, data := finishOnCard(t, b, sessionID, cardURL(t, b, sessionID))
++	require.Equal(t, broker.AuthGranted, access, "data: %s", data)
++	require.Contains(t, data, `"name":"alice@school.example"`)
++	require.Contains(t, data, "alice-id")
++}
++
++// The request asks for the facts and for the school's organisation; the login hint stays the requested name.
++func TestMastersOSScopesCarryTheOrganisation(t *testing.T) {
++	t.Setenv("MASTERSOS_AUTH_CODE", "1")
++	b := profileBroker(t, schoolClaims("alice@school.example"), withProfile(mastersosOrg))
++
++	sessionID, _ := newSessionForTests(t, b, "alice@school.example", "")
++	u := cardURL(t, b, sessionID)
++	scopes := scopesOf(u)
++	require.Contains(t, scopes, "openid")
++	require.Contains(t, scopes, "mastersos.facts")
++	require.Contains(t, scopes, "org:"+mastersosOrg)
++	require.Equal(t, "alice@school.example", u.Query().Get("login_hint"))
++	b.CancelIsAuthenticated(sessionID)
++}
++
++func TestMastersOSOtherOrganisationIsDeniedBeforeGrant(t *testing.T) {
++	t.Setenv("MASTERSOS_AUTH_CODE", "1")
++	for name, org := range map[string]interface{}{
++		"another organisation": mastersosOtherOrg,
++		"no org claim":         nil,
++		"org not a string":     42,
++		"org in another case":  strings.ToUpper(mastersosOrg),
++	} {
++		t.Run(name, func(t *testing.T) {
++			claims := schoolClaims("alice@school.example")
++			if org == nil {
++				delete(claims, "org")
++			} else {
++				claims["org"] = org
++			}
++			b := profileBroker(t, claims, withProfile(mastersosOrg))
++
++			sessionID, _ := newSessionForTests(t, b, "alice@school.example", "")
++			access, data := finishOnCard(t, b, sessionID, cardURL(t, b, sessionID))
++			requireDeniedBeforeGrant(t, b, sessionID, access, data)
++			require.Contains(t, data, "not a member of this school")
++		})
++	}
++}
++
++// The drop-in says the profile is on, and the expected organisation cannot be known: everyone is denied, and nobody
++// falls back to email names.
++func TestMastersOSMissingExpectedOrgDeniesEveryone(t *testing.T) {
++	t.Setenv("MASTERSOS_AUTH_CODE", "1")
++	for name, write := range map[string]func(t *testing.T, path string){
++		"file absent":        func(*testing.T, string) {},
++		"file unreadable":    func(t *testing.T, path string) { require.NoError(t, os.Mkdir(path, 0o755)) },
++		"file empty":         writeFile(""),
++		"only comments":      writeFile("# written by mastersos-agent\n# no school id\n\n"),
++		"not a uuid":         writeFile("school\n"),
++		"upper case uuid":    writeFile(strings.ToUpper(mastersosOrg) + "\n"),
++		"two uuids":          writeFile(mastersosOrg + "\n" + mastersosOtherOrg + "\n"),
++		"uuid with trailing": writeFile(mastersosOrg + " x\n"),
++		"too large":          writeFile("# " + strings.Repeat("x", 4096) + "\n" + mastersosOrg + "\n"),
++	} {
++		t.Run(name, func(t *testing.T) {
++			dir := t.TempDir()
++			cfgPath := filepath.Join(dir, "broker.conf")
++			require.NoError(t, os.Mkdir(cfgPath+".d", 0o700))
++			require.NoError(t, os.WriteFile(filepath.Join(cfgPath+".d", "10-mastersos.conf"),
++				[]byte("# Generated by mastersos-agent\n"+broker.MastersOSProfileMarker+"\n[users]\nallowed_users = ALL\n"), 0o600))
++			write(t, filepath.Join(dir, broker.MastersOSExpectedOrgFile))
++
++			b := profileBroker(t, schoolClaims("alice@school.example"), func(cfg *brokerForTestConfig) {
++				cfg.LoadMastersOSProfile(cfgPath)
++			})
++			sessionID, _ := newSessionForTests(t, b, "alice@school.example", "")
++			access, data := finishOnCard(t, b, sessionID, cardURL(t, b, sessionID))
++			requireDeniedBeforeGrant(t, b, sessionID, access, data)
++		})
++	}
++
++	// The same layout with a good file signs in: the denials above come from the file, not from the setup.
++	t.Run("good file", func(t *testing.T) {
++		dir := t.TempDir()
++		cfgPath := filepath.Join(dir, "broker.conf")
++		require.NoError(t, os.Mkdir(cfgPath+".d", 0o700))
++		require.NoError(t, os.WriteFile(filepath.Join(cfgPath+".d", "10-mastersos.conf"),
++			[]byte(broker.MastersOSProfileMarker+"\n"), 0o600))
++		writeFile("# written by mastersos-agent\n"+mastersosOrg+"\n")(t, filepath.Join(dir, broker.MastersOSExpectedOrgFile))
++
++		b := profileBroker(t, schoolClaims("alice@school.example"), func(cfg *brokerForTestConfig) {
++			cfg.LoadMastersOSProfile(cfgPath)
++		})
++		sessionID, _ := newSessionForTests(t, b, "alice@school.example", "")
++		access, data := finishOnCard(t, b, sessionID, cardURL(t, b, sessionID))
++		require.Equal(t, broker.AuthGranted, access, "data: %s", data)
++		require.Contains(t, data, `"name":"alice@school.example"`)
++	})
++}
++
++func writeFile(content string) func(t *testing.T, path string) {
++	return func(t *testing.T, path string) {
++		t.Helper()
++		require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
++	}
++}
++
++// A login_name of the wrong shape never becomes a user name (nor, later, a file name).
++func TestMastersOSBadLoginNameIsDenied(t *testing.T) {
++	t.Setenv("MASTERSOS_AUTH_CODE", "1")
++	for name, loginName := range map[string]interface{}{
++		"upper case":          "Alice@school.example",
++		"slash":               "a/b@school.example",
++		"two at signs":        "a@b@c",
++		"empty":               "",
++		"local part too long": strings.Repeat("a", 65) + "@school.example",
++		"no at sign":          "alice",
++		"empty domain":        "alice@",
++		"empty local part":    "@school.example",
++		"not a string":        42,
++		"missing":             nil,
++	} {
++		t.Run(name, func(t *testing.T) {
++			claims := schoolClaims("")
++			if loginName == nil {
++				delete(claims, "login_name")
++			} else {
++				claims["login_name"] = loginName
++			}
++			b := profileBroker(t, claims, withProfile(mastersosOrg))
++
++			sessionID, _ := newSessionForTests(t, b, "alice@school.example", "")
++			access, data := finishOnCard(t, b, sessionID, cardURL(t, b, sessionID))
++			requireDeniedBeforeGrant(t, b, sessionID, access, data)
++			require.Contains(t, data, "no valid login name", "the shape refuses it, before the requested name is compared")
++		})
++	}
++}
++
++// The school's page signed in another person than the one picked on the greeter: upstream's refusal, which the login
++// screen's refusalKind matches, comparing login_name.
++func TestMastersOSWrongAccountComparesLoginName(t *testing.T) {
++	t.Setenv("MASTERSOS_AUTH_CODE", "1")
++	b := profileBroker(t, schoolClaims("alice@school.example"), withProfile(mastersosOrg))
++
++	sessionID, _ := newSessionForTests(t, b, "bob@school.example", "")
++	access, data := finishOnCard(t, b, sessionID, cardURL(t, b, sessionID))
++	requireDeniedBeforeGrant(t, b, sessionID, access, data)
++	require.Contains(t, data, "does not match the authenticated user", "the login screen matches this text for its refusal")
++	require.Contains(t, data, "bob@school.example")
++	require.Contains(t, data, "alice@school.example")
++}

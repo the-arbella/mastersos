@@ -17,3 +17,9 @@ suites:
     cpus: 2
     timeout: 10m
     paths: [image/tests/card-policy-chrome-test.*, image/tests/fixtures/card-policy/**]
+  broker:
+    run: bash image/tests/authd-oidc-patch-test.sh
+    mem: 2G
+    cpus: 4
+    timeout: 20m
+    paths: [image/patches/authd-oidc/**, image/tests/authd-oidc-patch-test.sh, image/mkosi.build]
