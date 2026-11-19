@@ -1457,7 +1457,7 @@ fn deb_kiosk_apps_from_config_and_public() {
             },
         ),
     ]);
-    let got = deb_kiosk_apps(&g, &public);
+    let got = deb_kiosk_apps(&g, &public, false);
     assert_eq!(got.keys().collect::<Vec<_>>(), vec!["testnav", "waiting"]);
     let tn = &got["testnav"];
     assert_eq!(tn.name, "TestNav");
@@ -1488,7 +1488,14 @@ fn legacy_browser_has_no_deb_kiosk_account() {
     merged_exec(p, "/opt/testnav/bin/testnav");
     let legacy = grp(&deb_kiosk("testnav", "TestNav", ""));
     assert!(legacy.legacy_browser);
-    assert!(deb_kiosk_apps(&legacy, &BTreeMap::new()).is_empty());
+    assert!(deb_kiosk_apps(&legacy, &BTreeMap::new(), false).is_empty());
+    // format 3 lists them in every mode (user layer design §4.6)
+    assert_eq!(
+        deb_kiosk_apps(&legacy, &BTreeMap::new(), true)
+            .keys()
+            .collect::<Vec<_>>(),
+        ["testnav"]
+    );
 
     // fresh: nothing made
     let r = FakeRunner::new();

@@ -659,6 +659,7 @@ mod tests {
             group: m.groups[0].clone(),
             config,
             escrow_recipients: vec![],
+            user_layer: false,
         })));
         let cx = Arc::new(JobCtx {
             fetcher: crate::fetch::Fetcher::from_seed(&seed()),

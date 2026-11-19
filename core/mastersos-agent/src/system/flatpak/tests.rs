@@ -32,6 +32,7 @@ fn cur(kind: Kind, list: &[&str]) -> CurrentGroup {
         group: group(),
         config,
         escrow_recipients: vec![],
+        user_layer: false,
     }
 }
 
@@ -93,6 +94,26 @@ fn legacy_browser_skips_flatpak() {
     );
     assert!(it.ok, "{it:?}");
     assert_eq!(it.detail.as_deref(), Some("browser mode: not installing"));
+}
+
+/// User layer design §4.6: with a format 3 bundle the Device installs the union whatever its mode, even the legacy
+/// browser mode that installs nothing in format 1/2.
+#[test]
+fn format3_installs_union_regardless_of_mode() {
+    for kind in [Kind::LegacyBrowser, Kind::Learning, Kind::Full] {
+        let root = tmp_root();
+        let p = paths(root.path());
+        let r = FakeRunner::new();
+        let mut c = cur(kind, &[LO]);
+        c.user_layer = true;
+        let (out, _) = rec(&r, &p, Some(&c));
+        assert!(
+            r.calls().contains(&format!("{INSTALL} {LO}")),
+            "{:?}",
+            r.calls()
+        );
+        assert_eq!(find(&out, LO), &ok(&format!("flatpak:{LO}")));
+    }
 }
 
 #[test]

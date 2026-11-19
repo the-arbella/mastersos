@@ -638,6 +638,7 @@ mod job {
                 group: m.groups.remove(0),
                 config,
                 escrow_recipients: vec![],
+                user_layer: false,
             })));
         }
 

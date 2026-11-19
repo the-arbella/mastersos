@@ -482,6 +482,17 @@ fn method_name(m: LoginMethod) -> &'static str {
 /// 锁定应用的账号名单来自配置的 `apps.kiosk` 与 `kiosk = true` 的 `apps.deb`（`kiosk-<id>` 与应用的 `name`，按账号名排序）；id 不合规的跳过
 /// （清单的校验本该挡住；跳过只会少放行）。锁定时名单照写（`decide` 照样拒）。
 pub fn policy_from_bundle(school: &School, config: &Config, lock: Option<&Lock>) -> LoginPolicy {
+    policy_from_bundle_in(school, config, lock, false)
+}
+
+/// [`policy_from_bundle`] for settings that are format 3 (`user_layer`) or not: format 3 lists the `kiosk = true` .deb
+/// apps in every mode (user layer design §4.6).
+fn policy_from_bundle_in(
+    school: &School,
+    config: &Config,
+    lock: Option<&Lock>,
+    user_layer: bool,
+) -> LoginPolicy {
     // Guest sign-in is always on; `decide` still denies it on a locked device.
     let mut methods: Vec<String> = vec![method_name(LoginMethod::Guest).into()];
     for m in &config.login_methods {
@@ -506,17 +517,16 @@ pub fn policy_from_bundle(school: &School, config: &Config, lock: Option<&Lock>)
         locked: lock.is_some(),
         lock_message: lock.map(|l| l.message.clone()),
         from_bundle: true,
-        kiosk_users: kiosk_users(config),
+        kiosk_users: kiosk_users(config, user_layer),
         it_account: super::it_account::wanted(config.it_account.as_ref()).is_some(),
         it_account_uid: None,
         local_users_admin: config.local_users_admin,
-        // set by `bundle_policy`, which sees the whole settings
-        user_layer: false,
+        user_layer,
         mastersos_claims: school.oidc.as_ref().is_some_and(|o| o.mastersos_claims),
     }
 }
 
-fn kiosk_users(config: &Config) -> Vec<KioskUser> {
+fn kiosk_users(config: &Config, user_layer: bool) -> Vec<KioskUser> {
     let mut out: Vec<KioskUser> = config
         .apps
         .kiosk
@@ -533,7 +543,7 @@ fn kiosk_users(config: &Config) -> Vec<KioskUser> {
                 .filter(|(id, a)| {
                     a.kiosk
                         && !config.apps.kiosk.contains_key(*id)
-                        && super::desktop::profile(config).flatpaks
+                        && (user_layer || super::desktop::profile(config).flatpaks)
                 })
                 .map(|(id, a)| (id, &a.name)),
         )
@@ -901,9 +911,8 @@ pub fn step() -> Step {
 
 /// [`policy_from_bundle`] with the device's own part: the recorded owner uid of `itadmin` (the `lock` step writes the same).
 pub fn bundle_policy(ctx: &ApplyContext, env: &Env) -> LoginPolicy {
-    let mut p = policy_from_bundle(ctx.school, ctx.config, ctx.lock);
+    let mut p = policy_from_bundle_in(ctx.school, ctx.config, ctx.lock, ctx.user_layer().is_some());
     p.it_account_uid = owner_uid(env, p.it_account);
-    p.user_layer = ctx.user_layer().is_some();
     p
 }
 
@@ -948,6 +957,25 @@ pub fn set_it_account_uid(paths: &SysPaths, uid: u32) -> Result<()> {
     Ok(())
 }
 
+/// The `chrome_policy` the open card takes its `URLBlocklist` from: format 1/2 the Config's; format 3 the user config a
+/// `kind = "guest"` login resolves to on this Device (user layer design §3), so the card opens no site the Device's guest
+/// could not. Fails closed: a guest config that cannot be resolved blocks everything (`"*"`), which keeps the card listed.
+fn card_policy_source(ctx: &ApplyContext) -> toml::Table {
+    let Some(m) = ctx.user_layer() else {
+        return ctx.config.chrome_policy.clone();
+    };
+    match mastersos_bundle::guest_user_config(m, &ctx.group.id)
+        .and_then(|id| mastersos_bundle::user_config(m, &id))
+    {
+        Some(u) => u.chrome_policy,
+        None => {
+            let mut t = toml::Table::new();
+            t.insert("URLBlocklist".into(), toml::Value::Array(vec!["*".into()]));
+            t
+        }
+    }
+}
+
 fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
     let mut problems = Vec::new();
     for d in &ctx.school.allowed_domains {
@@ -956,11 +984,12 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
         }
     }
     let policy = bundle_policy(ctx, env);
+    let blocks = card_policy_source(ctx);
     apply(
         env,
         &policy,
         ctx.school.oidc.as_ref(),
-        Some(&ctx.config.chrome_policy),
+        Some(&blocks),
         problems,
     )
 }
@@ -3578,6 +3607,57 @@ client_id = "laptops"
             serde_json::json!(["*", "chrome://*", "tiktok.com"])
         );
         assert_eq!(v["URLAllowlist"][0], "https://*");
+    }
+
+    /// User layer design §3: format 3 takes the card's blocks from the guest's user config, not the device Config
+    /// (which has no `chrome_policy` there); format 1/2 keeps the Config's.
+    #[test]
+    fn card_blocks_come_from_guest_config() {
+        let m = mastersos_bundle::Manifest::parse(&mastersos_bundle::testutil::spec_example_v3())
+            .unwrap();
+        let ident = crate::system::tests::test_ident();
+        let sel = mastersos_bundle::select(&m, &ident, None);
+        assert!(
+            sel.config.chrome_policy.is_empty(),
+            "the device layer has none"
+        );
+        let root = tmp_root();
+        put_decl_src(root.path(), "[authd]\nname = OIDC\n");
+        let p = paths(root.path());
+        let flag = AtomicBool::new(false);
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ApplyContext {
+            seed: &crate::system::tests::test_seed(),
+            school: &m.school,
+            group: sel.group,
+            config: &sel.config,
+            lock: None,
+            bundle_dir: dir.path(),
+            phase: Phase::Boot,
+            superseded: &flag,
+            quiet: &AtomicBool::new(false),
+            device: None,
+            ident: &ident,
+            manifest: Some(&m),
+        };
+        let r = FakeRunner::new();
+        let mut sys = SysState::default();
+        let out = run(
+            &ctx,
+            &mut Env {
+                paths: &p,
+                runner: &r,
+                sys: &mut sys,
+            },
+        );
+        assert_eq!(out, vec![ok(ITEM)]);
+        let v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(card_policy(root.path())).unwrap()).unwrap();
+        // `primary` (the guest's config) inherits `user_defaults`
+        assert_eq!(
+            v["URLBlocklist"],
+            serde_json::json!(["*", "chrome://*", "tiktok.com"])
+        );
     }
 
     #[test]

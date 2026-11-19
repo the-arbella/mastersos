@@ -220,7 +220,8 @@ pub(crate) fn write_saved(work: &std::os::fd::OwnedFd, s: &Saved) -> Result<()> 
 /// without the Config's apps (the legacy browser mode, deb-apps design §4.1; the same switch as the Flatpaks,
 /// [`crate::system::desktop::Profile::flatpaks`]) no app: the round installs nothing and removes what is installed.
 pub fn wanted_from(cur: &CurrentGroup, state_dir: &Path) -> Wanted {
-    let shown = crate::system::desktop::profile(&cur.config).flatpaks;
+    // Format 3 installs the union of the user configs' apps whatever the mode (user layer design §4.6)
+    let shown = cur.user_layer || crate::system::desktop::profile(&cur.config).flatpaks;
     Wanted {
         apps: if shown {
             cur.config.apps.deb.clone()

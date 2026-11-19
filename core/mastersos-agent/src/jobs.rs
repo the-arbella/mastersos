@@ -43,6 +43,9 @@ pub struct CurrentGroup {
     /// The bundle's `[school].escrow_recipients` (plan 6 Task 13): the LUKS job seals the
     /// recovery key to them. Empty when the bundle names none.
     pub escrow_recipients: Vec<String>,
+    /// The settings are format 3 (they have a user layer): the Device installs the union of the reachable user
+    /// configs' apps whatever its mode, and `config` already carries that union.
+    pub user_layer: bool,
 }
 
 pub struct JobCtx {
@@ -619,6 +622,7 @@ mod tests {
             group: m.groups.remove(0),
             config: mastersos_bundle::effective_config(&m, &m.configs[0]),
             escrow_recipients: vec![],
+            user_layer: false,
         })));
         gate.notify_one();
         tokio::time::sleep(Duration::from_secs(1)).await;

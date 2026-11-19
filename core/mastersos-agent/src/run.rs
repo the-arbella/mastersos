@@ -911,6 +911,7 @@ impl Agent {
                 group: sel.group.clone(),
                 config: sel.config,
                 escrow_recipients: m.school.escrow_recipients.clone(),
+                user_layer: m.user_layer.is_some(),
             })
         });
         self.current.send_if_modified(|cur| {

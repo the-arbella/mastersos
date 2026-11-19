@@ -803,3 +803,28 @@ fn switch_invalidates_the_old_session_db() {
     switch_to(&p.root, &p.public_dir, &p.var_dir, &index.neutral, None).unwrap();
     assert_switched_to(&p, NEUTRAL_DIR);
 }
+
+/// The managed policy directory is read whole by Chrome: after any switch it holds only `mastersos.json`; the staging
+/// copies stay beside it in `.mastersos-staging/`.
+#[test]
+fn card_policy_dir_has_no_staging_files() {
+    let (_root, p, index) = rendered();
+    let teacher = rendered_of(&index, "teacher");
+    for r in [&teacher, &index.neutral] {
+        switch_to(&p.root, &p.public_dir, &p.var_dir, r, None).unwrap();
+        let managed = p.root.join(crate::system::chrome_policy::POLICY_DIR);
+        let mut names: Vec<String> = fs::read_dir(&managed)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["mastersos.json"], "{}", r.dir);
+    }
+    assert!(p
+        .root
+        .join(crate::system::chrome_policy::POLICY_DIR)
+        .parent()
+        .unwrap()
+        .join(".mastersos-staging")
+        .is_dir());
+}
