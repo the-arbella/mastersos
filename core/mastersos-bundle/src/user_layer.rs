@@ -781,6 +781,227 @@ fn lint_user_apps(
     lint_app_formats(base, &apps.web, &apps.flatpak, out);
 }
 
+/// What one session gets: a user config with `[user_defaults]` laid under it (format 3), or the
+/// profile a format 1/2 Config implies ([`UserConfig::implied`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UserConfig {
+    /// The user config's id (a format 1/2 Config's id).
+    pub id: String,
+    /// The name shown in the console.
+    pub name: String,
+    /// The starting point of the capabilities.
+    pub preset: Preset,
+    /// The effective capabilities: preset plus `allow` minus `deny`.
+    pub caps: Caps,
+    /// What happens to the home folder.
+    pub home: HomeMode,
+    /// Web apps.
+    pub web: Vec<WebApp>,
+    /// Flatpak app ids shown in the Dash.
+    pub flatpak: Vec<String>,
+    /// Non-kiosk .deb apps shown in the Dash, keyed by app id.
+    pub deb: BTreeMap<String, DebApp>,
+    /// Chrome managed policies.
+    pub chrome_policy: toml::Table,
+    /// Scripts run as the person at sign-in.
+    pub login_scripts: Vec<Script>,
+    /// Set only for the profile implied by a legacy `mode = "browser"` Group.
+    pub legacy_browser: bool,
+}
+
+/// Effective capabilities: the preset's (`learning` none, `full` all), plus `allow`, minus
+/// `deny` (deny wins).
+pub fn effective_caps(preset: Preset, allow: &[Capability], deny: &[Capability]) -> Caps {
+    let mut caps: Caps = match preset {
+        Preset::Learning => Caps::new(),
+        Preset::Full => ALL_CAPS.into_iter().collect(),
+    };
+    caps.extend(allow.iter().copied());
+    for d in deny {
+        caps.remove(d);
+    }
+    caps
+}
+
+/// The home mode a preset gives when nobody writes one.
+fn preset_home(preset: Preset) -> HomeMode {
+    match preset {
+        Preset::Learning => HomeMode::Tidy,
+        Preset::Full => HomeMode::Keep,
+    }
+}
+
+/// A capability list merged like any collection: the defaults' entries minus `drop`, then the
+/// config's own, each capability once.
+fn merge_caps(
+    inherited: &[Capability],
+    own: &[Capability],
+    drop: &[Capability],
+) -> Vec<Capability> {
+    let drop: Vec<String> = drop.iter().map(|c| c.as_str().to_owned()).collect();
+    let merged = merge_list(inherited, own, &drop, |c| c.as_str());
+    let mut seen = BTreeSet::new();
+    merged.into_iter().filter(|c| seen.insert(*c)).collect()
+}
+
+/// The user config `c` laid over `[user_defaults]`: the same rules as [`effective_config`]
+/// (single values replace; entries add, the same name replaces; `drop` removes), `allow` and
+/// `deny` being collections too. `home` is the config's own, else the defaults', else the
+/// preset's.
+pub fn effective_user_config(u: &UserLayer, c: &UserConfigLayer) -> UserConfig {
+    let d = &u.defaults;
+    let drop = &c.drop;
+    let preset = c.preset.or(d.preset).unwrap_or_default();
+    let allow = merge_caps(&d.allow, &c.allow, &drop.allow);
+    let deny = merge_caps(&d.deny, &c.deny, &drop.deny);
+    UserConfig {
+        id: c.id.clone(),
+        name: c.name.clone(),
+        preset,
+        caps: effective_caps(preset, &allow, &deny),
+        home: c.home.or(d.home).unwrap_or_else(|| preset_home(preset)),
+        web: merge_list(&d.apps.web, &c.apps.web, &drop.apps.web, |a| {
+            a.name.as_str()
+        }),
+        flatpak: merge_list(&d.apps.flatpak, &c.apps.flatpak, &drop.apps.flatpak, |id| {
+            id.as_str()
+        }),
+        deb: merge_map(&d.apps.deb, &c.apps.deb, &drop.apps.deb),
+        chrome_policy: merge_map(&d.chrome_policy, &c.chrome_policy, &drop.chrome_policy),
+        login_scripts: merge_list(&d.scripts, &c.scripts, &drop.scripts, |s| s.path.as_str()),
+        legacy_browser: false,
+    }
+}
+
+impl UserConfig {
+    /// The profile a format 1/2 Config implies: `interface = full` is preset `full` with every
+    /// capability, `learning` is preset `learning` with none; the Config's web apps, Chrome
+    /// policy and login scripts, and its Flatpaks and non-kiosk .deb apps unless it is the
+    /// legacy browser mode.
+    pub fn implied(config: &Config) -> UserConfig {
+        let preset = match config.interface {
+            Interface::Full => Preset::Full,
+            Interface::Learning => Preset::Learning,
+        };
+        let installs = !config.legacy_browser;
+        UserConfig {
+            id: config.id.clone(),
+            name: config.name.clone(),
+            preset,
+            caps: effective_caps(preset, &[], &[]),
+            home: preset_home(preset),
+            web: config.apps.web.clone(),
+            flatpak: if installs {
+                config.apps.flatpak.clone()
+            } else {
+                Vec::new()
+            },
+            deb: if installs {
+                config
+                    .apps
+                    .deb
+                    .iter()
+                    .filter(|(_, a)| !a.kiosk)
+                    .map(|(k, a)| (k.clone(), a.clone()))
+                    .collect()
+            } else {
+                BTreeMap::new()
+            },
+            chrome_policy: config.chrome_policy.clone(),
+            login_scripts: config
+                .scripts
+                .iter()
+                .filter(|s| s.when == When::Login)
+                .cloned()
+                .collect(),
+            legacy_browser: config.legacy_browser,
+        }
+    }
+}
+
+/// The effective user config with this id: format 3 the layer, format 1/2 the profile implied by
+/// the Config with that id.
+pub fn user_config(m: &Manifest, id: &str) -> Option<UserConfig> {
+    match &m.user_layer {
+        Some(u) => {
+            let c = u.configs.iter().find(|c| c.id == id)?;
+            Some(effective_user_config(u, c))
+        }
+        None => {
+            let layer = m.config(id)?;
+            Some(UserConfig::implied(&effective_config(m, layer)))
+        }
+    }
+}
+
+/// The ids of the user configs a Device of this Group can give a person, in order: those named by
+/// the rules whose `device_group` is absent or lists the Group, then the fallback, each once
+/// (format 3); the Group's Config id (format 1/2).
+pub fn reachable_user_configs(m: &Manifest, group_id: &str) -> Vec<String> {
+    let Some(u) = &m.user_layer else {
+        return m
+            .groups
+            .iter()
+            .find(|g| g.id == group_id)
+            .map(|g| vec![g.config.clone()])
+            .unwrap_or_default();
+    };
+    let mut out: Vec<String> = Vec::new();
+    let named = u
+        .rules
+        .iter()
+        .filter(|r| {
+            r.device_group
+                .as_ref()
+                .is_none_or(|gs| gs.iter().any(|g| g == group_id))
+        })
+        .map(|r| &r.user_config)
+        .chain(u.fallback.iter());
+    for id in named {
+        if !out.contains(id) {
+            out.push(id.clone());
+        }
+    }
+    out
+}
+
+/// The Flatpak ids and non-kiosk .deb apps of the reachable user configs, in reachable order;
+/// the first definition of an id wins.
+pub fn install_union(m: &Manifest, group_id: &str) -> (Vec<String>, BTreeMap<String, DebApp>) {
+    let mut flatpak: Vec<String> = Vec::new();
+    let mut deb: BTreeMap<String, DebApp> = BTreeMap::new();
+    for id in reachable_user_configs(m, group_id) {
+        let Some(u) = user_config(m, &id) else {
+            continue;
+        };
+        for f in u.flatpak {
+            if !flatpak.contains(&f) {
+                flatpak.push(f);
+            }
+        }
+        for (k, a) in u.deb {
+            if !a.kiosk {
+                deb.entry(k).or_insert(a);
+            }
+        }
+    }
+    (flatpak, deb)
+}
+
+/// What the Devices of `group` get: [`effective_config`] of its Config; for format 3 also the
+/// install union (`apps.flatpak`, and the union's .deb apps next to the device's own, the device
+/// entry winning on an id clash). `None` when the Group's Config is missing.
+pub fn effective_device_config(m: &Manifest, group: &Group) -> Option<Config> {
+    let mut config = effective_config(m, m.config(&group.config)?);
+    if m.user_layer.is_some() {
+        let (flatpak, mut deb) = install_union(m, &group.id);
+        config.apps.flatpak = flatpak;
+        deb.extend(std::mem::take(&mut config.apps.deb));
+        config.apps.deb = deb;
+    }
+    Some(config)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -811,6 +1032,269 @@ mod tests {
         "version = 1\n[[config]]\nid = \"c\"\nname = \"c\"\n\
          [[group]]\nid = \"default\"\nname = \"d\"\nconfig = \"c\""
             .to_string()
+    }
+
+    /// A format 3 text: one device config, groups `default` and `exam-room`, then `body`.
+    fn v3_text(body: &str) -> String {
+        format!(
+            "format = 3\nversion = 1\n\
+             [[device_config]]\nid = \"classroom\"\nname = \"C\"\n\
+             [[group]]\nid = \"default\"\nname = \"D\"\nconfig = \"classroom\"\n\
+             [[group]]\nid = \"exam-room\"\nname = \"E\"\nconfig = \"classroom\"\n{body}"
+        )
+    }
+
+    fn names(v: &[WebApp]) -> Vec<&str> {
+        v.iter().map(|a| a.name.as_str()).collect()
+    }
+
+    fn deb(name: &str, url: &str) -> String {
+        format!("{{ name = \"{name}\", url = \"{url}\" }}")
+    }
+
+    #[test]
+    fn caps_deny_wins() {
+        assert_eq!(
+            effective_caps(
+                Preset::Learning,
+                &[Capability::Terminal],
+                &[Capability::Terminal]
+            ),
+            Caps::new()
+        );
+        assert_eq!(
+            effective_caps(Preset::Full, &[], &[Capability::Terminal]).len(),
+            5
+        );
+        assert_eq!(effective_caps(Preset::Full, &[], &[]).len(), 6);
+        assert_eq!(
+            effective_caps(Preset::Learning, &[Capability::Settings], &[]),
+            Caps::from([Capability::Settings])
+        );
+    }
+
+    #[test]
+    fn merge_follows_defaults_rules() {
+        let m = Manifest::parse(&v3_text(
+            "[user_defaults]\n\
+             apps.web = [{ name = \"Classroom\", url = \"https://c.example\" }]\n\
+             chrome_policy = { URLBlocklist = [\"a.com\"] }\nallow = [\"file_manager\"]\n\
+             [[user_config]]\nid = \"x\"\nname = \"X\"\n\
+             apps.web = [{ name = \"Starfall\", url = \"https://s.example\" }]\n\
+             drop.apps.web = [\"Classroom\"]\ndeny = [\"file_manager\"]\n\
+             drop.chrome_policy = [\"URLBlocklist\"]\n",
+        ))
+        .unwrap();
+        let u = user_config(&m, "x").unwrap();
+        assert_eq!(names(&u.web), ["Starfall"]);
+        assert!(u.caps.is_empty());
+        assert!(u.chrome_policy.is_empty());
+        assert!(user_config(&m, "nope").is_none());
+    }
+
+    #[test]
+    fn allow_and_deny_merge_as_collections() {
+        let m = Manifest::parse(&v3_text(
+            "[user_defaults]\nallow = [\"settings\"]\ndeny = [\"file_manager\"]\n\
+             [[user_config]]\nid = \"a\"\nname = \"A\"\npreset = \"full\"\n\
+             [[user_config]]\nid = \"b\"\nname = \"B\"\npreset = \"full\"\n\
+             drop.deny = [\"file_manager\"]\nallow = [\"settings\", \"terminal\"]\n",
+        ))
+        .unwrap();
+        // The defaults' deny reaches `a`, and `b` undoes it with `drop.deny`.
+        assert!(!user_config(&m, "a")
+            .unwrap()
+            .caps
+            .contains(&Capability::FileManager));
+        assert_eq!(user_config(&m, "b").unwrap().caps.len(), 6);
+    }
+
+    #[test]
+    fn home_default_follows_preset() {
+        let m = Manifest::parse(&v3_text(
+            "[[user_config]]\nid = \"l\"\nname = \"L\"\nallow = [\"file_manager\"]\n\
+             [[user_config]]\nid = \"f\"\nname = \"F\"\npreset = \"full\"\n\
+             [[user_config]]\nid = \"k\"\nname = \"K\"\nhome = \"keep\"\n",
+        ))
+        .unwrap();
+        let home = |id: &str| user_config(&m, id).unwrap().home;
+        assert_eq!(home("l"), HomeMode::Tidy);
+        assert_eq!(home("f"), HomeMode::Keep);
+        assert_eq!(home("k"), HomeMode::Keep);
+        let m = Manifest::parse(&v3_text(
+            "[user_defaults]\nhome = \"keep\"\n\
+             [[user_config]]\nid = \"d\"\nname = \"D\"\n\
+             [[user_config]]\nid = \"t\"\nname = \"T\"\nhome = \"tidy\"\n",
+        ))
+        .unwrap();
+        assert_eq!(user_config(&m, "d").unwrap().home, HomeMode::Keep);
+        assert_eq!(user_config(&m, "t").unwrap().home, HomeMode::Tidy);
+    }
+
+    #[test]
+    fn login_scripts_are_the_merged_scripts() {
+        let m = Manifest::parse(&v3_text(
+            "[user_defaults]\nscripts = [{ path = \"scripts/a.sh\", when = \"login\" }, \
+             { path = \"scripts/b.sh\", when = \"login\" }]\n\
+             [[user_config]]\nid = \"x\"\nname = \"X\"\ndrop.scripts = [\"scripts/a.sh\"]\n\
+             scripts = [{ path = \"scripts/c.sh\", when = \"login\" }]\n",
+        ))
+        .unwrap();
+        let paths: Vec<_> = user_config(&m, "x")
+            .unwrap()
+            .login_scripts
+            .into_iter()
+            .map(|s| s.path)
+            .collect();
+        assert_eq!(paths, ["scripts/b.sh", "scripts/c.sh"]);
+    }
+
+    #[test]
+    fn implied_matches_todays_profiles() {
+        let m = Manifest::parse(&crate::testutil::spec_example()).unwrap();
+        let eff = |id: &str| effective_config(&m, m.config(id).unwrap());
+        let student = UserConfig::implied(&eff("cart"));
+        assert_eq!(
+            (student.preset, student.home),
+            (Preset::Learning, HomeMode::Tidy)
+        );
+        assert!(student.caps.is_empty() && !student.legacy_browser);
+        let teacher = UserConfig::implied(&eff("teacher"));
+        assert_eq!(
+            (teacher.preset, teacher.home),
+            (Preset::Full, HomeMode::Keep)
+        );
+        assert_eq!(teacher.caps.len(), 6);
+        assert_eq!(teacher.id, "teacher");
+        assert_eq!(teacher.web, eff("teacher").apps.web);
+        assert_eq!(teacher.flatpak, eff("teacher").apps.flatpak);
+        assert_eq!(teacher.chrome_policy, eff("teacher").chrome_policy);
+        assert_eq!(user_config(&m, "teacher").unwrap(), teacher);
+        assert_eq!(reachable_user_configs(&m, "teacher"), ["teacher"]);
+        assert!(reachable_user_configs(&m, "nope").is_empty());
+
+        let mut browser = eff("teacher");
+        browser.legacy_browser = true;
+        let b = UserConfig::implied(&browser);
+        assert!(b.legacy_browser && b.flatpak.is_empty() && b.deb.is_empty());
+
+        // Login scripts only; kiosk .deb apps stay on the device.
+        let mut c = eff("teacher");
+        c.scripts = vec![
+            Script {
+                path: "scripts/a.sh".into(),
+                when: When::Apply,
+                timeout_secs: None,
+            },
+            Script {
+                path: "scripts/b.sh".into(),
+                when: When::Login,
+                timeout_secs: None,
+            },
+        ];
+        let plain: DebApp =
+            toml::from_str("name = \"P\"\nurl = \"https://x.example/p.deb\"").unwrap();
+        let kiosk = DebApp {
+            kiosk: true,
+            ..plain.clone()
+        };
+        c.apps.deb = BTreeMap::from([("plain".into(), plain), ("kiosky".into(), kiosk)]);
+        let i = UserConfig::implied(&c);
+        assert_eq!(i.login_scripts.len(), 1);
+        assert_eq!(i.login_scripts[0].path, "scripts/b.sh");
+        assert_eq!(i.deb.keys().collect::<Vec<_>>(), ["plain"]);
+    }
+
+    /// Rules teacher(admin), exam(device_group exam-room), primary(org_node); fallback primary.
+    fn reachable_text() -> String {
+        v3_text(&format!(
+            "[[user_config]]\nid = \"primary\"\nname = \"P\"\n\
+             [[user_config]]\nid = \"teacher\"\nname = \"T\"\npreset = \"full\"\n\
+             [[user_config]]\nid = \"exam\"\nname = \"E\"\n\
+             apps.flatpak = [\"org.libreoffice.LibreOffice\"]\n\
+             apps.deb.zoom = {}\n\
+             [[assign]]\nuser_config = \"teacher\"\nadmin = true\n\
+             [[assign]]\nuser_config = \"exam\"\ndevice_group = [\"exam-room\"]\n\
+             [[assign]]\nuser_config = \"primary\"\n\
+             org_node = [\"0193a0c2-0000-7000-8000-000000000001\"]\n\
+             [user]\nfallback = \"primary\"\n",
+            deb("Zoom", "https://x.example/zoom.deb")
+        ))
+    }
+
+    #[test]
+    fn reachable_respects_device_group_and_fallback() {
+        let m = Manifest::parse(&reachable_text()).unwrap();
+        assert_eq!(
+            reachable_user_configs(&m, "default"),
+            ["teacher", "primary"]
+        );
+        assert_eq!(
+            reachable_user_configs(&m, "exam-room"),
+            ["teacher", "exam", "primary"]
+        );
+    }
+
+    #[test]
+    fn install_union_keeps_first_definition() {
+        let m = Manifest::parse(&v3_text(&format!(
+            "[[user_config]]\nid = \"a\"\nname = \"A\"\n\
+             apps.flatpak = [\"org.a.A\", \"org.b.B\"]\napps.deb.zoom = {}\n\
+             [[user_config]]\nid = \"b\"\nname = \"B\"\n\
+             apps.flatpak = [\"org.b.B\", \"org.c.C\"]\napps.deb.zoom = {}\n\
+             [[assign]]\nuser_config = \"a\"\nadmin = true\n\
+             [user]\nfallback = \"b\"\n",
+            deb("First", "https://x.example/1.deb"),
+            deb("Second", "https://x.example/2.deb")
+        )))
+        .unwrap();
+        let (flatpak, debs) = install_union(&m, "default");
+        assert_eq!(flatpak, ["org.a.A", "org.b.B", "org.c.C"]);
+        assert_eq!(debs.len(), 1);
+        assert_eq!(debs["zoom"].name, "First");
+    }
+
+    #[test]
+    fn device_config_carries_install_union() {
+        use crate::select::{select, DeviceIdent};
+        let text = format!(
+            "{}\n[[device]]\ndevice_id = \"dev-exam\"\ngroup = \"exam-room\"\n",
+            reachable_text()
+        );
+        let m = Manifest::parse(&text).unwrap();
+        let ident_in = |id: &str| DeviceIdent {
+            serial: None,
+            device_id: id.into(),
+        };
+        let sel = select(&m, &ident_in("dev-exam"), None);
+        assert_eq!(sel.group.id, "exam-room");
+        assert_eq!(sel.config.apps.flatpak, ["org.libreoffice.LibreOffice"]);
+        assert!(sel.config.chrome_policy.is_empty());
+        assert!(sel.config.apps.deb.contains_key("zoom"));
+        let sel = select(&m, &ident_in("other"), None);
+        assert_eq!(sel.group.id, "default");
+        assert!(sel.config.apps.flatpak.is_empty());
+    }
+
+    #[test]
+    fn device_deb_entry_wins_over_the_union() {
+        let m = Manifest::parse(
+            &v3_text(&format!(
+                "[[user_config]]\nid = \"a\"\nname = \"A\"\napps.deb.zoom = {}\n\
+             [user]\nfallback = \"a\"\n",
+                deb("User", "https://x.example/u.deb")
+            ))
+            .replace(
+                "name = \"C\"\n",
+                &format!(
+                    "name = \"C\"\napps.deb.zoom = {}\n",
+                    deb("Device", "https://x.example/d.deb")
+                ),
+            ),
+        )
+        .unwrap();
+        let c = m.effective_of_group("default").unwrap();
+        assert_eq!(c.apps.deb["zoom"].name, "Device");
     }
 
     #[test]

@@ -986,7 +986,7 @@ impl std::fmt::Debug for ItAccount {
 
 /// Entries of `inherited` whose name is neither among `own`'s nor in `drop`, in order, then
 /// `own`'s, in order: an own entry replaces the inherited one of the same name as a whole.
-fn merge_list<T: Clone>(
+pub(crate) fn merge_list<T: Clone>(
     inherited: &[T],
     own: &[T],
     drop: &[String],
@@ -1005,7 +1005,7 @@ fn merge_list<T: Clone>(
 
 /// [`merge_list`] for tables keyed by name (`apps.kiosk`, `chrome_policy`): an own entry replaces
 /// the inherited one of the same key.
-fn merge_map<V: Clone, M>(inherited: &M, own: &M, drop: &[String]) -> M
+pub(crate) fn merge_map<V: Clone, M>(inherited: &M, own: &M, drop: &[String]) -> M
 where
     for<'a> &'a M: IntoIterator<Item = (&'a String, &'a V)>,
     M: FromIterator<(String, V)> + Extend<(String, V)>,
@@ -2107,10 +2107,12 @@ impl Manifest {
         self.config(&g.config)
     }
 
-    /// What the Devices of the Group with this id get ([`effective_config`] of its Config);
-    /// `None` when the Group or its Config is missing.
+    /// What the Devices of the Group with this id get ([`effective_device_config`]: the
+    /// effective Config, plus the install union of a format 3 text); `None` when the Group or
+    /// its Config is missing.
     pub fn effective_of_group(&self, group_id: &str) -> Option<Config> {
-        Some(effective_config(self, self.config_of_group(group_id)?))
+        let group = self.groups.iter().find(|g| g.id == group_id)?;
+        crate::user_layer::effective_device_config(self, group)
     }
 
     /// 检查清单内部与它引用的文件是否自洽。`present` 是包里实际存在的

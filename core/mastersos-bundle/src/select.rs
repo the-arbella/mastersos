@@ -4,9 +4,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::manifest::{
-    effective_config, normalize_id, Config, DeviceEntry, Group, Lock, Manifest, ResetRequest,
-    DEFAULT_GROUP,
+    normalize_id, Config, DeviceEntry, Group, Lock, Manifest, ResetRequest, DEFAULT_GROUP,
 };
+use crate::user_layer::effective_device_config;
 
 /// 机器自己知道的身份。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,7 +29,7 @@ pub enum GroupSource {
 pub struct Selection<'a> {
     pub group: &'a Group,
     /// What the Devices of `group` get: the Config it names laid over `[defaults]`
-    /// ([`effective_config`]).
+    /// ([`effective_device_config`]).
     pub config: Config,
     pub source: GroupSource,
     pub lock: Option<&'a Lock>,
@@ -44,7 +44,7 @@ pub fn select<'a>(m: &'a Manifest, ident: &DeviceIdent, seed_group: Option<&str>
     // A group counts only together with its config; `validate` guarantees both.
     let find = |id: &str| {
         let group = m.groups.iter().find(|g| g.id == id)?;
-        Some((group, effective_config(m, m.config(&group.config)?)))
+        Some((group, effective_device_config(m, group)?))
     };
 
     if let Some(d) = device_entry(m, ident.serial.as_deref(), &ident.device_id) {
@@ -356,6 +356,17 @@ group = "staff"
         assert_eq!(s.source, GroupSource::Default);
         assert_eq!(s.config, eff("student"));
         assert_eq!(s.config.printers.len(), 1, "inherited from Defaults");
+    }
+
+    #[test]
+    fn format2_selection_unchanged() {
+        let m = Manifest::parse(&crate::testutil::spec_example()).unwrap();
+        for g in &m.groups {
+            let id = g.id.as_str();
+            let want = crate::effective_config(&m, m.config(&g.config).unwrap());
+            assert_eq!(select(&m, &ident(None, "x"), Some(id)).config, want, "{id}");
+            assert_eq!(m.effective_of_group(id).unwrap(), want, "{id}");
+        }
     }
 
     #[test]
