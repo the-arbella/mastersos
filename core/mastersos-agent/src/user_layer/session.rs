@@ -21,7 +21,7 @@ use mastersos_bundle::{Caps, HomeMode, ItemResult};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
-use super::render::{read_index, Rendered, STATE_SUB};
+use super::render::{self, read_index, Rendered, STATE_SUB};
 use super::switch::{self, lock_active, switch_to, write_active, LOCK_WAIT};
 use super::{active_marker, Active, ActiveState, ACTIVE_FILE, NEUTRAL_DIR, RUN_DIR};
 use crate::jobs::SideResults;
@@ -109,7 +109,8 @@ pub fn after_login(paths: &SysPaths, runner: &dyn Runner) -> Result<()> {
 /// a session the agent saw before (`seen`) or a login at least [`OPEN_GRACE`] old. A live session sets `seen`; a
 /// closing marker whose uid still has a live session (R27: the same person signed in elsewhere, say on a tty) becomes
 /// open again, so logins stay refused until that session is gone too. The revert, in this order: neutral switched
-/// in, everything blocked (both skipped when the format 1/2 apply already removed this layer's files, R26),
+/// in, everything blocked (both skipped when the format 1/2 apply already removed this layer's files, R26; when a format
+/// 1/2 apply deferred that removal for this session, the removal instead, whose failure is only logged),
 /// `loginctl disable-linger`, `systemctl stop user@<uid>.service`, and only when all of them worked the marker removed.
 /// Any failure keeps the marker (logins stay refused) and is returned. An unreadable marker or logind list is an error,
 /// never "no session". A busy lock is [`WatchOutcome::Busy`].
@@ -180,7 +181,19 @@ pub(crate) fn watch_at(
 /// The revert of [`watch`], with the marker's lock held by the caller.
 fn revert(paths: &SysPaths, runner: &dyn Runner, a: &Active) -> Result<()> {
     let mut errs: Vec<String> = Vec::new();
-    if layer_state_present(paths) {
+    if render::cleanup_deferred(paths) {
+        // A format 1/2 apply waited for this session: its files go now instead of neutral being switched in (which would
+        // overwrite the format 1/2 steps' Chrome policy and exec-block state). A failure does not keep the marker: every
+        // format 1/2 apply tries again.
+        match render::remove_state(paths) {
+            Ok(_) => log::info!(
+                "user layer: settings format 1/2: removed the user configs after the session"
+            ),
+            Err(e) => log::warn!(
+                "user layer: settings format 1/2: removing the user configs after the session: {e:#}; retried at the next apply"
+            ),
+        }
+    } else if layer_state_present(paths) {
         if let Err(e) = to_neutral(paths, runner) {
             errs.push(format!("{e:#}"));
         }

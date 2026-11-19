@@ -34,8 +34,9 @@
 //! longer reachable are removed, the others closed. A busy lock or an unreadable marker leaves them all to the next
 //! round.
 //!
-//! With a format 1/2 bundle the step does nothing, unless an earlier format 3 bundle left its state: then it
-//! removes everything it created, and the format 1/2 steps own the session as before.
+//! With a format 1/2 bundle the step does nothing, unless an earlier format 3 bundle left its state: then, under the
+//! marker's lock, it removes everything it created, and the format 1/2 steps own the session as before. While a session
+//! marker exists it removes nothing and marks the cleanup deferred: that session's revert does it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::os::fd::OwnedFd;
@@ -72,6 +73,10 @@ pub const REMOVED_CONFIG: &str =
     "the signed-in person's user config was removed; they get it at their next login";
 /// The step's directory under `var_dir` (root 0700) and under `public_dir` (0755).
 pub const STATE_SUB: &str = "user-layer";
+/// In the `var_dir` part of [`STATE_SUB`] while the format 1/2 cleanup waits for a session to end (a marker exists): the
+/// agent's revert of that session then removes this layer's files instead of switching to neutral. Removed with the
+/// rest of the state, and by any format 3 render.
+pub const CLEANUP_DEFERRED_FILE: &str = "cleanup-deferred";
 /// The rules and the rendered configs, in the `var_dir` part of [`STATE_SUB`] (0600).
 pub const INDEX_FILE: &str = "index.json";
 /// A config's managed Chrome policy, in its `var_dir` directory.
@@ -175,12 +180,24 @@ pub fn step() -> Step {
 fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
     match ctx.user_layer() {
         Some(m) => render_all(ctx, m, env),
-        None => match remove_state(env.paths) {
-            Ok(false) => vec![],
-            Ok(true) => vec![ItemResult {
+        None => match cleanup(env.paths) {
+            Ok(Cleanup::Nothing) => vec![],
+            Ok(Cleanup::Removed) => vec![ItemResult {
                 detail: Some("removed the user configs of an earlier settings format 3".into()),
                 ..ok(ITEM)
             }],
+            Ok(Cleanup::Deferred) => vec![ItemResult {
+                detail: Some(
+                    "a session is signed in: the user configs of an earlier settings format 3 are removed when it ends"
+                        .into(),
+                ),
+                ..ok(ITEM)
+            }],
+            Ok(Cleanup::Busy) => vec![failed(
+                ITEM,
+                "the session is changing: the user configs of an earlier settings format 3 are removed at the next apply"
+                    .into(),
+            )],
             Err(e) => vec![failed(
                 ITEM,
                 format!("removing the user configs of an earlier settings format 3: {e:#}"),
@@ -203,6 +220,10 @@ fn render_all(ctx: &ApplyContext, m: &Manifest, env: &mut Env) -> Vec<ItemResult
     let sys = &mut *env.sys;
     let mut out = Vec::new();
     let mut errs = Vec::new();
+    // Format 3 again: a format 1/2 cleanup that waited for a session is off
+    if let Err(e) = state_dir(paths).and_then(|s| safefs::remove_at(&s, CLEANUP_DEFERRED_FILE)) {
+        errs.push(format!("state: {e:#}"));
+    }
     // Tightening first (R17): the legacy file is the only one an older image reads after a rollback.
     if let Err(e) = exec_block::write_session_mode(paths, true) {
         errs.push(format!("session mode: {e:#}"));
@@ -378,7 +399,10 @@ fn follow_session(
         // removed or closed)
         let tidy_errs = match active_marker(root) {
             Ok(Some(now)) => tidy(paths, configs, &[&named, &now.dir]),
-            _ => Vec::new(),
+            _ => vec![
+                "the signed-in session's marker cannot be read after the switch to the fallback; kept every user config this round"
+                    .into(),
+            ],
         };
         return Followed {
             active: Some(item),
@@ -931,9 +955,76 @@ fn open_existing(root: &Path, rel: &str) -> Result<Option<OwnedFd>> {
     }
 }
 
+/// What the format 1/2 [`cleanup`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cleanup {
+    /// No state of an earlier format 3 bundle.
+    Nothing,
+    Removed,
+    /// A session marker exists (or cannot be read): nothing removed, [`CLEANUP_DEFERRED_FILE`] written; the session's
+    /// revert removes it all ([`super::session`]), or a later apply once the marker is gone.
+    Deferred,
+    /// The marker's lock is busy: nothing removed, [`CLEANUP_DEFERRED_FILE`] written; retried at the next apply.
+    Busy,
+}
+
+/// With a format 1/2 bundle: [`remove_state`] under the marker's lock, but never while a session marker exists (open,
+/// closing or unreadable), since a settings apply never removes the config dir of a person signed in or signing in.
+/// Without a marker under the lock nobody is: `on_open` writes it before it releases the lock. A session link left on a
+/// user config without a marker (a neutral switch that failed) does not hold the cleanup up, since nothing under format
+/// 1/2 would ever re-point it.
+fn cleanup(paths: &SysPaths) -> Result<Cleanup> {
+    if !layer_state_present(paths)? {
+        return Ok(Cleanup::Nothing);
+    }
+    let _lock = match switch::lock_active(&paths.root, switch::LOCK_WAIT) {
+        Ok(l) => l,
+        Err(e) if switch::is_lock_busy(&e) => {
+            mark_deferred(paths)?;
+            return Ok(Cleanup::Busy);
+        }
+        Err(e) => return Err(e),
+    };
+    if !matches!(active_marker(&paths.root), Ok(None)) {
+        mark_deferred(paths)?;
+        return Ok(Cleanup::Deferred);
+    }
+    Ok(if remove_state(paths)? {
+        Cleanup::Removed
+    } else {
+        Cleanup::Nothing
+    })
+}
+
+/// Whether the `var_dir` part of [`STATE_SUB`] exists.
+fn layer_state_present(paths: &SysPaths) -> Result<bool> {
+    let Some(var) = open_existing_abs(&paths.var_dir)? else {
+        return Ok(false);
+    };
+    Ok(safefs::open_child_dir(&var, STATE_SUB)?.is_some())
+}
+
+fn mark_deferred(paths: &SysPaths) -> Result<()> {
+    let Some(var) = open_existing_abs(&paths.var_dir)? else {
+        return Ok(());
+    };
+    let Some(state) = safefs::open_child_dir(&var, STATE_SUB)? else {
+        return Ok(());
+    };
+    safefs::write_at(&state, CLEANUP_DEFERRED_FILE, b"", 0o600)?;
+    Ok(())
+}
+
+/// Whether a format 1/2 apply deferred its cleanup ([`CLEANUP_DEFERRED_FILE`]): the revert then calls
+/// [`remove_state`] instead of switching to neutral.
+pub(crate) fn cleanup_deferred(paths: &SysPaths) -> bool {
+    std::fs::symlink_metadata(paths.var_dir.join(STATE_SUB).join(CLEANUP_DEFERRED_FILE)).is_ok()
+}
+
 /// With a format 1/2 bundle: removes everything an earlier format 3 bundle had this step (and the switch) create,
-/// the state directory last so a failure is retried. `Ok(false)` when there is no such state.
-fn remove_state(paths: &SysPaths) -> Result<bool> {
+/// the state directory last so a failure is retried. `Ok(false)` when there is no such state. The caller holds the
+/// marker's lock and has made sure no session uses the state ([`cleanup`], the revert).
+pub(crate) fn remove_state(paths: &SysPaths) -> Result<bool> {
     let Some(var) = open_existing_abs(&paths.var_dir)? else {
         return Ok(false);
     };

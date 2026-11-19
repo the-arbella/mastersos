@@ -604,3 +604,43 @@ async fn monitor_lifts_reports_and_reverts() {
     shutdown.cancel();
     task.await.unwrap();
 }
+
+/// The format 1/2 cleanup was deferred for this session (R3): the revert removes this layer's files instead of switching
+/// to neutral, so the format 1/2 steps' Chrome policy and exec-block state are left as they are, and removes the marker.
+#[test]
+fn revert_with_deferred_cleanup_removes_the_layer() {
+    let (_root, p, index, r) = setup();
+    signed_in(&p, &index, ActiveState::Closing, true);
+    let var = p.var_dir.join(STATE_SUB);
+    fs::write(
+        var.join(crate::user_layer::render::CLEANUP_DEFERRED_FILE),
+        "",
+    )
+    .unwrap();
+    let managed = p
+        .root
+        .join("etc/opt/chrome/policies/managed/mastersos.json");
+    let policy_before = fs::read(&managed).unwrap();
+    let lifted_before = read_lifted(&p).unwrap();
+    list(&r, &[greeter()]);
+    assert_eq!(
+        watch_at(&p, &r, at(T0 + 1)).unwrap(),
+        WatchOutcome::Reverted {
+            user_config: "teacher".into()
+        }
+    );
+    assert!(read_active(&p.root).is_none());
+    assert_eq!(revert_cmds(&r.calls()), expected_revert_cmds());
+    assert!(
+        r.calls()
+            .iter()
+            .all(|c| c.starts_with("loginctl") || c.starts_with("systemctl")),
+        "{:?}",
+        r.calls()
+    );
+    assert_eq!(fs::read(&managed).unwrap(), policy_before);
+    assert_eq!(read_lifted(&p).unwrap(), lifted_before);
+    assert!(!var.exists());
+    assert!(!p.public_dir.join(STATE_SUB).exists());
+    assert!(fs::symlink_metadata(p.public_dir.join("session")).is_err());
+}

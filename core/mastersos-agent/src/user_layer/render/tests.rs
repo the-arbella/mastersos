@@ -1699,3 +1699,167 @@ fn a_failing_entry_does_not_stop_the_others() {
     assert!(fs::symlink_metadata(var(root.path()).join(first)).is_ok());
     assert!(fs::symlink_metadata(public(root.path()).join(first)).is_ok());
 }
+
+// ---------------------------------------------------------------------------
+// The removed-config branch reports a marker it cannot read back (R2)
+// ---------------------------------------------------------------------------
+
+/// [`LiveRunner`] that, at the first command after the round's last `dconf compile` (the removed-config branch blocking
+/// everything), makes the marker unreadable and its next write fail.
+struct MarkerLostAfterRender {
+    inner: LiveRunner,
+    root: PathBuf,
+    rendered: AtomicBool,
+    done: AtomicBool,
+}
+
+impl crate::runner::Runner for MarkerLostAfterRender {
+    fn run(&self, cmd: &crate::runner::Cmd) -> anyhow::Result<crate::runner::Output> {
+        use std::sync::atomic::Ordering::SeqCst;
+        if self.rendered.load(SeqCst) && !self.done.swap(true, SeqCst) {
+            fs::write(self.root.join(RUN_DIR).join(ACTIVE_FILE), "{").unwrap();
+            break_marker_write(&self.root);
+        }
+        // neutral is compiled last: what follows is the end of the step
+        if cmd.line().starts_with("dconf compile") && cmd.line().ends_with("/neutral/dconf.d") {
+            self.rendered.store(true, SeqCst);
+        }
+        self.inner.run(cmd)
+    }
+}
+
+/// The marker cannot be read back after the switch to the fallback: nothing is removed or closed, and the step says so.
+#[test]
+fn removed_config_with_unreadable_marker_after_reports_it() {
+    let root = root();
+    render_live(root.path(), &v3(), &live(root.path()));
+    let r = MarkerLostAfterRender {
+        inner: live(root.path()),
+        root: root.path().to_path_buf(),
+        rendered: AtomicBool::new(false),
+        done: AtomicBool::new(false),
+    };
+    sign_in(
+        root.path(),
+        &r.inner,
+        "gone",
+        &caps_of(&[Capability::Terminal]),
+    );
+    let old = config_dir_name("old");
+    put_stale(root.path(), &old);
+    let out = run_step_with(step(), root.path(), &v3(), &r, &mut SysState::default());
+    assert!(r.done.load(std::sync::atomic::Ordering::SeqCst));
+    let item = active_item(&out).unwrap();
+    assert!(item.detail.as_deref().unwrap().starts_with(REMOVED_CONFIG));
+    let main = out.iter().find(|i| i.item == ITEM).unwrap();
+    assert!(!main.ok, "{main:?}");
+    assert_eq!(
+        main.detail.as_deref(),
+        Some("the signed-in session's marker cannot be read after the switch to the fallback; kept every user config this round")
+    );
+    assert_eq!(stale_left(root.path(), &old), [true; 3]);
+}
+
+// ---------------------------------------------------------------------------
+// A format 3 -> 1/2 change waits for the signed-in session (R3)
+// ---------------------------------------------------------------------------
+
+/// Everything this layer keeps on the system: the root-only state, the public tree, the session link, the dconf profile
+/// and session database, the staging dir.
+fn layer_left(root: &Path) -> [bool; 6] {
+    [
+        var(root).exists(),
+        public(root).exists(),
+        fs::symlink_metadata(root.join("var/lib/mastersos-public").join(SESSION_LINK)).is_ok(),
+        root.join(PROFILE_DIR).join(PROFILE_FILE).exists(),
+        db(root).join(SESSION_DB).exists(),
+        staging(root).exists(),
+    ]
+}
+
+fn deferred(root: &Path) -> bool {
+    var(root).join(CLEANUP_DEFERRED_FILE).exists()
+}
+
+/// A settings apply never removes a signed-in person's config dir: under format 1/2 the cleanup waits while a marker
+/// exists (open, closing or unreadable), marks itself deferred, and is done by the next apply once the marker is gone.
+#[test]
+fn downgrade_waits_for_the_signed_in_session() {
+    let root = root();
+    let r = live(root.path());
+    render_live(root.path(), &v3(), &r);
+    let mut a = sign_in(root.path(), &r, "teacher", &Caps::new());
+    let teacher = config_dir_name("teacher");
+    for state in [ActiveState::Open, ActiveState::Closing] {
+        a.state = state;
+        switch::write_active(root.path(), &a).unwrap();
+        let out = render_live(root.path(), &v2(), &r);
+        let item = ok_item(&out, ITEM);
+        assert!(item.detail.is_some(), "{item:?}");
+        assert_eq!(layer_left(root.path()), [true; 6], "{state:?}");
+        assert_eq!(
+            session_link(root.path()),
+            Some(format!("user-layer/{teacher}"))
+        );
+        assert_eq!(mode(public(root.path()).join(&teacher)), 0o755);
+        assert!(var(root.path()).join(&teacher).join(CHROME_FILE).exists());
+        assert!(deferred(root.path()));
+    }
+    // a marker that cannot be read: nothing removed either
+    fs::write(root.path().join(RUN_DIR).join(ACTIVE_FILE), "{").unwrap();
+    render_live(root.path(), &v2(), &r);
+    assert_eq!(layer_left(root.path()), [true; 6]);
+    // the marker is gone: the next apply removes everything
+    fs::remove_file(root.path().join(RUN_DIR).join(ACTIVE_FILE)).unwrap();
+    let out = render_live(root.path(), &v2(), &r);
+    ok_item(&out, ITEM);
+    assert_eq!(layer_left(root.path()), [false; 6]);
+    let out = render_live(root.path(), &v2(), &r);
+    assert!(out.is_empty(), "{out:?}");
+}
+
+/// The marker's lock is busy: the format 1/2 cleanup removes nothing this round and fails, so that it is retried.
+#[test]
+fn downgrade_with_busy_lock_removes_nothing() {
+    let root = root();
+    let r = live(root.path());
+    render_live(root.path(), &v3(), &r);
+    let held = switch::lock_active(root.path(), std::time::Duration::ZERO).unwrap();
+    let out = render_live(root.path(), &v2(), &r);
+    let main = out.iter().find(|i| i.item == ITEM).unwrap();
+    assert!(!main.ok, "{main:?}");
+    assert_eq!(layer_left(root.path()), [true; 6]);
+    drop(held);
+    let out = render_live(root.path(), &v2(), &r);
+    ok_item(&out, ITEM);
+    assert_eq!(layer_left(root.path()), [false; 6]);
+}
+
+/// Without a marker under the lock nobody is signed in or signing in: a session link left on a user config (a neutral
+/// switch that failed) does not hold the cleanup up (nothing under format 1/2 would ever re-point it).
+#[test]
+fn downgrade_without_marker_removes_a_leftover_link() {
+    let root = root();
+    let r = live(root.path());
+    render_live(root.path(), &v3(), &r);
+    let p = paths(root.path());
+    let teacher = read_index(&p.var_dir).unwrap().configs["teacher"].clone();
+    switch_to(&p.root, &p.public_dir, &p.var_dir, &teacher, Some(UID)).unwrap();
+    let out = render_live(root.path(), &v2(), &r);
+    ok_item(&out, ITEM);
+    assert_eq!(layer_left(root.path()), [false; 6]);
+}
+
+/// A format 3 render drops a deferral left by an earlier format 1/2 apply (3 -> 2 -> 3 while signed in).
+#[test]
+fn format3_render_drops_a_deferral() {
+    let root = root();
+    let r = live(root.path());
+    render_live(root.path(), &v3(), &r);
+    sign_in(root.path(), &r, "teacher", &Caps::new());
+    render_live(root.path(), &v2(), &r);
+    assert!(deferred(root.path()));
+    render_live(root.path(), &v3(), &r);
+    assert!(!deferred(root.path()));
+    assert_eq!(layer_left(root.path()), [true; 6]);
+}

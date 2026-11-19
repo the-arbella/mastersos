@@ -269,4 +269,6 @@ All of the broker's changes go in a new carried patch `image/patches/authd-oidc/
 - Agents report the feature `format_3` (the existing `format_<n>` naming); publishing a `format = 3` document is refused while a recently
   seen Device does not report it (existing gate, `manifest.rs` `features_used`).
 - An agent that supports format 3 still accepts format 1/2 documents and behaves exactly as today with
-  them (every login gets the Device's single Config).
+  them (every login gets the Device's single Config). Changing a Device from a format 3 document to a format 1/2 one removes
+  the user layer's files, but never while a person is signed in: then the removal waits and is done when
+  that session ends (its revert, instead of switching to neutral).
