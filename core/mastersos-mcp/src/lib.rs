@@ -13,6 +13,7 @@
 #![forbid(unsafe_code)]
 
 pub mod cli;
+pub mod explain;
 pub mod itpass;
 pub mod logo;
 pub mod publish;

@@ -88,6 +88,10 @@ pub const ISSUE_CODES: &[&str] = &[
     "admins_without_sso",
     "allowed_domain_invalid",
     "allowed_domains_too_many",
+    "assign_device_group_unknown",
+    "assign_empty_list",
+    "assign_id_invalid",
+    "assign_unreachable",
     "chrome_pause_invalid",
     "chrome_pause_too_long",
     "chrome_paused",
@@ -99,7 +103,9 @@ pub const ISSUE_CODES: &[&str] = &[
     "deb_icon_invalid",
     "deb_id_invalid",
     "deb_kiosk_id_conflict",
+    "deb_kiosk_in_user_config",
     "deb_name_invalid",
+    "deb_not_kiosk_in_device_config",
     "deb_packages_invalid",
     "deb_sha256_invalid",
     "deb_url_invalid",
@@ -118,6 +124,7 @@ pub const ISSUE_CODES: &[&str] = &[
     "escrow_recipient_unregistered",
     "escrow_recipients_invalid",
     "escrow_recipients_missing",
+    "facts_without_mastersos_claims",
     "feature_unsupported",
     "feature_unsupported_in_use",
     "few_recovery_keys",
@@ -157,9 +164,11 @@ pub const ISSUE_CODES: &[&str] = &[
     "legacy_shape",
     "locale_invalid",
     "lock_message_too_long",
+    "login_domain_not_allowed",
     "logo_incomplete",
     "logo_sha256_invalid",
     "logo_unknown",
+    "mastersos_claims_without_school_id",
     "missing_field",
     "no_admins",
     "oidc_invalid",
@@ -170,6 +179,8 @@ pub const ISSUE_CODES: &[&str] = &[
     "school_id_mismatch",
     "school_name_invalid",
     "school_wifi_moved",
+    "script_apply_in_user_config",
+    "script_login_in_device_config",
     "script_timeout_too_long",
     "secret_name_invalid",
     "secret_rerouted",
@@ -189,6 +200,13 @@ pub const ISSUE_CODES: &[&str] = &[
     "update_channel_unknown",
     "update_mirror_invalid",
     "update_mirror_not_https",
+    "user_config_duplicate_id",
+    "user_config_id_invalid",
+    "user_config_terminal",
+    "user_config_unknown",
+    "user_config_unreached",
+    "user_deb_conflict",
+    "user_fallback_missing",
     "web_app_invalid",
     "web_app_not_https",
     "wifi_invalid",
@@ -205,6 +223,23 @@ pub const ISSUE_CODES: &[&str] = &[
 #[cfg(feature = "schema")]
 pub fn manifest_schema() -> serde_json::Value {
     let mut schema = serde_json::to_value(schemars::schema_for!(crate::Manifest))
+        .expect("a JSON Schema serializes to JSON");
+    if let Some(required) = schema
+        .get_mut("required")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        required.retain(|k| k != "version");
+    }
+    schema
+}
+
+/// The JSON Schema (draft 2020-12) of a `format = 3` settings file as a school writes it.
+///
+/// Derived from [`crate::V3Manifest`] the same way as [`manifest_schema`]; descriptions are the
+/// fields' doc comments, and `version` is not required.
+#[cfg(feature = "schema")]
+pub fn manifest_schema_v3() -> serde_json::Value {
+    let mut schema = serde_json::to_value(schemars::schema_for!(crate::V3Manifest))
         .expect("a JSON Schema serializes to JSON");
     if let Some(required) = schema
         .get_mut("required")
@@ -380,10 +415,9 @@ mod tests {
     #[test]
     fn prompt_spec_is_shorter_and_keeps_every_code() {
         let p = prompt_spec();
-        // 66%, not the planned 60%: the recipes stay in because they help an AI most. (Was 65 until the
-        // `[school.oidc]` issuer profile keys went in: every field row stays in the prompt copy.)
+        // 65%, not the planned 60%: the recipes stay in because they help an AI most.
         assert!(
-            p.len() * 100 < MANIFEST_SPEC.len() * 66,
+            p.len() * 100 < MANIFEST_SPEC.len() * 65,
             "prompt spec is {} of {} bytes",
             p.len(),
             MANIFEST_SPEC.len()
@@ -443,26 +477,43 @@ mod tests {
         }
     }
 
-    #[test]
-    fn spec_documents_every_field() {
-        let schema = manifest_schema();
+    /// The reference section that documents `table` of either schema: the table's own section,
+    /// else the section of the format 2 table it shares its keys with (`[defaults.…]`, and the
+    /// `[device_defaults.…]`, `[device_config.…]`, `[user_defaults.…]` and `[user_config.…]` sub-tables
+    /// of format 3, are written like `[config.…]`).
+    fn documented_section<'a>(table: &str) -> Option<&'a str> {
+        if table.is_empty() {
+            return section(|h| h.starts_with("### ") && h.contains("Top-level keys"));
+        }
+        let own = format!("`{table}`");
+        if let Some(s) = section(|h| h.starts_with("### ") && h.contains(&own)) {
+            return Some(s);
+        }
+        let mut shared = table.to_string();
+        for from in [
+            "[defaults.",
+            "[device_defaults.",
+            "[device_config.",
+            "[user_defaults.",
+            "[user_config.",
+        ] {
+            shared = shared.replacen(from, "[config.", 1);
+        }
+        let want = format!("`{shared}`");
+        section(|h| h.starts_with("### ") && h.contains(&want))
+    }
+
+    /// Every field of `schema` has a row in the section that documents its table.
+    fn undocumented_fields(schema: &Value) -> Vec<String> {
         let mut all = Vec::new();
-        fields(&schema, &schema, "", &mut all);
+        fields(schema, schema, "", &mut all);
         assert!(
             all.len() > 50,
             "the schema walk found too few fields: {all:?}"
         );
         let mut missing = BTreeSet::new();
         for (table, key) in &all {
-            let text = if table.is_empty() {
-                section(|h| h.starts_with("### ") && h.contains("Top-level keys"))
-            } else {
-                // `[defaults]` has the keys of `[[config]]`: its sub-tables (`[[defaults.wifi]]`,
-                // `[defaults.apps]`, …) are documented by the Config ones.
-                let want = format!("`{}`", table.replacen("[defaults.", "[config.", 1));
-                section(|h| h.starts_with("### ") && h.contains(&want))
-            };
-            match text {
+            match documented_section(table) {
                 Some(t) if t.contains(&format!("| `{key}` |")) => {}
                 Some(_) => {
                     missing.insert(format!("{table} {key}: has no table row in its section"));
@@ -472,10 +523,25 @@ mod tests {
                 }
             }
         }
-        let missing: Vec<_> = missing.into_iter().collect();
+        missing.into_iter().collect()
+    }
+
+    #[test]
+    fn spec_documents_every_field() {
+        let missing = undocumented_fields(&manifest_schema());
         assert!(
             missing.is_empty(),
             "undocumented fields:\n{}",
+            missing.join("\n")
+        );
+    }
+
+    #[test]
+    fn spec_documents_every_format_3_field() {
+        let missing = undocumented_fields(&manifest_schema_v3());
+        assert!(
+            missing.is_empty(),
+            "undocumented format 3 fields:\n{}",
             missing.join("\n")
         );
     }
@@ -771,7 +837,10 @@ mod tests {
         let missing: Vec<_> = ISSUE_CODES
             .iter()
             .filter(|c| {
-                !SERVER_ONLY.contains(c) && !COUNT_CAPS.contains(c) && !labeled.contains(**c)
+                !SERVER_ONLY.contains(c)
+                    && !COUNT_CAPS.contains(c)
+                    && !SCHOOL_ID_STAMPED.contains(c)
+                    && !labeled.contains(**c)
             })
             .collect();
         assert!(
@@ -788,6 +857,10 @@ mod tests {
         "allowed_domains_too_many",
         "issues_truncated",
     ];
+
+    /// Codes that need a text without `[school] id`: `completed()` adds one to every example, so no
+    /// example can trigger them; a unit test covers each.
+    const SCHOOL_ID_STAMPED: &[&str] = &["mastersos_claims_without_school_id"];
 
     /// Codes that need the server's state (registered keys, the school's id, the fleet, the
     /// latest version): check_text never reports them, so the spec gives no check= example.

@@ -206,6 +206,7 @@
 **Files:**
 - Modify: `core/mastersos-bundle/src/status.rs:17-60` (`#[serde(default)] pub user_config: Option<String>` on `StatusReport`)
 - Modify: `core/mastersos-agent/src/report.rs:35-54` (add `FEATURE_FORMAT_3`, `FEATURE_OIDC_LOGIN_DOMAIN`), `:160-176` (fill `user_config` from the marker's `user_config` when `Open`), `:437-441` (assertion back to `format_feature(MAX_FORMAT) == FEATURE_FORMAT_3`)
+- Modify: the agent-side accepted-format limit that plan A added (the agent refuses bundles with a user layer until this task); raise it to 3 here, together with `format_3` reporting, and flip plan A's rejection test to acceptance
 - Modify: `docs/specs/2026-11-10-learning-session-integrity-design.md:21,35` (per-account mode now exists: point to `2026-11-19-user-layer-design.md`)
 - Test: `report.rs` tests
 

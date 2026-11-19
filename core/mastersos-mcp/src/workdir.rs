@@ -639,6 +639,14 @@ pub fn check_snapshot(w: &Workdir, cur: &Snapshot) -> Result<Vec<Lint>> {
     check_at(w, cur, chrono::Utc::now().date_naive())
 }
 
+/// [`check`] with `manifest_text` in place of `manifest.toml` (secrets and files as they are in
+/// the directory): how `mastersos migrate` checks a text before, or without, writing it.
+pub fn check_manifest(w: &Workdir, manifest_text: &str) -> Result<Vec<Lint>> {
+    let mut snap = read_snapshot(&w.root)?;
+    snap.manifest = manifest_text.to_owned();
+    check_snapshot(w, &snap)
+}
+
 fn check_at(w: &Workdir, cur: &Snapshot, today: chrono::NaiveDate) -> Result<Vec<Lint>> {
     w.verify_base()?;
     let base = read_snapshot(&w.base_dir())?;
