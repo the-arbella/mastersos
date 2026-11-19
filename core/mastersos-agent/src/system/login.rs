@@ -4106,6 +4106,54 @@ client_id = "laptops"
         );
     }
 
+    /// Format 3 on a Device whose Group is not in the bundle: no guest user config resolves, so the card blocks everything
+    /// (`URLBlocklist` `"*"` on the device side): a listed card, never the open `https://*` one.
+    #[test]
+    fn card_blocks_everything_without_a_guest_config() {
+        let m = mastersos_bundle::Manifest::parse(&mastersos_bundle::testutil::spec_example_v3())
+            .unwrap();
+        let ident = crate::system::tests::test_ident();
+        let sel = mastersos_bundle::select(&m, &ident, None);
+        let mut group = sel.group.clone();
+        group.id = "not-in-the-bundle".into();
+        assert!(mastersos_bundle::guest_user_config(&m, &group.id).is_none());
+        let root = tmp_root();
+        put_decl_src(root.path(), "[authd]\nname = OIDC\n");
+        let p = paths(root.path());
+        let flag = AtomicBool::new(false);
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ApplyContext {
+            seed: &crate::system::tests::test_seed(),
+            school: &m.school,
+            group: &group,
+            config: &sel.config,
+            lock: None,
+            bundle_dir: dir.path(),
+            phase: Phase::Boot,
+            superseded: &flag,
+            quiet: &AtomicBool::new(false),
+            device: None,
+            ident: &ident,
+            manifest: Some(&m),
+        };
+        let r = FakeRunner::new();
+        let mut sys = SysState::default();
+        let out = run(
+            &ctx,
+            &mut Env {
+                paths: &p,
+                runner: &r,
+                sys: &mut sys,
+            },
+        );
+        assert_eq!(out, vec![ok(ITEM)]);
+        let v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(card_policy(root.path())).unwrap()).unwrap();
+        assert_eq!(v["URLBlocklist"], serde_json::json!(CARD_BLOCKLIST));
+        let allow = v["URLAllowlist"].as_array().unwrap();
+        assert!(!allow.iter().any(|e| e == OPEN_CARD_FILTER), "{allow:?}");
+    }
+
     #[test]
     fn card_policy_allows_only_the_idp_and_the_redirect() {
         let text = render_login_browser_policy(
