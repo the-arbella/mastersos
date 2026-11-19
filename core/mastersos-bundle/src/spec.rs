@@ -380,9 +380,10 @@ mod tests {
     #[test]
     fn prompt_spec_is_shorter_and_keeps_every_code() {
         let p = prompt_spec();
-        // 65%, not the planned 60%: the recipes stay in because they help an AI most.
+        // 66%, not the planned 60%: the recipes stay in because they help an AI most. (Was 65 until the
+        // `[school.oidc]` issuer profile keys went in: every field row stays in the prompt copy.)
         assert!(
-            p.len() * 100 < MANIFEST_SPEC.len() * 65,
+            p.len() * 100 < MANIFEST_SPEC.len() * 66,
             "prompt spec is {} of {} bytes",
             p.len(),
             MANIFEST_SPEC.len()

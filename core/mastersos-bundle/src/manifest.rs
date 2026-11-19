@@ -629,6 +629,14 @@ pub struct Oidc {
     /// [`CardNavigation::Open`]. Read it through [`Oidc::navigation`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub card_navigation: Option<CardNavigation>,
+    /// The domain the login screen offers to complete a short user name with (spec §2.5); it must be one of
+    /// `allowed_domains`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login_domain: Option<String>,
+    /// `false`: a plain OIDC issuer (no org check, no facts, the user name comes from `email` as today). `true`: the issuer
+    /// profile of spec §5, used by broker patch 0007.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub mastersos_claims: bool,
 }
 
 impl Oidc {

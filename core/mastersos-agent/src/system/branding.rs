@@ -26,7 +26,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use mastersos_bundle::{ItemResult, Seed};
+use mastersos_bundle::{checks, ItemResult, Seed};
 use serde::Serialize;
 
 use super::banner::{gv_text, GDM_DCONF_DIR};
@@ -111,6 +111,8 @@ struct Branding<'a> {
     logo_icon: Option<String>,
     domains: &'a [String],
     locale_managed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    login_domain: Option<&'a str>,
 }
 
 /// What one round wants.
@@ -123,6 +125,8 @@ struct Want<'a> {
     icon_sha256: Option<&'a str>,
     /// `[school] locale` is set.
     locale_managed: bool,
+    /// `[school.oidc] login_domain`, as written; only a valid one that is in `domains` reaches `branding.json`.
+    login_domain: Option<&'a str>,
 }
 
 fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
@@ -137,6 +141,11 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
         logo_sha256: ctx.school.logo_sha256.as_deref(),
         icon_sha256: ctx.school.logo_icon_sha256.as_deref(),
         locale_managed: ctx.school.locale.is_some(),
+        login_domain: ctx
+            .school
+            .oidc
+            .as_ref()
+            .and_then(|o| o.login_domain.as_deref()),
     };
     apply(&want, &ctx.seed.server_url, ctx.phase, env, &HttpFetcher)
 }
@@ -149,6 +158,7 @@ fn run_seed(seed: &Seed, env: &mut Env) -> Vec<ItemResult> {
         logo_sha256: None,
         icon_sha256: None,
         locale_managed: false,
+        login_domain: None,
     };
     apply(&want, &seed.server_url, Phase::Boot, env, &HttpFetcher)
 }
@@ -241,6 +251,10 @@ fn sync_files(
         logo_icon: icon,
         domains: want.domains,
         locale_managed: want.locale_managed,
+        login_domain: want
+            .login_domain
+            .filter(|d| !d.is_empty() && checks::allowed_domain(d).is_ok())
+            .filter(|d| want.domains.iter().any(|a| a.to_ascii_lowercase() == *d)),
     })?;
     safefs::write_at(&dir, JSON_FILE, &json, 0o644).context("writing branding.json")?;
     Ok(logo)
@@ -423,7 +437,75 @@ mod tests {
             logo_sha256: hash,
             icon_sha256: None,
             locale_managed: false,
+            login_domain: None,
         }
+    }
+
+    #[test]
+    fn branding_carries_a_valid_login_domain() {
+        let root = tmp_root();
+        let p = paths(root.path());
+        let d = domains();
+        let run = |login_domain: Option<&str>| {
+            let want = Want {
+                login_domain,
+                ..named(&d, None)
+            };
+            let out = go(
+                &p,
+                &want,
+                Phase::Full,
+                &Fake::bytes(b""),
+                &FakeRunner::new(),
+                &mut SysState::default(),
+            );
+            assert_eq!(out, vec![ok(ITEM)]);
+            json(&p)
+        };
+        assert_eq!(run(Some(D1))["login_domain"], D1);
+        assert_eq!(run(Some(D2))["login_domain"], D2);
+        for bad in [
+            None,
+            Some("other.example"),
+            Some("SCHOOL.EXAMPLE"),
+            Some("School.example"),
+            Some("bad domain"),
+            Some("a@school.example"),
+            Some(""),
+        ] {
+            assert!(run(bad).get("login_domain").is_none(), "{bad:?}");
+        }
+        // An entry written in upper case in `allowed_domains` still matches the lowercase login domain.
+        let upper = vec!["School.Example".to_string()];
+        let want = Want {
+            login_domain: Some(D1),
+            ..named(&upper, None)
+        };
+        go(
+            &p,
+            &want,
+            Phase::Full,
+            &Fake::bytes(b""),
+            &FakeRunner::new(),
+            &mut SysState::default(),
+        );
+        assert_eq!(json(&p)["login_domain"], D1);
+        // The seed phase has no login domain.
+        let seed = Seed {
+            school_name: Some(NAME.into()),
+            ..test_seed()
+        };
+        let runner = FakeRunner::new();
+        let mut sys = SysState::default();
+        run_seed(
+            &seed,
+            &mut Env {
+                paths: &p,
+                runner: &runner,
+                sys: &mut sys,
+            },
+        );
+        assert!(json(&p).get("login_domain").is_none());
     }
 
     #[test]
@@ -584,6 +666,7 @@ mod tests {
             logo_sha256: None,
             icon_sha256: None,
             locale_managed: false,
+            login_domain: None,
         };
         let out = go(&p, &none, Phase::Full, &Fake::bytes(b""), &r, &mut sys);
         assert_eq!(out, vec![ok(ITEM)]);
@@ -703,6 +786,7 @@ mod tests {
             logo_sha256: Some(&lh),
             icon_sha256: Some(&ih),
             locale_managed: false,
+            login_domain: None,
         };
         let f = Fake::serving(&[logo, icon]);
         let r = FakeRunner::new();

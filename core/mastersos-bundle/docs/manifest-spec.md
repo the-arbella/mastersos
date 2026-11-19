@@ -236,6 +236,8 @@ with PKCE and the fixed redirect `http://127.0.0.1:48123/callback`.
 | `card_hosts` | list of strings | optional; only the issuer's host | lowercase hostnames with at least two labels; no scheme, port, path, wildcard or IP address; none twice; at most 20 | `card_hosts = ["sso.school.ac.th"]` | Only with `card_navigation = "listed"`: the hosts the sign-in card may open besides the issuer, for example an upstream provider. Each is reached over `https` on port 443, and its subdomains are not included. With `"open"` they change nothing. Feature `oidc_card`, like `client_secret`. |
 | `card_navigation` | string | `"open"` | `"open"`, `"listed"` | `card_navigation = "listed"` | Which pages the sign-in card may open. `open`: any `https` page the sign-in pages link or redirect to (an upstream provider, a captcha, a help page), except what the Device's own `chrome_policy` `URLBlocklist` blocks. `listed`: only the issuer and `card_hosts`; a Device whose `URLBlocklist` contains `"*"` always gets a listed card. See [The sign-in card](#the-sign-in-card). Devices whose OS predates this key reject the whole Version (feature `oidc_card_navigation`) and keep the card `listed`. |
 | `idp_hint` | string | optional; none | 1 to 64 of `A-Z a-z 0-9 _ -` | `idp_hint = "school-sso"` | Only when `issuer` is a broker in front of the school's SSO: the broker's id for that upstream provider. Feature `oidc_idp_hint`. |
+| `login_domain` | string | none | one of `allowed_domains` | `login_domain = "school.ac.th"` | Completes a short user name on the login screen. |
+| `mastersos_claims` | boolean | `false` | `true`, `false` | `mastersos_claims = true` | `true`: the MastersOS issuer profile (needs `[school] id`). |
 
 ```toml check=ok
 [school.oidc]
