@@ -19,7 +19,7 @@ const LOCAL_UID: u32 = 1500;
 
 /// A system root where the `user-layer` step rendered the spec example (Group `default`: `teacher`, `primary` and
 /// neutral), with a stand-in compiled database for each config (the step's `dconf update` is a fake here).
-fn rendered() -> (tempfile::TempDir, SysPaths, Index) {
+pub(crate) fn rendered() -> (tempfile::TempDir, SysPaths, Index) {
     let root = tmp_root();
     let m = Manifest::parse(&spec_example_v3()).unwrap();
     let p = render_with(root.path(), &m);
@@ -70,7 +70,7 @@ fn render_with(root: &Path, m: &Manifest) -> SysPaths {
     p
 }
 
-fn policy() -> LoginPolicy {
+pub(crate) fn policy() -> LoginPolicy {
     let mut p = login::policy_from_seed(
         &Seed::parse("server_url = \"https://m.school.ac.th\"\ntrust = []\n").unwrap(),
     );
@@ -515,13 +515,26 @@ fn other_uid_active_refuses() {
     assert_eq!(read_active(&p.root).unwrap(), other);
     assert!(link(&p).is_none());
     assert!(!managed(&p).exists());
-    // The same person again (a second session while theirs is open) is switched
-    switched("primary", false, &open(&p, &policy(), "bob", 2000));
-    // Their own session being closed is not reopened
+    // The same person again (a second session while theirs is open) keeps the first session's config: nothing is
+    // resolved or switched again under the first session
+    assert_eq!(
+        open(&p, &policy(), "bob", 2000),
+        OpenOutcome::Switched {
+            user_config: "teacher".into(),
+            fallback_reason: None,
+            home: index.configs["teacher"].home,
+        }
+    );
+    assert_eq!(read_active(&p.root).unwrap(), other);
+    assert!(link(&p).is_none());
+    assert!(!managed(&p).exists());
+    // A session being closed refuses every uid, its own too
     let mut closing = read_active(&p.root).unwrap();
     closing.state = ActiveState::Closing;
     write_active(&p.root, &closing).unwrap();
     assert_eq!(open(&p, &policy(), "bob", 2000), OpenOutcome::Refused);
+    assert_eq!(open(&p, &policy(), STUDENT, 20000), OpenOutcome::Refused);
+    assert_eq!(read_active(&p.root).unwrap(), closing);
     // An unreadable marker refuses too
     fs::write(p.root.join(RUN_DIR).join(ACTIVE_FILE), "{").unwrap();
     assert_eq!(open(&p, &policy(), STUDENT, 20000), OpenOutcome::Refused);
@@ -608,4 +621,97 @@ fn format2_after_a_switch_removes_profile_and_session_db() {
     assert!(!p.root.join("etc/dconf/profile/user").exists());
     assert!(!session_db(&p).exists());
     assert!(link(&p).is_none());
+}
+
+/// A second open of the same person after a real switch returns the marker's config (with its reason) and leaves
+/// every switched file as the first open left it, even when the rules would now choose something else.
+#[test]
+fn same_person_again_keeps_the_first_sessions_config() {
+    let (_root, p, index) = rendered();
+    fs::remove_file(chrome_of(&p, &dir_of("teacher"))).unwrap();
+    switched("primary", true, &open(&p, &policy(), ADMIN, 20000));
+    let first = read_active(&p.root).unwrap();
+    // teacher could be switched in now; the first session's config stays
+    fs::copy(
+        chrome_of(&p, &dir_of("primary")),
+        chrome_of(&p, &dir_of("teacher")),
+    )
+    .unwrap();
+    let before = tree(&p.root);
+    let managed_before = fs::read(managed(&p)).unwrap();
+    assert_eq!(
+        open(&p, &policy(), ADMIN, 20000),
+        OpenOutcome::Switched {
+            user_config: "primary".into(),
+            fallback_reason: first.reason.clone(),
+            home: index.configs["primary"].home,
+        }
+    );
+    assert_eq!(read_active(&p.root).unwrap(), first);
+    assert_eq!(tree(&p.root), before);
+    assert_eq!(fs::read(managed(&p)).unwrap(), managed_before);
+    assert_switched_to(&p, &dir_of("primary"));
+}
+
+/// Opens are serialized on `active.lock` (root 0600): while another open, close or revert holds it, an open waits at
+/// most the given time and then refuses, touching nothing; a close still wakes the agent.
+#[test]
+fn a_held_lock_refuses_the_open() {
+    let (_root, p, _) = rendered();
+    let held = lock_active(&p.root, Duration::ZERO).unwrap();
+    assert_eq!(mode(p.root.join(RUN_DIR).join(LOCK_FILE)), 0o600);
+    assert_eq!(mode(p.root.join(RUN_DIR)), 0o700);
+    // flock is per open file description: a second open of the file in this process conflicts like another process
+    let started = std::time::Instant::now();
+    assert!(lock_active(&p.root, Duration::from_millis(200)).is_err());
+    assert!(started.elapsed() >= Duration::from_millis(200));
+    assert!(started.elapsed() < LOCK_WAIT);
+    assert_eq!(open(&p, &policy(), STUDENT, 20000), OpenOutcome::Refused);
+    assert!(read_active(&p.root).is_none());
+    assert!(link(&p).is_none());
+    assert!(!managed(&p).exists());
+    let r = FakeRunner::new();
+    on_close(&p.root, 20000, &r);
+    assert_eq!(r.calls().len(), 1);
+    drop(held);
+    switched("primary", false, &open(&p, &policy(), STUDENT, 20000));
+    // The open released it
+    drop(lock_active(&p.root, Duration::ZERO).unwrap());
+}
+
+/// Two opens of different people at the same time: exactly one gets the session, the other is refused.
+#[test]
+fn concurrent_opens_switch_once() {
+    let (_root, p, _) = rendered();
+    let outs: Vec<OpenOutcome> = std::thread::scope(|s| {
+        let a = s.spawn(|| open(&p, &policy(), STUDENT, 20000));
+        let b = s.spawn(|| open(&p, &policy(), ADMIN, 20001));
+        vec![a.join().unwrap(), b.join().unwrap()]
+    });
+    let refused = outs.iter().filter(|o| **o == OpenOutcome::Refused).count();
+    assert_eq!(refused, 1, "{outs:?}");
+    let a = read_active(&p.root).unwrap();
+    let winner = if outs[0] == OpenOutcome::Refused {
+        20001
+    } else {
+        20000
+    };
+    assert_eq!(a.uid, winner);
+    assert_switched_to(&p, &a.dir);
+}
+
+/// Every reason is kept: missing facts and the failed switch of the rules' choice both reach the marker.
+#[test]
+fn facts_reason_and_switch_failure_are_both_kept() {
+    let (_root, p, _) = rendered();
+    let mut pol = policy();
+    pol.mastersos_claims = true;
+    fs::remove_file(chrome_of(&p, &dir_of("teacher"))).unwrap();
+    // The admin rule picks teacher without facts; teacher cannot be switched in
+    let out = open(&p, &pol, ADMIN, 20000);
+    switched("primary", true, &out);
+    let a = read_active(&p.root).unwrap();
+    let why = a.reason.unwrap();
+    assert!(why.contains("the issuer handed over no facts"), "{why}");
+    assert!(why.contains("switching to \"teacher\" failed"), "{why}");
 }

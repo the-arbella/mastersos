@@ -27,7 +27,7 @@
 
 use std::os::fd::OwnedFd;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use mastersos_bundle::{Caps, DeviceFacts, HomeMode, IssuerFacts, Kind, IT_ACCOUNT_USER};
@@ -47,6 +47,12 @@ use crate::system::SysPaths;
 /// The signed-in person's uid (`<uid>\n`, 0644) in the public dir of the config their session uses: the image's readers of
 /// `session/session-mode` trust it only in a user manager of this uid, and treat every other one as locked.
 pub const UID_FILE: &str = "uid";
+
+/// The lock of the session marker in [`RUN_DIR`] (root 0600): `on_open` holds it from the marker check through the marker
+/// write, `on_close` and the agent's revert (Task 6) while they change the marker, so two of them never interleave.
+pub const LOCK_FILE: &str = "active.lock";
+/// How long `pam-session` waits for [`LOCK_FILE`] before it refuses the login: well inside its 5 s budget.
+pub const LOCK_WAIT: Duration = Duration::from_secs(2);
 
 /// The temporary names of the switch, next to their targets.
 const SESSION_DB_TMP: &str = "mastersos-session.tmp";
@@ -245,11 +251,32 @@ pub(crate) fn on_open_at(
     if !policy.user_layer {
         return OpenOutcome::NotUserLayer;
     }
+    // `root` holds the marker and the facts (`/` in PAM), `paths` the switched files (their root is the same `/`); tests
+    // give both the same temporary root.
+    debug_assert_eq!(root, paths.root.as_path());
     let log = |msg: &str| eprintln!("mastersos-agent pam-session: {user}: user layer: {msg}");
-    // Backstop of pam-check's one-session rule: another person's session (or one of ours being closed) is not touched.
+    // One open at a time, from the marker check through the marker write; a busy lock refuses (fail closed).
+    let _lock = match lock_active(root, LOCK_WAIT) {
+        Ok(l) => l,
+        Err(e) => {
+            log(&format!("{e:#}; denied"));
+            return OpenOutcome::Refused;
+        }
+    };
+    // Backstop of pam-check's one-session rule: another person's session, or any session being closed, is not touched.
     match active_marker(root) {
         Ok(None) => {}
-        Ok(Some(a)) if a.uid == uid && a.state == ActiveState::Open => {}
+        Ok(Some(a)) if a.uid == uid && a.state == ActiveState::Open => {
+            // A second session of the same person keeps the first one's config: nothing is resolved or switched again.
+            let home = read_index(&paths.var_dir)
+                .and_then(|i| i.configs.get(&a.user_config).map(|r| r.home))
+                .unwrap_or(HomeMode::Keep);
+            return OpenOutcome::Switched {
+                user_config: a.user_config,
+                fallback_reason: a.reason,
+                home,
+            };
+        }
         Ok(Some(a)) => {
             log(&format!(
                 "a session is still signed in or closing (uid {}); denied",
@@ -288,20 +315,20 @@ pub(crate) fn on_open_at(
         return refuse("the user config rules are missing or unreadable".into());
     };
     let device = device_facts(policy, user, uid, &index.rules.group);
-    let mut reason = None;
+    let mut reasons: Vec<String> = Vec::new();
     let facts: Option<IssuerFacts> = if device.kind == Kind::Sso && policy.mastersos_claims {
         match take_facts(root, user, now) {
             FactsOutcome::Facts(f) => Some(f),
             FactsOutcome::Missing => {
-                reason = Some("the issuer handed over no facts".to_string());
+                reasons.push("the issuer handed over no facts".to_string());
                 None
             }
             FactsOutcome::Error(e) => {
-                reason = Some(format!("the issuer facts are unusable: {e}"));
+                reasons.push(format!("the issuer facts are unusable: {e}"));
                 None
             }
             FactsOutcome::Stale => {
-                reason = Some("the issuer facts are stale".to_string());
+                reasons.push("the issuer facts are stale".to_string());
                 None
             }
         }
@@ -314,13 +341,13 @@ pub(crate) fn on_open_at(
     match index.configs.get(&chosen) {
         Some(r) => match switch(r) {
             Ok(()) => picked = Some((chosen.clone(), r)),
-            Err(e) => reason = Some(format!("switching to {chosen:?} failed: {e:#}")),
+            Err(e) => reasons.push(format!("switching to {chosen:?} failed: {e:#}")),
         },
-        None => reason = Some(format!("the user config {chosen:?} was not rendered")),
+        None => reasons.push(format!("the user config {chosen:?} was not rendered")),
     }
     if picked.is_none() {
-        if let Some(why) = &reason {
-            log(why);
+        if !reasons.is_empty() {
+            log(&reasons.join("; "));
         }
         if chosen == fallback {
             return refuse(format!("the fallback {fallback:?} cannot be switched in"));
@@ -338,8 +365,8 @@ pub(crate) fn on_open_at(
     let Some((user_config, r)) = picked else {
         return refuse("no user config was switched in".into());
     };
-    // Only a fallback that is not the rules' choice has a reason worth reporting.
-    let reason = reason.filter(|_| user_config == fallback);
+    // Only a fallback that is not the rules' choice has a reason worth reporting; every reason is kept.
+    let reason = (user_config == fallback && !reasons.is_empty()).then(|| reasons.join("; "));
     if let Some(why) = &reason {
         log(&format!("got the fallback {fallback:?}: {why}"));
     }
@@ -364,29 +391,70 @@ pub(crate) fn on_open_at(
     }
 }
 
-/// `pam-session`'s close_session of a human account (uid `uid`): marks its session [`ActiveState::Closing`] and wakes
-/// the agent, which reverts to neutral. Never fails the logout: problems only go to stderr. A marker of another uid is
-/// left alone.
+/// `pam-session`'s close_session of a human account (uid `uid`): marks its session [`ActiveState::Closing`] (under
+/// [`LOCK_FILE`]) and wakes the agent, which reverts to neutral. Never fails the logout: problems only go to stderr. A
+/// marker of another uid is left alone.
 pub fn on_close(root: &Path, uid: u32, runner: &dyn Runner) {
-    match active_marker(root) {
-        Ok(Some(mut a)) if a.uid == uid => {
-            if a.state != ActiveState::Closing {
-                a.state = ActiveState::Closing;
-                if let Err(e) = write_active(root, &a) {
-                    eprintln!("mastersos-agent pam-session: user layer: marking the session closing failed: {e:#}");
+    let log = |msg: String| eprintln!("mastersos-agent pam-session: user layer: {msg}");
+    match lock_active(root, LOCK_WAIT) {
+        Err(e) => log(format!("{e:#}; the session is not marked closing")),
+        Ok(_lock) => match active_marker(root) {
+            Ok(Some(mut a)) if a.uid == uid => {
+                if a.state != ActiveState::Closing {
+                    a.state = ActiveState::Closing;
+                    if let Err(e) = write_active(root, &a) {
+                        log(format!("marking the session closing failed: {e:#}"));
+                    }
                 }
             }
-        }
-        Ok(Some(a)) => eprintln!(
-            "mastersos-agent pam-session: user layer: the session marker is for uid {}, not {uid}; left alone",
-            a.uid
-        ),
-        Ok(None) => {}
-        Err(e) => {
-            eprintln!("mastersos-agent pam-session: user layer: the session marker cannot be read: {e:#}")
-        }
+            Ok(Some(a)) => log(format!(
+                "the session marker is for uid {}, not {uid}; left alone",
+                a.uid
+            )),
+            Ok(None) => {}
+            Err(e) => log(format!("the session marker cannot be read: {e:#}")),
+        },
     }
     crate::login_queue::wake_agent(runner);
+}
+
+/// Takes the exclusive `flock` on [`LOCK_FILE`] in [`RUN_DIR`] under `root` (created root 0700 / 0600 when missing),
+/// polling up to `wait`; released when the returned fd is dropped. For `pam-session` and the agent's revert (Task 6).
+pub fn lock_active(root: &Path, wait: Duration) -> Result<OwnedFd> {
+    use rustix::fs::{flock, openat, FlockOperation, Mode, OFlags};
+    let dir = safefs::open_dir(root, Path::new(RUN_DIR), true)?;
+    safefs::set_mode(&dir, 0o700)?;
+    let fd = openat(
+        &dir,
+        LOCK_FILE,
+        OFlags::CREATE | OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        Mode::from_raw_mode(0o600),
+    )
+    .map_err(std::io::Error::from)
+    .with_context(|| format!("opening {LOCK_FILE}"))?;
+    let start = Instant::now();
+    loop {
+        match flock(&fd, FlockOperation::NonBlockingLockExclusive) {
+            Ok(()) => return Ok(fd),
+            Err(e) if e == rustix::io::Errno::WOULDBLOCK => {}
+            Err(e) => {
+                return Err(std::io::Error::from(e)).with_context(|| format!("locking {LOCK_FILE}"))
+            }
+        }
+        let waited = start.elapsed();
+        if waited >= wait {
+            bail!(
+                "{LOCK_FILE} is still held after {} ms (another sign-in or sign-out is changing the session)",
+                wait.as_millis()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50).min(wait - waited));
+    }
+}
+
+/// Whether a marker exists under `root` (or cannot be read): some session is open or still being closed.
+pub fn marker_present(root: &Path) -> bool {
+    !matches!(active_marker(root), Ok(None))
 }
 
 /// Writes the marker (`<root>/`[`RUN_DIR`]`/`[`ACTIVE_FILE`], directory root 0700, file 0600).
@@ -398,4 +466,4 @@ pub fn write_active(root: &Path, a: &Active) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

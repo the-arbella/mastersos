@@ -469,16 +469,6 @@ fn run_login_scripts_with(
     run_exported(uid, &scripts, every_login, state, runner, wait)
 }
 
-/// Whether the session mode next to the session's login scripts reads `full` (trimmed, any case); missing or unreadable
-/// counts as locked.
-fn session_is_full(session_dir: &Path) -> bool {
-    session_dir
-        .parent()
-        .and_then(|d| std::fs::read(d.join(crate::system::exec_block::SESSION_MODE_FILE)).ok())
-        .and_then(|b| String::from_utf8(b).ok())
-        .is_some_and(|t| t.trim().eq_ignore_ascii_case("full"))
-}
-
 /// One exported login script: its path in the bundle, the exported file and its timeout.
 struct Exported {
     path: String,
@@ -486,27 +476,89 @@ struct Exported {
     timeout_secs: u64,
 }
 
-/// The login scripts of the session's user config (format 3) in `dir`, from its [`INDEX`]; `None` when there is no
-/// readable index there (no user layer, or no session switched in yet). File names that are not plain names are
-/// left out.
-fn session_scripts(dir: &Path) -> Option<Vec<Exported>> {
-    // `dir` goes through the `session` link: only its last part is opened without following links
-    let fd = safefs::open_abs_dir(dir, false).ok()?;
-    let bytes = safefs::read_at(&fd, INDEX).ok()??;
-    let index: BTreeMap<String, IndexEntry> = serde_json::from_slice(&bytes).ok()?;
-    Some(
-        index
-            .into_iter()
-            .filter(|(_, e)| {
-                !e.file.is_empty() && !e.file.contains('/') && !e.file.starts_with('.')
-            })
-            .map(|(path, e)| Exported {
-                path,
-                file: dir.join(&e.file),
-                timeout_secs: e.timeout_secs.min(MAX_SCRIPT_TIMEOUT_SECS),
-            })
-            .collect(),
-    )
+/// What the session link says about a batch (format 3).
+enum SessionSet {
+    /// There is no session link: no user layer, the Config's export runs.
+    Absent,
+    /// The session is the batch's uid: its user config's login scripts, and whether its mode is `full`.
+    Mine { scripts: Vec<Exported>, full: bool },
+    /// The link exists but its session is not the batch's uid (or cannot be read): nothing runs.
+    Skip(String),
+}
+
+/// The session's set for a batch of `uid`. `session_dir` is [`SESSION_EXPORT_DIR`] (`<public>/session/login-scripts`):
+/// the link is read once and its config dir opened as an fd (no link followed after that), and everything (the `uid`
+/// file the switch writes before it points the link, the session mode, the index) is read through that fd. The scripts'
+/// files are named by the config dir, not by the link, so a later switch cannot swap them under the batch.
+fn session_set(session_dir: &Path, uid: u32) -> SessionSet {
+    use crate::user_layer::{is_config_dir, render::STATE_SUB, switch::UID_FILE};
+    let (Some(link_path), Some(sub)) = (
+        session_dir.parent(),
+        session_dir.file_name().and_then(|n| n.to_str()),
+    ) else {
+        return SessionSet::Skip(format!("malformed session dir {}", session_dir.display()));
+    };
+    let (Some(public), Some(link)) = (
+        link_path.parent(),
+        link_path.file_name().and_then(|n| n.to_str()),
+    ) else {
+        return SessionSet::Skip(format!("malformed session link {}", link_path.display()));
+    };
+    let pub_fd = match safefs::open_abs_dir(public, false) {
+        Ok(fd) => fd,
+        Err(e) if crate::apply::is_not_found(&e) => return SessionSet::Absent,
+        Err(e) => return SessionSet::Skip(format!("{}: {e:#}", public.display())),
+    };
+    let Some(target) = safefs::read_link_at(&pub_fd, link) else {
+        return match rustix::fs::statat(&pub_fd, link, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
+            Err(rustix::io::Errno::NOENT) => SessionSet::Absent,
+            _ => SessionSet::Skip(format!("{link} is not a link")),
+        };
+    };
+    let Some(d) = target
+        .strip_prefix(STATE_SUB)
+        .and_then(|t| t.strip_prefix('/'))
+        .filter(|d| is_config_dir(d))
+    else {
+        return SessionSet::Skip(format!("{link} points at {target:?}, not a user config"));
+    };
+    let cfg = match safefs::open_dir_at(&pub_fd, &Path::new(STATE_SUB).join(d), false) {
+        Ok(fd) => fd,
+        Err(e) => return SessionSet::Skip(format!("{target}: {e:#}")),
+    };
+    let read = |fd: &std::os::fd::OwnedFd, name: &str| -> Option<String> {
+        String::from_utf8(safefs::read_at(fd, name).ok()??).ok()
+    };
+    let owner = read(&cfg, UID_FILE).and_then(|t| t.trim().parse::<u32>().ok());
+    if owner != Some(uid) {
+        return SessionSet::Skip(match owner {
+            Some(o) => format!("the session is uid {o}'s"),
+            None => "the session belongs to nobody".to_string(),
+        });
+    }
+    let full = read(&cfg, crate::system::exec_block::SESSION_MODE_FILE)
+        .is_some_and(|t| t.trim().eq_ignore_ascii_case("full"));
+    let scripts_fd = match safefs::open_dir_at(&cfg, Path::new(sub), false) {
+        Ok(fd) => fd,
+        Err(e) => return SessionSet::Skip(format!("{target}/{sub}: {e:#}")),
+    };
+    let Some(bytes) = safefs::read_at(&scripts_fd, INDEX).ok().flatten() else {
+        return SessionSet::Skip(format!("{target}/{sub} has no readable {INDEX}"));
+    };
+    let Ok(index) = serde_json::from_slice::<BTreeMap<String, IndexEntry>>(&bytes) else {
+        return SessionSet::Skip(format!("{target}/{sub}/{INDEX} is malformed"));
+    };
+    let dir = public.join(STATE_SUB).join(d).join(sub);
+    let scripts = index
+        .into_iter()
+        .filter(|(_, e)| !e.file.is_empty() && !e.file.contains('/') && !e.file.starts_with('.'))
+        .map(|(path, e)| Exported {
+            path,
+            file: dir.join(&e.file),
+            timeout_secs: e.timeout_secs.min(MAX_SCRIPT_TIMEOUT_SECS),
+        })
+        .collect();
+    SessionSet::Mine { scripts, full }
 }
 
 fn run_exported(
@@ -623,9 +675,9 @@ pub fn current_results<'a>(
         .collect()
 }
 
-/// 以 `uid` 的身份跑一次 [`run_login_scripts`]（`hashes` 只需这个 uid 的键）。Under the user layer, when the session's
-/// set ([`SESSION_EXPORT_DIR`], `session_dir`) has an index, that set runs instead of the Config's: every login unless
-/// the session mode next to it is `full` (or for the guest, always).
+/// 以 `uid` 的身份跑一次 [`run_login_scripts`]（`hashes` 只需这个 uid 的键）。Under the user layer (a `session` link
+/// next to `session_dir`, [`SESSION_EXPORT_DIR`]) only the session's set runs, and only when the session is `uid`'s
+/// ([`session_set`]): every login unless its mode is `full` (or for the guest, always). Otherwise nothing runs.
 pub fn run_batch(
     uid: u32,
     config: &Config,
@@ -638,12 +690,19 @@ pub fn run_batch(
         login_script_hashes: hashes,
         ..State::default()
     };
-    let results = match session_scripts(session_dir) {
-        Some(scripts) => {
-            let every_login = uid == GUEST_UID || !session_is_full(session_dir);
+    let results = match session_set(session_dir, uid) {
+        SessionSet::Mine { scripts, full } => {
+            let every_login = uid == GUEST_UID || !full;
             run_exported(uid, &scripts, every_login, &mut st, runner, USER_WAIT)
         }
-        None => run_login_scripts(uid, config, export_dir, &mut st, runner),
+        SessionSet::Absent => run_login_scripts(uid, config, export_dir, &mut st, runner),
+        // Never another person's set, never the Config's: this login's scripts are skipped
+        SessionSet::Skip(why) => {
+            eprintln!(
+                "mastersos-agent: login scripts of uid {uid} skipped: {why} (the session was switched since this login)"
+            );
+            vec![]
+        }
     };
     Batch {
         uid,
@@ -850,6 +909,7 @@ mod tests {
             public.path().join("session"),
         )
         .unwrap();
+        fs::write(d.join("uid"), "1001\n").unwrap();
         let session = public.path().join("session/login-scripts");
         for (mode, recorded) in [("full\n", true), ("learning\n", false), ("", false)] {
             fs::write(d.join("session-mode"), mode).unwrap();
@@ -857,7 +917,13 @@ mod tests {
             let b = run_batch(1001, &g, ex.path(), &session, BTreeMap::new(), &r);
             let calls = runs(&r);
             assert_eq!(calls.len(), 1, "{calls:?}");
-            assert!(calls[0].contains(&name), "{calls:?}");
+            // named by the config dir, not by the link
+            assert!(
+                calls[0].contains(&format!(
+                    "user-layer/u-0123456789abcdef/login-scripts/{name}"
+                )),
+                "{calls:?}"
+            );
             assert!(calls[0].contains("RuntimeMaxSec=60"), "{calls:?}");
             assert_eq!(b.results.len(), 1);
             assert_eq!(b.results[0].item, "login-script:scripts/teacher.sh");
@@ -872,6 +938,58 @@ mod tests {
         let r = FakeRunner::new();
         run_batch(1001, &g, ex.path(), &session, BTreeMap::new(), &r);
         assert!(runs(&r)[0].contains(&exported_name("scripts/device.sh")));
+    }
+
+    /// The session's set runs only for the uid the session belongs to: by batch time the link may point at another
+    /// person's config (or neutral, or something malformed). Then nothing runs, neither that set nor the Config's.
+    #[test]
+    fn session_login_scripts_of_another_uid_are_skipped() {
+        let g = config(&[("scripts/device.sh", None)]);
+        let ex = exported(&[("scripts/device.sh", "#!/bin/sh\n")]);
+        let public = tempfile::tempdir().unwrap();
+        let d = public.path().join("user-layer/u-0123456789abcdef");
+        fs::create_dir_all(d.join("login-scripts")).unwrap();
+        fs::create_dir_all(public.path().join("user-layer/neutral/login-scripts")).unwrap();
+        let name = exported_name("scripts/teacher.sh");
+        fs::write(d.join("login-scripts").join(&name), "#!/bin/sh\necho t\n").unwrap();
+        fs::write(
+            d.join("login-scripts").join(INDEX),
+            format!(r#"{{"scripts/teacher.sh":{{"file":"{name}","timeout_secs":60}}}}"#),
+        )
+        .unwrap();
+        fs::write(d.join("session-mode"), "full\n").unwrap();
+        let link = public.path().join("session");
+        let session = link.join("login-scripts");
+        let point = |target: &str| {
+            let _ = fs::remove_file(&link);
+            std::os::unix::fs::symlink(target, &link).unwrap();
+        };
+        let nothing_runs = |why: &str| {
+            let r = FakeRunner::new();
+            let b = run_batch(1001, &g, ex.path(), &session, BTreeMap::new(), &r);
+            assert!(r.calls().is_empty(), "{why}: {:?}", r.calls());
+            assert!(b.results.is_empty(), "{why}");
+            assert!(b.hashes.is_empty(), "{why}");
+        };
+        point("user-layer/u-0123456789abcdef");
+        fs::write(d.join("uid"), "1002\n").unwrap();
+        nothing_runs("another person's session");
+        fs::write(d.join("uid"), "garbage").unwrap();
+        nothing_runs("an unreadable uid");
+        fs::remove_file(d.join("uid")).unwrap();
+        nothing_runs("a session of nobody");
+        point("user-layer/neutral");
+        nothing_runs("neutral");
+        point("user-layer/u-ffffffffffffffff");
+        nothing_runs("a dangling link");
+        point("/etc");
+        nothing_runs("a link out of the user layer");
+        // The same set runs once the session is the batch's uid again
+        point("user-layer/u-0123456789abcdef");
+        fs::write(d.join("uid"), "1001\n").unwrap();
+        let r = FakeRunner::new();
+        run_batch(1001, &g, ex.path(), &session, BTreeMap::new(), &r);
+        assert_eq!(runs(&r).len(), 1);
     }
 
     /// The hashes and results of the session's scripts are kept: the login Config lists every reachable user config's.
@@ -1413,7 +1531,8 @@ mod tests {
             1001,
             &g,
             ex.path(),
-            &ex.path().join("no-session"),
+            // no session link next to it: format 1/2
+            &ex.path().join("session/login-scripts"),
             hashes_of(&all, 1001),
             &FakeRunner::new(),
         );
