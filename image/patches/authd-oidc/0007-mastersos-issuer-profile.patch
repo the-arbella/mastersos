@@ -135,10 +135,10 @@ index 055c9fa..1aca227 100644
  }
 diff --git a/authd-oidc-brokers/internal/broker/mastersos_facts.go b/authd-oidc-brokers/internal/broker/mastersos_facts.go
 new file mode 100644
-index 0000000..7ab8858
+index 0000000..1c8aace
 --- /dev/null
 +++ b/authd-oidc-brokers/internal/broker/mastersos_facts.go
-@@ -0,0 +1,274 @@
+@@ -0,0 +1,289 @@
 +package broker
 +
 +// MastersOS carried patch (image/patches/authd-oidc/0007-mastersos-issuer-profile.patch): the facts hand-off.
@@ -171,6 +171,7 @@ index 0000000..7ab8858
 +	"net/http"
 +	"os"
 +	"path/filepath"
++	"strings"
 +	"syscall"
 +	"time"
 +
@@ -312,12 +313,26 @@ index 0000000..7ab8858
 +	return mastersosFactsFrom(raw, claims)
 +}
 +
++// The error texts for a userinfo answer without sub or org (for instance when the issuer did not grant the facts scope)
++// and for one whose sub or org is not the ID token's.
++const (
++	mastersosFactsMissingText  = "the userinfo answer has no sub or org"
++	mastersosFactsMismatchText = "the userinfo sub or org does not match the ID token"
++)
++
 +// mastersosFactsFrom keeps the six facts of a userinfo answer whose sub and org are the ID token's.
 +func mastersosFactsFrom(raw map[string]json.RawMessage, claims mastersosIDClaims) (map[string]json.RawMessage, error) {
++	absent := func(v json.RawMessage) bool {
++		t := strings.TrimSpace(string(v))
++		return t == "" || t == "null" || t == `""`
++	}
++	if absent(raw["sub"]) || absent(raw["org"]) {
++		return nil, &mastersosFactsError{text: mastersosFactsMissingText}
++	}
 +	var sub, org string
 +	if json.Unmarshal(raw["sub"], &sub) != nil || json.Unmarshal(raw["org"], &org) != nil ||
 +		sub == "" || org == "" || sub != claims.Sub || org != claims.Org {
-+		return nil, &mastersosFactsError{text: "the userinfo sub or org does not match the ID token"}
++		return nil, &mastersosFactsError{text: mastersosFactsMismatchText}
 +	}
 +	facts := make(map[string]json.RawMessage, len(mastersosFactKeys))
 +	for _, k := range mastersosFactKeys {
@@ -445,10 +460,10 @@ index 0000000..48192a1
 +}
 diff --git a/authd-oidc-brokers/internal/broker/mastersos_facts_internal_test.go b/authd-oidc-brokers/internal/broker/mastersos_facts_internal_test.go
 new file mode 100644
-index 0000000..e8ff512
+index 0000000..24c42ca
 --- /dev/null
 +++ b/authd-oidc-brokers/internal/broker/mastersos_facts_internal_test.go
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,73 @@
 +package broker
 +
 +// MastersOS carried patch (image/patches/authd-oidc/0007-mastersos-issuer-profile.patch): the userinfo body cap and the
@@ -498,27 +513,36 @@ index 0000000..e8ff512
 +	require.NoError(t, err)
 +	require.Len(t, facts, 2, "absent facts stay absent")
 +
-+	for _, bad := range []string{
-+		`{"sub":"bob-id","org":"` + testOrg + `"}`,
-+		`{"sub":"alice-id","org":"` + strings.ToUpper(testOrg) + `"}`,
-+		`{"org":"` + testOrg + `"}`,
-+		`{"sub":"alice-id"}`,
-+		`{"sub":null,"org":"` + testOrg + `"}`,
-+		`{"sub":["alice-id"],"org":"` + testOrg + `"}`,
++	const missing = "the userinfo answer has no sub or org"
++	const mismatch = "the userinfo sub or org does not match the ID token"
++	for bad, want := range map[string]string{
++		`{"sub":"bob-id","org":"` + testOrg + `"}`:                    mismatch,
++		`{"sub":"alice-id","org":"` + strings.ToUpper(testOrg) + `"}`: mismatch,
++		`{"sub":["alice-id"],"org":"` + testOrg + `"}`:                mismatch,
++		`{"sub":"alice-id","org":7}`:                                  mismatch,
++		`{"org":"` + testOrg + `"}`:                                   missing,
++		`{"sub":"alice-id"}`:                                          missing,
++		`{"sub":null,"org":"` + testOrg + `"}`:                        missing,
++		`{"sub":"alice-id","org":""}`:                                 missing,
++		`{"age_band":"13-17"}`:                                        missing,
 +	} {
 +		_, err := mastersosFactsFrom(raw(bad), claims)
-+		require.Error(t, err, "userinfo %s", bad)
++		var fe *mastersosFactsError
++		require.True(t, errors.As(err, &fe), "userinfo %s: err %v", bad, err)
++		require.Equal(t, want, fe.text, "userinfo %s", bad)
 +	}
++	require.Equal(t, missing, mastersosFactsMissingText)
++	require.Equal(t, mismatch, mastersosFactsMismatchText)
 +
 +	_, err = mastersosFactsFrom(raw(`{"sub":"","org":""}`), mastersosIDClaims{LoginName: "alice@school.example"})
 +	require.Error(t, err, "empty claims never match")
 +}
 diff --git a/authd-oidc-brokers/internal/broker/mastersos_facts_test.go b/authd-oidc-brokers/internal/broker/mastersos_facts_test.go
 new file mode 100644
-index 0000000..4a0d41a
+index 0000000..2193934
 --- /dev/null
 +++ b/authd-oidc-brokers/internal/broker/mastersos_facts_test.go
-@@ -0,0 +1,408 @@
+@@ -0,0 +1,420 @@
 +package broker_test
 +
 +// MastersOS carried patch (image/patches/authd-oidc/0007-mastersos-issuer-profile.patch): after a card login is granted
@@ -769,22 +793,30 @@ index 0000000..4a0d41a
 +	}
 +}
 +
-+// Userinfo that names another person or organisation than the verified ID token hands over nobody's facts.
++// Userinfo that names another person or organisation than the verified ID token hands over nobody's facts; one without
++// sub or org (the issuer did not grant the facts scope) neither, and says so in its own words.
 +func TestMastersOSUserinfoSubjectMismatchWritesError(t *testing.T) {
 +	t.Setenv("MASTERSOS_AUTH_CODE", "1")
-+	for name, change := range map[string]func(f map[string]interface{}){
-+		"another sub":      func(f map[string]interface{}) { f["sub"] = "bob-id" },
-+		"another org":      func(f map[string]interface{}) { f["org"] = mastersosOtherOrg },
-+		"org in capitals":  func(f map[string]interface{}) { f["org"] = strings.ToUpper(mastersosOrg) },
-+		"no sub":           func(f map[string]interface{}) { delete(f, "sub") },
-+		"no org":           func(f map[string]interface{}) { delete(f, "org") },
-+		"sub not a string": func(f map[string]interface{}) { f["sub"] = 7 },
-+		"org not a string": func(f map[string]interface{}) { f["org"] = []interface{}{mastersosOrg} },
++	const missing = "the userinfo answer has no sub or org"
++	const mismatch = "the userinfo sub or org does not match the ID token"
++	for name, tc := range map[string]struct {
++		change func(f map[string]interface{})
++		text   string
++	}{
++		"another sub":     {func(f map[string]interface{}) { f["sub"] = "bob-id" }, mismatch},
++		"another org":     {func(f map[string]interface{}) { f["org"] = mastersosOtherOrg }, mismatch},
++		"org in capitals": {func(f map[string]interface{}) { f["org"] = strings.ToUpper(mastersosOrg) }, mismatch},
++		// go-oidc decodes sub as a string itself and refuses the answer before the broker sees it.
++		"sub not a string": {func(f map[string]interface{}) { f["sub"] = 7 }, "the userinfo request failed"},
++		"org not a string": {func(f map[string]interface{}) { f["org"] = []interface{}{mastersosOrg} }, mismatch},
++		"no sub":           {func(f map[string]interface{}) { delete(f, "sub") }, missing},
++		"no org":           {func(f map[string]interface{}) { delete(f, "org") }, missing},
++		"org null":         {func(f map[string]interface{}) { f["org"] = nil }, missing},
 +	} {
 +		t.Run(name, func(t *testing.T) {
 +			f := schoolFacts()
 +			f["org_role"] = "staff-of-someone-else"
-+			change(f)
++			tc.change(f)
 +			rec := &userinfoRecorder{respond: respondJSON(f)}
 +			b := factsBroker(t, schoolClaims("alice@school.example"), rec, true)
 +			dir := newFactsDir(t)
@@ -794,6 +826,9 @@ index 0000000..4a0d41a
 +			require.Equal(t, 1, rec.count())
 +			content := requireErrorForm(t, filepath.Join(dir, aliceFile))
 +			require.NotContains(t, content, "staff-of-someone-else", "another person's facts are never handed over")
++			var got struct{ Error string }
++			require.NoError(t, json.Unmarshal([]byte(content), &got))
++			require.Equal(t, tc.text, got.Error)
 +		})
 +	}
 +}
@@ -853,6 +888,7 @@ index 0000000..4a0d41a
 +
 +			loginAlice(t, b)
 +
++			require.Equal(t, 1, rec.count(), "the hand-off ran: it asked userinfo, then found no directory to write in")
 +			require.Equal(t, before, dirNames(t, parent), "nothing new beside the directory")
 +			if watched != parent {
 +				require.Empty(t, dirNames(t, watched), "nothing written inside the directory")
