@@ -23,6 +23,7 @@ pub mod stamp;
 pub mod status;
 #[cfg(any(test, feature = "test-util"))]
 pub mod testutil;
+pub mod user_layer;
 pub mod webauthn;
 
 /// 长轮询最多挂住的秒数；server 与 agent 共用。
@@ -40,3 +41,4 @@ pub use select::*;
 pub use sign::*;
 pub use stamp::*;
 pub use status::*;
+pub use user_layer::*;

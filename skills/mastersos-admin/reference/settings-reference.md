@@ -89,7 +89,7 @@ once it uses `[defaults]`, `drop`, `it_account` or `[school]` `name` / `logo_sha
 when it uses none of them, so old files stay readable. A Device whose OS reads an older format does
 not apply the Version, reports "the settings use a newer format than this OS; update the OS first",
 and keeps the previous one; the server therefore refuses to publish a text whose format a Device
-seen in the last 30 days does not read (`format_unsupported`). A `format` newer than 2 is reported
+seen in the last 30 days does not read (`format_unsupported`). A `format` newer than 3 is reported
 the same way. Leave `format` as the server wrote it.
 
 <!-- prompt:omit -->
@@ -2538,11 +2538,11 @@ refuse new Versions.
 **Why:** a Device whose OS reads an older format does not apply the Version at all, so they would all stay on the previous settings.
 <!-- /prompt:omit -->
 
-**How to fix:** for a `format` newer than 2, put back the value the server wrote. When Devices are too old, the console names them and the OS image each last reported: update them to an image that reads the format (the message says when no Device of the school runs one yet), or take them out of use and wait until they have been silent for 30 days (the message gives the date); texts that need only format 1 publish as before. The console's version of this Issue carries `found`, `devices`, `device_list`, `more`, `until` and `supported_in` params.
+**How to fix:** for a `format` newer than 3, put back the value the server wrote. When Devices are too old, the console names them and the OS image each last reported: update them to an image that reads the format (the message says when no Device of the school runs one yet), or take them out of use and wait until they have been silent for 30 days (the message gives the date); texts that need only format 1 publish as before. The console's version of this Issue carries `found`, `devices`, `device_list`, `more`, `until` and `supported_in` params.
 
 <!-- prompt:omit -->
 ```toml check=format_unsupported
-format = 3
+format = 4
 [[group]]
 id = "default"
 name = "Unassigned"

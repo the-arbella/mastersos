@@ -19,7 +19,7 @@ pub const MAX_SCRIPT_TIMEOUT_SECS: u64 = 30 * 60;
 /// The newest settings syntax version (`format`) this code reads (phase B design §15.1). The
 /// number goes up only when the meaning of what is written changes; added keys still go through
 /// feature gates.
-pub const MAX_FORMAT: u32 = 2;
+pub const MAX_FORMAT: u32 = 3;
 /// The name of the IT maintenance account every managed Device gets with `it_account`.
 pub const IT_ACCOUNT_USER: &str = "itadmin";
 
@@ -84,9 +84,10 @@ pub struct Manifest {
     /// The settings syntax version: absent is 1. The server writes the lowest one the text needs
     /// (2 once `[defaults]`, `drop`, `it_account` or `[school] name`/`logo_sha256`/
     /// `logo_icon_sha256` are used);
-    /// leave it as the server wrote it.
+    /// leave it as the server wrote it. A `format = 3` text (device layer and user layer) is
+    /// read through [`crate::V3Manifest`].
     #[serde(default = "format_one")]
-    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 2)))]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 3)))]
     pub format: u32,
     /// The Version number, increasing with every Publish. The server writes it on Publish; leave
     /// it out of a Draft.
@@ -121,6 +122,10 @@ pub struct Manifest {
     /// Which shape the text was written in; not part of the text.
     #[serde(skip)]
     pub shape: Shape,
+    /// The user layer of a `format = 3` text (`[user_defaults]`, `[[user_config]]`,
+    /// `[[assign]]`, `[user]`); `None` for format 1 and 2. Not a key of the text.
+    #[serde(skip)]
+    pub user_layer: Option<crate::UserLayer>,
 }
 
 /// The shape a settings text was written in (config profiles design §3.1).
@@ -144,7 +149,7 @@ pub(crate) enum ShapeError {
         index: usize,
         group: String,
     },
-    /// `format` is not 1 or 2, or a format 1 text writes a key that needs format 2.
+    /// `format` is not 1, 2 or 3, or a format 1 text writes a key that needs format 2.
     Format(String),
     /// `format` is newer than [`MAX_FORMAT`].
     TooNew {
@@ -238,20 +243,19 @@ fn detect_shape(doc: &toml::Table) -> Result<Shape, ShapeError> {
 /// [`ShapeError::TooNew`] whatever else the text holds. Then a format 1 text must not write a key
 /// that needs format 2.
 fn check_format(doc: &toml::Table) -> Result<u32, ShapeError> {
-    let format =
-        match doc.get("format") {
-            None => 1,
-            Some(toml::Value::Integer(n)) if *n > i64::from(MAX_FORMAT) => {
-                return Err(ShapeError::TooNew {
-                    found: u32::try_from(*n).unwrap_or(u32::MAX),
-                })
-            }
-            Some(toml::Value::Integer(n)) if *n >= 1 => *n as u32,
-            Some(_) => return Err(ShapeError::Format(
-                "format must be the integer 1 or 2 (format = 2); leave it as the server wrote it"
-                    .into(),
-            )),
-        };
+    let format = match doc.get("format") {
+        None => 1,
+        Some(toml::Value::Integer(n)) if *n > i64::from(MAX_FORMAT) => {
+            return Err(ShapeError::TooNew {
+                found: u32::try_from(*n).unwrap_or(u32::MAX),
+            })
+        }
+        Some(toml::Value::Integer(n)) if *n >= 1 => *n as u32,
+        Some(_) => return Err(ShapeError::Format(
+            "format must be the integer 1, 2 or 3 (format = 2); leave it as the server wrote it"
+                .into(),
+        )),
+    };
     if format >= 2 {
         return Ok(format);
     }
@@ -316,7 +320,9 @@ fn format2_key(doc: &toml::Table) -> Option<&'static str> {
 pub(crate) fn parse_shapes(text: &str) -> Result<Manifest, ShapeError> {
     let shape = match text.parse::<toml::Table>() {
         Ok(doc) => {
-            check_format(&doc)?;
+            if check_format(&doc)? == 3 {
+                return crate::user_layer::parse_v3(text).map_err(ShapeError::Toml);
+            }
             detect_shape(&doc)?
         }
         Err(_) => Shape::New,
@@ -440,6 +446,7 @@ impl LegacyManifest {
             groups,
             devices: self.devices,
             shape: Shape::Legacy,
+            user_layer: None,
         }
     }
 }
@@ -1850,6 +1857,9 @@ pub const FEATURE_OIDC_CARD_NAVIGATION: &str = "oidc_card_navigation";
 /// See [`FEATURE_UPDATE_MIRROR`]: the Device reads `format = 2` (Defaults, `drop`, the IT account,
 /// the school logo and name); the same string as [`format_feature`]`(2)`.
 pub const FEATURE_FORMAT_2: &str = "format_2";
+/// See [`FEATURE_UPDATE_MIRROR`]: the Device reads `format = 3` (device layer, user layer and
+/// rules, user layer design §2); the same string as [`format_feature`]`(3)`.
+pub const FEATURE_FORMAT_3: &str = "format_3";
 /// See [`FEATURE_UPDATE_MIRROR`]: `platform` in a kiosk app (the ChromeOS disguise, design
 /// docs/specs/2026-11-06-kiosk-platform-inject-design.md).
 pub const FEATURE_KIOSK_PLATFORM: &str = "kiosk_platform";
@@ -4326,25 +4336,26 @@ drop.chrome_policy = ["PolA"]
         let m = Manifest::parse(&format!("format = 2\n{}", gated[4])).unwrap();
         assert_eq!(m.school.name.as_deref(), Some("EIS"));
         assert_eq!(format_feature(2), "format_2");
-        assert_eq!(format_feature(MAX_FORMAT), FEATURE_FORMAT_2);
-        assert_eq!(MAX_FORMAT, 2);
+        assert_eq!(format_feature(3), FEATURE_FORMAT_3);
+        assert_eq!(format_feature(MAX_FORMAT), FEATURE_FORMAT_3);
+        assert_eq!(MAX_FORMAT, 3);
     }
 
     #[test]
     fn newer_format_refused_before_unknown_keys() {
         let text =
-            "format = 3\nversion = 1\n[future]\nx = 1\n[[config]]\nid = \"c\"\nshiny = true\n";
+            "format = 4\nversion = 1\n[future]\nx = 1\n[[config]]\nid = \"c\"\nshiny = true\n";
         let e = Manifest::parse(text).unwrap_err();
-        assert_eq!(e, BundleError::FormatTooNew { found: 3, max: 2 });
+        assert_eq!(e, BundleError::FormatTooNew { found: 4, max: 3 });
         assert_eq!(
             e.to_string(),
-            "these settings use format 3, newer than this OS understands (2); update the OS first"
+            "these settings use format 4, newer than this OS understands (3); update the OS first"
         );
         assert_eq!(
             Manifest::parse(&format!("format = 99999999999\n{PLAIN}")).unwrap_err(),
             BundleError::FormatTooNew {
                 found: u32::MAX,
-                max: 2
+                max: 3
             }
         );
         // The check path says the same instead of an unknown-field issue.

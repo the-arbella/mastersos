@@ -546,9 +546,9 @@ mod tests {
 
     #[test]
     fn newer_format_is_format_unsupported() {
-        let e = parse_issue("format = 3\nversion = 1\n[school]\ncolour = 1\n").unwrap_err();
+        let e = parse_issue("format = 4\nversion = 1\n[school]\ncolour = 1\n").unwrap_err();
         assert_eq!(e.code, "format_unsupported");
-        assert_eq!(e.params["found"], "3");
+        assert_eq!(e.params["found"], "4");
         assert_eq!(e.span.unwrap().line, 1);
         // A wrong value is still an invalid value.
         let e = parse_issue("format = \"x\"\nversion = 1\n").unwrap_err();
