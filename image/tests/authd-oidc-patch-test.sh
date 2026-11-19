@@ -4,8 +4,9 @@
 # --check first), fetch the pinned Go toolchain and check its sha256, then run `go test -run '^TestMastersOS'` in
 # internal/broker/ and require every top-level TestMastersOS function of the patched tree to have passed.
 #
-# Run it as an ordinary user (mkosi.build runs the same tests as root in its chroot; both must pass). Needs git, curl,
-# tar and sha256sum, and the network. The Go tarball and the module and build caches are kept in
+# Run it as an ordinary user. mkosi.build runs the same tests as root in its chroot, so they run twice here: as this user,
+# then as root in a user namespace (unshare -r), with the same pass count required both times; a runner without user
+# namespaces fails instead of skipping the root run. Needs git, curl, tar, sha256sum, unshare (util-linux), and the network. The Go tarball and the module and build caches are kept in
 # $MASTERSOS_AUTHD_CACHE (default ~/.cache/mastersos-authd-oidc), so a rerun downloads nothing; the tarball's sha256 is
 # checked on every run, cached or not.
 set -euo pipefail
@@ -31,7 +32,7 @@ GO_SHA256=$(pin GO_SHA256)
 REPO=$(pin REPO)
 
 if [ "$(id -u)" = 0 ]; then
-	echo "authd-oidc-patch-test: run as an ordinary user (mkosi.build covers root)" >&2
+	echo "authd-oidc-patch-test: run as an ordinary user (the root run uses a user namespace)" >&2
 	exit 1
 fi
 
@@ -93,19 +94,37 @@ cd "$work/authd/authd-oidc-brokers"
 go mod download
 go mod verify
 
-mkdir -p "$work/tmp"
-log=$work/patch-tests.log
-if ! TMPDIR=$work/tmp go test -count=1 -v -run '^TestMastersOS' ./internal/broker/ >"$log" 2>&1; then
-	cat "$log"
-	echo "authd-oidc-patch-test: patch tests failed" >&2
+# Checked before the first run, so that a runner without user namespaces fails at once
+if ! unshare -r true; then
+	echo "authd-oidc-patch-test: cannot run as root in a user namespace (unshare -r); the root run is required" >&2
 	exit 1
 fi
-cat "$log"
+[ "$(unshare -r id -u)" = 0 ] || {
+	echo "authd-oidc-patch-test: unshare -r does not run as uid 0" >&2
+	exit 1
+}
+
 # A pattern that matches nothing still exits 0: require every TestMastersOS function in the patched tree to have passed
 want=$(grep -rhoE '^func TestMastersOS[A-Za-z0-9_]*' internal/broker/ | sort -u | wc -l)
-got=$(grep -cE '^--- PASS: TestMastersOS[A-Za-z0-9_]* ' "$log" || true)
-if [ "$want" -eq 0 ] || [ "$got" -ne "$want" ]; then
-	echo "authd-oidc-patch-test: expected $want top-level TestMastersOS passes, got $got" >&2
-	exit 1
-fi
-echo "authd-oidc-patch-test: $n patches apply; $got of $want top-level TestMastersOS tests passed"
+# run <as> <command prefix...>: the TestMastersOS tests with the prefix, their log printed, the pass count checked
+run() {
+	local as=$1
+	shift
+	mkdir -p "$work/tmp-$as"
+	local log=$work/patch-tests-$as.log
+	if ! TMPDIR=$work/tmp-$as "$@" go test -count=1 -v -run '^TestMastersOS' ./internal/broker/ >"$log" 2>&1; then
+		cat "$log"
+		echo "authd-oidc-patch-test: patch tests failed as $as" >&2
+		exit 1
+	fi
+	cat "$log"
+	local got
+	got=$(grep -cE '^--- PASS: TestMastersOS[A-Za-z0-9_]* ' "$log" || true)
+	if [ "$want" -eq 0 ] || [ "$got" -ne "$want" ]; then
+		echo "authd-oidc-patch-test: expected $want top-level TestMastersOS passes as $as, got $got" >&2
+		exit 1
+	fi
+	echo "authd-oidc-patch-test: $n patches apply; $got of $want top-level TestMastersOS tests passed as $as"
+}
+run user env
+run root unshare -r
