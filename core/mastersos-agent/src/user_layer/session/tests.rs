@@ -724,23 +724,34 @@ fn deferred_revert_keeps_the_marker_when_the_removal_fails() {
     assert!(fs::symlink_metadata(p.public_dir.join("session")).is_ok());
 }
 
-/// I1: the deferral is checked again under the marker's lock: a lift that waited for the lock while a format 1/2 apply
-/// deferred its cleanup lifts nothing.
+/// [`MountSim`] that writes the cleanup's deferral when the logind list is asked for: after `after_login`'s first look
+/// at the deferral and before it takes the marker's lock.
+struct DeferOnList<'a> {
+    inner: &'a MountSim,
+    p: &'a SysPaths,
+}
+
+impl Runner for DeferOnList<'_> {
+    fn run(&self, cmd: &crate::runner::Cmd) -> Result<Output> {
+        if cmd.line().starts_with(LIST) {
+            fs::write(deferral(self.p), "").unwrap();
+        }
+        self.inner.run(cmd)
+    }
+}
+
+/// I1: the deferral is checked again under the marker's lock: a format 1/2 apply that deferred its cleanup after the
+/// lift's first look (here while the lift asks logind, before it takes the lock) leaves nothing lifted.
 #[test]
 fn after_login_rechecks_the_deferral_under_the_lock() {
     let (_root, p, index, r) = setup();
-    signed_in(&p, &index, ActiveState::Open, false);
+    let a = signed_in(&p, &index, ActiveState::Open, false);
+    assert!(!a.caps.is_empty());
     install_policy(&p, false);
     list(&r, &[greeter()]);
-    let held = lock_active(&p.root, Duration::ZERO).unwrap();
-    std::thread::scope(|s| {
-        let lift = s.spawn(|| after_login(&p, &r));
-        // the lift has read the marker and waits for the lock
-        std::thread::sleep(Duration::from_millis(300));
-        fs::write(deferral(&p), "").unwrap();
-        drop(held);
-        lift.join().unwrap().unwrap();
-    });
+    assert!(!deferral(&p).exists());
+    after_login(&p, &DeferOnList { inner: &r, p: &p }).unwrap();
+    assert!(deferral(&p).exists());
     assert_eq!(lifted(&p), Caps::new());
 }
 
@@ -856,4 +867,102 @@ fn watch_drops_a_stray_lift_while_the_cleanup_is_deferred() {
     assert!(is_stub(&p.root, "/usr/libexec/gnome-terminal-server"));
     assert_eq!(read_active(&p.root).unwrap(), a);
     assert!(deferral(&p).exists());
+}
+
+/// The stub cannot be mounted while a stray lift is dropped: the lift stays recorded and the watch fails (reported) every
+/// round until the mount works, then the lift is gone.
+#[test]
+fn a_failed_drop_of_a_stray_lift_is_retried_until_it_works() {
+    use crate::system::exec_block::tests::is_stub;
+    let (_root, p, index, _) = setup();
+    let sim = Sim {
+        mounts: MountSim::new(&p.root),
+        sessions: Default::default(),
+        fail_mounts: false.into(),
+    };
+    let a = signed_in(&p, &index, ActiveState::Open, true);
+    exec_block::apply_lifted(&p, &sim, &a.caps).unwrap();
+    defer_cleanup(&p);
+    sim.set_sessions(&[
+        greeter(),
+        row("3", UID, Some("seat0"), "user", Some("active")),
+    ]);
+    sim.fail_mounts
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    for round in 1..=2 {
+        assert!(watch_at(&p, &sim, at(T0 + round)).is_err(), "round {round}");
+        assert!(lifted_file(&p).exists(), "round {round}");
+    }
+    sim.fail_mounts
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(
+        watch_at(&p, &sim, at(T0 + 3)).unwrap(),
+        WatchOutcome::StillOpen
+    );
+    assert!(!lifted_file(&p).exists());
+    assert!(is_stub(&p.root, "/usr/libexec/gnome-terminal-server"));
+}
+
+/// A deferral with a login policy that cannot be read: nothing is done (fail closed), and the watch fails (reported)
+/// instead of looking idle.
+#[test]
+fn deferral_with_an_unreadable_policy_is_reported() {
+    let (_root, p, _index, r) = setup();
+    defer_cleanup(&p);
+    fs::write(p.var_dir.join("login/policy.json"), "not json").unwrap();
+    let e = watch_at(&p, &r, at(T0)).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("login policy cannot be read"),
+        "{e:#}"
+    );
+    assert!(p.var_dir.join(STATE_SUB).exists());
+    assert!(deferral(&p).exists());
+}
+
+/// A revert that removed the marker but could not finish the deferred cleanup: the revert item reports it and the
+/// session's item goes with the session.
+#[tokio::test(start_paused = true)]
+async fn monitor_settles_the_session_item_after_a_late_revert_error() {
+    let (_root, p, index, _) = setup();
+    let mut a = signed_in(&p, &index, ActiveState::Open, true);
+    a.reason = Some("the issuer handed over no facts".into());
+    write_active(&p.root, &a).unwrap();
+    let sim = Arc::new(Sim {
+        mounts: MountSim::new(&p.root),
+        sessions: Default::default(),
+        fail_mounts: false.into(),
+    });
+    sim.set_sessions(&[
+        greeter(),
+        row("5", UID, Some("seat0"), "user", Some("active")),
+    ]);
+    let side: SideResults = Default::default();
+    let (changed, kick) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let shutdown = CancellationToken::new();
+    let task = tokio::spawn(monitor(
+        p.clone(),
+        sim.clone(),
+        side.clone(),
+        changed.clone(),
+        kick.clone(),
+        shutdown.clone(),
+    ));
+    eventually("the fallback note", || {
+        item_of(&side, SESSION_ITEM).is_some_and(|i| i.ok)
+    })
+    .await;
+    // the format 1/2 apply deferred its cleanup; the public tree cannot be removed (a symlink where the directory is)
+    defer_cleanup(&p);
+    let public = p.public_dir.join(STATE_SUB);
+    fs::rename(&public, p.public_dir.join("user-layer-real")).unwrap();
+    std::os::unix::fs::symlink("user-layer-real", &public).unwrap();
+    sim.set_sessions(&[greeter()]);
+    tokio::time::sleep(crate::quiet::POLL + Duration::from_secs(1)).await;
+    eventually("the revert", || read_active(&p.root).is_none()).await;
+    eventually("the items settled", || {
+        item_of(&side, REVERT_ITEM).is_some_and(|i| !i.ok) && item_of(&side, SESSION_ITEM).is_none()
+    })
+    .await;
+    shutdown.cancel();
+    task.await.unwrap();
 }

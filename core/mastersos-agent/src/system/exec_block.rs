@@ -473,18 +473,31 @@ pub fn lifts_recorded(paths: &SysPaths) -> bool {
 }
 
 /// Forgets every lift of the user layer (its format 3 state goes under format 1/2) and converges to the mode word on
-/// disk, under the lock: [`LIFTED_FILE`] removed, then a blocked word mounts every stub and an open one (a format 1/2
-/// `full` Group) lifts everything. A mode file that is not understood blocks everything; no state changes no mount.
+/// disk, under the lock: a blocked word mounts every stub and an open one (a format 1/2 `full` Group) lifts everything;
+/// a mode file that is not understood blocks everything; no state changes no mount. [`LIFTED_FILE`] is removed only
+/// once the mounts are right: until then [`lifts_recorded`] stays true, so the caller retries.
 pub fn drop_lifts(paths: &SysPaths, runner: &dyn Runner) -> Result<()> {
     let _lock = lock(&paths.root)?;
-    let cleared = clear_lifted_file(paths);
-    let ensured = match read_parsed(paths)? {
-        Some(Some(lifted)) => ensure_set(&paths.root, runner, &lifted, true),
-        Some(None) => ensure(&paths.root, runner, true),
-        None => Ok(()),
+    let target = match read_mode_word(paths)? {
+        None => None,
+        Some(Some(ModeWord::Open)) => Some(all_caps()),
+        Some(Some(ModeWord::Blocked)) | Some(None) => Some(Caps::new()),
     };
-    cleared?;
-    ensured
+    if let Some(lifted) = target {
+        ensure_set(&paths.root, runner, &lifted, true)?;
+    }
+    clear_lifted_file(paths)
+}
+
+/// [`MODE_FILE`] alone: `None` without state, `Some(None)` when not understood.
+#[allow(clippy::option_option)]
+fn read_mode_word(paths: &SysPaths) -> Result<Option<Option<ModeWord>>> {
+    let dir = match crate::safefs::open_abs_dir(&paths.var_dir, false) {
+        Ok(d) => d,
+        Err(e) if crate::apply::is_not_found(&e) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    Ok(crate::safefs::read_at(&dir, MODE_FILE)?.map(|b| parse_mode(&b)))
 }
 
 /// `exec-block`（sysext 合并、刷新之后；GDM 之前；`apply-local` 一开始）：持锁之后才读盘上的模式（应用正持锁改模式时

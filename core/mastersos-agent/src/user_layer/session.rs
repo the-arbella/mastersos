@@ -152,7 +152,7 @@ pub(crate) fn watch_at(
     };
     // A format 1/2 apply deferred its cleanup for this session: nothing may stay lifted (a lift that slipped in before
     // the deferral is dropped within one round)
-    if exec_block::lifts_recorded(paths) && deferred_cleanup_due(paths) {
+    if exec_block::lifts_recorded(paths) && deferred_cleanup_due(paths).unwrap_or(false) {
         exec_block::drop_lifts(paths, runner)
             .context("dropping a lift while the settings format 1/2 cleanup waits")?;
     }
@@ -200,7 +200,7 @@ fn revert(paths: &SysPaths, runner: &dyn Runner, a: &Active) -> Result<()> {
     let mut errs: Vec<String> = Vec::new();
     // Reported after the marker is removed: a failure that leaves nothing a next session would read
     let mut after: Option<anyhow::Error> = None;
-    if deferred_cleanup_due(paths) {
+    if deferred_cleanup_due(paths).unwrap_or(false) {
         // A format 1/2 apply waited for this session: its lifts are forgotten and its files go now, instead of neutral
         // being switched in (which would overwrite the format 1/2 steps' Chrome policy and exec-block mode).
         if let Err(e) = finish_cleanup(paths, runner) {
@@ -264,7 +264,7 @@ fn idle(paths: &SysPaths, runner: &dyn Runner) -> Result<WatchOutcome> {
         // A session (or an unreadable marker): its revert does it
         return Ok(WatchOutcome::Idle);
     }
-    if deferred_cleanup_due(paths) {
+    if deferred_cleanup_due(paths)? {
         finish_cleanup(paths, runner)?;
         log::info!("user layer: settings format 1/2: removed the user configs of format 3");
     }
@@ -273,26 +273,28 @@ fn idle(paths: &SysPaths, runner: &dyn Runner) -> Result<WatchOutcome> {
 
 /// Whether a deferred format 1/2 cleanup ([`render::cleanup_deferred`]) is to be done now, with the marker's lock held:
 /// only while the installed login policy is not format 3. Under format 3 the deferral is stale (a format 3 render that
-/// could not delete it): it is deleted and the session reverts as usual. An unreadable policy does nothing.
-fn deferred_cleanup_due(paths: &SysPaths) -> bool {
+/// could not delete it): it is deleted and the session reverts as usual. A login policy that cannot be read does nothing
+/// and is an error (the watch reports it; with a marker the session reverts as usual and the error is only logged).
+fn deferred_cleanup_due(paths: &SysPaths) -> Result<bool> {
     if !render::cleanup_deferred(paths) {
-        return false;
+        return Ok(false);
     }
     match crate::system::login::policy_at(paths) {
-        Some(p) if !p.user_layer => true,
+        Some(p) if !p.user_layer => Ok(true),
         Some(_) => {
             if let Err(e) = render::drop_deferral(paths) {
                 log::warn!(
                     "user layer: deleting a stale deferral of the format 1/2 cleanup: {e:#}"
                 );
             }
-            false
+            Ok(false)
         }
         None => {
-            log::warn!(
-                "user layer: the login policy cannot be read; the deferred format 1/2 cleanup waits"
+            let e = anyhow!(
+                "the login policy cannot be read; the deferred settings format 1/2 cleanup waits"
             );
-            false
+            log::warn!("user layer: {e}");
+            Err(e)
         }
     }
 }
@@ -470,6 +472,11 @@ pub async fn monitor(
                     detail: Some(format!("{e:#}")),
                 };
                 set_item(&side, &changed, REVERT_ITEM, Some(item));
+                // No session any more (a revert that removed the marker and then failed, or a deferred cleanup): the
+                // session's item goes with it, as on a revert
+                if matches!(active_marker(&paths.root), Ok(None)) {
+                    set_item(&side, &changed, SESSION_ITEM, None);
+                }
             }
         }
         tokio::select! {
