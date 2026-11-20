@@ -35,7 +35,7 @@ pub struct StatusReport {
     #[serde(default)]
     pub newer_withheld: Option<u64>,
     /// 这台机器的状态是从种子分区导入的（新装或恢复出厂，计划 4a Ruling 10）：导入时种子里每把
-    /// trust 钥匙的指纹（与 `mastersos-sign seed-check` 同一算法，`trust_fingerprint`）。服务端可以拿它
+    /// trust 钥匙的指纹（与 `mastersos seed check` 同一算法，`trust_fingerprint`）。服务端可以拿它
     /// 与自己发出的 trust 对照，发现被离线改过的种子分区。没有导入过时为空。
     #[serde(default)]
     pub seed_trust_fingerprints: Vec<String>,

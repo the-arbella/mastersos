@@ -1,8 +1,8 @@
 # MastersOS glossary
 
-The console, the settings reference, MCP tool descriptions and skills all use these terms.
+The console, the settings reference, and skills all use these terms.
 English is the source language; the Simplified Chinese column is what the zh-Hans interface says.
-TOML keys, API paths and MCP tool names are never translated or renamed.
+TOML keys and API paths are never translated or renamed.
 
 | English | 简体中文 | Definition | Do not say |
 |---|---|---|---|
@@ -17,12 +17,12 @@ TOML keys, API paths and MCP tool names are never translated or renamed.
 | Version | 版本 | One published, signed, numbered snapshot of the settings (v1, v2, ...). | revision, build |
 | Settings | 设置 | What a school configures for its devices (the TOML document). | manifest, bundle |
 | Settings reference | 设置规范 | The public specification of every settings key. | manifest spec, schema page |
-| School key | 学校钥匙 | A small file (plus a printed copy) that approves settings for every device and can unlock their disks. Made on the command line with `mastersos-sign school-key new`; keep it on a USB stick. | recovery kit, recovery package, recovery key, kit, signing key, master key |
+| School key | 学校钥匙 | A small file (plus a printed copy) that approves settings for every device and can unlock their disks. Made on the command line with `mastersos key new`; keep it on a USB stick. | recovery kit, recovery package, recovery key, kit, signing key, master key |
 | Key code | 钥匙码 | The first 8 hex digits of a school key's id, grouped 4-4 (`11d9-03eb`): on the printed copy, in the file name and on the School keys page. Full fingerprints still appear where trusted keys change. | fingerprint, key id |
 | Check code | 核对码 | The first 8 hex digits of an upload's digest (`a1b2c3d4`), printed by `mastersos publish`; equal means "this is what you uploaded". | digest, hash |
-| Trusted keys | 受信钥匙 | The school keys whose approval devices accept, carried in each version (`[[trust]]` in `manifest.toml`, written by `mastersos init` and `mastersos keys`). Shown only in `manifest.toml` comments and review screens. | trust, allow-list, key ring |
+| Trusted keys | 受信钥匙 | The school keys whose approval devices accept, carried in each version (`[[trust]]` in `manifest.toml`, written by `mastersos init` and `mastersos key`). Shown only in `manifest.toml` comments and review screens. | trust, allow-list, key ring |
 | Disk unlocking | 磁盘解锁 | What a school key does for a device's encrypted disk: the device stores its recovery code so that the school key can open it (`[school].escrow_recipients`). | escrow, escrow recipient, backup key |
-| Monthly check-in | 每月确认 | Tells every device "nothing new; what you have is current". `mastersos publish --school-key` does it with every publish; otherwise the admin site reminds IT. | heartbeat, heartbeat renewal, keep-alive |
+| Monthly check-in | 每月确认 | Tells every device "nothing new; what you have is current". `mastersos publish --key-file` does it with every publish; otherwise the admin site reminds IT. | heartbeat, heartbeat renewal, keep-alive |
 | Install file | 装机文件 | The file that goes on the installation USB stick so a new device knows its school. | seed |
 | Issue | 问题 | One finding from checking settings, with a level: error, warning or info. | lint, diagnostic |
 | Error / Warning / Info | 错误 / 警告 / 提示 | Issue levels. Errors block publishing; warnings and info do not. | fatal, note |
@@ -36,4 +36,4 @@ TOML keys, API paths and MCP tool names are never translated or renamed.
 | Admin | 管理员 | A person who signs in to a school's console. | operator (the operator runs the cloud), user |
 
 Notes for Chinese: say 设备 for every device (never 机器 or 电脑); say 设置 for settings; keep product and tool names
-(MastersOS, mastersos-sign, TOML, LUKS, TPM, X25519) in Latin letters.
+(MastersOS, TOML, LUKS, TPM, X25519) in Latin letters.

@@ -1,4 +1,4 @@
-//! 学校钥匙的 key_id 与登记探针的消息。服务端、`mastersos-sign` 与网页按同一套规则算，
+//! 学校钥匙的 key_id 与登记探针的消息。服务端、`mastersos` 命令行与网页按同一套规则算，
 //! 所以 trust 里的 id 由公钥决定，调用方传来的 id 一律不用。
 
 use sha2::{Digest, Sha256};

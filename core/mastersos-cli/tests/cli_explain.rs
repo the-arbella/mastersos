@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 use mastersos_bundle::testutil::{defaults_example, legacy_spec_example, spec_example_v3};
-use mastersos_mcp::workdir::{Meta, Workdir};
+use mastersos_cli::workdir::{Meta, Workdir};
 use serde_json::{json, Value};
 
 const KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";

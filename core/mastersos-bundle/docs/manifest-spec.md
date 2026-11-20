@@ -33,7 +33,7 @@ The settings file can also carry files (`files/…`, such as wallpapers or icons
 ### Edit, check, Publish
 
 1. The settings are a **local directory** that IT keeps: `mastersos pull <dir>` downloads the latest
-   published Version into it (`mastersos init <dir> --school-key <file>` starts one for a new school and
+   published Version into it (`mastersos init <dir> --key-file <file>` starts one for a new school and
    writes the trusted keys from the school key files). You (or an AI assistant) edit `manifest.toml` there, and
    add files under `files/`. The server holds no draft.
 2. `mastersos check` **checks** the directory on your computer and lists its **Issues**. An Issue has a level:
@@ -42,7 +42,7 @@ The settings file can also carry files (`files/…`, such as wallpapers or icons
    - **info**: reports the current state (for example a Chrome update pause), not a problem.
 3. When there are no errors, `mastersos publish` builds the next **Version** from the directory (it puts the
    secrets in) and uploads it; IT approves it with a **school key** on the computer
-   (`mastersos publish --school-key <file>`). Devices accept only Versions signed by one of
+   (`mastersos publish --key-file <file>`). Devices accept only Versions signed by one of
    the **trusted keys** (`[[trust]]`), and only Versions newer than the one they have. Afterwards `mastersos pull`
    takes the published Version as the new base.
 
@@ -52,9 +52,9 @@ Some keys are written for you; do not write them by hand:
 |---|---|
 | `format` | `mastersos init` / `pull` (the lowest the text needs); leave it as it is |
 | `version`, `issued_at` | `mastersos publish`, when it builds the Version |
-| `[[trust]]` | `mastersos init` / `mastersos keys add` / `mastersos keys remove`, from the school key files IT holds; never by hand |
+| `[[trust]]` | `mastersos init` / `mastersos key add` / `mastersos key remove`, from the school key files IT holds; never by hand |
 | `[school] id` | `mastersos init` / `pull`: the school's id; do not change it |
-| `[school] escrow_recipients` | `mastersos init` / `keys add` / `keys remove`, with `[[trust]]` (disk unlocking) |
+| `[school] escrow_recipients` | `mastersos init` / `key add` / `key remove`, with `[[trust]]` (disk unlocking) |
 | `[school] name` | `mastersos publish`, from the school's name |
 | `[school] logo_sha256`, `logo_icon_sha256` | IT, pasted from the output of `mastersos logo upload` |
 | `it_account` `password_hash` | a `secret:` reference; IT puts the hash (`mastersos hash-password`) in `secrets.toml` |
@@ -350,7 +350,7 @@ Columns: **Key**, **Type**, **Required / default** (what happens when the key is
 | `format` | integer | `1` when left out; written by `init`/`pull` | `1`, `2`, `3` | `format = 2` | The settings syntax version, on the first line. `init` and `pull` write the lowest one the text needs: `2` once `[defaults]`, `drop`, `it_account` or `[school]` `name` / `logo_sha256` / `logo_icon_sha256` are used (they are `invalid_value` under `1`). A Device whose OS reads an older format does not apply the Version and asks to update the OS first. `3` is the device layer and user layer shape, written by `mastersos migrate` (see [Format 3](#format-3-device-layer-and-user-layer)). Leave it as `init`, `pull` or `migrate` wrote it. |
 | `version` | integer | written by `publish` | a positive integer, higher than the last Version | `version = 42` | `mastersos publish` writes it (the pulled version plus one). |
 | `issued_at` | string | written by `publish` | RFC 3339 time | `issued_at = "2026-10-10T07:00:00Z"` | `mastersos publish` writes it. |
-| `trust` | list of tables | required, at least one key | see [`[[trust]]`](#trust) | — | Listed in `manifest.toml` (see `mastersos keys list`); IT changes it. Empty is `trust_empty`. |
+| `trust` | list of tables | required, at least one key | see [`[[trust]]`](#trust) | — | Listed in `manifest.toml` (see `mastersos key list`); IT changes it. Empty is `trust_empty`. |
 | `school` | table | optional; defaults below | see [`[school]`](#school) | — | Settings for every Device. |
 | `defaults` | table | optional; nothing inherited | see [`[defaults]`](#defaults) | — | What every Config starts from (`format = 2`). |
 | `config` | list of tables | required: at least the Config of the `default` Group | see [`[[config]]`](#config) | — | Each `[[config]]` header adds one Config. |
@@ -381,7 +381,7 @@ Settings shared by every Device, whatever its Group.
 | `name` | string | written by the server | 1-100 characters | `name = "Example International School"` | The school's display name, shown on Devices ("Managed by …"). Do not write it by hand (`format = 2`); a name that is empty, over 100 characters or holds control characters is `school_name_invalid`. |
 | `logo_sha256` | string | written by IT | 64 lowercase hex digits | — | The SHA-256 of the sign-in screen logo (a PNG 96 pixels high, at most 480 wide) Devices download from the school's server at `/logos/<sha256>.png` and show only when it matches; written, with `logo_icon_sha256`, when IT runs `mastersos logo upload` and pastes the lines it prints. Do not invent it (`format = 2`); anything else is `logo_sha256_invalid`, and one of the two keys without the other is `logo_incomplete`. |
 | `logo_icon_sha256` | string | written by IT | 64 lowercase hex digits | — | The SHA-256 of the quick menu icon (a PNG of 40 x 40 pixels), downloaded and checked like `logo_sha256`. Written together with `logo_sha256`; do not write it by hand (`format = 2`). |
-| `escrow_recipients` | list of strings | optional; no escrow | 1 to 8 age X25519 public keys (`age1…`) in canonical lowercase form, none twice; never an empty list | — | Devices encrypt their disk recovery key to these keys before sending it to the cloud. Written by `mastersos init` and `mastersos keys add`; each must belong to a Recovery kit in trust (`escrow_recipient_unregistered`). Write the key with entries or leave it out: `escrow_recipients = []` is `invalid_value`. |
+| `escrow_recipients` | list of strings | optional; no escrow | 1 to 8 age X25519 public keys (`age1…`) in canonical lowercase form, none twice; never an empty list | — | Devices encrypt their disk recovery key to these keys before sending it to the cloud. Written by `mastersos init` and `mastersos key add`; each must belong to a Recovery kit in trust (`escrow_recipient_unregistered`). Write the key with entries or leave it out: `escrow_recipients = []` is `invalid_value`. |
 
 ```toml check=ok
 [school]
@@ -3033,7 +3033,7 @@ a binding signature of a Recovery kit key in this trust.
 **Why:** Devices would encrypt their disk recovery keys to a key the school never proved it holds.
 <!-- /prompt:omit -->
 
-**How to fix:** register the school key it belongs to (`mastersos-sign register --school-key`), or remove it with `mastersos keys remove`. Needs the school's registered keys, so there is no
+**How to fix:** register the school key it belongs to (`mastersos key register --key-file`), or remove it with `mastersos key remove`. Needs the school's registered keys, so there is no
 standalone example.
 
 ### `escrow_recipients_invalid`
@@ -3045,7 +3045,7 @@ public key in canonical form, an entry listed twice, or more than 8 entries.
 **Why:** Devices encrypt their recovery key to every entry and compare the list exactly.
 <!-- /prompt:omit -->
 
-**How to fix:** let `mastersos init` or `mastersos keys add` write this key; if editing, paste each `age1…` key exactly as
+**How to fix:** let `mastersos init` or `mastersos key add` write this key; if editing, paste each `age1…` key exactly as
 given, once.
 
 <!-- prompt:omit -->
@@ -3074,7 +3074,7 @@ had recipients, or while the school registered recipients for the Recovery kits 
 password could not be recovered.
 <!-- /prompt:omit -->
 
-**How to fix:** put the recipients back (`mastersos keys add` writes them). Needs the school's state, so
+**How to fix:** put the recipients back (`mastersos key add` writes them). Needs the school's state, so
 there is no standalone example.
 
 ### `facts_without_mastersos_claims`

@@ -1,4 +1,4 @@
-//! 固化的内容摘要向量：网页（Task 16）与 `mastersos-sign` 自己重算摘要时对照同一份文件。
+//! 固化的内容摘要向量：网页（Task 16）与 `mastersos` 命令行自己重算摘要时对照同一份文件。
 //! 由 `webauthn::tests::regenerate_vectors`（`--ignored`）生成。
 
 use std::collections::BTreeMap;

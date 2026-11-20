@@ -151,7 +151,7 @@ fn read_snapshot(dir: &Path) -> Result<Snapshot> {
 /// missing path is fine.
 fn refuse_link(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
-        Ok(m) if mastersos_sign::platform::is_link(path, &m) => {
+        Ok(m) if crate::platform::is_link(path, &m) => {
             bail!("{} is a symbolic link, which is refused", path.display())
         }
         Ok(_) => Ok(()),
@@ -252,7 +252,7 @@ fn write_snapshot(
     }
     remove_if_exists(&dir.join(SECRETS))?;
     fs::write(dir.join(MANIFEST), manifest)?;
-    mastersos_sign::platform::write_private(&dir.join(SECRETS), secrets_raw.as_bytes())?;
+    crate::platform::write_private(&dir.join(SECRETS), secrets_raw.as_bytes())?;
     for (key, data) in files {
         let path = dir.join(key);
         if let Some(parent) = path.parent() {
@@ -349,7 +349,7 @@ impl Workdir {
         let digest = digest_of(&base).map_err(|_| {
             anyhow::anyhow!("The base of version {v} refers to secrets it does not hold: {fix}")
         })?;
-        match mastersos_sign::chain::recorded_digest(pins, &meta.server, v)? {
+        match crate::sign::chain::recorded_digest(pins, &meta.server, v)? {
             Some(d) if d.eq_ignore_ascii_case(&digest) => Ok(()),
             Some(_) => bail!(
                 "The base differs from version {v} as this computer verified it: {fix}"
@@ -811,8 +811,8 @@ fn changes<V: PartialEq>(
 // —— Trusted keys and disk-unlocking recipients in manifest.toml ——
 //
 // `[[trust]]` and `[school].escrow_recipients` are written only from school key files IT holds
-// (`init --school-key`, `keys add`); the server is never the source of what goes in. Each
-// recipient carries a `# school key <code>` comment so that `keys remove` finds it offline.
+// (`init --key-file`, `key add`); the server is never the source of what goes in. Each
+// recipient carries a `# school key <code>` comment so that `key remove` finds it offline.
 
 const RECIPIENT_TAG: &str = "# school key ";
 
@@ -829,7 +829,7 @@ pub fn normalize_key_code(code: &str) -> Option<String> {
         .then(|| format!("{}-{}", &hex[..4], &hex[4..]))
 }
 
-/// The code IT sees for a trusted key: its key code, or its id when it has none (a Passkey).
+/// The code IT sees for a trusted key: its key code, or its id when it has none.
 pub fn shown_code(key_id: &str) -> String {
     mastersos_bundle::keyid::key_code(key_id).unwrap_or_else(|| key_id.to_owned())
 }
@@ -857,9 +857,6 @@ fn trust_table(k: &TrustKey) -> toml_edit::Table {
     t["id"] = toml_edit::value(k.id.as_str());
     t["alg"] = toml_edit::value(k.alg.as_str());
     t["public_key"] = toml_edit::value(k.public_key.as_str());
-    if let Some(rp) = &k.rp_id {
-        t["rp_id"] = toml_edit::value(rp.as_str());
-    }
     t
 }
 
@@ -1083,7 +1080,7 @@ pub fn remove_school_key(
             _ => bail!("More than one school key has code {want}; edit manifest.toml by hand"),
         }
         if aot.iter().filter(|t| is_school_key(t)).count() == 1 {
-            bail!("cannot remove the last school key: computers would accept no new settings. Add another one first (`mastersos keys add <FILE>`)");
+            bail!("cannot remove the last school key: computers would accept no new settings. Add another one first (`mastersos key add <FILE>`)");
         }
         let i = hits[0];
         let first_prefix = (i == 0)
@@ -1150,12 +1147,12 @@ impl Workdir {
     /// Record the base's digest for `base_version` in [`Workdir::test_pins`] (as a pull that
     /// verified it would) and check the base against it.
     pub(crate) fn pinned(self) -> Workdir {
-        use mastersos_sign::chain::{Pin, VerifiedVersion};
+        use crate::sign::chain::{Pin, VerifiedVersion};
         let meta = self.meta().unwrap();
         let digest = digest_of(&read_snapshot(&self.base_dir()).unwrap()).unwrap();
         let pins = self.test_pins();
         fs::create_dir_all(&pins).unwrap();
-        let name = mastersos_sign::pin_name_for(&meta.server).unwrap();
+        let name = crate::sign::pin_name_for(&meta.server).unwrap();
         let pin = Pin {
             host: name.replace('_', ":"),
             version: meta.base_version,
@@ -1224,14 +1221,6 @@ mod tests {
             "{e}"
         );
         assert!(check(&w).is_err() && diff(&w).is_err() && w.freeze().is_err());
-        let e = crate::tools::call_local(
-            &w.root,
-            &w.test_pins(),
-            "read_manifest",
-            serde_json::json!({}),
-        )
-        .unwrap_err();
-        assert!(!e.contains("TOPSECRET"), "{e}");
     }
 
     #[cfg(unix)]
@@ -1248,14 +1237,6 @@ mod tests {
             e.contains("secrets.toml") && !e.contains("TOPSECRET"),
             "{e}"
         );
-        let e = crate::tools::call_local(
-            &w.root,
-            &w.test_pins(),
-            "read_manifest",
-            serde_json::json!({}),
-        )
-        .unwrap_err();
-        assert!(!e.contains("TOPSECRET"), "{e}");
     }
 
     #[cfg(unix)]
@@ -1348,7 +1329,7 @@ mod tests {
         }
         #[cfg(windows)]
         for p in ["secrets.toml", ".mastersos/base/secrets.toml"] {
-            mastersos_sign::platform::check_private(&w.root.join(p)).unwrap();
+            crate::platform::check_private(&w.root.join(p)).unwrap();
         }
         assert!(!w.is_dirty().unwrap());
         // The base keeps the split form: no secret value anywhere under .mastersos/.
@@ -1633,7 +1614,7 @@ mod tests {
     }
 
     #[test]
-    fn pull_after_passkey_publish_is_clean() {
+    fn pull_after_a_published_upload_is_clean() {
         let t = tempfile::tempdir().unwrap();
         let dir = t.path().join("school");
         let w = pulled(&dir);
@@ -1733,6 +1714,21 @@ mod tests {
             "{again}"
         );
         assert!(set_trusted_keys(&t, &[]).is_err());
+    }
+
+    #[test]
+    fn key_add_and_remove_keep_a_site_bound_entry_byte_for_byte() {
+        let (a, b, c) = (school_key(1), school_key(2), school_key(3));
+        let t = template("11111111-1111-1111-1111-111111111111").unwrap();
+        let text = set_trusted_keys(&t, &[a.clone(), b.clone()]).unwrap();
+        let entry = "[[trust]]\nid = \"site-key\"\nalg = \"webauthn-es256\"\npublic_key = \"BAAA\"\nrp_id = \"school.example\"\n";
+        let text = text.replace("[[group]]", &format!("{entry}\n[[group]]"));
+        assert!(text.contains(entry), "{text}");
+        let added = add_trusted_key(&text, &c.0, &c.1).unwrap();
+        assert!(added.contains(entry), "{added}");
+        let removed = remove_trusted_key(&added, &code_of(2)).unwrap();
+        assert!(removed.contains(entry), "{removed}");
+        assert!(!removed.contains(&b.0.public_key), "{removed}");
     }
 
     #[test]

@@ -1,8 +1,8 @@
 //! The `mastersos` command line. Settings live in a local directory (`init`, `pull`, `check`,
-//! `diff`, `publish`); the server holds no draft. The read commands that touch the server run the
-//! same operations as the MCP tools ([`crate::call`]); `mastersos mcp` serves those tools.
+//! `diff`, `publish`); the server holds no draft. The read commands that touch the server go
+//! through [`crate::call`].
 //!
-//! Output is a table or the text itself for people; `--json` prints the server's JSON for scripts and AI.
+//! Output is a table or the text itself for people; `--json` prints the server's JSON for scripts.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -16,7 +16,7 @@ use mastersos_bundle::{AgeBand, ClassRole, Kind, OrgRole};
 use crate::explain::{self as explain_mod, UserQuery};
 use crate::publish::SignWith;
 use crate::workdir::{self, Meta, Workdir};
-use crate::{call, check_server, connect, serve_stdio, Api, OpError, Req, TokenUse};
+use crate::{call, check_server, connect, Api, OpError, Req};
 
 const EXIT_CODES: &str = "Exit codes: 0 success; 1 failure (network, token, the server refused); \
 2 `check` or `publish` found errors in the local settings (or `publish` found a secret rerouted without --allow-reroute).";
@@ -30,7 +30,7 @@ const EXIT_CODES: &str = "Exit codes: 0 success; 1 failure (network, token, the 
 )]
 pub struct Cli {
     // The defaults name the settings folder the way this platform writes it (spec 2026-11-04 §4.7)
-    /// Admin server address, for example https://cloud.arbellalabs.com/org/<organisation>/devices
+    /// Admin server address, for example https://server.example/org/<organisation>/devices
     #[cfg_attr(
         not(windows),
         doc = "(default: `server` in ~/.config/mastersos/config.toml)"
@@ -41,8 +41,7 @@ pub struct Cli {
     )]
     #[arg(long, global = true)]
     server: Option<String>,
-    /// File holding IT's own token (read and draft scopes, not an AI token), never accepted on the
-    /// command line
+    /// File holding the token from the Command line page, never accepted on the command line
     #[cfg_attr(
         not(windows),
         doc = "(default: `token_file` in the config file, else ~/.config/mastersos/token)"
@@ -53,20 +52,14 @@ pub struct Cli {
     )]
     #[arg(long, global = true)]
     token_file: Option<PathBuf>,
-    /// File holding the AI token that only `mastersos mcp` uses
-    #[cfg_attr(
-        not(windows),
-        doc = "(default: `ai_token_file` in the config file, else ~/.config/mastersos/ai-token)"
-    )]
-    #[cfg_attr(
-        windows,
-        doc = r"(default: `ai_token_file` in the config file, else %APPDATA%\mastersos\ai-token)"
-    )]
-    #[arg(long, global = true)]
-    ai_token_file: Option<PathBuf>,
-    /// Print the server's JSON instead of tables: for scripts and AI
+    /// Print the server's JSON instead of tables: for scripts
     #[arg(long, global = true)]
     json: bool,
+    /// Where this computer keeps what it verified of each server's published versions
+    #[cfg_attr(not(windows), doc = "(default: ~/.config/mastersos/pins)")]
+    #[cfg_attr(windows, doc = r"(default: %APPDATA%\mastersos\pins)")]
+    #[arg(long, global = true, value_name = "DIR")]
+    pin_dir: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -75,19 +68,16 @@ pub struct Cli {
 enum Cmd {
     /// Connect this computer to a school's admin server: paste the token from the Command line page; it is checked, then saved with the server address
     Connect {
-        /// The admin server address, for example https://cloud.arbellalabs.com/org/<organisation>/devices
+        /// The admin server address, for example https://server.example/org/<organisation>/devices
         server_url: String,
     },
-    /// Save --server, --token-file and --ai-token-file to config.toml in the settings folder, then test the connection
-    #[command(hide = true)]
-    Setup,
     /// Start a local settings directory for a school that has published nothing yet, approved by the school keys given
     Init {
         /// The directory to create (it must be empty or not exist)
         dir: PathBuf,
-        /// A school key file; give it once for each school key (two is good). Make one with `mastersos-sign school-key new`, then register it with `mastersos-sign register`
-        #[arg(long = "school-key", alias = "kit", value_name = "FILE")]
-        school_key: Vec<PathBuf>,
+        /// A school key file, or `-` for the first line of stdin; give it once for each school key (two is good). Make one with `mastersos key new`, then register it with `mastersos key register`
+        #[arg(long = "key-file", value_name = "PATH")]
+        key_file: Vec<PathBuf>,
     },
     /// Download the latest published settings (checked on this computer, version by version) into a local directory
     Pull {
@@ -134,34 +124,42 @@ enum Cmd {
         #[arg(long, conflicts_with = "section")]
         full: bool,
     },
-    /// Publish the local settings directory: check, fill in secrets, stamp, upload, then approve with the school key file (--school-key)
+    /// Publish the local settings directory: check, fill in secrets, stamp, upload, then approve with the school key file (--key-file)
     Publish {
         /// The settings directory (default: the current directory)
         dir: Option<PathBuf>,
-        /// The school key file (keep it on a USB stick; only you should be able to read it): check and approve on this computer. Required
-        #[arg(long = "school-key", alias = "kit", value_name = "FILE")]
-        kit: Option<PathBuf>,
-        /// A PKCS#8 key file instead of the school key (kept for old scripts)
-        #[arg(long, value_name = "FILE", conflicts_with = "kit", hide = true)]
-        key: Option<PathBuf>,
+        /// The school key file (keep it on a USB stick; only you should be able to read it), or `-` for the first line of stdin: check and approve on this computer. Required
+        #[arg(long = "key-file", value_name = "PATH")]
+        key_file: Option<PathBuf>,
         /// IT approves that secret NAME may go to its changed network (`secret_rerouted`); give it once per rerouted secret. Without it publish refuses. Never passed by an AI
         #[arg(long = "allow-reroute", value_name = "NAME")]
         allow_reroute: Vec<String>,
     },
-    /// The school keys: list them, or add or remove one in the local settings directory
+    /// The school keys: make one, register it, list them, or add or remove one in the local settings directory
     #[command(subcommand)]
-    Keys(KeysCmd),
+    Key(KeyCmd),
+    /// Check every published version on this computer (the first time, you confirm the key fingerprints)
+    Verify,
+    /// Monthly check-in: confirm to every computer that the latest settings are current
+    Heartbeat {
+        /// The school key file (keep it on a USB stick; only you should be able to read it), or `-` for the first line of stdin
+        #[arg(long = "key-file", value_name = "PATH")]
+        key_file: PathBuf,
+        /// How many days the check-in lasts, 1 to 31
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(i64).range(1..=31))]
+        days: i64,
+    },
+    /// A computer's disk recovery keys
+    #[command(subcommand)]
+    Recovery(RecoveryCmd),
+    /// Install files
+    #[command(subcommand)]
+    Seed(SeedCmd),
     /// Read a password twice without echo and print its yescrypt hash for the IT account (it_account.password_hash)
     HashPassword,
     /// The school's logos
     #[command(subcommand)]
     Logo(LogoCmd),
-    /// Serve read-only tools over MCP (stdio): read, check and diff the local settings directory (never its secrets), inspect Devices
-    Mcp {
-        /// The settings directory (default: the current directory)
-        #[arg(long)]
-        dir: Option<PathBuf>,
-    },
 }
 
 #[derive(Subcommand)]
@@ -219,16 +217,34 @@ fn parse_enum<T: serde::de::DeserializeOwned>(s: &str) -> Result<T, String> {
 }
 
 #[derive(Subcommand)]
-enum KeysCmd {
+enum KeyCmd {
+    /// Create a school key on this computer, without the network. It is never written over an existing file. Prints only its key code and fingerprint
+    New {
+        /// The file to write, or an existing directory (the file is then named `<school>-school-key-<key code>.kit`)
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// A short school name for the file name, such as `alpha`
+        #[arg(long, value_name = "NAME")]
+        school: Option<String>,
+    },
+    /// Register the school key with the server, then the disk unlocking that belongs to it
+    Register {
+        /// The school key file (keep it on a USB stick; only you should be able to read it), or `-` for the first line of stdin
+        #[arg(long = "key-file", value_name = "PATH")]
+        key_file: PathBuf,
+        /// A name people will recognise
+        #[arg(long, value_name = "TEXT")]
+        label: String,
+    },
     /// List the school keys registered for this school: key code, label, registered date, whether the published settings and the local directory have them
     List {
         /// The settings directory (default: the current directory)
         #[arg(long)]
         dir: Option<PathBuf>,
     },
-    /// Add the school key in FILE (registered with `mastersos-sign register`) to the local manifest.toml; then publish with a school key already in use
+    /// Add the school key in FILE (registered with `mastersos key register`) to the local manifest.toml; then publish with a school key already in use
     Add {
-        /// The school key file
+        /// The school key file, or `-` for the first line of stdin
         #[arg(value_name = "FILE")]
         file: PathBuf,
         /// The settings directory (default: the current directory)
@@ -241,11 +257,34 @@ enum KeysCmd {
         #[arg(value_name = "KEY CODE")]
         code: String,
         /// That school key's file, if you still have it: then the disk-unlocking entry that belongs to it is removed too, even in an older manifest.toml
-        #[arg(long = "school-key", alias = "kit", value_name = "FILE")]
-        school_key: Option<PathBuf>,
+        #[arg(long = "key-file", value_name = "PATH")]
+        key_file: Option<PathBuf>,
         /// The settings directory (default: the current directory)
         #[arg(long)]
         dir: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum RecoveryCmd {
+    /// Unlock a computer's disk: open its stored recovery keys on this computer with the school key (every read is recorded on the server)
+    Read {
+        /// The computer's device id
+        #[arg(value_name = "DEVICE")]
+        device: String,
+        /// The school key file (keep it on a USB stick; only you should be able to read it), or `-` for the first line of stdin
+        #[arg(long = "key-file", value_name = "PATH")]
+        key_file: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum SeedCmd {
+    /// Compare an install file with the keys and version verified on this computer
+    Check {
+        /// The install file
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
     },
 }
 
@@ -277,11 +316,10 @@ enum DevicesCmd {
 struct ConfigFile {
     server: Option<String>,
     token_file: Option<PathBuf>,
-    ai_token_file: Option<PathBuf>,
 }
 
 fn config_dir() -> Result<PathBuf, OpError> {
-    mastersos_sign::platform::config_dir("mastersos").map_err(fail)
+    crate::platform::config_dir("mastersos").map_err(fail)
 }
 
 fn load_config() -> Result<ConfigFile, OpError> {
@@ -316,7 +354,7 @@ pub async fn main() -> ExitCode {
                     print_issues(i);
                 }
             }
-            // The message never holds the token: only scope names, the address and the server's error text.
+            // The message never holds the token: only the address and the server's error text.
             eprintln!("mastersos: {}", e.message());
             ExitCode::from(e.exit_code())
         }
@@ -327,23 +365,23 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
     let Cli {
         server,
         token_file,
-        ai_token_file,
         json,
+        pin_dir,
         cmd,
     } = cli;
+    if let Some(d) = pin_dir {
+        // Set once per process: `run` is called once.
+        let _ = PIN_DIR.set(d);
+    }
     if let Cmd::Connect { server_url } = &cmd {
-        if server.is_some() || ai_token_file.is_some() {
+        if server.is_some() {
             return Err(OpError::Failed(
-                "`mastersos connect` takes the server address as its argument (`mastersos connect <SERVER_URL>`); --server and --ai-token-file are not used here"
+                "`mastersos connect` takes the server address as its argument (`mastersos connect <SERVER_URL>`); --server is not used here"
                     .into(),
             ));
         }
-        // Like setup: before the config file is read, so a broken one gets rewritten.
+        // Before the config file is read, so a broken one gets rewritten.
         return connect_school(server_url, token_file).await;
-    }
-    if let Cmd::Setup = cmd {
-        // Before the config file is read: setup is how a broken one gets rewritten.
-        return setup(server, token_file, ai_token_file).await;
     }
     // Offline commands: no server address, no token.
     match &cmd {
@@ -357,112 +395,94 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
             Workdir::ensure_pullable(dir, *force).map_err(fail)?;
         }
         Cmd::HashPassword => return hash_password(),
+        Cmd::Key(KeyCmd::New { out, school }) => return key_new(out, school.as_deref()),
         Cmd::Logo(LogoCmd::Upload { login, icon }) => {
             // Wrong sizes are refused before the config, the token or the network is touched.
             logo_body(login, icon)?;
         }
         // Only the local manifest.toml changes, and nothing from the server decides what.
-        Cmd::Keys(KeysCmd::Remove {
+        Cmd::Key(KeyCmd::Remove {
             code,
-            school_key,
+            key_file,
             dir,
         }) => {
             return keys_remove(
                 dir.as_deref(),
                 code,
-                school_key.as_deref(),
+                key_file.as_deref(),
                 server.as_deref(),
                 token_file.as_deref(),
             )
             .await
         }
-        Cmd::Init { school_key, .. } if school_key.is_empty() => {
+        Cmd::Init { key_file, .. } if key_file.is_empty() => {
             return Err(OpError::Failed(
-                "mastersos init needs a school key file: --school-key <FILE>. Make one with: mastersos-sign school-key new --out <FOLDER> --school <name>, then register it with mastersos-sign register (the admin site's Tokens page gives the key token)."
+                "mastersos init needs a school key file: --key-file <PATH>. Make one with: mastersos key new --out <FOLDER> --school <name>, then register it with mastersos key register --key-file <PATH> --label <name>."
                     .into(),
             ))
         }
         // Settings are approved on this computer with the school key; nothing is uploaded without it.
-        Cmd::Publish {
-            kit: None,
-            key: None,
-            ..
-        } => {
+        Cmd::Publish { key_file: None, .. } => {
             return Err(OpError::Failed(
-                "Publishing needs the school key file: mastersos publish --school-key <FILE>"
-                    .into(),
+                "Publishing needs the school key file: mastersos publish --key-file <PATH>".into(),
             ))
         }
         _ => {}
     }
-    // School key files that cannot be read stop before the network.
+    // School key files that cannot be read (not private, not a school key) stop before the network.
     let school_keys = match &cmd {
-        Cmd::Init { school_key, .. } => load_school_keys(school_key)?,
-        Cmd::Keys(KeysCmd::Add { file, .. }) => load_school_keys(std::slice::from_ref(file))?,
+        Cmd::Init { key_file, .. } => load_school_keys(key_file)?,
+        Cmd::Key(KeyCmd::Add { file, .. }) => load_school_keys(std::slice::from_ref(file))?,
         _ => Vec::new(),
     };
-    // A kit or key file that is not private or does not parse stops before the network.
     let sign_with = match &cmd {
-        Cmd::Publish { kit, key, .. } => signer(kit.as_deref(), key.as_deref())?,
+        Cmd::Publish {
+            key_file: Some(p), ..
+        } => Some(SignWith::key_file(p).map_err(fail)?),
+        _ => None,
+    };
+    let kit = match &cmd {
+        Cmd::Heartbeat { key_file, .. }
+        | Cmd::Recovery(RecoveryCmd::Read { key_file, .. })
+        | Cmd::Key(KeyCmd::Register { key_file, .. }) => {
+            Some(crate::sign::kit::load_key_file(key_file).map_err(fail)?)
+        }
+        _ => None,
+    };
+    // The install file is read before the network too, so a wrong path fails fast.
+    let seed_text = match &cmd {
+        Cmd::Seed(SeedCmd::Check { file }) => Some(
+            std::fs::read_to_string(file)
+                .map_err(|e| OpError::Failed(format!("Could not read {}: {e}", file.display())))?,
+        ),
         _ => None,
     };
     let cfg = load_config()?;
     let server = server.or(cfg.server).ok_or_else(|| {
         OpError::Failed(
-            "No server address: run `mastersos setup --server https://cloud.arbellalabs.com/org/<organisation>/devices` first, or pass --server"
+            "No server address: run `mastersos connect https://server.example/org/<organisation>/devices` first, or pass --server"
                 .into(),
         )
     })?;
-    if let Cmd::Mcp { dir } = &cmd {
-        // The AI gets its own token, never IT's.
-        let ai_token_file = match ai_token_file.or(cfg.ai_token_file) {
-            Some(p) => p,
-            None => config_dir()?.join("ai-token"),
-        };
-        check_private(&ai_token_file, AI_TOKEN_AGAIN)?;
-        let dir = dir.clone().unwrap_or_else(|| PathBuf::from("."));
-        Workdir::open(&dir).map_err(fail)?;
-        // The MCP server keeps its own exit codes: 2 for a token that must not be given to an AI.
-        let api = match connect(&server, &ai_token_file, TokenUse::Ai).await {
-            Ok(api) => api,
-            Err(e) => {
-                eprintln!("mastersos: {e}");
-                return Ok(ExitCode::from(e.exit_code()));
-            }
-        };
-        serve_stdio(api, dir, config_dir()?.join("pins"))
-            .await
-            .map_err(|e| OpError::Failed(format!("{e:#}")))?;
-        return Ok(ExitCode::SUCCESS);
-    }
     let token_file = match token_file.or(cfg.token_file) {
         Some(p) => p,
         None => config_dir()?.join("token"),
     };
     check_private(&token_file, TOKEN_AGAIN)?;
-    // The commands that write settings (or upload them) refuse an AI token: it reads secrets as
-    // "<kept>" and must not be able to publish.
-    let wanted = match &cmd {
-        Cmd::Init { .. }
-        | Cmd::Pull { .. }
-        | Cmd::Publish { .. }
-        | Cmd::Logo(_)
-        | Cmd::Keys(KeysCmd::Add { .. }) => TokenUse::It,
-        _ => TokenUse::Any,
-    };
-    let api = connect(&server, &token_file, wanted)
+    let api = connect(&server, &token_file)
         .await
         .map_err(|e| OpError::Failed(e.to_string()))?;
     let out = Out { json };
+    let kit = kit.as_ref();
     match cmd {
-        Cmd::Setup
-        | Cmd::Connect { .. }
-        | Cmd::Mcp { .. }
+        Cmd::Connect { .. }
         | Cmd::Check { .. }
         | Cmd::Diff { .. }
         | Cmd::Explain(_)
         | Cmd::Migrate { .. }
-        | Cmd::Keys(KeysCmd::Remove { .. }) => {
+        | Cmd::HashPassword
+        | Cmd::Key(KeyCmd::New { .. })
+        | Cmd::Key(KeyCmd::Remove { .. }) => {
             unreachable!("handled above")
         }
         Cmd::Init { dir, .. } => init_dir(&api, &server, &token_file, &dir, &school_keys).await,
@@ -490,11 +510,42 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
             )
             .await
         }
-        Cmd::Keys(KeysCmd::List { dir }) => keys_list(&api, &out, dir.as_deref()).await,
-        Cmd::Keys(KeysCmd::Add { dir, .. }) => {
+        Cmd::Key(KeyCmd::Register { label, .. }) => {
+            key_register(
+                &server,
+                &token_file,
+                kit.ok_or_else(|| fail("no school key"))?,
+                &label,
+            )
+            .await
+        }
+        Cmd::Key(KeyCmd::List { dir }) => keys_list(&api, &out, dir.as_deref()).await,
+        Cmd::Key(KeyCmd::Add { dir, .. }) => {
             keys_add(&api, &server, dir.as_deref(), &school_keys).await
         }
-        Cmd::HashPassword => unreachable!("handled above"),
+        Cmd::Verify => verify(&server, &token_file).await,
+        Cmd::Heartbeat { days, .. } => {
+            heartbeat(
+                &server,
+                &token_file,
+                kit.ok_or_else(|| fail("no school key"))?,
+                days,
+            )
+            .await
+        }
+        Cmd::Recovery(RecoveryCmd::Read { device, .. }) => {
+            recovery_read(
+                &server,
+                &token_file,
+                kit.ok_or_else(|| fail("no school key"))?,
+                &device,
+            )
+            .await
+        }
+        Cmd::Seed(SeedCmd::Check { .. }) => {
+            let text = seed_text.ok_or_else(|| fail("no install file"))?;
+            seed_check(&server, &token_file, &text).await
+        }
         Cmd::Logo(LogoCmd::Upload { login, icon }) => {
             let body = logo_body(&login, &icon)?;
             let text = api
@@ -511,81 +562,134 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
     }
 }
 
-async fn setup(
-    server: Option<String>,
-    token_file: Option<PathBuf>,
-    ai_token_file: Option<PathBuf>,
+/// `--pin-dir`, when given.
+static PIN_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Where the pins are kept: `--pin-dir`, else `pins` in this computer's settings folder.
+fn pin_dir() -> Result<PathBuf, OpError> {
+    match PIN_DIR.get() {
+        Some(d) => Ok(d.clone()),
+        None => Ok(config_dir()?.join("pins")),
+    }
+}
+
+/// An error of the signing code: it may hold strings from the server, so it is escaped.
+fn sign_fail(e: anyhow::Error) -> OpError {
+    OpError::Failed(crate::safe::text(&format!("{e:#}")))
+}
+
+/// `mastersos key new`: no network.
+fn key_new(out: &Path, school: Option<&str>) -> Result<ExitCode, OpError> {
+    let (k, path) = crate::sign::kit::kit_new_in(out, school).map_err(sign_fail)?;
+    println!(
+        "key code:    {}",
+        mastersos_bundle::keyid::key_code(&k.key_id).unwrap_or(k.key_id)
+    );
+    println!("fingerprint: {}", k.fingerprint);
+    let shown = std::path::absolute(&path).unwrap_or(path);
+    println!("school key:  {}", shown.display());
+    println!(
+        "Print the school key file on paper and lock the printout away, register it with \
+         `mastersos key register --key-file <file>`, then move the file to a USB stick \
+         and delete it from this computer."
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `mastersos key register`: the school key, then the disk unlocking bound to it.
+async fn key_register(
+    server: &str,
+    token_file: &Path,
+    kit: &mastersos_bundle::kit::Kit,
+    label: &str,
 ) -> Result<ExitCode, OpError> {
-    let server = server.ok_or_else(|| {
-        OpError::Failed(
-            "setup needs --server https://cloud.arbellalabs.com/org/<organisation>/devices".into(),
-        )
-    })?;
-    check_server(&server).map_err(|e| OpError::Failed(e.to_string()))?;
-    let dir = config_dir()?;
-    let absolute = |p: Option<PathBuf>, default: &str| -> Result<PathBuf, OpError> {
-        match p {
-            Some(p) => std::path::absolute(&p)
-                .map_err(|e| OpError::Failed(format!("Bad token file path {}: {e}", p.display()))),
-            None => Ok(dir.join(default)),
-        }
-    };
-    let token_file = absolute(token_file, "token")?;
-    let ai_token_file = absolute(ai_token_file, "ai-token")?;
-    if token_file == ai_token_file {
-        return Err(OpError::Failed(
-            "IT's token file and the AI token file must be different files".into(),
-        ));
-    }
-    for (f, again) in [(&token_file, TOKEN_AGAIN), (&ai_token_file, AI_TOKEN_AGAIN)] {
-        if f.exists() {
-            check_private(f, again)?;
-        }
-    }
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| OpError::Failed(format!("Could not create {}: {e}", dir.display())))?;
-    let path = dir.join("config.toml");
-    let text = toml::to_string(&ConfigFile {
-        server: Some(server.clone()),
-        token_file: Some(token_file.clone()),
-        ai_token_file: Some(ai_token_file.clone()),
-    })
-    .map_err(|e| OpError::Failed(format!("Could not write the config: {e}")))?;
-    mastersos_sign::platform::write_private(&path, text.as_bytes()).map_err(fail)?;
-    println!("Saved {}", path.display());
-    for (file, wanted, what) in [
-        (
-            &token_file,
-            TokenUse::It,
-            "IT's own token for the command line: an API token with read and draft scopes from your operator or the admin web page",
+    use crate::sign::kit::{is_already_registered, register_escrow_recipient};
+    let api = sign_api(server, token_file)?;
+    match crate::sign::register(&api, kit, label).await {
+        Ok(id) => match mastersos_bundle::keyid::key_code(&id) {
+            Some(code) => println!("Registered school key {code} ({id})."),
+            None => println!("Registered key {id}."),
+        },
+        // Registered before (say the disk-unlocking step failed): go on to that step.
+        Err(e) if is_already_registered(&e) => println!(
+            "School key {} is already registered.",
+            mastersos_bundle::keyid::key_code(&kit.key_id()).unwrap_or_else(|| kit.key_id())
         ),
-        (
-            &ai_token_file,
-            TokenUse::Ai,
-            "the AI token, used only by `mastersos mcp`: create it under AI tools on the school's admin page",
-        ),
-    ] {
-        if !file.exists() {
-            println!(
-                "Next: save {what} to {}; only you should be able to read that file.",
-                file.display()
-            );
-            continue;
-        }
-        let api = connect(&server, file, wanted)
-            .await
-            .map_err(|e| OpError::Failed(e.to_string()))?;
-        let who = crate::whoami(&api)
-            .await
-            .map_err(|e| OpError::Failed(e.to_string()))?;
+        Err(e) => return Err(sign_fail(e)),
+    }
+    register_escrow_recipient(&api, kit, label, &mut std::io::stdout())
+        .await
+        .map_err(sign_fail)?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `mastersos verify`.
+async fn verify(server: &str, token_file: &Path) -> Result<ExitCode, OpError> {
+    let api = sign_api(server, token_file)?;
+    let v = crate::sign::chain::verify_chain(
+        &api,
+        &pin_dir()?,
+        &mut std::io::stdin().lock(),
+        &mut std::io::stdout(),
+    )
+    .await
+    .map_err(sign_fail)?;
+    if v.latest != v.version {
         println!(
-            "{}: connected to {server} as {} (scopes: {})",
-            file.display(),
-            cell(&who["label"]),
-            cell(&who["scopes"])
+            "Verified up to version {}; computers accept up to version {}. Its trusted keys:",
+            v.latest, v.version
         );
+    } else {
+        println!("Verified up to version {}. Trusted keys:", v.version);
     }
-    println!("Never give an AI the token file {}.", token_file.display());
+    for k in &v.trust {
+        println!("    {}", crate::sign::key_line(k));
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `mastersos heartbeat`.
+async fn heartbeat(
+    server: &str,
+    token_file: &Path,
+    kit: &mastersos_bundle::kit::Kit,
+    days: i64,
+) -> Result<ExitCode, OpError> {
+    let api = sign_api(server, token_file)?;
+    crate::sign::sign_heartbeat(
+        &api,
+        kit,
+        &pin_dir()?,
+        days,
+        &mut std::io::stdin().lock(),
+        &mut std::io::stdout(),
+    )
+    .await
+    .map_err(sign_fail)?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `mastersos recovery read <DEVICE>`.
+async fn recovery_read(
+    server: &str,
+    token_file: &Path,
+    kit: &mastersos_bundle::kit::Kit,
+    device: &str,
+) -> Result<ExitCode, OpError> {
+    let api = sign_api(server, token_file)?;
+    let n = crate::sign::kit::recovery_read(&api, kit, device, &mut std::io::stdout())
+        .await
+        .map_err(sign_fail)?;
+    println!("{n} recovery key(s) opened.");
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `mastersos seed check <FILE>`, with the file's text (read before the network).
+async fn seed_check(server: &str, token_file: &Path, text: &str) -> Result<ExitCode, OpError> {
+    let api = sign_api(server, token_file)?;
+    crate::sign::seed_check(&api, &pin_dir()?, text, &mut std::io::stdout())
+        .await
+        .map_err(sign_fail)?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -596,9 +700,8 @@ async fn connect_school(
     token_file: Option<PathBuf>,
 ) -> Result<ExitCode, OpError> {
     let base = check_server(server_url).map_err(|e| OpError::Failed(e.to_string()))?;
-    let token =
-        mastersos_sign::platform::read_hidden_line("Paste the token from the Command line page: ")
-            .map_err(fail)?;
+    let token = crate::platform::read_hidden_line("Paste the token from the Command line page: ")
+        .map_err(fail)?;
     let token = token.trim();
     if token.is_empty() {
         return Err(OpError::Failed("No token was entered".into()));
@@ -607,31 +710,6 @@ async fn connect_school(
     let who = crate::whoami(&api)
         .await
         .map_err(|e| OpError::Failed(e.to_string()))?;
-    if crate::is_ai_token(&who) {
-        return Err(OpError::Failed(
-            "This token is for an AI tool. Paste the token from the Command line page instead; nothing was saved"
-                .into(),
-        ));
-    }
-    let has = |name: &str| {
-        who["scopes"]
-            .as_array()
-            .is_some_and(|a| a.iter().any(|s| s.as_str() == Some(name)))
-    };
-    if !has("read") || !has("draft") {
-        return Err(OpError::Failed(
-            "This token cannot read and edit settings. Create a new token on the Command line page; nothing was saved"
-                .into(),
-        ));
-    }
-    // The same check every later command applies to IT's token.
-    crate::check_scopes(&who, TokenUse::It).map_err(|e| match e {
-        crate::StartError::Refused(_) => OpError::Failed(
-            "This token has more rights than the command line needs. Create a token with read and draft only; nothing was saved"
-                .into(),
-        ),
-        other => OpError::Failed(other.to_string()),
-    })?;
     let school: String = who["school_name"]
         .as_str()
         .map(|n| {
@@ -650,12 +728,9 @@ async fn connect_school(
         None => dir.join("token"),
     };
     let config_path = dir.join("config.toml");
-    // Keep the AI token file of an earlier setup; a broken old config is replaced.
-    let ai_token_file = load_config().ok().and_then(|c| c.ai_token_file);
     let text = toml::to_string(&ConfigFile {
         server: Some(server_url.trim_end_matches('/').to_owned()),
         token_file: Some(token_path.clone()),
-        ai_token_file,
     })
     .map_err(|e| OpError::Failed(format!("Could not write the settings: {e}")))?;
     for p in [&token_path, &config_path] {
@@ -665,9 +740,8 @@ async fn connect_school(
             })?;
         }
     }
-    mastersos_sign::platform::write_private(&token_path, format!("{token}\n").as_bytes())
-        .map_err(fail)?;
-    mastersos_sign::platform::write_private(&config_path, text.as_bytes()).map_err(fail)?;
+    crate::platform::write_private(&token_path, format!("{token}\n").as_bytes()).map_err(fail)?;
+    crate::platform::write_private(&config_path, text.as_bytes()).map_err(fail)?;
     println!("Connected to {school}.");
     println!("Token saved in {}", token_path.display());
     println!("Settings saved in {}", config_path.display());
@@ -676,7 +750,7 @@ async fn connect_school(
 
 /// The token file must be readable by its owner only.
 fn check_private(path: &Path, again: &str) -> Result<(), OpError> {
-    mastersos_sign::platform::check_private(path).map_err(|e| {
+    crate::platform::check_private(path).map_err(|e| {
         let why = format!("{e:#}");
         OpError::Failed(format!("{}. {again}", why.trim_end_matches('.')))
     })
@@ -684,8 +758,6 @@ fn check_private(path: &Path, again: &str) -> Result<(), OpError> {
 
 /// How to replace a token file that [`check_private`] refuses.
 const TOKEN_AGAIN: &str = "Or save a new token file: run `mastersos connect <SERVER_URL>` again.";
-const AI_TOKEN_AGAIN: &str =
-    "Or save the AI token again: create it under AI tools on the school's admin page.";
 
 async fn devices(api: &Api, out: &Out, c: DevicesCmd) -> Result<ExitCode, OpError> {
     match c {
@@ -830,7 +902,7 @@ fn fail(e: impl std::fmt::Display) -> OpError {
 fn open_dir(dir: Option<&Path>) -> Result<Workdir, OpError> {
     Ok(Workdir::open(dir.unwrap_or_else(|| Path::new(".")))
         .map_err(fail)?
-        .with_pins(config_dir()?.join("pins")))
+        .with_pins(pin_dir()?))
 }
 
 fn lint_values(lints: &[mastersos_bundle::Lint]) -> Vec<Value> {
@@ -869,7 +941,6 @@ fn reroute_notice(lints: &[mastersos_bundle::Lint]) -> Option<String> {
 fn local_check(dir: Option<&Path>, json: bool) -> Result<ExitCode, OpError> {
     let lints = workdir::check(&open_dir(dir)?).map_err(fail)?;
     if json {
-        // The same shape as the MCP `check` tool.
         println!("{}", crate::tools::check_result(&lints));
     } else {
         print_issues(&lint_values(&lints));
@@ -1143,8 +1214,8 @@ async fn school_info(api: &Api, server: &str) -> Result<(String, String), OpErro
     Ok((id, name))
 }
 
-fn sign_api(server: &str, token_file: &Path) -> Result<mastersos_sign::Api, OpError> {
-    mastersos_sign::Api::from_token_file(server, token_file).map_err(fail)
+fn sign_api(server: &str, token_file: &Path) -> Result<crate::sign::Api, OpError> {
+    crate::sign::Api::from_token_file(server, token_file).map_err(fail)
 }
 
 /// Whether two server addresses name the same server: compared as URLs (scheme, host in lower
@@ -1165,7 +1236,7 @@ fn same_server(a: &str, b: &str) -> bool {
     }
 }
 
-/// `mastersos init <dir> --school-key <FILE>…`: the trusted keys and the disk-unlocking
+/// `mastersos init <dir> --key-file <PATH>…`: the trusted keys and the disk-unlocking
 /// recipients come from the school key files only; the server is asked only whether each is
 /// registered for this school. Nothing is written when one is not.
 async fn init_dir(
@@ -1210,7 +1281,7 @@ async fn init_dir(
     Ok(ExitCode::SUCCESS)
 }
 
-/// A school key file read for `init` or `keys add`.
+/// A school key file read for `init` or `key add`.
 struct SchoolKey {
     kit: mastersos_bundle::kit::Kit,
 }
@@ -1225,7 +1296,7 @@ impl SchoolKey {
 fn load_school_keys(paths: &[PathBuf]) -> Result<Vec<SchoolKey>, OpError> {
     let mut out: Vec<SchoolKey> = Vec::new();
     for p in paths {
-        let kit = mastersos_sign::kit::load_kit(p).map_err(fail)?;
+        let kit = crate::sign::kit::load_key_file(p).map_err(fail)?;
         if !out.iter().any(|k| k.kit.key_id() == kit.key_id()) {
             out.push(SchoolKey { kit });
         }
@@ -1285,7 +1356,7 @@ async fn ensure_registered(
         let recipient_ok = recipients.iter().any(|r| r.recipient == recipient);
         if !key_ok || !recipient_ok {
             return Err(OpError::Failed(format!(
-                "This school key ({}) is not registered for {school}. Register it first with `mastersos-sign register` (the admin site's Tokens page gives the key token).",
+                "This school key ({}) is not registered for {school}. Register it first with `mastersos key register --key-file <file> --label <name>`.",
                 k.code()
             )));
         }
@@ -1308,7 +1379,7 @@ fn trusted_line(manifest_text: &str) -> Result<String, OpError> {
 }
 
 const PUBLISH_NEXT: &str =
-    "Now publish with a school key that is already trusted: mastersos publish --school-key <file>";
+    "Now publish with a school key that is already trusted: mastersos publish --key-file <file>";
 
 /// The settings directory the `keys` commands edit; it must belong to this server and school.
 async fn keys_dir(
@@ -1330,7 +1401,7 @@ async fn keys_dir(
     Ok((w, name))
 }
 
-/// `mastersos keys add <FILE>`: only the local manifest.toml changes.
+/// `mastersos key add <FILE>`: only the local manifest.toml changes.
 async fn keys_add(
     api: &Api,
     server: &str,
@@ -1354,7 +1425,7 @@ async fn keys_add(
     Ok(ExitCode::SUCCESS)
 }
 
-/// `mastersos keys remove <KEY CODE> [--school-key <FILE>]`: only local data decides what is
+/// `mastersos key remove <KEY CODE> [--key-file <PATH>]`: only local data decides what is
 /// removed. The disk-unlocking entry goes when its `# school key <code>` comment ties it to the
 /// key, or when it is the one derived from the key's own file. Entries without either are listed
 /// for IT; when this computer is connected, the server's word on each is shown beside it, and
@@ -1362,13 +1433,13 @@ async fn keys_add(
 async fn keys_remove(
     dir: Option<&Path>,
     code: &str,
-    school_key: Option<&Path>,
+    key_file: Option<&Path>,
     server: Option<&str>,
     token_file: Option<&Path>,
 ) -> Result<ExitCode, OpError> {
-    let file = match school_key {
+    let file = match key_file {
         Some(p) => {
-            let kit = mastersos_sign::kit::load_kit(p).map_err(fail)?;
+            let kit = crate::sign::kit::load_key_file(p).map_err(fail)?;
             let file_code = workdir::shown_code(&kit.key_id());
             match workdir::normalize_key_code(code) {
                 Some(want) if want == file_code => {}
@@ -1395,7 +1466,7 @@ async fn keys_remove(
         if k.key_id() != r.key_id {
             return Err(OpError::Failed(format!(
                 "manifest.toml has a school key {shown} that does not match {}. Check which file is the right one. Nothing was changed.",
-                absolute(school_key.unwrap_or(Path::new("")))?.display()
+                absolute(key_file.unwrap_or(Path::new("")))?.display()
             )));
         }
     }
@@ -1413,7 +1484,7 @@ async fn keys_remove(
             }
         }
         println!(
-            "If you still have that key's file, run again with --school-key <file>: mastersos keys remove {shown} --school-key <file>"
+            "If you still have that key's file, run again with --key-file <file>: mastersos key remove {shown} --key-file <file>"
         );
         println!("Otherwise remove the one that belonged to {shown} by hand.");
     }
@@ -1441,12 +1512,12 @@ async fn server_says(
             Some(p) => p,
             None => config_dir().ok()?.join("token"),
         };
-        mastersos_sign::platform::check_private(&token_file).ok()?;
+        crate::platform::check_private(&token_file).ok()?;
         let m = w.meta().ok()?;
         if !same_server(&m.server, &server) {
             return None;
         }
-        let api = connect(&server, &token_file, TokenUse::Any).await.ok()?;
+        let api = connect(&server, &token_file).await.ok()?;
         let (id, _) = school_info(&api, &server).await.ok()?;
         if id != m.school_id {
             return None;
@@ -1469,7 +1540,7 @@ async fn server_says(
         .unwrap_or_default()
 }
 
-/// `mastersos keys list`: the registered school keys, and whether the local directory has each.
+/// `mastersos key list`: the registered school keys, and whether the local directory has each.
 async fn keys_list(api: &Api, out: &Out, dir: Option<&Path>) -> Result<ExitCode, OpError> {
     let local: Option<Vec<mastersos_bundle::TrustKey>> = match dir {
         Some(d) => {
@@ -1560,8 +1631,8 @@ async fn pull_dir(
         }
     }
     let sign = sign_api(server, token_file)?;
-    let pins = config_dir()?.join("pins");
-    let verified = mastersos_sign::chain::verify_chain(
+    let pins = pin_dir()?;
+    let verified = crate::sign::chain::verify_chain(
         &sign,
         &pins,
         &mut std::io::stdin().lock(),
@@ -1583,9 +1654,9 @@ async fn pull_dir(
             // Only a version this computer verified before, with the digest it had then: the
             // manifests link to no earlier digest, so history before the first use here cannot
             // be authenticated.
-            mastersos_sign::chain::recorded_version(&verified.history, n).map_err(fail)?;
+            crate::sign::chain::recorded_version(&verified.history, n).map_err(fail)?;
             let archive = sign.version_archive(n).await.map_err(fail)?;
-            let contents = mastersos_sign::chain::recorded_contents(&verified.history, n, &archive)
+            let contents = crate::sign::chain::recorded_contents(&verified.history, n, &archive)
                 .map_err(fail)?;
             (n, contents)
         }
@@ -1698,8 +1769,8 @@ fn prompt_secret(text: &str) -> Result<zeroize::Zeroizing<String>, OpError> {
             "stdin is not a terminal, so a password cannot be read safely".into(),
         ));
     }
-    mastersos_sign::platform::read_hidden_line(text).map_err(|e| {
-        if e.is::<mastersos_sign::platform::CannotHideTyping>() {
+    crate::platform::read_hidden_line(text).map_err(|e| {
+        if e.is::<crate::platform::CannotHideTyping>() {
             OpError::Failed(
                 "Cannot hide typing in this terminal, so a password cannot be read safely. \
                  Run this in PowerShell or Command Prompt (Windows) or another terminal."
@@ -1709,19 +1780,6 @@ fn prompt_secret(text: &str) -> Result<zeroize::Zeroizing<String>, OpError> {
             fail(e)
         }
     })
-}
-
-/// `publish --kit` / `--key`, read and checked (owner, mode 0600, contents) before anything is
-/// uploaded. Clap already refuses both at once.
-fn signer(kit: Option<&Path>, key: Option<&Path>) -> Result<Option<SignWith>, OpError> {
-    match (kit, key) {
-        (Some(_), Some(_)) => Err(OpError::Failed(
-            "give --school-key or --key, not both".into(),
-        )),
-        (Some(p), None) => SignWith::kit_file(p).map(Some).map_err(fail),
-        (None, Some(p)) => SignWith::key_file(p).map(Some).map_err(fail),
-        (None, None) => Ok(None),
-    }
 }
 
 /// `mastersos publish`.
@@ -1735,7 +1793,7 @@ async fn publish_dir(
     json: bool,
 ) -> Result<ExitCode, OpError> {
     let w = open_dir(dir)?;
-    let pins = config_dir()?.join("pins");
+    let pins = pin_dir()?;
     publish_to(
         api,
         server,
@@ -1866,19 +1924,16 @@ mod tests {
             assert!(flat.contains("~/.config/mastersos/token"), "{help}");
             assert!(!help.contains("APPDATA"), "{help}");
         }
-        assert!(flat.contains("ai-token)"), "{help}");
         assert!(flat.contains("config.toml)"), "{help}");
     }
 
     #[test]
-    fn publish_takes_kit_or_key_and_repeated_reroute_approvals() {
-        let both = Cli::try_parse_from(["mastersos", "publish", "--kit", "a", "--key", "b"]);
-        assert!(both.is_err());
+    fn publish_takes_a_key_file_and_repeated_reroute_approvals() {
         let cli = Cli::try_parse_from([
             "mastersos",
             "publish",
             "dir",
-            "--kit",
+            "--key-file",
             "school.kit",
             "--allow-reroute",
             "x-psk",
@@ -1886,34 +1941,25 @@ mod tests {
         ])
         .unwrap();
         let Cmd::Publish {
-            kit,
-            key,
+            key_file,
             allow_reroute,
             ..
         } = cli.cmd
         else {
             panic!("not publish");
         };
-        assert_eq!(kit, Some(PathBuf::from("school.kit")));
-        assert_eq!(key, None);
+        assert_eq!(key_file, Some(PathBuf::from("school.kit")));
         assert_eq!(allow_reroute, ["x-psk", "y-psk"]);
-        assert!(signer(None, None).unwrap().is_none());
-        let missing = signer(Some(Path::new("/nonexistent/school.kit")), None);
-        assert!(missing.is_err());
+        assert!(SignWith::key_file(Path::new("/nonexistent/school.kit")).is_err());
     }
 
     #[test]
-    fn kit_kit_alias_still_works() {
-        let cli = Cli::try_parse_from(["mastersos", "publish", "--kit", "f"]).unwrap();
-        let Cmd::Publish { kit, .. } = cli.cmd else {
-            panic!("not publish");
-        };
-        assert_eq!(kit, Some(PathBuf::from("f")));
-        let cli = Cli::try_parse_from(["mastersos", "publish", "--school-key", "g"]).unwrap();
-        let Cmd::Publish { kit, .. } = cli.cmd else {
-            panic!("not publish");
-        };
-        assert_eq!(kit, Some(PathBuf::from("g")));
+    fn pin_dir_is_a_global_option() {
+        let cli = Cli::try_parse_from(["mastersos", "verify", "--pin-dir", "/p"]).unwrap();
+        assert_eq!(cli.pin_dir, Some(PathBuf::from("/p")));
+        let cli =
+            Cli::try_parse_from(["mastersos", "--pin-dir", "/q", "seed", "check", "f"]).unwrap();
+        assert_eq!(cli.pin_dir, Some(PathBuf::from("/q")));
     }
 
     #[test]

@@ -552,7 +552,7 @@ pub struct School {
             length(min = 1, max = 8),
             description = "1 to 8 age X25519 public keys (`age1…`, canonical lowercase, none \
                            twice) that Devices encrypt their disk recovery key to before sending \
-                           it to the cloud. Written by `mastersos init` and `mastersos keys add`. Leave the key out rather \
+                           it to the cloud. Written by `mastersos init` and `mastersos key add`. Leave the key out rather \
                            than writing an empty list."
         )
     )]
@@ -972,12 +972,12 @@ impl DropApps {
 #[serde(deny_unknown_fields)]
 pub struct ItAccount {
     /// The password as a crypt(3) hash (`$y$…` yescrypt, or `$6$rounds=500000$…`). Written by the
-    /// console; a secret: never shown to AI tokens.
+    /// console; a secret: kept out of reports and logs.
     pub password_hash: String,
 }
 
 impl ItAccount {
-    /// The fields whose values are secrets: kept out of reports, logs and AI tokens' view.
+    /// The fields whose values are secrets: kept out of reports and logs.
     pub const SECRET_FIELDS: [&'static str; 1] = ["password_hash"];
 }
 
@@ -1163,7 +1163,7 @@ pub struct Wifi {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open: Option<bool>,
     /// The WPA personal password: 8-63 printable ASCII characters or 64 hex digits. Makes the
-    /// network WPA personal (WPA2, and WPA3 transition mode). A secret: never shown to AI tokens.
+    /// network WPA personal (WPA2, and WPA3 transition mode). A secret: kept out of reports and logs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub psk: Option<String>,
     /// Only WPA3 (SAE): write `true` only for a network that accepts nothing else. Only with `psk`.
@@ -1179,7 +1179,7 @@ pub struct Wifi {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<String>,
     /// The account password. Required with `eap` `peap`, `ttls` and `pwd`; not allowed with `tls`.
-    /// A secret: never shown to AI tokens.
+    /// A secret: kept out of reports and logs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
     /// The inner authentication of `peap` and `ttls`: `mschapv2` (the default), `pap`, `gtc` or
@@ -1208,7 +1208,7 @@ pub struct Wifi {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_cert: Option<String>,
     /// The client private key of `tls`, PEM text inline. Required with `tls`, not allowed
-    /// otherwise. A secret: never shown to AI tokens.
+    /// otherwise. A secret: kept out of reports and logs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_key: Option<String>,
     /// The passphrase of an encrypted `client_key`. Only with `tls`. A secret: never shown to AI
@@ -1308,7 +1308,7 @@ pub enum WifiKind {
 }
 
 impl Wifi {
-    /// The fields whose values are secrets: kept out of reports, logs and AI tokens' view.
+    /// The fields whose values are secrets: kept out of reports and logs.
     pub const SECRET_FIELDS: [&'static str; 4] =
         ["psk", "password", "client_key", "client_key_password"];
 

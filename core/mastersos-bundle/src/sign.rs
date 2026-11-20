@@ -127,7 +127,7 @@ pub fn pack(c: &Contents, signer: &dyn Signer) -> Result<Vec<u8>, BundleError> {
     assemble(c, &sig)
 }
 
-/// 用外部做好的签名（passkey、`mastersos-sign`）打包。这里**不验签**：
+/// 用外部做好的签名（passkey、`mastersos` 命令行）打包。这里**不验签**：
 /// 用哪组 trust 验由调用方决定。
 pub fn assemble(c: &Contents, sig: &SignatureFile) -> Result<Vec<u8>, BundleError> {
     write_archive(c, &sig.to_toml())

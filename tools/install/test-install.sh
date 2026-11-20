@@ -39,12 +39,10 @@ if [ $# -eq 0 ]; then
   tag=cli-test
   expect='^mastersos 0\.0\.0-stub$'
   mkdir -p "$www/$tag" "$tmp/stub"
-  for name in mastersos mastersos-sign; do
-    printf '#!/bin/sh\necho "%s 0.0.0-stub"\n' "$name" >"$tmp/stub/$name"
-    chmod 755 "$tmp/stub/$name"
-  done
+  printf '#!/bin/sh\necho "mastersos 0.0.0-stub"\n' >"$tmp/stub/mastersos"
+  chmod 755 "$tmp/stub/mastersos"
   for target in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
-    tar -czf "$www/$tag/mastersos-$target.tar.gz" -C "$tmp/stub" mastersos mastersos-sign
+    tar -czf "$www/$tag/mastersos-$target.tar.gz" -C "$tmp/stub" mastersos
   done
   if command -v sha256sum >/dev/null 2>&1; then
     (cd "$www/$tag" && sha256sum -- *.tar.gz >SHA256SUMS)
@@ -102,20 +100,33 @@ run_install() {
     sh -s -- "$@" <"$installer" >"$log" 2>&1
 }
 
-# 1. A given version: both programs installed, the absolute path and the version printed
+# 1. A given version: the program installed, the absolute path and the version printed; a mastersos-sign left in the
+# same folder by an earlier installer is removed, with one line saying so
 home=$tmp/home1
+mkdir -p "$home/.local/bin"
+printf '#!/bin/sh\necho stale\n' >"$home/.local/bin/mastersos-sign"
+chmod 755 "$home/.local/bin/mastersos-sign"
 run_install "$home" "$tmp/1.log" --version "$tag" || { cat "$tmp/1.log"; fail "install --version $tag"; }
-for name in mastersos mastersos-sign; do
-  [ -x "$home/.local/bin/$name" ] || { cat "$tmp/1.log"; fail "$name not installed"; }
-done
+[ -x "$home/.local/bin/mastersos" ] || { cat "$tmp/1.log"; fail "mastersos not installed"; }
+[ ! -e "$home/.local/bin/mastersos-sign" ] || { cat "$tmp/1.log"; fail "stale mastersos-sign not removed"; }
+[ "$(grep -c 'mastersos-sign' "$tmp/1.log")" = 1 ] || { cat "$tmp/1.log"; fail "removal not reported in exactly one line"; }
+grep -qF "Removed the old $home/.local/bin/mastersos-sign (now part of mastersos)" "$tmp/1.log" \
+  || { cat "$tmp/1.log"; fail "removal message missing"; }
 "$home/.local/bin/mastersos" --version | grep -Eq "$expect" || fail "installed mastersos --version"
 grep -qF "$home/.local/bin/mastersos" "$tmp/1.log" || { cat "$tmp/1.log"; fail "installed path not printed"; }
 grep -Eq "$expect" "$tmp/1.log" || { cat "$tmp/1.log"; fail "version not printed"; }
 pass "install --version $tag"
 
-# 2. Again over the installed copy (an upgrade)
+# 2. Over an older installed copy (an upgrade): the installed mastersos is the archive's, never the older one;
+# with nothing stale left, the installer says nothing about mastersos-sign
+printf '#!/bin/sh\necho "mastersos 0.0.0-old"\n' >"$home/.local/bin/mastersos"
+chmod 755 "$home/.local/bin/mastersos"
 run_install "$home" "$tmp/2.log" --version "$tag" || { cat "$tmp/2.log"; fail "reinstall"; }
-pass "reinstall over an existing copy"
+installed=$("$home/.local/bin/mastersos" --version)
+case $installed in *-old*) fail "upgrade left the older mastersos: $installed" ;; esac
+printf '%s\n' "$installed" | grep -Eq "$expect" || fail "upgrade: installed mastersos prints: $installed"
+if grep -q 'mastersos-sign' "$tmp/2.log"; then cat "$tmp/2.log"; fail "installer names mastersos-sign with nothing to remove"; fi
+pass "upgrade over an older copy"
 
 # 3. No version: the newest cli-* release in the list, on its second page
 home=$tmp/home3
@@ -131,7 +142,7 @@ if release_base=$base/tampered run_install "$home" "$tmp/4.log" --version "$tag"
   fail "tampered SHA256SUMS accepted"
 fi
 grep -qi 'sha-256' "$tmp/4.log" || { cat "$tmp/4.log"; fail "tampered: no checksum message"; }
-if [ -e "$home/.local/bin/mastersos" ] || [ -e "$home/.local/bin/mastersos-sign" ]; then
+if [ -e "$home/.local/bin/mastersos" ]; then
   fail "tampered: something was installed"
 fi
 pass "tampered SHA256SUMS refused, nothing installed"

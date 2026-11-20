@@ -1,42 +1,44 @@
-//! 打印前的清洗：服务端给的任何字符串（key_id、rp_id、路径、清单原文、lint、错误消息）
-//! 都可能带终端控制序列。被攻破的服务端可以借光标移动、清行、OSC 在确认界面上藏行或
-//! 伪造行，所以这些字符一律以可见的转义形式打出来。
+//! Cleaning before printing: any string from the server (key_id, rp_id, paths, manifest text,
+//! lints, error messages) may carry terminal control sequences. A compromised server could use
+//! cursor moves, line clears or OSC to hide or forge lines on the confirmation screen, so these
+//! characters are always printed in a visible escaped form.
 //!
-//! - [`field`]：单个字段（换行也转义），超长截断。
-//! - [`text`]：多行正文（只保留 `\n`），每行超长截断。
-//! - [`SafeWriter`]：库里所有打印都经过它，作为最后一道：漏掉 [`field`] 的字符串也不会
-//!   把控制字符送到终端。
+//! - [`field`]: one field (newlines escaped too), cut when too long.
+//! - [`text`]: multi-line text (only `\n` kept), each line cut when too long.
+//! - [`SafeWriter`]: everything printed goes through it as the last line of defence: a string that
+//!   missed [`field`] still cannot send control characters to the terminal.
 
 use std::io::{self, Write};
 
-/// 单个字段最多显示的字符数。
+/// The most characters shown of one field.
 pub const FIELD_MAX: usize = 200;
-/// 多行正文里每行最多显示的字符数。
+/// The most characters shown of each line of multi-line text.
 pub const LINE_MAX: usize = 400;
 
-/// 这个字符要不要以转义形式显示。`\n` 不在此列：调用方按需单独处理。
+/// Whether this character is shown escaped. `\n` is not: callers handle it as they need.
 ///
-/// 控制字符之外，Unicode 的 Cf（格式）类一律算：它们不占宽度或改变显示顺序，能让两个不同的
-/// id 看起来一样。Cf 的码位表是固定的（Unicode 17），这里逐段列出，没有引入类别表的依赖。
+/// Besides control characters, every Unicode Cf (format) character counts: they take no width or
+/// change the display order, and can make two different ids look the same. The Cf code points are
+/// fixed (Unicode 17) and listed range by range here, without a dependency for the category table.
 fn hidden(c: char) -> bool {
     let u = c as u32;
     (c.is_control() && c != '\n')            // C0、DEL、C1（U+0080–U+009F）
-        || u == 0x00AD                       // 软连字符
-        || (0x0600..=0x0605).contains(&u)    // 阿拉伯数字标记
-        || u == 0x061C                       // 阿拉伯字母标记
-        || u == 0x06DD || u == 0x070F        // 阿拉伯 / 叙利亚缩写标记
+        || u == 0x00AD                       // soft hyphen
+        || (0x0600..=0x0605).contains(&u)    // Arabic number marks
+        || u == 0x061C                       // Arabic letter mark
+        || u == 0x06DD || u == 0x070F        // Arabic / Syriac abbreviation marks
         || (0x0890..=0x0891).contains(&u) || u == 0x08E2
-        || u == 0x180E                       // 蒙古文元音分隔符
-        || (0x200B..=0x200F).contains(&u)    // 零宽字符、LRM / RLM
-        || (0x2028..=0x202E).contains(&u)    // 行 / 段分隔符、双向嵌入与覆盖
-        || (0x2060..=0x206F).contains(&u)    // 词连接符、不可见运算符、废弃的格式控制
-        || u == 0xFEFF                       // BOM / 零宽不换行空格
-        || (0xFFF9..=0xFFFB).contains(&u)    // 注音锚点
+        || u == 0x180E                       // Mongolian vowel separator
+        || (0x200B..=0x200F).contains(&u)    // zero-width characters, LRM / RLM
+        || (0x2028..=0x202E).contains(&u)    // line / paragraph separators, bidi embeddings and overrides
+        || (0x2060..=0x206F).contains(&u)    // word joiner, invisible operators, deprecated format controls
+        || u == 0xFEFF                       // BOM / zero-width no-break space
+        || (0xFFF9..=0xFFFB).contains(&u)    // interlinear annotation anchors
         || u == 0x110BD || u == 0x110CD
-        || (0x13430..=0x1343F).contains(&u)  // 埃及象形文字格式控制
-        || (0x1BCA0..=0x1BCA3).contains(&u)  // 速记格式控制
-        || (0x1D173..=0x1D17A).contains(&u)  // 乐谱格式控制
-        || (0xE0000..=0xE007F).contains(&u) // 标签字符
+        || (0x13430..=0x1343F).contains(&u)  // Egyptian hieroglyph format controls
+        || (0x1BCA0..=0x1BCA3).contains(&u)  // shorthand format controls
+        || (0x1D173..=0x1D17A).contains(&u)  // musical symbol format controls
+        || (0xE0000..=0xE007F).contains(&u) // tag characters
 }
 
 fn push_escaped(out: &mut String, c: char) {
@@ -53,9 +55,10 @@ fn push_escaped(out: &mut String, c: char) {
     }
 }
 
-/// `escape_backslash`：把 `\` 写成 `\\`，让转义出来的 `\u{202e}` 与字面上的 `\u{202e}` 分得开。
-/// 只有清洗服务端字符串的 [`field`] / [`text`] / [`escape_lines`] 要开；[`SafeWriter`] 处理的
-/// 是已经清洗过、带着我们自己转义序列的输出，再转一次会把它们改坏。
+/// `escape_backslash`: write `\` as `\\`, so an escaped `\u{202e}` and a literal `\u{202e}` stay
+/// apart. Only [`field`] / [`text`] / [`escape_lines`], which clean the server's strings, turn it
+/// on; [`SafeWriter`] handles output that is already clean and carries our own escapes, which a
+/// second pass would break.
 fn escape_into(out: &mut String, s: &str, keep_newline: bool, escape_backslash: bool) {
     for c in s.chars() {
         if c == '\\' && escape_backslash {
@@ -75,7 +78,8 @@ fn capped(s: &str, max: usize) -> (&str, Option<usize>) {
     }
 }
 
-/// 单个字段：所有控制与不可见格式字符（含换行）转义，超过 [`FIELD_MAX`] 个字符截断。
+/// One field: every control and invisible format character (newlines too) escaped, cut after
+/// [`FIELD_MAX`] characters.
 pub fn field(s: &str) -> String {
     let (head, total) = capped(s, FIELD_MAX);
     let mut out = String::new();
@@ -86,20 +90,23 @@ pub fn field(s: &str) -> String {
     out
 }
 
-/// 多行正文转义但不截断：先转义再按行比对（`similar` 会把单独的 `\r` 当换行，转义后
-/// 显示的行就是比对的行；不截断，免得只差在长行后半截的改动被比没了）。
+/// Multi-line text escaped but not cut: escape first, then diff by line (`similar` takes a lone
+/// `\r` as a line break; after escaping, the lines shown are the lines diffed; nothing is cut, so a
+/// change only in the second half of a long line is not lost).
 pub fn escape_lines(s: &str) -> String {
     let mut out = String::new();
     escape_into(&mut out, s, true, true);
     out
 }
 
-/// 多行正文：保留 `\n`，其余照 [`field`] 转义，每行超过 [`LINE_MAX`] 个字符截断。
+/// Multi-line text: `\n` kept, the rest escaped as in [`field`], each line cut after [`LINE_MAX`]
+/// characters.
 pub fn text(s: &str) -> String {
     lines(s, true)
 }
 
-/// 只按行截断，不再转义：给已经过 [`escape_lines`] 的文字用（再转一次，`\` 会变成 `\\\\`）。
+/// Only cut by line, no escaping: for text that went through [`escape_lines`] (a second pass
+/// would turn `\` into `\\\\`).
 pub fn cap_lines(s: &str) -> String {
     lines(s, false)
 }
@@ -123,10 +130,10 @@ fn lines(s: &str, escape: bool) -> String {
     out
 }
 
-/// 把写进来的一切转义后再交给内层：只有 `\n` 原样通过。
+/// Escapes everything written to it before passing it on: only `\n` goes through as it is.
 pub struct SafeWriter<'a> {
     inner: &'a mut dyn Write,
-    /// 跨两次 write 的半个 UTF-8 字符。
+    /// Half a UTF-8 character split across two writes.
     tail: Vec<u8>,
 }
 
@@ -155,7 +162,8 @@ impl Write for SafeWriter<'_> {
                     let (ok, bad) = rest.split_at(e.valid_up_to());
                     escape_into(
                         &mut out,
-                        std::str::from_utf8(ok).expect("valid_up_to 之前是合法 UTF-8"),
+                        std::str::from_utf8(ok)
+                            .expect("the bytes before valid_up_to are valid UTF-8"),
                         true,
                         false,
                     );
@@ -166,7 +174,7 @@ impl Write for SafeWriter<'_> {
                             }
                             rest = &bad[n..];
                         }
-                        // 结尾是半个字符：留到下一次 write。
+                        // It ends in half a character: keep it for the next write.
                         None => {
                             rest = bad;
                             break;
@@ -187,7 +195,7 @@ impl Write for SafeWriter<'_> {
 
 impl Drop for SafeWriter<'_> {
     fn drop(&mut self) {
-        // 到最后也没补全的半个字符按字节转义输出。
+        // Half a character never completed is escaped byte by byte.
         if !self.tail.is_empty() {
             let s: String = self.tail.iter().map(|b| format!("\\x{b:02x}")).collect();
             let _ = self.inner.write_all(s.as_bytes());
@@ -220,7 +228,7 @@ mod tests {
 
     #[test]
     fn backslash_is_escaped_so_literal_and_real_differ() {
-        // 字面上的转义写法与真字符不能转成同一段文字。
+        // A literal escape and the real character must not give the same text.
         let real = field("a\u{202e}b");
         let literal = field("a\\u{202e}b");
         assert_eq!(real, "a\\u{202e}b");
@@ -252,7 +260,7 @@ mod tests {
             let f = field(&format!("a{c}b"));
             assert_eq!(f, format!("a\\u{{{:x}}}b", c as u32), "{c:?}");
         }
-        // E0080 不是 Cf，保持原样。
+        // E0080 is not Cf: kept as it is.
         assert_eq!(field("a\u{e0080}b"), "a\u{e0080}b");
     }
 
@@ -293,7 +301,7 @@ mod tests {
         {
             let mut w = SafeWriter::new(&mut sink);
             let bytes = format!("ok\n{EVIL}\n").into_bytes();
-            // 一个字节一个字节地写，半个字符跨 write 也要拼回来。
+            // Written one byte at a time: half a character across writes is put back together.
             for b in &bytes {
                 w.write_all(std::slice::from_ref(b)).unwrap();
             }

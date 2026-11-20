@@ -1,10 +1,14 @@
-//! 本地验链：像 agent 一样从 pin 住的那一版逐版验到最新（Ruling 15）。
+//! Verifying the chain here: from the pinned version to the latest, one version at a time, as the
+//! agent does (Ruling 15).
 //!
-//! pin 存在 `<pin_dir>/<主机>.toml`，记上次验证过的版本号、它的内容摘要与 trust。
-//! - **没有 pin**（首次使用，TOFU）：打印最新版 trust 里每把钥匙的指纹，要人输入 `yes`
-//!   确认与钥匙页、种子开头的指纹对照无误，再以包自己的 trust 自洽检查，记 pin。
-//! - **有 pin**：先确认 pin 住的那一版内容没被换（摘要相同），再对之后的每一版
-//!   `accept(包, 当前 trust, Some(当前版本))`，任何一版不过 → 报「历史版本验不过」，pin 不动。
+//! The pin is `<pin_dir>/<host>.toml`: the version verified last time, its content digest and its
+//! trust.
+//! - **No pin** (first use, TOFU): the fingerprint of every key in the latest version's trust is
+//!   printed, and the human types `yes` after comparing them with the keys page and the top of
+//!   the install file; the package is then checked against its own trust and the pin recorded.
+//! - **A pin**: first the pinned version's content must be unchanged (same digest), then every
+//!   later version goes through `accept(package, current trust, Some(current version))`; any
+//!   version that fails is reported as an earlier version failing verification, and the pin stays.
 //!
 //! A chain is identified by the pin on disk: (host, version, content digest, trust). A new pin
 //! replaces it only when the caller verified forward from exactly that pin and the version is
@@ -22,15 +26,16 @@ use mastersos_bundle::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{ask, hex, print_trust, Api, TrustDelta};
+use super::{ask, hex, print_trust, Api, TrustDelta};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Pin {
-    /// `主机[:端口]`。
+    /// `host[:port][/path]`.
     pub host: String,
     pub version: u64,
-    /// 这一版的 `content_digest`（小写十六进制）：再验时确认服务端没有换掉 pin 住的那一版。
+    /// This version's `content_digest` (lower-case hex): checked next time, so the server cannot
+    /// swap the pinned version.
     pub digest_hex: String,
     pub trust: Vec<TrustKey>,
     /// Every version this computer verified, with its content digest, in order. The only record
@@ -104,7 +109,7 @@ pub fn recorded_version(verified: &[VerifiedVersion], want: u64) -> Result<&Veri
         })
 }
 
-/// 验证过的最新版。
+/// The latest verified version.
 ///
 /// `version`, `digest_hex`, `trust` and `contents` are the last version machines accept: the base
 /// the next signature is checked and diffed against, and what the pin records. `latest` is the
@@ -117,7 +122,7 @@ pub struct Verified {
     pub version: u64,
     pub digest_hex: String,
     pub trust: Vec<TrustKey>,
-    /// 最新已验证版本的清单与文件。
+    /// The manifest and files of the latest verified version.
     pub contents: Contents,
     /// The newest version on the chain (`>= version`).
     pub latest: u64,
@@ -133,7 +138,7 @@ pub fn pin_path(pin_dir: &Path, api: &Api) -> PathBuf {
 /// pin under `pin_dir`: `None` when there is no pin or the version was never verified here. Read
 /// offline, so a local copy of a version can be checked against what was verified.
 pub fn recorded_digest(pin_dir: &Path, server: &str, version: u64) -> Result<Option<String>> {
-    let path = pin_dir.join(format!("{}.toml", crate::pin_name_for(server)?));
+    let path = pin_dir.join(format!("{}.toml", super::pin_name_for(server)?));
     Ok(load_pin(&path)?.and_then(|p| {
         p.verified
             .into_iter()
@@ -159,7 +164,7 @@ pub(crate) fn load_pin(path: &Path) -> Result<Option<Pin>> {
 /// chain, or it changed meanwhile), when `pin` would not move forward, or when the host differs.
 ///
 /// The compare and the write happen under an exclusive `flock` on `<pin>.lock`, so two
-/// `mastersos-sign` runs against the same server cannot both pass the compare and overwrite each
+/// `mastersos` runs against the same server cannot both pass the compare and overwrite each
 /// other. The new pin goes to a fresh temporary file (created exclusively, so it never follows a
 /// planted symlink), is fsynced, renamed over the pin, and the directory is fsynced: a crash
 /// leaves the old pin or the new one, never half of one.
@@ -199,7 +204,7 @@ pub fn save_pin(path: &Path, prev: Option<&Pin>, pin: &Pin) -> Result<()> {
             cur.version
         ),
         (None, Some(_)) => bail!(
-            "the pin {} disappeared while verifying; run mastersos-sign verify again",
+            "the pin {} disappeared while verifying; run mastersos verify again",
             path.display()
         ),
     }
@@ -287,7 +292,8 @@ fn tampered(v: u64, why: impl std::fmt::Display) -> anyhow::Error {
     )
 }
 
-/// 从 pin 验到服务端的最新版，更新 pin，返回最新已验证的版本。见模块文档。
+/// Verify from the pin to the server's latest version, update the pin, and return the latest
+/// verified version. See the module documentation.
 pub async fn verify_chain(
     api: &Api,
     pin_dir: &Path,
@@ -316,7 +322,7 @@ pub async fn verify_chain(
         );
     }
 
-    // pin 住的那一版：内容必须还是当时验证过的那一份。
+    // The pinned version: its content must still be what was verified then.
     let archive = api.version_archive(pin.version).await?;
     let contents = read_archive(&archive)
         .map_err(|e| tampered(pin.version, e))?
@@ -406,7 +412,7 @@ pub async fn verify_chain(
                 out,
                 &format!("Checked version {v}'s change and still continue from it? Type yes: "),
             )
-            // 没有输入（seed-check 等非交互调用）同样算没有确认。
+            // No input (`seed check` and other calls without a dialogue) is no confirmation either.
             .unwrap_or_default();
             if typed != "yes" {
                 bail!(
@@ -464,7 +470,8 @@ pub(crate) fn pin_of(api: &Api, v: &Verified) -> Pin {
     }
 }
 
-/// 首次使用：没有可以往前验的锚，只能由人对照指纹确认最新版的 trust。
+/// First use: there is no anchor to verify forward from, so a human confirms the latest version's
+/// trust by comparing fingerprints.
 async fn first_use(
     api: &Api,
     path: &Path,
@@ -475,7 +482,7 @@ async fn first_use(
     if latest == 0 {
         bail!(
             "the server has not published any version yet: nothing to verify. Approve the first \
-             version with a school key: `mastersos publish --school-key <FILE>`"
+             version with a school key: `mastersos publish --key-file <FILE>`"
         );
     }
     let archive = api.version_archive(latest).await?;
