@@ -922,7 +922,7 @@ mod tests {
         )
         .unwrap();
 
-        // 内容摘要向量：网页与 mastersos-sign 自己重算摘要时对照用。
+        // 内容摘要向量：网页与 mastersos 命令行自己重算摘要时对照用。
         let mut digests = Vec::new();
         let mut push = |name: &str, manifest_text: &str, files: Vec<(&str, Vec<u8>)>| {
             let mut c = crate::Contents {
