@@ -824,3 +824,61 @@ async fn seed_check_compares_trust_entries_not_fingerprints() {
     let v = json_of(&o);
     assert!(v["problems"].to_string().contains("trusted keys"), "{v}");
 }
+
+/// Ruling R23: a seed's Devices verify their first version under the seed's own trust, so a
+/// latest version signed by a key that is not among its own trusted keys (key 1 removing itself:
+/// an honest server refuses it with `trust_rule`) gives no seed. Refused with `seed_invalid`
+/// before `POST seed`, nothing written; once key 2 has signed a version, the seed is made.
+#[tokio::test(flavor = "multi_thread")]
+async fn seed_needs_a_latest_version_signed_by_its_own_trust() {
+    let k1 = Ed25519Signer::from_seed("key-1", &[1; 32]);
+    let k2 = Ed25519Signer::from_seed("key-2", &[2; 32]);
+    let v1 = version(1, &[&k1], &k1);
+    let s = school(std::slice::from_ref(&v1)).await;
+    let home = signed_in(&s.uri());
+    let t = tempfile::tempdir().unwrap();
+    let pins = t.path().join("pins");
+    // The pin at version 1, so version 2 is verified forward from it (as key 1 signed it).
+    let o = make(
+        home.path(),
+        &s,
+        &pins,
+        &[&k1],
+        &t.path().join("one.seed"),
+        &[],
+    )
+    .await;
+    assert!(o.status.success(), "{:?}", text(&o));
+
+    s.reset().await;
+    let v2 = version(2, &[&k2], &k1);
+    publish(&s, &[v1.clone(), v2.clone()]).await;
+    seed_answer(
+        &s,
+        json!({"server_url": s.uri(), "school_id": SID, "fetch_token": TOKEN}),
+    )
+    .await;
+    let out = t.path().join("two.seed");
+    let o = make(home.path(), &s, &pins, &[], &out, &[]).await;
+    assert_eq!(o.status.code(), Some(1), "{:?}", text(&o));
+    let v = json_of(&o);
+    assert_eq!(v["error"]["code"], "seed_invalid", "{v}");
+    let m = v["error"]["message"].as_str().unwrap();
+    assert!(m.contains("version 2"), "{m}");
+    assert!(m.contains("not among its own trusted keys"), "{m}");
+    assert!(m.contains("publish"), "{m}");
+    assert!(seed_requests(&s).await.is_empty(), "POST seed was sent");
+    assert!(!out.exists());
+
+    s.reset().await;
+    publish(&s, &[v1, v2, version(3, &[&k2], &k2)]).await;
+    seed_answer(
+        &s,
+        json!({"server_url": s.uri(), "school_id": SID, "fetch_token": TOKEN}),
+    )
+    .await;
+    let o = make(home.path(), &s, &pins, &[], &out, &[]).await;
+    assert!(o.status.success(), "{:?}", text(&o));
+    assert_eq!(json_of(&o)["min_version"], 3);
+    assert_eq!(read_seed(&out).trust, vec![k2.trust_key()]);
+}

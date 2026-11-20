@@ -698,6 +698,14 @@ pub(crate) fn pin_of(src: Source<'_>, v: &Verified) -> Result<Pin, CliError> {
     })
 }
 
+/// The key id that signed an archive (its `signature` member) when no entry of the archive's own
+/// trust has that id (ruling R23): a computer or Device that starts from that version cannot
+/// verify it. `None` when the signer is in the trust or the member cannot be read.
+pub(crate) fn signer_outside_own_trust(signature_toml: &str, trust: &[TrustKey]) -> Option<String> {
+    let s: mastersos_bundle::SignatureFile = toml::from_str(signature_toml).ok()?;
+    (!trust.iter().any(|t| t.id == s.key_id)).then_some(s.key_id)
+}
+
 /// First use: there is no pin to verify forward from, so the latest version's trust is taken only
 /// from an anchor (a key file, `--trust-fingerprint`, or a person at a terminal).
 async fn first_use(
@@ -830,10 +838,20 @@ async fn first_use(
     // version must verify under that set.
     let anchored: Vec<TrustKey> = m.trust.clone();
     let b = accept(&archive, &anchored, None).map_err(|e| {
-        tamper(format!(
-            "The latest version does not verify even with its own trusted keys: do not trust this server ({})",
-            crate::safe::field(&e.to_string())
-        ))
+        match signer_outside_own_trust(&unpacked.signature_toml, &m.trust) {
+            // Ruling R23: still refused, with what happened and what IT does about it.
+            Some(signer) => tamper(format!(
+                "The latest version {latest} is signed by school key {}, which is not among its \
+                 own trusted keys, so a computer starting from it cannot verify it. An honest \
+                 server refuses such a version: do not trust this server until IT has published \
+                 once with one of the trusted keys (`mastersos publish --key-file <FILE>`)",
+                crate::safe::field(&signer)
+            )),
+            None => tamper(format!(
+                "The latest version does not verify even with its own trusted keys: do not trust this server ({})",
+                crate::safe::field(&e.to_string())
+            )),
+        }
     })?;
     if b.manifest.version != latest {
         return Err(tamper(format!(
@@ -1391,6 +1409,60 @@ mod tests {
                 [serde_json::json!(trust_fingerprint(&signer(2).trust_key()))]
             );
             assert!(std::fs::read_dir(pins.path()).unwrap().next().is_none());
+        }
+
+        /// Ruling R23: a first use facing a latest version signed by a key that is not among its
+        /// own trusted keys is still refused (`chain_tampered`, nothing pinned), with the plain
+        /// explanation: an honest server refuses such a version; IT publishes once with a trusted
+        /// key. A signature by a trusted key id that does not verify keeps the bare refusal.
+        #[tokio::test]
+        async fn first_use_of_a_version_signed_outside_its_own_trust_explains() {
+            let mock = MockServer::start().await;
+            let gone = Ed25519Signer::from_seed("key-9", &[9; 32]);
+            let t = signer(1).trust_key();
+            let text = format!(
+                "version = 1\nissued_at = \"2026-11-03T00:00:00Z\"\n\n[[trust]]\nid = \"{}\"\nalg = \"ed25519\"\npublic_key = \"{}\"\n\n[school]\nid = \"{SCHOOL}\"\n\n[[config]]\nid = \"default\"\nname = \"Default\"\ninterface = \"learning\"\nlogin_methods = [\"local\"]\n\n[[group]]\nid = \"default\"\nname = \"Ungrouped\"\nconfig = \"default\"\n",
+                t.id, t.public_key
+            );
+            let a = pack(
+                &Contents {
+                    manifest_text: text,
+                    files: Default::default(),
+                },
+                &gone,
+            )
+            .unwrap();
+            serve(&mock, SCHOOL, &[a]).await;
+            let pins = tempfile::tempdir().unwrap();
+            let s = server(&mock, SCHOOL);
+            let (r, _) = verify(&s, pins.path(), true, "").await;
+            let e = r.unwrap_err();
+            assert_eq!(e.code, "chain_tampered");
+            assert!(
+                e.message.contains("not among its own trusted keys"),
+                "{}",
+                e.message
+            );
+            assert!(e.message.contains("publish"), "{}", e.message);
+            assert!(
+                e.message.contains("do not trust this server"),
+                "{}",
+                e.message
+            );
+            assert!(pin_files(pins.path()).is_empty());
+
+            // Signed under a trusted key id, but not by that key: the bare refusal.
+            let mock = MockServer::start().await;
+            serve(&mock, SCHOOL, &[archive(1, SCHOOL, 7, "x")]).await;
+            let s = server(&mock, SCHOOL);
+            let (r, _) = verify(&s, pins.path(), true, "").await;
+            let e = r.unwrap_err();
+            assert_eq!(e.code, "chain_tampered");
+            assert!(
+                !e.message.contains("not among its own trusted keys"),
+                "{}",
+                e.message
+            );
         }
 
         /// A person sees every key, the key file's own marked, and confirms the whole set.

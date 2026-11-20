@@ -205,6 +205,7 @@ pub async fn make(
     let m = manifest_of(verified.version, &verified.contents.manifest_text)?;
     // Before the server is asked for anything: no fetch token is handed out for nothing.
     group_config(&m, group, school_id)?;
+    self_verifying(server, verified, &m).await?;
     let answer: SeedAnswer = server.post_empty("seed").await.map_err(nothing_published)?;
     check_answer(&answer, origin, school_id)?;
     let seed = seed_from_version(
@@ -219,6 +220,48 @@ pub async fn make(
     crate::platform::write_out_file(out, text.as_bytes(), replace)
         .map_err(|e| CliError::new("local_file", &safe::text(&format!("{e:#}"))))?;
     Ok(seed)
+}
+
+/// Ruling R23: a seed's Devices verify their first version with the seed's trust alone, which is
+/// that version's own. The verified version's package (the one recorded here, by its digest)
+/// must verify under its own trusted keys; else no seed is made, before `POST seed`.
+async fn self_verifying(
+    server: &Server,
+    verified: &Verified,
+    m: &Manifest,
+) -> Result<(), CliError> {
+    let v = verified.version;
+    let archive = server.version_archive(v).await?;
+    let unpacked = mastersos_bundle::read_archive(&archive).map_err(|_| {
+        invalid(&format!(
+            "the server's package of version {v} cannot be opened; nothing was made"
+        ))
+    })?;
+    if crate::sign::hex(&mastersos_bundle::content_digest(&unpacked.contents))
+        != verified.digest_hex
+    {
+        return Err(CliError::new(
+            "chain_tampered",
+            &format!("the server's package of version {v} differs from the one verified here; nothing was made"),
+        ));
+    }
+    if mastersos_bundle::accept(&archive, &m.trust, None).is_ok() {
+        return Ok(());
+    }
+    Err(invalid(
+        &match crate::sign::chain::signer_outside_own_trust(&unpacked.signature_toml, &m.trust) {
+            Some(signer) => format!(
+            "Not made: version {v} is signed by school key {}, which is not among its own trusted \
+             keys, so a Device starting from this seed could not verify it. Publish once with the \
+             new school key first (`mastersos publish --key-file <FILE>`), then make the seed",
+            safe::field(&signer)
+        ),
+            None => format!(
+            "Not made: version {v} does not verify with its own trusted keys, so a Device starting \
+             from this seed would refuse it"
+        ),
+        },
+    ))
 }
 
 // —— seed check ——
