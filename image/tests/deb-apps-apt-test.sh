@@ -129,7 +129,10 @@ apt update >"$T/update.out" 2>&1 || {
 }
 [ ! -e "$T/canary" ] || fail "a system apt.conf.d hook ran: the system configuration must be off"
 # Control: without APT_CONFIG the same run does read apt.conf.d (so the check above can fail).
-env -i LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin apt-get "${apt_opts[@]}" update >/dev/null 2>&1 || true
+# Into lists of its own: the host's configuration may ask for other indexes (GitHub's runners set
+# APT::Architecture-Variants "amd64v3"), and those would replace the lists the agent's configuration fetched.
+mkdir -p "$T/control-lists/partial" "$T/control-cache"
+env -i LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin apt-get "${apt_opts[@]}" -o "Dir::State::lists=$T/control-lists" -o "Dir::Cache=$T/control-cache" update >/dev/null 2>&1 || true
 [ -e "$T/canary" ] || fail "control: the canary hook did not run without APT_CONFIG"
 rm -f "$T/canary"
 if find "$work/lists" -name '*binary-i386*' | grep -q .; then
@@ -144,16 +147,6 @@ apt -s install "$T/mastersos-apt-probe.deb" >"$T/sim1" 2>&1 || {
 	ls -l "$work/lists" >&2 || true
 	echo "--- policy:" >&2
 	env -i APT_CONFIG="$work/apt.conf" LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin apt-cache "${apt_opts[@]}" policy x11-utils >&2 || true
-	echo "--- architecture settings apt sees with the agent's configuration:" >&2
-	env -i APT_CONFIG="$work/apt.conf" LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin apt-config "${apt_opts[@]}" dump 2>&1 | grep -iE 'variant|architect' >&2 || true
-	echo "--- and where the host sets a variant:" >&2
-	grep -rIis 'variant' /etc/apt /etc/dpkg /usr/share/apt 2>/dev/null | head -20 >&2 || true
-	dpkg --print-architecture >&2 || true
-	echo "--- the same update and policy with no variants:" >&2
-	mkdir -p "$T/nv/lists/partial"
-	env -i APT_CONFIG="$work/apt.conf" LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin apt-get "${apt_opts[@]}" -o "Dir::State::lists=$T/nv/lists" -o 'APT::Architecture-Variants=' update 2>&1 | tail -5 >&2 || true
-	ls "$T/nv/lists" >&2 || true
-	env -i APT_CONFIG="$work/apt.conf" LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin apt-cache "${apt_opts[@]}" -o "Dir::State::lists=$T/nv/lists" -o 'APT::Architecture-Variants=' policy x11-utils >&2 || true
 	fail "simulation 1"
 }
 grep -qE '^Inst x11-utils \([^ ]+ .*\[amd64\]\)' "$T/sim1" || {
