@@ -888,3 +888,115 @@ async fn a_foreign_dir_is_refused_untouched() {
     assert_eq!(mode(dir), 0o755);
     assert_eq!(entries(dir), ["other.txt"]);
 }
+
+/// A DIR of ours that is 0755 (empty, or an earlier run's layout) is tightened to 0700.
+#[tokio::test]
+async fn existing_dir_0755_is_tightened() {
+    let _l = LOCK.lock().await;
+    let a = Kit::generate();
+    let srv = simple_server(&a.signer(), &a, true).await;
+    let s = setup(&seed(&srv.uri(), vec![a.trust_key()], Some(3)), None);
+    let dir = &s.input.dir;
+    let open = |p: &Path| std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755));
+    std::fs::create_dir(dir).unwrap();
+    open(dir).unwrap();
+    let r = run_check(&s.input, Utc::now()).await;
+    assert!(r.ok, "{r:#?}");
+    assert_eq!(mode(dir), 0o700);
+    for d in ["", "seed-partition", "state"] {
+        open(&dir.join(d)).unwrap();
+    }
+    let r = run_check(&s.input, Utc::now()).await;
+    assert!(r.ok, "{r:#?}");
+    for d in ["", "seed-partition", "state"] {
+        assert_eq!(mode(&dir.join(d)), 0o700, "{d}");
+    }
+}
+
+/// The only entry of a refused run.
+fn refused_seed_import(r: &CheckReport) {
+    assert_eq!(r.calls.len(), 1, "{r:#?}");
+    let c = &r.calls[0];
+    assert_eq!(
+        (c.step.as_str(), c.ok, c.error_code.as_deref()),
+        ("seed_import", false, Some("bad_input")),
+        "{c:?}"
+    );
+    assert_eq!(r.device_id, None);
+}
+
+#[tokio::test]
+async fn symlinked_dir_is_refused() {
+    let _l = LOCK.lock().await;
+    let a = Kit::generate();
+    let s = setup(
+        &seed("https://server.example", vec![a.trust_key()], None),
+        None,
+    );
+    let target = s.files.parent().unwrap().join("target");
+    std::fs::create_dir(&target).unwrap();
+    std::os::unix::fs::symlink(&target, &s.input.dir).unwrap();
+    let r = run_check(&s.input, Utc::now()).await;
+    refused_seed_import(&r);
+    assert!(entries(&target).is_empty());
+    assert!(std::fs::symlink_metadata(&s.input.dir)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+}
+
+/// DIR/<name> is a symlink to another directory: refused, the target untouched.
+async fn symlinked_sub_is_refused(name: &str) {
+    let a = Kit::generate();
+    let s = setup(
+        &seed("https://server.example", vec![a.trust_key()], None),
+        None,
+    );
+    let target = s.files.parent().unwrap().join("target");
+    std::fs::create_dir(&target).unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let dir = &s.input.dir;
+    std::fs::create_dir(dir).unwrap();
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::os::unix::fs::symlink(&target, dir.join(name)).unwrap();
+    let r = run_check(&s.input, Utc::now()).await;
+    refused_seed_import(&r);
+    assert!(entries(&target).is_empty(), "{:?}", entries(&target));
+    assert_eq!(mode(&target), 0o755);
+    assert_eq!(entries(dir), [name]);
+}
+
+#[tokio::test]
+async fn symlinked_state_is_refused() {
+    let _l = LOCK.lock().await;
+    symlinked_sub_is_refused("state").await;
+}
+
+#[tokio::test]
+async fn symlinked_seed_partition_is_refused() {
+    let _l = LOCK.lock().await;
+    symlinked_sub_is_refused("seed-partition").await;
+}
+
+/// A DIR owned by another user is refused untouched. Changing the owner needs root: as another
+/// user this test checks nothing (the decision itself has a unit test in the module).
+#[tokio::test]
+async fn a_dir_of_another_user_is_refused() {
+    let _l = LOCK.lock().await;
+    if !rustix::process::geteuid().is_root() {
+        return;
+    }
+    let a = Kit::generate();
+    let s = setup(
+        &seed("https://server.example", vec![a.trust_key()], None),
+        None,
+    );
+    let dir = &s.input.dir;
+    std::fs::create_dir(dir).unwrap();
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::os::unix::fs::chown(dir, Some(65534), Some(65534)).unwrap();
+    let r = run_check(&s.input, Utc::now()).await;
+    refused_seed_import(&r);
+    assert_eq!(mode(dir), 0o755);
+    assert!(entries(dir).is_empty());
+}

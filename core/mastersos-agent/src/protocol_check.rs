@@ -9,7 +9,7 @@
 //! (the lab rule, §2); any other `http://` refuses status, escrow and renewal locally, as a
 //! release image does.
 
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -27,6 +27,7 @@ use crate::fetch::{
     Fetcher, NotAvailable, Recorder, RenewFailed, RenewOutcome, ServerRefused, StatusNotSent,
 };
 use crate::luks::{escrow_request, SealedKey};
+use crate::safefs;
 use crate::seedpart::{self, Identity, Imported};
 
 /// The version of the report's shape (`protocol_check`).
@@ -173,6 +174,8 @@ fn hex(b: &[u8]) -> String {
 
 /// The device a run uses, from `seed_import`.
 struct Device {
+    /// DIR, open for the whole run: `seed_part` and `state` are paths through this fd.
+    _dir: OwnedFd,
     seed: Seed,
     identity: Identity,
     seed_part: PathBuf,
@@ -244,53 +247,71 @@ fn finish(
     }
 }
 
-/// DIR: created 0700 when missing (its parent must exist). An existing DIR is used only when it
-/// is a directory (not a symlink) holding nothing but an earlier run's `seed-partition/` and
-/// `state/`; it is never modified (no chmod), so a wrong DIR is refused untouched.
-fn run_dir(dir: &Path) -> Result<()> {
-    match std::fs::symlink_metadata(dir) {
-        Ok(m) if m.is_dir() => {
-            let rd = std::fs::read_dir(dir)
-                .map_err(|e| anyhow::anyhow!("reading {} failed: {e}", dir.display()))?;
-            for entry in rd {
-                let entry =
-                    entry.map_err(|e| anyhow::anyhow!("reading {} failed: {e}", dir.display()))?;
-                let name = entry.file_name();
-                if name != SEED_PART && name != STATE {
-                    anyhow::bail!(
-                        "{} holds {:?}, not only an earlier run's {SEED_PART}/ and {STATE}/; use an empty or new DIR",
-                        dir.display(),
-                        name
-                    );
-                }
-            }
-            Ok(())
-        }
-        Ok(_) => anyhow::bail!("{} is not a directory", dir.display()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => std::fs::DirBuilder::new()
-            .mode(0o700)
-            .create(dir)
-            .map_err(|e| anyhow::anyhow!("creating {} failed: {e}", dir.display())),
-        Err(e) => anyhow::bail!("checking {} failed: {e}", dir.display()),
+/// A directory owned by `uid` is used only by a process whose effective uid is `uid`.
+fn owned_by_us(uid: u32, euid: u32, what: &str) -> Result<()> {
+    if uid != euid {
+        anyhow::bail!("{what} is owned by another user (uid {uid}); use a directory of your own");
     }
+    Ok(())
 }
 
-/// Creates `p` 0700 when missing (its parent must exist: nothing is created above DIR); refuses
-/// a symlink or a non-directory, and sets 0700.
-fn private_dir(p: &Path) -> Result<()> {
-    match std::fs::symlink_metadata(p) {
-        Ok(m) if m.is_dir() => {}
-        Ok(_) => anyhow::bail!("{} is not a directory", p.display()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            std::fs::DirBuilder::new()
-                .mode(0o700)
-                .create(p)
-                .map_err(|e| anyhow::anyhow!("creating {} failed: {e}", p.display()))?;
+/// The path of an open directory through its fd (Linux): opening it resolves to that very
+/// directory, whatever was renamed or swapped since.
+fn fd_path(fd: &OwnedFd) -> PathBuf {
+    PathBuf::from(format!("/proc/self/fd/{}", fd.as_raw_fd()))
+}
+
+/// Opens DIR exactly once (`O_DIRECTORY|O_NOFOLLOW`: a symlink is refused); a missing DIR is
+/// created 0700 first (its parent must exist). It must be ours and hold nothing but an earlier
+/// run's `seed-partition/` and `state/` directories; anything else is refused untouched. Only then
+/// is it tightened to 0700 through the fd (an own 0755 DIR becomes 0700).
+fn open_run_dir(dir: &Path) -> Result<OwnedFd> {
+    use rustix::fs::{Mode, OFlags};
+    let (Some(parent), Some(name)) = (dir.parent(), dir.file_name()) else {
+        anyhow::bail!("DIR must be a directory below another");
+    };
+    let parent = rustix::fs::open(
+        parent,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|e| anyhow::anyhow!("opening the parent of DIR failed: {e}"))?;
+    let name = Path::new(name);
+    let fd = match safefs::open_dir_at(&parent, name, false) {
+        Ok(fd) => fd,
+        Err(e) if crate::apply::is_not_found(&e) => {
+            rustix::fs::mkdirat(&parent, name, Mode::from_raw_mode(0o700))
+                .map_err(|e| anyhow::anyhow!("creating DIR failed: {e}"))?;
+            safefs::open_dir_at(&parent, name, false).map_err(|e| e.context("opening DIR"))?
         }
-        Err(e) => anyhow::bail!("checking {} failed: {e}", p.display()),
+        Err(e) => return Err(e.context("opening DIR")),
+    };
+    let st = rustix::fs::fstat(&fd).map_err(|e| anyhow::anyhow!("checking DIR failed: {e}"))?;
+    owned_by_us(st.st_uid, rustix::process::geteuid().as_raw(), "DIR")?;
+    for entry in std::fs::read_dir(fd_path(&fd))? {
+        let entry = entry?;
+        let name = entry.file_name();
+        // `file_type` does not follow a symlink.
+        if !((name == SEED_PART || name == STATE) && entry.file_type()?.is_dir()) {
+            anyhow::bail!(
+                "DIR holds {name:?}, not only an earlier run's {SEED_PART}/ and {STATE}/ directories; use an empty or new DIR"
+            );
+        }
     }
-    std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o700))
-        .map_err(|e| anyhow::anyhow!("setting the mode of {} failed: {e}", p.display()))
+    rustix::fs::fchmod(&fd, Mode::from_raw_mode(0o700))
+        .map_err(|e| anyhow::anyhow!("setting the mode of DIR failed: {e}"))?;
+    Ok(fd)
+}
+
+/// `DIR/<name>`, opened or created relative to the DIR fd with `O_NOFOLLOW` (a symlink is
+/// refused), ours, and tightened to 0700.
+fn open_private_sub(dir: &OwnedFd, name: &str) -> Result<OwnedFd> {
+    let fd = safefs::open_dir_at(dir, Path::new(name), true)?;
+    let st = rustix::fs::fstat(&fd).map_err(|e| anyhow::anyhow!("checking {name} failed: {e}"))?;
+    owned_by_us(st.st_uid, rustix::process::geteuid().as_raw(), name)?;
+    rustix::fs::fchmod(&fd, rustix::fs::Mode::from_raw_mode(0o700))
+        .map_err(|e| anyhow::anyhow!("setting the mode of {name} failed: {e}"))?;
+    Ok(fd)
 }
 
 /// Step 1.
@@ -313,31 +334,30 @@ fn seed_import(input: &CheckInput) -> std::result::Result<(Device, String), (Str
     if let Err(e) = seed.validate() {
         return Err(bad(format!("{e}"), &url));
     }
-    let set_up = || -> Result<(PathBuf, PathBuf, Imported, Identity)> {
+    // DIR is resolved by its path once; every later open goes through its fd: here directly, and
+    // in the library calls (which take paths) through `/proc/self/fd/<DIR fd>/<name>`, whose last
+    // part `safefs` opens with `O_NOFOLLOW` relative to the already-open DIR. DIR is ours and
+    // 0700, so no one else can rename or swap its entries.
+    let set_up = || -> Result<(OwnedFd, PathBuf, PathBuf, Imported, Identity)> {
         let dir = std::path::absolute(&input.dir)?;
-        run_dir(&dir)?;
-        let (seed_part, state) = (dir.join(SEED_PART), dir.join(STATE));
-        private_dir(&seed_part)?;
-        let fd = crate::safefs::open_abs_dir(&seed_part, false)?;
-        for (d, what) in [(&seed_part, "seed-partition"), (&state, "state")] {
-            let held = match crate::safefs::open_abs_dir(d, false) {
-                Ok(fd) => crate::safefs::read_at(&fd, SEED_FILE)?,
-                Err(e) if crate::apply::is_not_found(&e) => None,
-                Err(e) => return Err(e),
-            };
-            if held.is_some_and(|h| h != bytes) {
+        let dir_fd = open_run_dir(&dir)?;
+        let part_fd = open_private_sub(&dir_fd, SEED_PART)?;
+        let state_fd = open_private_sub(&dir_fd, STATE)?;
+        for (fd, what) in [(&part_fd, SEED_PART), (&state_fd, STATE)] {
+            if safefs::read_at(fd, SEED_FILE)?.is_some_and(|h| h != bytes) {
                 anyhow::bail!(
                     "{what}/{SEED_FILE} in DIR is another seed than --seed; use a new DIR"
                 );
             }
         }
-        crate::safefs::write_at(&fd, SEED_FILE, &bytes, 0o600)?;
+        safefs::write_at(&part_fd, SEED_FILE, &bytes, 0o600)?;
+        let base = fd_path(&dir_fd);
+        let (seed_part, state) = (base.join(SEED_PART), base.join(STATE));
         let imported = seedpart::import_if_fresh(&state, &seed_part)?;
-        private_dir(&state)?;
         let identity = seedpart::load_or_create_identity(&seed_part, None)?;
-        Ok((seed_part, state, imported, identity))
+        Ok((dir_fd, seed_part, state, imported, identity))
     };
-    let (seed_part, state, imported, identity) = match set_up() {
+    let (dir_fd, seed_part, state, imported, identity) = match set_up() {
         Ok(v) => v,
         Err(e) => return Err(bad(format!("{e:#}"), &url)),
     };
@@ -356,6 +376,7 @@ fn seed_import(input: &CheckInput) -> std::result::Result<(Device, String), (Str
         Device {
             seed,
             identity,
+            _dir: dir_fd,
             seed_part,
             state,
         },
@@ -714,4 +735,20 @@ async fn renewal(
         ),
         Ok(_) => c.detail("the renewed token is taken"),
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A DIR owned by someone else is refused whoever runs the check (the integration test that
+    /// chowns a DIR needs root).
+    #[test]
+    fn only_a_directory_of_our_own_is_used() {
+        assert!(owned_by_us(1000, 1000, "DIR").is_ok());
+        assert!(owned_by_us(0, 0, "DIR").is_ok());
+        let e = owned_by_us(65534, 1000, "DIR").unwrap_err().to_string();
+        assert!(e.contains("another user"), "{e}");
+        assert!(owned_by_us(1000, 0, "state").is_err());
+    }
 }
