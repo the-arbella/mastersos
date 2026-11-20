@@ -670,11 +670,10 @@ async fn escrow(
     let Some(uuid) = &input.luks_uuid else {
         return c.fail("bad_input", "--recovery-key needs --luks-uuid");
     };
-    if !is_luks_uuid(uuid) {
-        return c.fail(
-            "bad_input",
-            "the LUKS UUID is not a lowercase 8-4-4-4-12 UUID",
-        );
+    // The server takes only lowercase; lsblk and blkid may print it in capitals.
+    let uuid = uuid.trim().to_ascii_lowercase();
+    if !is_luks_uuid(&uuid) {
+        return c.fail("bad_input", "the LUKS UUID is not an 8-4-4-4-12 UUID");
     }
     if escrow_transport_ok(f.base(), lab).is_err() {
         return c.fail("local_refused", LOCAL_TRANSPORT);
@@ -697,7 +696,7 @@ async fn escrow(
     let req = match escrow_request(
         &dev.identity.device_id,
         None,
-        uuid,
+        &uuid,
         &sealed,
         &dev.identity.escrow_secret,
     ) {
