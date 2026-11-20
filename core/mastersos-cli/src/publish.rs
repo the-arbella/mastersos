@@ -373,7 +373,7 @@ pub async fn publish(
         return Err(CheckFailed(lints).into());
     }
     // A secret pointed at a changed network would be handed to whoever runs it: only IT may
-    // approve that, by name, on the command line (the MCP tools have no way to pass it).
+    // approve that, by name, on the command line.
     let names = secret_ref::unapproved_reroutes(&lints, allow_reroute);
     if !names.is_empty() {
         return Err(RerouteRefused { names, lints }.into());

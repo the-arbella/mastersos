@@ -1224,14 +1224,6 @@ mod tests {
             "{e}"
         );
         assert!(check(&w).is_err() && diff(&w).is_err() && w.freeze().is_err());
-        let e = crate::tools::call_local(
-            &w.root,
-            &w.test_pins(),
-            "read_manifest",
-            serde_json::json!({}),
-        )
-        .unwrap_err();
-        assert!(!e.contains("TOPSECRET"), "{e}");
     }
 
     #[cfg(unix)]
@@ -1248,14 +1240,6 @@ mod tests {
             e.contains("secrets.toml") && !e.contains("TOPSECRET"),
             "{e}"
         );
-        let e = crate::tools::call_local(
-            &w.root,
-            &w.test_pins(),
-            "read_manifest",
-            serde_json::json!({}),
-        )
-        .unwrap_err();
-        assert!(!e.contains("TOPSECRET"), "{e}");
     }
 
     #[cfg(unix)]

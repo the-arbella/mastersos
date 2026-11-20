@@ -1,8 +1,8 @@
 //! The `mastersos` command line. Settings live in a local directory (`init`, `pull`, `check`,
-//! `diff`, `publish`); the server holds no draft. The read commands that touch the server run the
-//! same operations as the MCP tools ([`crate::call`]); `mastersos mcp` serves those tools.
+//! `diff`, `publish`); the server holds no draft. The read commands that touch the server go
+//! through [`crate::call`].
 //!
-//! Output is a table or the text itself for people; `--json` prints the server's JSON for scripts and AI.
+//! Output is a table or the text itself for people; `--json` prints the server's JSON for scripts.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -16,7 +16,7 @@ use mastersos_bundle::{AgeBand, ClassRole, Kind, OrgRole};
 use crate::explain::{self as explain_mod, UserQuery};
 use crate::publish::SignWith;
 use crate::workdir::{self, Meta, Workdir};
-use crate::{call, check_server, connect, serve_stdio, Api, OpError, Req, TokenUse};
+use crate::{call, check_server, connect, Api, OpError, Req};
 
 const EXIT_CODES: &str = "Exit codes: 0 success; 1 failure (network, token, the server refused); \
 2 `check` or `publish` found errors in the local settings (or `publish` found a secret rerouted without --allow-reroute).";
@@ -41,8 +41,7 @@ pub struct Cli {
     )]
     #[arg(long, global = true)]
     server: Option<String>,
-    /// File holding IT's own token (read and draft scopes, not an AI token), never accepted on the
-    /// command line
+    /// File holding the token from the Command line page, never accepted on the command line
     #[cfg_attr(
         not(windows),
         doc = "(default: `token_file` in the config file, else ~/.config/mastersos/token)"
@@ -53,18 +52,7 @@ pub struct Cli {
     )]
     #[arg(long, global = true)]
     token_file: Option<PathBuf>,
-    /// File holding the AI token that only `mastersos mcp` uses
-    #[cfg_attr(
-        not(windows),
-        doc = "(default: `ai_token_file` in the config file, else ~/.config/mastersos/ai-token)"
-    )]
-    #[cfg_attr(
-        windows,
-        doc = r"(default: `ai_token_file` in the config file, else %APPDATA%\mastersos\ai-token)"
-    )]
-    #[arg(long, global = true)]
-    ai_token_file: Option<PathBuf>,
-    /// Print the server's JSON instead of tables: for scripts and AI
+    /// Print the server's JSON instead of tables: for scripts
     #[arg(long, global = true)]
     json: bool,
     #[command(subcommand)]
@@ -78,9 +66,6 @@ enum Cmd {
         /// The admin server address, for example https://cloud.arbellalabs.com/org/<organisation>/devices
         server_url: String,
     },
-    /// Save --server, --token-file and --ai-token-file to config.toml in the settings folder, then test the connection
-    #[command(hide = true)]
-    Setup,
     /// Start a local settings directory for a school that has published nothing yet, approved by the school keys given
     Init {
         /// The directory to create (it must be empty or not exist)
@@ -156,12 +141,6 @@ enum Cmd {
     /// The school's logos
     #[command(subcommand)]
     Logo(LogoCmd),
-    /// Serve read-only tools over MCP (stdio): read, check and diff the local settings directory (never its secrets), inspect Devices
-    Mcp {
-        /// The settings directory (default: the current directory)
-        #[arg(long)]
-        dir: Option<PathBuf>,
-    },
 }
 
 #[derive(Subcommand)]
@@ -277,7 +256,6 @@ enum DevicesCmd {
 struct ConfigFile {
     server: Option<String>,
     token_file: Option<PathBuf>,
-    ai_token_file: Option<PathBuf>,
 }
 
 fn config_dir() -> Result<PathBuf, OpError> {
@@ -316,7 +294,7 @@ pub async fn main() -> ExitCode {
                     print_issues(i);
                 }
             }
-            // The message never holds the token: only scope names, the address and the server's error text.
+            // The message never holds the token: only the address and the server's error text.
             eprintln!("mastersos: {}", e.message());
             ExitCode::from(e.exit_code())
         }
@@ -327,23 +305,18 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
     let Cli {
         server,
         token_file,
-        ai_token_file,
         json,
         cmd,
     } = cli;
     if let Cmd::Connect { server_url } = &cmd {
-        if server.is_some() || ai_token_file.is_some() {
+        if server.is_some() {
             return Err(OpError::Failed(
-                "`mastersos connect` takes the server address as its argument (`mastersos connect <SERVER_URL>`); --server and --ai-token-file are not used here"
+                "`mastersos connect` takes the server address as its argument (`mastersos connect <SERVER_URL>`); --server is not used here"
                     .into(),
             ));
         }
-        // Like setup: before the config file is read, so a broken one gets rewritten.
+        // Before the config file is read, so a broken one gets rewritten.
         return connect_school(server_url, token_file).await;
-    }
-    if let Cmd::Setup = cmd {
-        // Before the config file is read: setup is how a broken one gets rewritten.
-        return setup(server, token_file, ai_token_file).await;
     }
     // Offline commands: no server address, no token.
     match &cmd {
@@ -409,55 +382,21 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
     let cfg = load_config()?;
     let server = server.or(cfg.server).ok_or_else(|| {
         OpError::Failed(
-            "No server address: run `mastersos setup --server https://cloud.arbellalabs.com/org/<organisation>/devices` first, or pass --server"
+            "No server address: run `mastersos connect https://cloud.arbellalabs.com/org/<organisation>/devices` first, or pass --server"
                 .into(),
         )
     })?;
-    if let Cmd::Mcp { dir } = &cmd {
-        // The AI gets its own token, never IT's.
-        let ai_token_file = match ai_token_file.or(cfg.ai_token_file) {
-            Some(p) => p,
-            None => config_dir()?.join("ai-token"),
-        };
-        check_private(&ai_token_file, AI_TOKEN_AGAIN)?;
-        let dir = dir.clone().unwrap_or_else(|| PathBuf::from("."));
-        Workdir::open(&dir).map_err(fail)?;
-        // The MCP server keeps its own exit codes: 2 for a token that must not be given to an AI.
-        let api = match connect(&server, &ai_token_file, TokenUse::Ai).await {
-            Ok(api) => api,
-            Err(e) => {
-                eprintln!("mastersos: {e}");
-                return Ok(ExitCode::from(e.exit_code()));
-            }
-        };
-        serve_stdio(api, dir, config_dir()?.join("pins"))
-            .await
-            .map_err(|e| OpError::Failed(format!("{e:#}")))?;
-        return Ok(ExitCode::SUCCESS);
-    }
     let token_file = match token_file.or(cfg.token_file) {
         Some(p) => p,
         None => config_dir()?.join("token"),
     };
     check_private(&token_file, TOKEN_AGAIN)?;
-    // The commands that write settings (or upload them) refuse an AI token: it reads secrets as
-    // "<kept>" and must not be able to publish.
-    let wanted = match &cmd {
-        Cmd::Init { .. }
-        | Cmd::Pull { .. }
-        | Cmd::Publish { .. }
-        | Cmd::Logo(_)
-        | Cmd::Keys(KeysCmd::Add { .. }) => TokenUse::It,
-        _ => TokenUse::Any,
-    };
-    let api = connect(&server, &token_file, wanted)
+    let api = connect(&server, &token_file)
         .await
         .map_err(|e| OpError::Failed(e.to_string()))?;
     let out = Out { json };
     match cmd {
-        Cmd::Setup
-        | Cmd::Connect { .. }
-        | Cmd::Mcp { .. }
+        Cmd::Connect { .. }
         | Cmd::Check { .. }
         | Cmd::Diff { .. }
         | Cmd::Explain(_)
@@ -511,84 +450,6 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
     }
 }
 
-async fn setup(
-    server: Option<String>,
-    token_file: Option<PathBuf>,
-    ai_token_file: Option<PathBuf>,
-) -> Result<ExitCode, OpError> {
-    let server = server.ok_or_else(|| {
-        OpError::Failed(
-            "setup needs --server https://cloud.arbellalabs.com/org/<organisation>/devices".into(),
-        )
-    })?;
-    check_server(&server).map_err(|e| OpError::Failed(e.to_string()))?;
-    let dir = config_dir()?;
-    let absolute = |p: Option<PathBuf>, default: &str| -> Result<PathBuf, OpError> {
-        match p {
-            Some(p) => std::path::absolute(&p)
-                .map_err(|e| OpError::Failed(format!("Bad token file path {}: {e}", p.display()))),
-            None => Ok(dir.join(default)),
-        }
-    };
-    let token_file = absolute(token_file, "token")?;
-    let ai_token_file = absolute(ai_token_file, "ai-token")?;
-    if token_file == ai_token_file {
-        return Err(OpError::Failed(
-            "IT's token file and the AI token file must be different files".into(),
-        ));
-    }
-    for (f, again) in [(&token_file, TOKEN_AGAIN), (&ai_token_file, AI_TOKEN_AGAIN)] {
-        if f.exists() {
-            check_private(f, again)?;
-        }
-    }
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| OpError::Failed(format!("Could not create {}: {e}", dir.display())))?;
-    let path = dir.join("config.toml");
-    let text = toml::to_string(&ConfigFile {
-        server: Some(server.clone()),
-        token_file: Some(token_file.clone()),
-        ai_token_file: Some(ai_token_file.clone()),
-    })
-    .map_err(|e| OpError::Failed(format!("Could not write the config: {e}")))?;
-    mastersos_sign::platform::write_private(&path, text.as_bytes()).map_err(fail)?;
-    println!("Saved {}", path.display());
-    for (file, wanted, what) in [
-        (
-            &token_file,
-            TokenUse::It,
-            "IT's own token for the command line: an API token with read and draft scopes from your operator or the admin web page",
-        ),
-        (
-            &ai_token_file,
-            TokenUse::Ai,
-            "the AI token, used only by `mastersos mcp`: create it under AI tools on the school's admin page",
-        ),
-    ] {
-        if !file.exists() {
-            println!(
-                "Next: save {what} to {}; only you should be able to read that file.",
-                file.display()
-            );
-            continue;
-        }
-        let api = connect(&server, file, wanted)
-            .await
-            .map_err(|e| OpError::Failed(e.to_string()))?;
-        let who = crate::whoami(&api)
-            .await
-            .map_err(|e| OpError::Failed(e.to_string()))?;
-        println!(
-            "{}: connected to {server} as {} (scopes: {})",
-            file.display(),
-            cell(&who["label"]),
-            cell(&who["scopes"])
-        );
-    }
-    println!("Never give an AI the token file {}.", token_file.display());
-    Ok(ExitCode::SUCCESS)
-}
-
 /// `mastersos connect <SERVER_URL>`: ask for the token without echo, check it with `whoami`, then
 /// save the token and `config.toml` (owner only). Nothing is written when the token is refused.
 async fn connect_school(
@@ -607,31 +468,6 @@ async fn connect_school(
     let who = crate::whoami(&api)
         .await
         .map_err(|e| OpError::Failed(e.to_string()))?;
-    if crate::is_ai_token(&who) {
-        return Err(OpError::Failed(
-            "This token is for an AI tool. Paste the token from the Command line page instead; nothing was saved"
-                .into(),
-        ));
-    }
-    let has = |name: &str| {
-        who["scopes"]
-            .as_array()
-            .is_some_and(|a| a.iter().any(|s| s.as_str() == Some(name)))
-    };
-    if !has("read") || !has("draft") {
-        return Err(OpError::Failed(
-            "This token cannot read and edit settings. Create a new token on the Command line page; nothing was saved"
-                .into(),
-        ));
-    }
-    // The same check every later command applies to IT's token.
-    crate::check_scopes(&who, TokenUse::It).map_err(|e| match e {
-        crate::StartError::Refused(_) => OpError::Failed(
-            "This token has more rights than the command line needs. Create a token with read and draft only; nothing was saved"
-                .into(),
-        ),
-        other => OpError::Failed(other.to_string()),
-    })?;
     let school: String = who["school_name"]
         .as_str()
         .map(|n| {
@@ -650,12 +486,9 @@ async fn connect_school(
         None => dir.join("token"),
     };
     let config_path = dir.join("config.toml");
-    // Keep the AI token file of an earlier setup; a broken old config is replaced.
-    let ai_token_file = load_config().ok().and_then(|c| c.ai_token_file);
     let text = toml::to_string(&ConfigFile {
         server: Some(server_url.trim_end_matches('/').to_owned()),
         token_file: Some(token_path.clone()),
-        ai_token_file,
     })
     .map_err(|e| OpError::Failed(format!("Could not write the settings: {e}")))?;
     for p in [&token_path, &config_path] {
@@ -684,8 +517,6 @@ fn check_private(path: &Path, again: &str) -> Result<(), OpError> {
 
 /// How to replace a token file that [`check_private`] refuses.
 const TOKEN_AGAIN: &str = "Or save a new token file: run `mastersos connect <SERVER_URL>` again.";
-const AI_TOKEN_AGAIN: &str =
-    "Or save the AI token again: create it under AI tools on the school's admin page.";
 
 async fn devices(api: &Api, out: &Out, c: DevicesCmd) -> Result<ExitCode, OpError> {
     match c {
@@ -869,7 +700,6 @@ fn reroute_notice(lints: &[mastersos_bundle::Lint]) -> Option<String> {
 fn local_check(dir: Option<&Path>, json: bool) -> Result<ExitCode, OpError> {
     let lints = workdir::check(&open_dir(dir)?).map_err(fail)?;
     if json {
-        // The same shape as the MCP `check` tool.
         println!("{}", crate::tools::check_result(&lints));
     } else {
         print_issues(&lint_values(&lints));
@@ -1446,7 +1276,7 @@ async fn server_says(
         if !same_server(&m.server, &server) {
             return None;
         }
-        let api = connect(&server, &token_file, TokenUse::Any).await.ok()?;
+        let api = connect(&server, &token_file).await.ok()?;
         let (id, _) = school_info(&api, &server).await.ok()?;
         if id != m.school_id {
             return None;
@@ -1866,7 +1696,6 @@ mod tests {
             assert!(flat.contains("~/.config/mastersos/token"), "{help}");
             assert!(!help.contains("APPDATA"), "{help}");
         }
-        assert!(flat.contains("ai-token)"), "{help}");
         assert!(flat.contains("config.toml)"), "{help}");
     }
 

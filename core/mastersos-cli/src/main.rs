@@ -1,5 +1,4 @@
-//! `mastersos`: the MastersOS admin command line, and `mastersos mcp`, the same operations as an
-//! MCP server over stdio.
+//! `mastersos`: the MastersOS admin command line.
 #![forbid(unsafe_code)]
 
 use std::process::ExitCode;

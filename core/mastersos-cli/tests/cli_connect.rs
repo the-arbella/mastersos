@@ -109,46 +109,44 @@ async fn connect_without_school_name_says_the_host() {
     let out = run(s.uri(), home.path().to_owned(), "t\n").await;
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     assert!(out.status.success(), "{stdout}");
-    // An operator-issued `token:` label counts as IT's own.
     assert_eq!(stdout.lines().next(), Some("Connected to 127.0.0.1."));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn connect_refuses_ai_token() {
-    let s =
-        server(json!({ "label": "ai:bot", "kind": "token", "scopes": ["read", "draft"] })).await;
-    let home = tempfile::tempdir().unwrap();
-    let out = run(s.uri(), home.path().to_owned(), "t\n").await;
-    assert!(!out.status.success());
-    assert!(!config_dir(home.path()).exists(), "nothing may be written");
-    assert!(String::from_utf8_lossy(&out.stderr).contains("nothing was saved"));
+async fn connect_does_not_judge_the_token_purpose() {
+    // What a token may do is the server's to decide: whatever label or scopes `whoami` reports,
+    // the token and the server address are saved.
+    for who in [
+        json!({ "label": "ai:bot", "kind": "token", "scopes": ["read"] }),
+        json!({ "label": "cli:IT", "kind": "token", "scopes": ["read", "draft", "recovery"] }),
+    ] {
+        let s = server(who).await;
+        let home = tempfile::tempdir().unwrap();
+        let out = run(s.uri(), home.path().to_owned(), "t\n").await;
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{err}");
+        let dir = config_dir(home.path());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("token")).unwrap().trim(),
+            "t"
+        );
+        assert!(dir.join("config.toml").exists());
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn connect_refuses_token_without_draft() {
-    let s = server(json!({ "label": "cli:IT", "kind": "token", "scopes": ["read"] })).await;
+async fn connect_saves_nothing_when_whoami_fails() {
+    let s = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/admin/whoami"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&s)
+        .await;
     let home = tempfile::tempdir().unwrap();
     let out = run(s.uri(), home.path().to_owned(), "t\n").await;
     assert!(!out.status.success());
     assert!(!config_dir(home.path()).exists(), "nothing may be written");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn connect_refuses_token_with_more_rights() {
-    let s = server(json!({
-        "label": "cli:IT", "kind": "token", "scopes": ["read", "draft", "recovery"]
-    }))
-    .await;
-    let home = tempfile::tempdir().unwrap();
-    let out = run(s.uri(), home.path().to_owned(), "t\n").await;
-    assert!(!out.status.success());
-    assert!(!config_dir(home.path()).exists(), "nothing may be written");
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        err.contains("more rights than the command line needs")
-            && err.contains("nothing was saved"),
-        "{err}"
-    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("whoami failed"));
 }
 
 #[test]
