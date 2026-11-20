@@ -40,9 +40,9 @@ pub struct ApplyRequest {
     pub phase: Phase,
     pub managed_paths: BTreeMap<String, String>,
     pub script_hashes: BTreeMap<String, String>,
-    /// [`Fetcher::current_token`](crate::fetch::Fetcher::current_token) when the request was
-    /// built, for [`ApplyContext::fetch_token`]. No `Debug` on this struct: it would print it.
-    pub fetch_token: Option<String>,
+    /// The main loop's fetch token, read at each download ([`crate::fetch::TokenSource`]), for
+    /// [`ApplyContext::fetch_token`]: a retry after a token switch sends the new token.
+    pub fetch_token: Option<crate::fetch::TokenSource>,
 }
 
 #[derive(Debug, Clone)]
@@ -356,7 +356,7 @@ impl Worker {
                 device: sel.device,
                 ident: &ident,
                 manifest: Some(m),
-                fetch_token: token.as_deref(),
+                fetch_token: token.as_ref(),
             })
         })
         .await

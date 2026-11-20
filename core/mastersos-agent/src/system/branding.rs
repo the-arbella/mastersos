@@ -37,7 +37,7 @@ use super::banner::{gv_text, GDM_DCONF_DIR};
 use super::{failed, ok, Env, Step};
 use crate::apply::{is_not_found, sha256_hex, ApplyContext, Phase};
 use crate::backoff::{jittered, Jitter, JITTER_HIGH};
-use crate::fetch::{LogoFetch, NOT_AVAILABLE_RETRY};
+use crate::fetch::{LogoFetch, TokenSource, NOT_AVAILABLE_RETRY};
 use crate::runner::{run_ok, Cmd};
 use crate::safefs;
 
@@ -72,14 +72,15 @@ pub trait LogoFetcher {
     fn fetch(&self, url: &str) -> Result<LogoFetch>;
 }
 
-/// [`crate::fetch::fetch_logo`] with the fetch token of this round (no `Debug`: it holds the token).
+/// [`crate::fetch::fetch_logo`] with the fetch token in force at the download (no `Debug`).
 struct HttpFetcher<'a> {
-    token: Option<&'a str>,
+    token: Option<&'a TokenSource>,
 }
 
 impl LogoFetcher for HttpFetcher<'_> {
     fn fetch(&self, url: &str) -> Result<LogoFetch> {
-        let fut = crate::fetch::fetch_logo(url, self.token);
+        let token = self.token.and_then(TokenSource::current);
+        let fut = crate::fetch::fetch_logo(url, token.as_deref());
         match tokio::runtime::Handle::try_current() {
             Ok(h) => h.block_on(fut),
             Err(_) => tokio::runtime::Builder::new_current_thread()
@@ -1104,9 +1105,11 @@ mod tests {
         failure_sets_no_wait("the server answered 401 unauthorized");
     }
 
-    /// The real download path: the round's fetch token goes with the logo request.
+    /// The real download path: the fetch token in force at the download goes with the logo
+    /// request. The same request retried after a token switch (renewal, 401 fallback) sends the
+    /// new token, not the one in force when the request was built.
     #[test]
-    fn logo_download_carries_the_rounds_fetch_token() {
+    fn logo_download_carries_the_current_fetch_token() {
         use crate::system::tests::{config, group};
         use wiremock::matchers::{header, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1116,7 +1119,7 @@ mod tests {
             let srv = MockServer::start().await;
             Mock::given(method("GET"))
                 .and(path(format!("/api/device/v1/logos/{hash}.png")))
-                .and(header("authorization", "Bearer FT-round"))
+                .and(header("authorization", "Bearer FT-new"))
                 .respond_with(ResponseTemplate::new(200).set_body_bytes(b"LOGO".to_vec()))
                 .mount(&srv)
                 .await;
@@ -1134,6 +1137,8 @@ mod tests {
         seed.server_url = srv.uri();
         let dir = tempfile::tempdir().unwrap();
         let flag = std::sync::atomic::AtomicBool::new(false);
+        let fetcher = crate::fetch::Fetcher::new(&seed, Some("FT-old".into()));
+        let token = fetcher.token_source();
         let ctx = ApplyContext {
             seed: &seed,
             school: &school,
@@ -1147,19 +1152,39 @@ mod tests {
             device: None,
             ident: &crate::system::tests::test_ident(),
             manifest: None,
-            fetch_token: Some("FT-round"),
+            fetch_token: Some(&token),
         };
         let r = FakeRunner::new();
         let mut sys = SysState::default();
-        let out = run(
-            &ctx,
-            &mut Env {
-                paths: &p,
-                runner: &r,
-                sys: &mut sys,
-            },
-        );
-        assert_eq!(out, vec![ok(ITEM)]);
+        let mut round = || {
+            run(
+                &ctx,
+                &mut Env {
+                    paths: &p,
+                    runner: &r,
+                    sys: &mut sys,
+                },
+            )
+        };
+        // The server no longer takes the old token: the download fails (404 from the mock).
+        assert!(!round()[0].ok);
+        // The main loop switches tokens; the worker retries the same context.
+        fetcher.set_token("FT-new".into());
+        assert_eq!(round(), vec![ok(ITEM)]);
+        let auth: Vec<String> = rt
+            .block_on(srv.received_requests())
+            .unwrap()
+            .iter()
+            .map(|q| {
+                q.headers
+                    .get("authorization")
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect();
+        assert_eq!(auth, ["Bearer FT-old", "Bearer FT-new"]);
         assert_eq!(
             std::fs::read(p.public_dir.join("branding/logo.png")).unwrap(),
             b"LOGO"

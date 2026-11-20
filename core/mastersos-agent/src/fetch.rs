@@ -107,11 +107,15 @@ pub fn http_client(o: HttpOpts) -> Client {
 }
 
 /// 托管与换领令牌用的客户端：不跟随任何重定向（307/308 会带着恢复密钥、托管凭据重发到 Location）。
-fn no_redirect_client(total: Duration) -> Client {
-    Client::builder()
+/// `connect`: a separate connect timeout (the logo download); `None` leaves only `total`.
+fn no_redirect_client(connect: Option<Duration>, total: Duration) -> Client {
+    let mut b = Client::builder()
         .timeout(total)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
+        .redirect(reqwest::redirect::Policy::none());
+    if let Some(c) = connect {
+        b = b.connect_timeout(c);
+    }
+    b.build()
         .expect("building the HTTP client failed (the TLS backend could not initialize)")
 }
 
@@ -356,11 +360,16 @@ pub enum LogoFetch {
 /// `GET logos/<sha256>.png` with the fetch token like every device request (Ruling R2), at most
 /// [`MAX_LOGO_BYTES`](crate::system::branding::MAX_LOGO_BYTES) in
 /// [`LOGO_TIMEOUT`](crate::system::branding::LOGO_TIMEOUT). It carries the token, so it follows no
-/// redirect ([`no_redirect_client`]). [`logo_answer`] reads a non-success answer; errors never carry
-/// the URL or the token.
+/// redirect ([`no_redirect_client`], 10 s to connect). A non-success answer is read by
+/// [`refused`], as for every other device route: 404 `not_available` is
+/// [`LogoFetch::NotAvailable`], anything else an error. Errors never carry the URL or the token.
+/// Connecting for the logo download gives up after this long (the whole download after
+/// [`LOGO_TIMEOUT`](crate::system::branding::LOGO_TIMEOUT)).
+const LOGO_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
 pub async fn fetch_logo(url: &str, token: Option<&str>) -> Result<LogoFetch> {
     use crate::system::branding::{LOGO_TIMEOUT, MAX_LOGO_BYTES};
-    let mut req = no_redirect_client(LOGO_TIMEOUT).get(url);
+    let mut req = no_redirect_client(Some(LOGO_CONNECT_TIMEOUT), LOGO_TIMEOUT).get(url);
     if let Some(t) = token {
         req = req.bearer_auth(t);
     }
@@ -369,10 +378,13 @@ pub async fn fetch_logo(url: &str, token: Option<&str>) -> Result<LogoFetch> {
         .await
         .map_err(reqwest::Error::without_url)
         .context("request for the logo failed")?;
-    let status = resp.status();
-    if !status.is_success() {
-        let body = read_error_body(resp).await;
-        return logo_answer(status.as_u16(), body);
+    if !resp.status().is_success() {
+        let e = refusal(resp).await;
+        return if e.is::<NotAvailable>() {
+            Ok(LogoFetch::NotAvailable)
+        } else {
+            Err(e)
+        };
     }
     if resp
         .content_length()
@@ -386,17 +398,16 @@ pub async fn fetch_logo(url: &str, token: Option<&str>) -> Result<LogoFetch> {
     }
 }
 
-/// The one place that reads a non-success logo answer: 404 `not_available` waits
-/// ([`NOT_AVAILABLE_RETRY`]); anything else (401 `unauthorized`, 404 `not_found`, a body that is
-/// not the error JSON) is an ordinary failed download.
-fn logo_answer(status: u16, body: Option<ErrorBody>) -> Result<LogoFetch> {
-    if is_not_available(status, &body) {
-        return Ok(LogoFetch::NotAvailable);
+/// The fetch token in force, read when needed ([`Fetcher::token_source`]). No `Debug`: it would
+/// print the token; never log what [`TokenSource::current`] returns.
+#[derive(Clone)]
+pub struct TokenSource(Arc<RwLock<Option<String>>>);
+
+impl TokenSource {
+    /// The token the fetcher uses now.
+    pub fn current(&self) -> Option<String> {
+        self.0.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
-    Err(anyhow::Error::new(ServerRefused {
-        status,
-        code: body.map(|b| b.code),
-    }))
 }
 
 /// 克隆便宜（HTTP 客户端内部共享连接池）：主循环、心跳与后台任务各拿一份。
@@ -424,7 +435,7 @@ impl Fetcher {
         Fetcher {
             client: http_client(short_opts()),
             bundle_client: http_client(bundle_opts()),
-            escrow_client: no_redirect_client(ESCROW_TIMEOUT),
+            escrow_client: no_redirect_client(None, ESCROW_TIMEOUT),
             upload_client: diag_put_client(),
             base: device_base(&seed.server_url),
             token: Arc::new(RwLock::new(token)),
@@ -446,6 +457,12 @@ impl Fetcher {
     /// 眼下用的令牌（主循环比对别的来源用；不要打印它）。
     pub fn current_token(&self) -> Option<String> {
         self.token.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// A handle that reads this fetcher's token (shared with every clone) whenever asked: the apply
+    /// worker's rounds use the token in force at the download, not the one of the request.
+    pub fn token_source(&self) -> TokenSource {
+        TokenSource(self.token.clone())
     }
 
     /// 最近一个机器侧响应说这把令牌已退役（`X-Mastersos-Fetch-Token: stale`）。
@@ -976,7 +993,7 @@ fn valid_ticket(t: &str) -> bool {
 
 /// The client of the presigned diagnostics `PUT`: never follows a redirect, [`DIAG_PUT_TIMEOUT`].
 fn diag_put_client() -> Client {
-    no_redirect_client(DIAG_PUT_TIMEOUT)
+    no_redirect_client(None, DIAG_PUT_TIMEOUT)
 }
 
 /// The presigned `PUT` of `file` ([`Fetcher::diag_put`]). Returns the 2xx status.
@@ -1326,10 +1343,16 @@ async fn read_error_body(resp: reqwest::Response) -> Option<ErrorBody> {
     parse_error_body(&body)
 }
 
-/// The error for a non-success answer: [`NotAvailable`] or [`ServerRefused`].
+/// The error for a non-success answer: [`NotAvailable`] or [`ServerRefused`] ([`refused`]).
 async fn refusal(resp: reqwest::Response) -> anyhow::Error {
     let status = resp.status().as_u16();
     let body = read_error_body(resp).await;
+    refused(status, body)
+}
+
+/// The one reading of a non-success answer on the device routes (push grant, inbox, logos, ...):
+/// 404 `not_available` is [`NotAvailable`], anything else [`ServerRefused`] with the sanitised code.
+fn refused(status: u16, body: Option<ErrorBody>) -> anyhow::Error {
     if is_not_available(status, &body) {
         return anyhow::Error::new(NotAvailable);
     }

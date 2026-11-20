@@ -896,7 +896,7 @@ impl Agent {
             phase: Phase::Full,
             managed_paths: self.state.managed_paths.clone(),
             script_hashes: self.state.script_hashes.clone(),
-            fetch_token: self.fetcher.current_token(),
+            fetch_token: Some(self.fetcher.token_source()),
         });
     }
 
@@ -1159,7 +1159,7 @@ impl Agent {
         let bundle = self.bundle.clone();
         let ident = self.machine.ident.clone();
         let seed = self.seed.clone();
-        let token = self.fetcher.current_token();
+        let token = self.fetcher.token_source();
         let dir = bundle
             .as_deref()
             .map(|b| state::version_dir(&self.cfg.state_dir, b))
@@ -1185,7 +1185,7 @@ impl Agent {
                 device: sel.device,
                 ident: &ident,
                 manifest: Some(m),
-                fetch_token: token.as_deref(),
+                fetch_token: Some(&token),
             })
         })
         .await
