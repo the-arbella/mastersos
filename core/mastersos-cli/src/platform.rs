@@ -115,6 +115,49 @@ fn open(path: &Path) -> Result<File> {
     Ok(f)
 }
 
+/// Make sure `dir` is a private settings directory and say whether it exists. With `create` a
+/// missing one is made with mode 0700 (its parents the usual way). It is refused when it is a
+/// link, not a directory, or (Unix) belongs to another user; an existing one of ours that other
+/// users can enter is narrowed to 0700 on the opened directory. Its parents may be links (dotfile
+/// managers link `~/.config`). For the credentials file, the school key file and the seed.
+pub fn private_dir(dir: &Path, create: bool) -> Result<bool> {
+    sys::private_dir(dir, create)
+}
+
+/// Read a private file without following a link at its last part: `None` when it does not exist.
+/// Refused when it is a link, not a regular file, not the current user's, open to other users
+/// ([`check_private`]) or larger than `max` bytes. The bytes are wiped when dropped.
+pub fn read_private(path: &Path, max: u64) -> Result<Option<Zeroizing<Vec<u8>>>> {
+    use std::io::Read as _;
+    let Some(f) = sys::open_no_follow(path)? else {
+        return Ok(None);
+    };
+    let meta = f
+        .metadata()
+        .with_context(|| format!("cannot read the metadata of {}", path.display()))?;
+    if !meta.is_file() {
+        bail!(
+            "{} is not a regular file; refusing to read it",
+            path.display()
+        );
+    }
+    sys::check_owner(&f, path)?;
+    if let Some(why) = sys::not_private(&f, path)? {
+        bail!("{why}");
+    }
+    if meta.len() > max {
+        bail!("{} is larger than {max} bytes", path.display());
+    }
+    let mut out = Zeroizing::new(Vec::with_capacity(meta.len() as usize));
+    f.take(max + 1)
+        .read_to_end(&mut out)
+        .with_context(|| format!("cannot read {}", path.display()))?;
+    if out.len() as u64 > max {
+        bail!("{} is larger than {max} bytes", path.display());
+    }
+    Ok(Some(out))
+}
+
 /// Whether `path`, whose [`std::fs::symlink_metadata`] is `meta`, is a link that a settings
 /// directory never follows: a symbolic link; on Windows also a junction (mount point). Other
 /// Windows reparse points (OneDrive cloud files, deduplicated files) are ordinary files. A
@@ -216,6 +259,67 @@ mod sys {
 
     pub fn is_link(_path: &Path, meta: &std::fs::Metadata) -> bool {
         meta.file_type().is_symlink()
+    }
+
+    fn refused_link(e: &std::io::Error) -> bool {
+        use nix::errno::Errno;
+        matches!(e.raw_os_error(), Some(c) if c == Errno::ELOOP as i32 || c == Errno::ENOTDIR as i32)
+    }
+
+    /// Created with mode 0700; opened with O_DIRECTORY | O_NOFOLLOW, so the checks and the
+    /// narrowing (fchmod) apply to the directory itself, not to where a link points.
+    pub fn private_dir(dir: &Path, create: bool) -> Result<bool> {
+        use nix::fcntl::OFlag;
+        use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
+        if create {
+            if let Some(parent) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("cannot create {}", parent.display()))?;
+            }
+            match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => bail!("cannot create {}: {e}", dir.display()),
+            }
+        }
+        let flags = (OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW).bits();
+        let f = match std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(flags)
+            .open(dir)
+        {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !create => return Ok(false),
+            Err(e) if refused_link(&e) => bail!(
+                "{} is a symbolic link or not a directory; refusing to use it",
+                dir.display()
+            ),
+            Err(e) => bail!("cannot open {}: {e}", dir.display()),
+        };
+        check_owner(&f, dir)?;
+        if meta(&f, dir)?.mode() & 0o077 != 0 {
+            f.set_permissions(std::fs::Permissions::from_mode(0o700))
+                .with_context(|| format!("cannot make {} private", dir.display()))?;
+        }
+        Ok(true)
+    }
+
+    /// O_NOFOLLOW (a link is refused) and O_NONBLOCK (a FIFO put there cannot hang the open).
+    pub fn open_no_follow(path: &Path) -> Result<Option<File>> {
+        use nix::fcntl::OFlag;
+        use std::os::unix::fs::OpenOptionsExt as _;
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags((OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK).bits())
+            .open(path)
+        {
+            Ok(f) => Ok(Some(f)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) if refused_link(&e) => {
+                bail!("{} is a symbolic link; refusing to read it", path.display())
+            }
+            Err(e) => bail!("cannot open {}: {e}", path.display()),
+        }
     }
 
     /// Echo off on stdin until dropped.
@@ -541,6 +645,53 @@ mod sys {
         }
     }
 
+    /// A missing directory inherits the owner-only access of `%APPDATA%`; a link is refused.
+    pub fn private_dir(dir: &Path, create: bool) -> Result<bool> {
+        if create {
+            if let Some(parent) = dir.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| anyhow::anyhow!("cannot create {}: {e}", parent.display()))?;
+            }
+            match std::fs::create_dir(dir) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => anyhow::bail!("cannot create {}: {e}", dir.display()),
+            }
+        }
+        let meta = match std::fs::symlink_metadata(dir) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !create => return Ok(false),
+            Err(e) => anyhow::bail!("cannot read {}: {e}", dir.display()),
+        };
+        if is_link(dir, &meta) || !meta.is_dir() {
+            anyhow::bail!(
+                "{} is a link or not a directory; refusing to use it",
+                dir.display()
+            );
+        }
+        Ok(true)
+    }
+
+    /// Open for reading, refusing a symbolic link or junction at the last part.
+    pub fn open_no_follow(path: &Path) -> Result<Option<File>> {
+        let meta = match std::fs::symlink_metadata(path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => anyhow::bail!("cannot read {}: {e}", path.display()),
+        };
+        if is_link(path, &meta) {
+            anyhow::bail!("{} is a link; refusing to read it", path.display());
+        }
+        // FILE_FLAG_OPEN_REPARSE_POINT: a link put there since the check is opened, not followed
+        // (and then fails the regular-file check).
+        let f = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+            .map_err(|e| anyhow::anyhow!("cannot open {}: {e}", path.display()))?;
+        Ok(Some(f))
+    }
+
     /// A symbolic link or junction, by its reparse tag; other reparse points are files.
     pub fn is_link(path: &Path, meta: &std::fs::Metadata) -> bool {
         if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0 {
@@ -859,5 +1010,74 @@ mod tests {
         drop(create_private(&p).unwrap());
         icacls_grant(&p, "S-1-5-32-544", "F");
         check_private(&p).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn mode(p: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::symlink_metadata(p).unwrap().permissions().mode() & 0o777
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_dir_is_made_0700_and_narrowed() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let t = tempfile::tempdir().unwrap();
+        let d = t.path().join("a").join("mastersos");
+        assert!(!private_dir(&d, false).unwrap());
+        assert!(!d.exists());
+        assert!(private_dir(&d, true).unwrap());
+        assert_eq!(mode(&d), 0o700);
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(private_dir(&d, false).unwrap());
+        assert_eq!(mode(&d), 0o700);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_dir_refuses_a_link_and_a_file() {
+        let t = tempfile::tempdir().unwrap();
+        let target = t.path().join("elsewhere");
+        std::fs::create_dir(&target).unwrap();
+        let link = t.path().join("mastersos");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        for create in [false, true] {
+            let e = private_dir(&link, create).unwrap_err().to_string();
+            assert!(e.contains("refusing"), "{e}");
+        }
+        let file = t.path().join("file");
+        std::fs::write(&file, "x").unwrap();
+        assert!(private_dir(&file, true).is_err());
+        // A linked parent is fine (dotfile managers link ~/.config).
+        let inside = link.join("sub");
+        assert!(private_dir(&inside, true).unwrap());
+        assert_eq!(mode(&target.join("sub")), 0o700);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_private_refuses_links_broad_files_and_big_files() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let t = tempfile::tempdir().unwrap();
+        let p = t.path().join("credentials.json");
+        assert!(read_private(&p, 100).unwrap().is_none());
+        write_private(&p, b"{}").unwrap();
+        assert_eq!(&**read_private(&p, 100).unwrap().unwrap(), b"{}");
+        assert!(read_private(&p, 1)
+            .unwrap_err()
+            .to_string()
+            .contains("larger"));
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(read_private(&p, 100)
+            .unwrap_err()
+            .to_string()
+            .contains("chmod 600"));
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let link = t.path().join("link.json");
+        std::os::unix::fs::symlink(&p, &link).unwrap();
+        let e = read_private(&link, 100).unwrap_err().to_string();
+        assert!(e.contains("link"), "{e}");
+        let e = read_private(t.path(), 100).unwrap_err().to_string();
+        assert!(e.contains("not a regular file"), "{e}");
     }
 }

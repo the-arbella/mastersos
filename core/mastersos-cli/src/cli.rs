@@ -160,6 +160,14 @@ enum Cmd {
     /// The school's logos
     #[command(subcommand)]
     Logo(LogoCmd),
+    /// Sign in to the server given with --server: confirm a code in the browser; the sign-in is saved for this user only
+    Login {
+        /// Print the address to open instead of opening the browser
+        #[arg(long)]
+        no_browser: bool,
+    },
+    /// Forget the sign-in saved by `mastersos login`
+    Logout,
 }
 
 #[derive(Subcommand)]
@@ -361,6 +369,20 @@ pub async fn main() -> ExitCode {
     }
 }
 
+/// Print what a protocol v1 command gave: its output, or its error (`--json` on stdout).
+fn finish(r: Result<String, crate::server::CliError>, json: bool) -> ExitCode {
+    match r {
+        Ok(out) => {
+            print!("{out}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            crate::server::print_error(&e, json);
+            ExitCode::from(u8::try_from(crate::server::exit_code(&e)).unwrap_or(1))
+        }
+    }
+}
+
 async fn run(cli: Cli) -> Result<ExitCode, OpError> {
     let Cli {
         server,
@@ -372,6 +394,15 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
     if let Some(d) = pin_dir {
         // Set once per process: `run` is called once.
         let _ = PIN_DIR.set(d);
+    }
+    // Sign-in commands: before the config file and the old server address are read.
+    match &cmd {
+        Cmd::Login { no_browser } => {
+            let r = crate::auth::login(server.as_deref(), *no_browser, json).await;
+            return Ok(finish(r, json));
+        }
+        Cmd::Logout => return Ok(finish(crate::auth::logout(json), json)),
+        _ => {}
     }
     if let Cmd::Connect { server_url } = &cmd {
         if server.is_some() {
@@ -476,6 +507,8 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
     let kit = kit.as_ref();
     match cmd {
         Cmd::Connect { .. }
+        | Cmd::Login { .. }
+        | Cmd::Logout
         | Cmd::Check { .. }
         | Cmd::Diff { .. }
         | Cmd::Explain(_)

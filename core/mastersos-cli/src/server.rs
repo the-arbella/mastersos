@@ -130,7 +130,7 @@ pub fn segment(s: &str) -> Result<String, CliError> {
     Ok(out)
 }
 
-fn clean(s: &str) -> String {
+pub(crate) fn clean(s: &str) -> String {
     s.chars()
         .filter(|c| !c.is_control())
         .take(MAX_ERROR_CHARS)
@@ -138,7 +138,7 @@ fn clean(s: &str) -> String {
 }
 
 /// Exactly `localhost`, `127.0.0.1` and `::1`.
-fn is_loopback(url: &Url) -> bool {
+pub(crate) fn is_loopback(url: &Url) -> bool {
     matches!(
         url.host_str().map(str::to_ascii_lowercase).as_deref(),
         Some("localhost" | "127.0.0.1" | "[::1]")
@@ -146,7 +146,7 @@ fn is_loopback(url: &Url) -> bool {
 }
 
 /// An origin that passes the bundle's check, `https` or `http` to the loopback only.
-fn check_origin(origin: &str) -> Result<Url, CliError> {
+pub(crate) fn check_origin(origin: &str) -> Result<Url, CliError> {
     mastersos_bundle::checks::server_origin(origin).map_err(|e| {
         CliError::usage(&format!(
             "the server address is not valid: {}",
@@ -158,7 +158,7 @@ fn check_origin(origin: &str) -> Result<Url, CliError> {
     Ok(url)
 }
 
-fn require_secure(url: &Url) -> Result<(), CliError> {
+pub(crate) fn require_secure(url: &Url) -> Result<(), CliError> {
     if url.scheme() == "https" || (url.scheme() == "http" && is_loopback(url)) {
         Ok(())
     } else {
@@ -176,7 +176,7 @@ fn is_school_id(s: &str) -> bool {
         })
 }
 
-fn build_client() -> Result<reqwest::Client, CliError> {
+pub(crate) fn build_client() -> Result<reqwest::Client, CliError> {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(CONNECT_TIMEOUT)
@@ -446,7 +446,10 @@ impl Server {
 
 /// The body of an answer, read chunk by chunk and refused (`invalid_answer`) as soon as it passes
 /// `cap` bytes, also when `Content-Length` announces more.
-async fn read_capped(mut res: reqwest::Response, cap: usize) -> Result<Vec<u8>, CliError> {
+pub(crate) async fn read_capped(
+    mut res: reqwest::Response,
+    cap: usize,
+) -> Result<Vec<u8>, CliError> {
     let too_big = || CliError::new("invalid_answer", "the server's answer is too large");
     if res.content_length().is_some_and(|n| n > cap as u64) {
         return Err(too_big());
