@@ -59,6 +59,8 @@ pub const DETAIL_UNSUPPORTED: &str = "unsupported: needs a newer system";
 pub const DETAIL_RUNNING: &str = "factory resetting";
 pub const DETAIL_DONE: &str = "factory reset finished";
 pub const DETAIL_COLLECTING: &str = "collecting diagnostics";
+/// The ack detail (for IT, not end-user text) when this release offers no diagnostics.
+pub const DETAIL_DIAG_UNAVAILABLE: &str = "diagnostics are not available in this release";
 /// The status report sent before the reboot waits at most this long (best effort).
 const REPORT_WAIT: Duration = Duration::from_secs(10);
 
@@ -88,6 +90,8 @@ pub struct InboxCtx<'a> {
     pub persist: &'a (dyn Fn(u64) + Send + Sync),
     /// The upload queue `collect-diagnostics` goes into.
     pub upload_queue: crate::upload::queue::Queue,
+    /// This release offers help requests and diagnostics ([`crate::support::HELP_AVAILABLE`]).
+    pub help_available: bool,
 }
 
 #[derive(Debug)]
@@ -282,6 +286,10 @@ async fn factory_reset(cx: &InboxCtx<'_>, m: &InboxMessage) -> Step {
 
 async fn collect_diagnostics(cx: &InboxCtx<'_>, m: &InboxMessage) -> Step {
     let seq = m.seq;
+    if !cx.help_available {
+        log::info!("inbox: collect-diagnostics (seq {seq}) refused: not available in this release");
+        return ack(cx, seq, InboxResultState::Failed, DETAIL_DIAG_UNAVAILABLE).await;
+    }
     let request = serde_json::from_value::<CollectDiagnostics>(m.payload.clone())
         .map_err(|e| e.to_string())
         .and_then(|r| r.validate().map(|()| r));
@@ -647,6 +655,18 @@ mod tests {
         clock: &(dyn Fn() -> DateTime<Utc> + Send + Sync),
         after: u64,
     ) -> (SyncOutcome, Vec<u64>) {
+        run_help(m, runner, s, clock, after, true).await
+    }
+
+    /// Like `run_clock`, with `help_available` set as given.
+    async fn run_help(
+        m: &Box_,
+        runner: Arc<dyn Runner>,
+        s: &Srv,
+        clock: &(dyn Fn() -> DateTime<Utc> + Send + Sync),
+        after: u64,
+        help: bool,
+    ) -> (SyncOutcome, Vec<u64>) {
         let saved = Mutex::new(vec![]);
         let persist = |n: u64| saved.lock().unwrap().push(n);
         let f = fetcher(&s.srv.uri());
@@ -665,6 +685,7 @@ mod tests {
                 lab: true,
                 persist: &persist,
                 upload_queue: m.queue(),
+                help_available: help,
             },
             after,
         )
@@ -995,6 +1016,7 @@ mod tests {
                 lab: true,
                 persist,
                 upload_queue: m.queue(),
+                help_available: true,
             }
         }
         assert!(ack_reset_done(&cx(&m, &f, &c, &persist), 7).await.is_err());
@@ -1153,6 +1175,29 @@ mod tests {
         assert!(m.queue().list().unwrap().is_empty());
     }
 
+    /// Without help in this release: a failed ack, nothing queued, nothing started, the next message goes on.
+    #[tokio::test]
+    async fn collect_is_refused_when_help_is_unavailable() {
+        let m = machine(true);
+        let s = server(vec![collect_msg(5, serde_json::json!({"boots": 2}))], 204).await;
+        let r = spy(&m, true, &s.events);
+        let clock = now;
+        let (out, saved) = run_help(&m, r, &s, &clock, 4, false).await;
+        assert!(out.error.is_none(), "{:?}", out.error);
+        assert_eq!(out.inbox_after, 5);
+        assert_eq!(saved, [5]);
+        assert_eq!(
+            acks(&s),
+            [(
+                5,
+                InboxResultState::Failed,
+                "diagnostics are not available in this release".to_string()
+            )]
+        );
+        assert!(cmds(&s.events).is_empty());
+        assert!(m.queue().list().unwrap().is_empty());
+    }
+
     /// `running` refused (409): nothing is queued, nothing started.
     #[tokio::test]
     async fn collect_not_queued_when_running_is_refused() {
@@ -1196,6 +1241,7 @@ mod tests {
             lab: true,
             persist: &persist,
             upload_queue: m.queue(),
+            help_available: true,
         };
         ack_reset_done(&cx, 7).await.unwrap();
         assert!(!m.seed.join(RESET_SEQ).exists());

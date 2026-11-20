@@ -42,6 +42,15 @@ pub const UPLOAD_UNIT: &str = "mastersos-upload.service";
 /// Report item of [`step`].
 pub const ITEM: &str = "support";
 
+/// Protocol v1 phase 1 offers no help requests and no diagnostics (§3.9): "Get help" stays hidden, no help request
+/// is sent and no diagnostics are collected. The release that implements phase 3 sets this to `true`.
+pub const HELP_AVAILABLE: bool = false;
+
+/// Whether the dialogs show "Get help": the school's setting and what this release offers.
+pub fn support_enabled(config_enabled: bool, help_available: bool) -> bool {
+    config_enabled && help_available
+}
+
 /// After a help request is queued (its `support` item is in the upload queue): start the sender without waiting for
 /// it, through [`crate::upload::kick`]. Best effort: when it fails, the sender's timer and the network hook send the
 /// queue later.
@@ -70,7 +79,7 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
     let write = || -> anyhow::Result<()> {
         let dir = public_dir(env.paths)?;
         let mut bytes = serde_json::to_vec(&SupportJson {
-            enabled: ctx.config.support_enabled,
+            enabled: support_enabled(ctx.config.support_enabled, HELP_AVAILABLE),
         })?;
         bytes.push(b'\n');
         safefs::write_at(&dir, SUPPORT_JSON, &bytes, 0o644)?;

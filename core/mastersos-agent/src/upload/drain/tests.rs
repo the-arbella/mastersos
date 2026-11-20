@@ -699,3 +699,23 @@ fn device_batteries_do_not_count() {
     m.battery(10, "Discharging", false);
     assert!(low_battery(&m.paths().root));
 }
+
+/// Phase 1: the drain entry point sends nothing and leaves the queue as it is.
+#[tokio::test]
+async fn drain_main_sends_nothing_in_phase_1() {
+    let m = Machine::new();
+    m.queue
+        .enqueue_support("0192f3a4-5b6c-7d8e-9f00-112233445566", t(T0))
+        .unwrap();
+    let c = cloud(None, 200, 204).await;
+    let cfg = crate::AgentConfig {
+        state_dir: m.tmp.path().to_path_buf(),
+        seed_dir: m.tmp.path().join("seed"),
+        seed_requires_mount: false,
+        root: m.tmp.path().join("root"),
+        ..crate::AgentConfig::default()
+    };
+    drain_main(&cfg).await.unwrap();
+    assert!(acks(&c).is_empty() && c.asked.lock().unwrap().is_empty());
+    assert_eq!(m.queue.list().unwrap().len(), 1, "the item stays");
+}

@@ -1400,6 +1400,7 @@ impl Agent {
             lab: crate::luks::image_is_lab(&self.cfg.root),
             persist,
             upload_queue: crate::upload::queue::Queue::new(&self.cfg.state_dir),
+            help_available: crate::support::HELP_AVAILABLE,
         }
     }
 
