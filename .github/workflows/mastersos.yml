@@ -55,8 +55,8 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev pkg-config
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace --no-fail-fast
-  # The command lines school IT runs (mastersos, mastersos-sign) are tested on macOS and Windows by cli-release.yml, before
-  # it builds them; Linux runs their tests in the core job
+  # The command line school IT runs (mastersos) is tested on macOS and Windows by cli-release.yml, before
+  # it builds it; Linux runs its tests in the core job
   # Known vulnerabilities, licences and registries (core/deny.toml)
   deps:
     runs-on: ubuntu-latest

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs the MastersOS command line (mastersos, mastersos-sign) for the current user on macOS or Linux.
+# Installs the MastersOS command line (mastersos) for the current user on macOS or Linux.
 #
 #   curl -fsSL https://raw.githubusercontent.com/the-arbella/mastersos/master/tools/install/install.sh | sh
 #   curl -fsSL …/install.sh | sh -s -- --version cli-0123456789ab
@@ -23,7 +23,7 @@ die() { printf 'mastersos install: %s\n' "$*" >&2; exit 1; }
 
 usage() {
   say "Usage: install.sh [--version cli-<commit>]"
-  say "Installs mastersos and mastersos-sign into ~/.local/bin. Without --version: the newest cli-* release."
+  say "Installs mastersos into ~/.local/bin. Without --version: the newest cli-* release."
 }
 
 while [ $# -gt 0 ]; do
@@ -163,25 +163,27 @@ actual=$(sha256 "$tmp/$asset")
 
 mkdir "$tmp/x"
 tar -xzf "$tmp/$asset" -C "$tmp/x"
-for name in mastersos mastersos-sign; do
-  if [ ! -f "$tmp/x/$name" ] || [ -L "$tmp/x/$name" ]; then
-    die "$asset has no $name: nothing installed"
-  fi
-done
+if [ ! -f "$tmp/x/mastersos" ] || [ -L "$tmp/x/mastersos" ]; then
+  die "$asset has no mastersos: nothing installed"
+fi
 
 mkdir -p "$bindir"
 # Copy next to the target, then rename: a running copy is never half written
-for name in mastersos mastersos-sign; do
-  cp "$tmp/x/$name" "$bindir/.$name.new"
-  chmod 755 "$bindir/.$name.new"
-done
-for name in mastersos mastersos-sign; do
-  mv -f "$bindir/.$name.new" "$bindir/$name"
-done
+cp "$tmp/x/mastersos" "$bindir/.mastersos.new"
+chmod 755 "$bindir/.mastersos.new"
+mv -f "$bindir/.mastersos.new" "$bindir/mastersos"
+
+# An earlier installer put a second program in this folder; its key commands are part of mastersos now
+if [ -e "$bindir/mastersos-sign" ] || [ -L "$bindir/mastersos-sign" ]; then
+  if rm -f "$bindir/mastersos-sign"; then
+    say "Removed the old $bindir/mastersos-sign (now part of mastersos)"
+  else
+    say "Could not remove the old $bindir/mastersos-sign (now part of mastersos): delete it by hand"
+  fi
+fi
 
 installed=$("$bindir/mastersos" --version) || die "installed $bindir/mastersos, but it does not run on this computer"
 say "Installed $bindir/mastersos"
-say "Installed $bindir/mastersos-sign"
 say "$installed"
 
 case ":${PATH:-}:" in
