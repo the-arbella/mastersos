@@ -35,7 +35,7 @@ use mastersos_bundle::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{ask, hex, print_trust, Api, TrustDelta};
+use super::{ask, hex, key_line, Api, TrustDelta};
 use crate::server::{CliError, Server};
 
 /// Where the versions come from.
@@ -542,7 +542,7 @@ async fn verify_inner(
             _ => return first_use(src, &path, latest, anchors, confirm, out).await,
         },
     };
-    let cur = forward(src, &pin, latest, confirm, out)
+    let cur = forward(src, &pin, latest, anchors.interactive, confirm, out)
         .await
         .map_err(|e| match (&legacy, e.downcast_ref::<Tampered>()) {
             (Some(old), Some(t)) => tamper(format!(
@@ -566,6 +566,7 @@ async fn forward(
     src: Source<'_>,
     pin: &Pin,
     latest: u64,
+    interactive: bool,
     confirm: &mut dyn BufRead,
     out: &mut dyn Write,
 ) -> Result<Verified> {
@@ -661,6 +662,14 @@ async fn forward(
                  !!! their disks. Approve a corrected version with a school key and check the server.",
                 cur.version
             )?;
+            // Only a person may go on: a piped "yes" or --yes never confirms this.
+            if !interactive {
+                return Err(cancel(&format!(
+                    "version {v} changes {changes} without a school key's approval, and nobody \
+                     can confirm going on here (--yes, --json, or stdin is not a terminal); \
+                     cancelled. Check the change, then run again at a terminal"
+                )));
+            }
             let typed = ask(
                 confirm,
                 out,
@@ -748,7 +757,20 @@ async fn first_use(
         "This computer has not checked {} before. The server's latest is version {latest}; it names these keys as the ones computers accept:",
         src.describe()
     )?;
-    print_trust(out, &m.trust)?;
+    let own = |t: &TrustKey| {
+        anchors
+            .keys
+            .iter()
+            .any(|k| k.alg == t.alg && k.public_key == t.public_key)
+    };
+    for t in &m.trust {
+        let mark = if own(t) {
+            "  (your school key file)"
+        } else {
+            ""
+        };
+        writeln!(out, "    {}{mark}", key_line(t))?;
+    }
     writeln!(
         out,
         "Compare each one with the School keys page and the comment at the top of the install file. Every later version is verified from here on."
@@ -763,53 +785,65 @@ async fn first_use(
         .iter()
         .map(|f| f.trim().to_ascii_lowercase())
         .collect();
-    let by_key = m.trust.iter().any(|t| {
-        anchors
-            .keys
-            .iter()
-            .any(|k| k.alg == t.alg && k.public_key == t.public_key)
-    });
-    let not_confirmed = |why: &str| {
-        anyhow::Error::new(CliError::new(
-            "trust_not_confirmed",
-            &format!(
-                "the trusted keys of version {latest} were not confirmed: {why}. Compare them with \
-                 the School keys page, then run again at a terminal without --yes, or pass \
-                 --trust-fingerprint once for each fingerprint shown"
-            ),
-        ))
+    let not_confirmed = |why: &str, problems: Vec<serde_json::Value>| {
+        anyhow::Error::new(CliError {
+            problems,
+            ..CliError::new(
+                "trust_not_confirmed",
+                &format!(
+                    "the trusted keys of version {latest} were not confirmed: {why}. Compare them \
+                     with the School keys page, then run again at a terminal without --yes, or \
+                     pass --trust-fingerprint once for each key that is not your school key file"
+                ),
+            )
+        })
     };
-    if by_key {
+    // Every given fingerprint must be one shown: a wrong one is a mistake, never ignored.
+    let unknown: Vec<serde_json::Value> = given
+        .difference(&shown)
+        .map(|f| serde_json::json!(crate::safe::field(f)))
+        .collect();
+    if !unknown.is_empty() {
+        return Err(not_confirmed(
+            "a --trust-fingerprint value is not one of the keys shown",
+            unknown,
+        ));
+    }
+    let unanchored: Vec<String> = m
+        .trust
+        .iter()
+        .filter(|t| !own(t) && !given.contains(&mastersos_bundle::trust_fingerprint(t)))
+        .map(mastersos_bundle::trust_fingerprint)
+        .collect();
+    if unanchored.is_empty() {
         writeln!(
             out,
-            "Accepted: the school key file given is one of these keys."
-        )?;
-    } else if !given.is_empty() {
-        if given != shown {
-            return Err(not_confirmed(
-                "the --trust-fingerprint values are not exactly the fingerprints shown",
-            ));
-        }
-        writeln!(
-            out,
-            "Accepted: they are exactly the --trust-fingerprint values given."
+            "Accepted: every key is your school key file or a --trust-fingerprint value given."
         )?;
     } else if !anchors.interactive {
         return Err(not_confirmed(
-            "nobody can confirm them here (--yes, or stdin is not a terminal)",
+            "not every key is your school key file or a --trust-fingerprint value, and nobody \
+             can confirm them here (--yes, --json, or stdin is not a terminal)",
+            unanchored
+                .into_iter()
+                .map(serde_json::Value::from)
+                .collect(),
         ));
     } else {
         let typed = ask(
             confirm,
             out,
-            "If they match the School keys page and the install file, type yes: ",
+            "If every key above matches the School keys page and the install file, type yes: ",
         )
         .map_err(|_| cancel("No input was read; cancelled"))?;
         if typed != "yes" {
             return Err(cancel("The trusted keys were not confirmed; cancelled"));
         }
     }
-    let b = accept(&archive, &m.trust, None).map_err(|e| {
+    // Every key is now anchored (by a key file, a fingerprint, or the person): the latest
+    // version must verify under that set.
+    let anchored: Vec<TrustKey> = m.trust.clone();
+    let b = accept(&archive, &anchored, None).map_err(|e| {
         tamper(format!(
             "The latest version does not verify even with its own trusted keys: do not trust this server ({})",
             crate::safe::field(&e.to_string())
@@ -1268,23 +1302,185 @@ mod tests {
                 .is_some());
         }
 
-        #[tokio::test]
-        async fn first_use_with_yes_and_no_anchor_is_refused() {
-            let mock = MockServer::start().await;
-            // Version 1 trusts keys 1 and 2.
+        /// Version 1 of `SCHOOL` trusting keys 1 and 2, signed by the key of `seed`.
+        fn two_keys(seed: u8) -> Vec<u8> {
             let (t1, t2) = (signer(1).trust_key(), signer(2).trust_key());
             let text = format!(
                 "version = 1\nissued_at = \"2026-11-03T00:00:00Z\"\n\n[[trust]]\nid = \"{}\"\nalg = \"ed25519\"\npublic_key = \"{}\"\n\n[[trust]]\nid = \"key-2\"\nalg = \"ed25519\"\npublic_key = \"{}\"\n\n[school]\nid = \"{SCHOOL}\"\n\n[[config]]\nid = \"default\"\nname = \"Default\"\ninterface = \"learning\"\nlogin_methods = [\"local\"]\n\n[[group]]\nid = \"default\"\nname = \"Ungrouped\"\nconfig = \"default\"\n",
                 t1.id, t1.public_key, t2.public_key
             );
-            let a = pack(
+            pack(
                 &Contents {
                     manifest_text: text,
                     files: Default::default(),
                 },
-                &signer(1),
+                &Ed25519Signer::from_seed(&format!("key-{seed}"), &[seed; 32]),
+            )
+            .unwrap()
+        }
+
+        /// The key file of key 1 alone does not anchor key 2: refused, key 2's fingerprint in
+        /// `problems`, nothing pinned; key 2's fingerprint given as well, accepted.
+        #[tokio::test]
+        async fn key_file_does_not_anchor_the_other_keys() {
+            let mock = MockServer::start().await;
+            serve(&mock, SCHOOL, &[two_keys(1)]).await;
+            let pins = tempfile::tempdir().unwrap();
+            let s = server(&mock, SCHOOL);
+            let fp2 = trust_fingerprint(&signer(2).trust_key());
+            let own = Anchors {
+                keys: vec![signer(1).trust_key()],
+                ..Anchors::default()
+            };
+            let (r, _) = verify_with(&s, pins.path(), &own, "yes\n").await;
+            let e = r.unwrap_err();
+            assert_eq!(e.code, "trust_not_confirmed");
+            assert_eq!(e.problems, [serde_json::json!(fp2)]);
+            assert!(pin_files(pins.path()).is_empty());
+            // A wrong fingerprint next to the key file is refused too.
+            let wrong = Anchors {
+                fingerprints: vec!["0000-0000-0000-0000".into()],
+                ..own.clone()
+            };
+            let (r, _) = verify_with(&s, pins.path(), &wrong, "").await;
+            assert_eq!(r.unwrap_err().code, "trust_not_confirmed");
+            assert!(pin_files(pins.path()).is_empty());
+            let both = Anchors {
+                fingerprints: vec![fp2],
+                ..own
+            };
+            let (r, out) = verify_with(&s, pins.path(), &both, "").await;
+            assert_eq!(r.unwrap().version, 1, "{out}");
+        }
+
+        /// Trust {1, 2} signed by key 2 with the key file of key 1: refused, nothing pinned.
+        #[tokio::test]
+        async fn key_file_does_not_anchor_a_set_signed_by_another_key() {
+            let mock = MockServer::start().await;
+            serve(&mock, SCHOOL, &[two_keys(2)]).await;
+            let pins = tempfile::tempdir().unwrap();
+            let s = server(&mock, SCHOOL);
+            let own = Anchors {
+                keys: vec![signer(1).trust_key()],
+                ..Anchors::default()
+            };
+            let (r, _) = verify_with(&s, pins.path(), &own, "yes\n").await;
+            let e = r.unwrap_err();
+            assert_eq!(e.code, "trust_not_confirmed");
+            assert_eq!(
+                e.problems,
+                [serde_json::json!(trust_fingerprint(&signer(2).trust_key()))]
+            );
+            assert!(std::fs::read_dir(pins.path()).unwrap().next().is_none());
+        }
+
+        /// A person sees every key, the key file's own marked, and confirms the whole set.
+        #[tokio::test]
+        async fn interactive_first_use_shows_every_key_and_marks_the_own() {
+            let mock = MockServer::start().await;
+            serve(&mock, SCHOOL, &[two_keys(2)]).await;
+            let pins = tempfile::tempdir().unwrap();
+            let s = server(&mock, SCHOOL);
+            let fp2 = trust_fingerprint(&signer(2).trust_key());
+            let person = Anchors {
+                keys: vec![signer(1).trust_key()],
+                interactive: true,
+                ..Anchors::default()
+            };
+            let (r, out) = verify_with(&s, pins.path(), &person, "no\n").await;
+            assert_eq!(r.unwrap_err().code, "cancelled");
+            assert!(pin_files(pins.path()).is_empty());
+            let line = |fp: &str| {
+                out.lines()
+                    .find(|l| l.contains(fp))
+                    .unwrap_or("")
+                    .to_owned()
+            };
+            assert!(line(&fp1()).contains("(your school key file)"), "{out}");
+            assert!(!line(&fp2).is_empty(), "{out}");
+            assert!(!line(&fp2).contains("your school key file"), "{out}");
+            assert!(out.contains("type yes"), "{out}");
+            let (r, _) = verify_with(&s, pins.path(), &person, "yes\n").await;
+            assert_eq!(r.unwrap().version, 1);
+        }
+
+        /// Version `v` of `SCHOOL` trusting `trust` (any algorithm).
+        fn manifest_trusting(v: u64, trust: &[TrustKey]) -> Contents {
+            let mut text = format!("version = {v}\nissued_at = \"2026-11-03T00:00:00Z\"\n");
+            for t in trust {
+                let alg = match t.alg {
+                    mastersos_bundle::KeyAlg::Ed25519 => "ed25519",
+                    mastersos_bundle::KeyAlg::WebauthnEs256 => "webauthn-es256",
+                };
+                text += &format!(
+                    "\n[[trust]]\nid = \"{}\"\nalg = \"{alg}\"\npublic_key = \"{}\"\n",
+                    t.id, t.public_key
+                );
+                if let Some(rp) = &t.rp_id {
+                    text += &format!("rp_id = \"{rp}\"\n");
+                }
+            }
+            text += &format!("\n[school]\nid = \"{SCHOOL}\"\n\n[[config]]\nid = \"default\"\nname = \"Default\"\ninterface = \"learning\"\nlogin_methods = [\"local\"]\n\n[[group]]\nid = \"default\"\nname = \"Ungrouped\"\nconfig = \"default\"\n");
+            Contents {
+                manifest_text: text,
+                files: Default::default(),
+            }
+        }
+
+        /// A trust change signed by a passkey (R7) asks a person to go on; without one (piped
+        /// stdin, `--yes`) a piped "yes" never confirms it: cancelled, the pin stays.
+        #[tokio::test]
+        async fn kit_warning_needs_a_person() {
+            use mastersos_bundle::testutil::FakePasskey;
+            let phone =
+                FakePasskey::new("server.example", "https://server.example").with_key_id("phone");
+            let t1 = vec![signer(1).trust_key(), phone.trust_key("phone")];
+            let mut t2 = t1.clone();
+            t2.push(Ed25519Signer::from_seed("key-9", &[9; 32]).trust_key());
+            let v1 = pack(&manifest_trusting(1, &t1), &signer(1)).unwrap();
+            let c2 = manifest_trusting(2, &t2);
+            let v2 = mastersos_bundle::assemble(
+                &c2,
+                &phone.sign(&mastersos_bundle::signed_message(&c2), 0x05),
             )
             .unwrap();
+            let mock = MockServer::start().await;
+            serve(&mock, SCHOOL, std::slice::from_ref(&v1)).await;
+            let pins = tempfile::tempdir().unwrap();
+            let s = server(&mock, SCHOOL);
+            let first = Anchors {
+                keys: vec![signer(1).trust_key()],
+                fingerprints: vec![trust_fingerprint(&phone.trust_key("phone"))],
+                interactive: false,
+            };
+            let (r, out) = verify_with(&s, pins.path(), &first, "").await;
+            assert_eq!(r.unwrap().version, 1, "{out}");
+            mock.reset().await;
+            serve(&mock, SCHOOL, &[v1, v2]).await;
+            let nobody = Anchors {
+                interactive: false,
+                ..first.clone()
+            };
+            let (r, out) = verify_with(&s, pins.path(), &nobody, "yes\n").await;
+            let e = r.unwrap_err();
+            assert_eq!(e.code, "cancelled", "{out}");
+            assert!(e.message.contains("nobody"), "{}", e.message);
+            assert!(!out.contains("Type yes"), "{out}");
+            let person = Anchors {
+                interactive: true,
+                ..first
+            };
+            let (r, out) = verify_with(&s, pins.path(), &person, "yes\n").await;
+            let v = r.unwrap();
+            assert_eq!((v.version, v.latest), (1, 2), "{out}");
+        }
+
+        #[tokio::test]
+        async fn first_use_with_yes_and_no_anchor_is_refused() {
+            let mock = MockServer::start().await;
+            // Version 1 trusts keys 1 and 2.
+            let t2 = signer(2).trust_key();
+            let a = two_keys(1);
             serve(&mock, SCHOOL, &[a]).await;
             let pins = tempfile::tempdir().unwrap();
             let s = server(&mock, SCHOOL);

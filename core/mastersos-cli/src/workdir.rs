@@ -262,8 +262,13 @@ fn write_snapshot(
     crate::platform::write_private(&dir.join(SECRETS), secrets_raw.as_bytes())?;
     for (key, data) in files {
         let path = dir.join(key);
+        // Each member directory is private too (0700), whatever the umask.
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+            let mut d = dir.to_path_buf();
+            for part in parent.strip_prefix(dir)?.components() {
+                d.push(part);
+                crate::platform::private_dir(&d, true)?;
+            }
         }
         crate::platform::write_private(&path, data)?;
     }
@@ -1359,7 +1364,13 @@ mod tests {
                     .mode();
                 assert_eq!(mode & 0o777, 0o600, "{p}");
             }
-            for d in ["", ".mastersos", ".mastersos/base"] {
+            for d in [
+                "",
+                ".mastersos",
+                ".mastersos/base",
+                "files",
+                ".mastersos/base/files",
+            ] {
                 let mode = std::fs::metadata(w.root.join(d))
                     .unwrap()
                     .permissions()

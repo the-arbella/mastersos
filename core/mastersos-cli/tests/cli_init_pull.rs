@@ -708,3 +708,17 @@ async fn init_reads_the_key_file_from_stdin() {
     assert!(o.status.success(), "{:?}", text(&o));
     assert_eq!(manifest_trust(&dir).0, [a.trust_key()]);
 }
+
+/// `check` and `diff` work offline: they read the pins but never create the pins directory.
+#[tokio::test]
+async fn offline_commands_do_not_create_the_pins_directory() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    for cmd in ["check", "diff"] {
+        let _ = run(home.path(), Some(dir.path()), &[&cmd]).await;
+        assert!(
+            !home.path().join(".config/mastersos/pins").exists(),
+            "{cmd} made the pins directory"
+        );
+    }
+}

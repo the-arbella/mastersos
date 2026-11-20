@@ -61,11 +61,11 @@ pub struct Cli {
     #[cfg_attr(windows, doc = r"(default: %APPDATA%\mastersos\pins)")]
     #[arg(long, global = true, value_name = "DIR")]
     pin_dir: Option<PathBuf>,
-    /// Answer yes to every question: accept the key fingerprints the first time a school is checked (they are printed), and never read stdin to choose
+    /// No person is answering: never ask (a choice that needs one is refused). It never confirms trusted keys: the first time a school is checked needs a person at a terminal, or each of the trusted keys given by --key-file or --trust-fingerprint
     #[arg(long, global = true)]
     yes: bool,
-    /// The first time a school is checked without a person at the terminal (--yes): give each fingerprint shown on the School keys page; the keys must be exactly these
-    #[arg(long = "trust-fingerprint", global = true, value_name = "FP")]
+    /// The first time a school is checked without a person (--yes, --json, or no terminal): a fingerprint (xxxx-xxxx-xxxx-xxxx) from the School keys page; give one for each of the trusted keys that is not your --key-file
+    #[arg(long = "trust-fingerprint", global = true, value_name = "FP", value_parser = parse_fingerprint)]
     trust_fingerprint: Vec<String>,
     #[command(subcommand)]
     cmd: Cmd,
@@ -411,6 +411,7 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         cmd,
     } = cli;
     let pin_dir = || pin_dir_op(pin_flag.as_deref());
+    let pins_read = || pin_dir_path(pin_flag.as_deref()).map_err(|e| OpError::Failed(e.message));
     // Sign-in commands: before the config file and the old server address are read.
     match &cmd {
         Cmd::Login { no_browser } => {
@@ -446,8 +447,9 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
     }
     // Offline commands: no server address, no token.
     match &cmd {
-        Cmd::Check { dir } => return local_check(dir.as_deref(), &pin_dir()?, json),
-        Cmd::Diff { dir } => return local_diff(dir.as_deref(), &pin_dir()?),
+        // Offline: the pins are read, never created.
+        Cmd::Check { dir } => return local_check(dir.as_deref(), &pins_read()?, json),
+        Cmd::Diff { dir } => return local_diff(dir.as_deref(), &pins_read()?),
         Cmd::Explain(c) => return explain(c, json),
         Cmd::Migrate { dir, write } => return migrate(dir.as_deref(), &pin_dir()?, *write, json),
         Cmd::HashPassword => return hash_password(),
@@ -608,18 +610,42 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
     }
 }
 
-/// Where the pins are kept: `--pin-dir`, else `pins` in this computer's settings folder. The
-/// directory is made private (0700; refused when it is a link or another user's).
+/// `--trust-fingerprint`: four groups of four hex digits joined by `-`, taken in lowercase.
+fn parse_fingerprint(s: &str) -> Result<String, String> {
+    let fp = s.to_ascii_lowercase();
+    let ok = fp.len() == 19
+        && fp.split('-').count() == 4
+        && fp
+            .split('-')
+            .all(|g| g.len() == 4 && g.bytes().all(|b| b.is_ascii_hexdigit()));
+    if ok {
+        Ok(fp)
+    } else {
+        Err("a fingerprint is four groups of four hex digits, like 1a2b-3c4d-5e6f-7a8b".into())
+    }
+}
+
+/// Where the pins are kept: `--pin-dir`, else `pins` in this computer's settings folder. Nothing
+/// is created: the offline commands only read pins.
+fn pin_dir_path(flag: Option<&Path>) -> Result<PathBuf, CliError> {
+    match flag {
+        Some(d) => Ok(d.to_path_buf()),
+        None => crate::platform::config_dir("mastersos")
+            .map(|c| c.join("pins"))
+            .map_err(|e| CliError::new("local_file", &format!("{e:#}"))),
+    }
+}
+
+/// [`pin_dir_path`] for the commands that verify a chain: the settings folder and the pins
+/// directory are made private (0700; refused when a link or another user's).
 fn resolve_pin_dir(flag: Option<&Path>) -> Result<PathBuf, CliError> {
     let local = |e: anyhow::Error| CliError::new("local_file", &format!("{e:#}"));
-    let dir = match flag {
-        Some(d) => d.to_path_buf(),
-        None => {
-            let cfg = crate::platform::config_dir("mastersos").map_err(local)?;
-            crate::platform::private_dir(&cfg, true).map_err(local)?;
-            cfg.join("pins")
+    let dir = pin_dir_path(flag)?;
+    if flag.is_none() {
+        if let Some(cfg) = dir.parent() {
+            crate::platform::private_dir(cfg, true).map_err(local)?;
         }
-    };
+    }
     crate::platform::private_dir(&dir, true).map_err(local)?;
     Ok(dir)
 }
@@ -1606,13 +1632,13 @@ struct V1 {
 
 impl V1 {
     /// The first-use anchors of a command without a school key file: the fingerprints given, or
-    /// a person at a terminal (not with `--yes`).
+    /// a person at a terminal (not with `--yes` or `--json`).
     fn anchors(&self) -> crate::sign::chain::Anchors {
         use std::io::IsTerminal as _;
         crate::sign::chain::Anchors {
             keys: Vec::new(),
             fingerprints: self.fingerprints.clone(),
-            interactive: !self.yes && std::io::stdin().is_terminal(),
+            interactive: !self.yes && !self.json && std::io::stdin().is_terminal(),
         }
     }
 }
@@ -2304,6 +2330,27 @@ mod tests {
         let cli =
             Cli::try_parse_from(["mastersos", "--pin-dir", "/q", "seed", "check", "f"]).unwrap();
         assert_eq!(cli.pin_dir, Some(PathBuf::from("/q")));
+    }
+
+    #[test]
+    fn trust_fingerprint_must_be_four_groups_of_hex() {
+        let fp = "ABCD-0123-ef45-6789";
+        let cli = Cli::try_parse_from(["mastersos", "verify", "--trust-fingerprint", fp]).unwrap();
+        assert_eq!(cli.trust_fingerprint, ["abcd-0123-ef45-6789"]);
+        for bad in [
+            "abcd-0123-ef45",
+            "abcd-0123-ef45-678",
+            "abcd-0123-ef45-67890",
+            "abcd01234ef4556789",
+            "abcd-0123-ef45-678g",
+            " abcd-0123-ef45-6789",
+            "",
+        ] {
+            let e = Cli::try_parse_from(["mastersos", "verify", "--trust-fingerprint", bad])
+                .err()
+                .unwrap_or_else(|| panic!("{bad:?} was taken"));
+            assert_eq!(e.exit_code(), 2, "{bad:?}");
+        }
     }
 
     #[test]
