@@ -628,12 +628,28 @@ s_publish_v1() {
 	publish_ok publish-v1 "$W/pins-a" "$W/a" "$W/keys/k1.kit" 1
 }
 
+# The rotation takes two versions: a key that signs must be in the new trust (protocol 4.4, commit
+# step 5, `trust_rule`; the command line refuses it first with `key_not_trusted`), so key 1 adds
+# key 2 (v2), then key 2 removes key 1 (v3). Every version verifies under its own trust.
 s_publish_v2_rotation() {
 	ms key-add-k2 "$W/pins-a" -- key add "$W/keys/k2.kit" --dir "$W/a"
 	[[ $RC -eq 0 ]] || {
 		failed_call "key add k2"
 		return
 	}
+	if ! grep -q "${KID[1]}" "$W/a/manifest.toml" || ! grep -q "${KID[2]}" "$W/a/manifest.toml"; then
+		DETAIL="after key add, manifest.toml should trust k1 and k2"
+		return 1
+	fi
+	publish_ok publish-v2 "$W/pins-a" "$W/a" "$W/keys/k1.kit" 2 || return 1
+	local hb=$DETAIL
+	want trust_change.added.0 "${KID[2]}" "publish v2 trust change" || return 1
+	absent trust_change.added.1 "publish v2 trust change (one key added)" || return 1
+	absent trust_change.removed.0 "publish v2 trust change (nothing removed)" || return 1
+	DETAIL="$hb; trust {k1} -> {k1, k2} and escrow recipients k1 -> k1, k2, signed by k1"
+}
+
+s_publish_v3_new_key() {
 	# Local only; prints text even with --json, so only the exit code is checked.
 	ms key-remove-k1 "$W/pins-a" -- key remove "${KCODE[1]}" --key-file "$W/keys/k1.kit" --dir "$W/a"
 	[[ $RC -eq 0 ]] || {
@@ -641,20 +657,19 @@ s_publish_v2_rotation() {
 		return 1
 	}
 	if grep -q "${KID[1]}" "$W/a/manifest.toml" || ! grep -q "${KID[2]}" "$W/a/manifest.toml"; then
-		DETAIL="after key add/remove, manifest.toml should trust k2 and not k1"
+		DETAIL="after key remove, manifest.toml should trust k2 and not k1"
 		return 1
 	fi
-	publish_ok publish-v2 "$W/pins-a" "$W/a" "$W/keys/k1.kit" 2 || return 1
-	local hb=$DETAIL
-	want trust_change.added.0 "${KID[2]}" "publish v2 trust change" || return 1
-	want trust_change.removed.0 "${KID[1]}" "publish v2 trust change" || return 1
-	DETAIL="$hb; trust {k1} -> {k2} and escrow recipient k1 -> k2, signed by k1"
-}
-
-s_publish_v3_new_key() {
-	touch_manifest "$W/a" "first version approved by key 2" || return 1
+	if [[ $({ grep -oE 'age1[02-9ac-hj-np-z]{58}' "$W/a/manifest.toml" || true; } | sort -u | wc -l) -ne 1 ]]; then
+		DETAIL="after key remove, manifest.toml should hold exactly one escrow recipient (k2's)"
+		return 1
+	fi
 	publish_ok publish-v3 "$W/pins-a" "$W/a" "$W/keys/k2.kit" 3 || return 1
-	DETAIL="$DETAIL, signed by k2: the rotation version is signed by k1 only, so a computer or Device starting from it cannot verify it under its own trust"
+	local hb=$DETAIL
+	want trust_change.removed.0 "${KID[1]}" "publish v3 trust change" || return 1
+	absent trust_change.removed.1 "publish v3 trust change (one key removed)" || return 1
+	absent trust_change.added.0 "publish v3 trust change (nothing added)" || return 1
+	DETAIL="$hb; trust {k1, k2} -> {k2} and escrow recipient -> k2 only, signed by k2"
 }
 
 s_heartbeat() {
