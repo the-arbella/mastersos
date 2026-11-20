@@ -7,7 +7,7 @@
 //!    读进内存，不落 /tmp），先用 `cryptsetup open --test-passphrase` 经 stdin 核对它真能解开分区，
 //!    **再**写进加密根分区上 0600 的 `escrow-pending.json`，然后才去托管：服务器暂时连不上时下一轮
 //!    （或 agent 重启后）拿同一把重试，不会再登记一把新的、把服务端没收到的留在盘上。
-//! 2. **托管**：`POST /v1/escrow`。成功（204）才在 `luks-state.json` 记下这个分区已托管，删掉待托管文件。
+//! 2. **托管**：`POST /api/device/v1/escrow`。成功（204）才在 `luks-state.json` 记下这个分区已托管，删掉待托管文件。
 //!    Sealed only (plan 6 design §6.2, rulings 26, 27): nothing is enrolled or sent before the
 //!    first accepted bundle names `[school].escrow_recipients` ([`escrow_mode`]); the key is
 //!    sealed with age to every recipient once, the armor kept in `escrow-pending.json`

@@ -7,7 +7,7 @@
 //! - [`step`]: the settings step that writes `support.json` (`{"enabled": bool}`, 0644) into the public directory for
 //!   the dialogs and the host (`[config.support] enabled`; no file means off).
 //!
-//! - [`send`]: sending a queued request to the cloud (`POST /v1/support`, then the attachment), in
+//! - [`send`]: sending a queued request to the cloud (`POST /api/device/v1/support`, then the attachment), in
 //!   `mastersos-upload.service` (Task 5b): the host queues a `support` item in the upload queue beside the store item.
 
 pub mod host;

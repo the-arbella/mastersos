@@ -1,7 +1,7 @@
 //! The machine's inbox (MQTT push spec §5.1a, §6.3): commands from the server, fetched over
 //! HTTPS with the device credential; MQTT only rings the doorbell.
 //!
-//! [`sync`] takes `GET /v1/inbox?after=inbox_after` and handles the messages in ascending `seq`,
+//! [`sync`] takes `GET /api/device/v1/inbox?after=inbox_after` and handles the messages in ascending `seq`,
 //! skipping any at or below `after` (the server hands a message out again until it is acked).
 //! Each message is acked first; only a successful ack advances `inbox_after` (and saves it). A
 //! failed ack ends the sync: the main loop retries it with the backoff.
@@ -518,7 +518,14 @@ mod tests {
 
     impl Respond for Acks {
         fn respond(&self, r: &Request) -> ResponseTemplate {
-            let seq: u64 = r.url.path().split('/').nth(3).unwrap().parse().unwrap();
+            let seq: u64 = r
+                .url
+                .path()
+                .split('/')
+                .nth_back(1)
+                .unwrap()
+                .parse()
+                .unwrap();
             let body: InboxResult = serde_json::from_slice(&r.body).unwrap();
             let state = serde_json::to_string(&body.state).unwrap();
             self.events
@@ -547,14 +554,16 @@ mod tests {
         let bodies: Arc<Mutex<Vec<(u64, InboxResult)>>> = Default::default();
         let last_seq = messages.iter().map(|m| m.seq).max().unwrap_or(0);
         Mock::given(method("GET"))
-            .and(path("/v1/inbox"))
+            .and(path("/api/device/v1/inbox"))
             .respond_with(
                 ResponseTemplate::new(200).set_body_json(InboxPage { messages, last_seq }),
             )
             .mount(&srv)
             .await;
         Mock::given(method("POST"))
-            .and(wiremock::matchers::path_regex(r"^/v1/inbox/\d+/result$"))
+            .and(wiremock::matchers::path_regex(
+                r"^/api/device/v1/inbox/\d+/result$",
+            ))
             .respond_with(Acks {
                 events: events.clone(),
                 bodies: bodies.clone(),
@@ -564,7 +573,7 @@ mod tests {
             .mount(&srv)
             .await;
         Mock::given(method("POST"))
-            .and(path("/v1/status"))
+            .and(path("/api/device/v1/status"))
             .respond_with(ResponseTemplate::new(204))
             .mount(&srv)
             .await;
@@ -688,14 +697,13 @@ mod tests {
             .collect()
     }
 
-    /// The server address of an organisation has a path (`https://host/org/<organisation>/devices`): every device
-    /// request is joined under it, and none goes to the host root.
+    /// Every inbox-side request goes under the device prefix of the origin; a path on an older
+    /// seed's `server_url` is dropped.
     #[tokio::test]
-    async fn requests_are_joined_under_a_server_url_with_a_path() {
+    async fn inbox_requests_use_the_device_prefix() {
         let srv = MockServer::start().await;
-        let root = "/org/example/devices";
         Mock::given(method("GET"))
-            .and(path(format!("{root}/v1/inbox")))
+            .and(path("/api/device/v1/inbox"))
             .respond_with(ResponseTemplate::new(200).set_body_json(InboxPage {
                 messages: vec![],
                 last_seq: 0,
@@ -704,24 +712,23 @@ mod tests {
             .mount(&srv)
             .await;
         Mock::given(method("POST"))
-            .and(path(format!("{root}/v1/status")))
+            .and(path("/api/device/v1/status"))
             .respond_with(ResponseTemplate::new(204))
             .expect(1)
             .mount(&srv)
             .await;
         Mock::given(method("GET"))
-            .and(path(format!("{root}/v1/heartbeat")))
+            .and(path("/api/device/v1/heartbeat"))
             .respond_with(ResponseTemplate::new(204))
             .expect(1)
             .mount(&srv)
             .await;
-        // A trailing slash on the address changes nothing.
-        let f = fetcher(&format!("{}{root}/", srv.uri()));
-        assert_eq!(f.base(), format!("{}{root}", srv.uri()));
+        let f = fetcher(&format!("{}/org/example/devices/", srv.uri()));
+        assert_eq!(f.base(), format!("{}/api/device/v1/", srv.uri()));
         f.inbox(&cred(), 0, true).await.unwrap();
         f.heartbeat().await.unwrap();
         f.report(&status(), Some(&cred()), true).await.unwrap();
-        // `.expect(1)` is checked when the server drops; anything sent to the host root would have been a 404 above.
+        // `.expect(1)` is checked when the server drops.
     }
 
     #[tokio::test]
@@ -749,7 +756,7 @@ mod tests {
         let q = s.srv.received_requests().await.unwrap();
         assert!(q
             .iter()
-            .any(|r| r.url.path() == "/v1/inbox" && r.url.query() == Some("after=2")));
+            .any(|r| r.url.path() == "/api/device/v1/inbox" && r.url.query() == Some("after=2")));
     }
 
     #[tokio::test]
@@ -922,7 +929,7 @@ mod tests {
         let m = machine(true);
         let srv = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/v1/inbox"))
+            .and(path("/api/device/v1/inbox"))
             .respond_with(ResponseTemplate::new(200).set_body_json(InboxPage {
                 messages: vec![msg(1, "x-new", None), msg(2, "x-new", None)],
                 last_seq: 2,
@@ -1172,7 +1179,7 @@ mod tests {
         fs::write(m.seed.join(RESET_SEQ), "7\n").unwrap();
         let srv = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/v1/inbox/7/result"))
+            .and(path("/api/device/v1/inbox/7/result"))
             .respond_with(ResponseTemplate::new(404))
             .expect(1)
             .mount(&srv)

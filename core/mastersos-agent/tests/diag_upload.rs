@@ -1,4 +1,4 @@
-//! The three-step diagnostics upload (`POST /v1/diagnostics` → presigned `PUT` → complete)
+//! The three-step diagnostics upload (`POST /api/device/v1/diagnostics` → presigned `PUT` → complete)
 //! against a local mock server that plays both the cloud and S3.
 
 use std::collections::BTreeSet;
@@ -96,7 +96,7 @@ fn presigned(srv: &MockServer, object: &str, expires_in: u64) -> ResponseTemplat
 }
 
 async fn mount_step1(srv: &MockServer, t: ResponseTemplate, times: Option<u64>) {
-    let m = Mock::given(method("POST")).and(path("/v1/diagnostics"));
+    let m = Mock::given(method("POST")).and(path("/api/device/v1/diagnostics"));
     let m = m.respond_with(t);
     let m = match times {
         Some(n) => m.up_to_n_times(n),
@@ -115,7 +115,7 @@ async fn mount_put(srv: &MockServer, object: &str, t: ResponseTemplate) {
 
 async fn mount_complete(srv: &MockServer, t: ResponseTemplate, times: Option<u64>) {
     let m = Mock::given(method("POST"))
-        .and(path("/v1/diagnostics/abc123/complete"))
+        .and(path("/api/device/v1/diagnostics/abc123/complete"))
         .respond_with(t);
     let m = match times {
         Some(n) => m.up_to_n_times(n),
@@ -151,7 +151,7 @@ fn assert_clean(e: &DiagUploadError) {
 async fn upload_happy_path_sends_headers_verbatim() {
     let e = env().await;
     Mock::given(method("POST"))
-        .and(path("/v1/diagnostics"))
+        .and(path("/api/device/v1/diagnostics"))
         .and(header("authorization", format!("Bearer {TOKEN}").as_str()))
         .and(header("x-mastersos-device", "dev-1"))
         .and(header("x-mastersos-device-secret", "S".repeat(43).as_str()))
@@ -164,7 +164,7 @@ async fn upload_happy_path_sends_headers_verbatim() {
         .await;
     mount_put(&e.srv, "obj1", ResponseTemplate::new(200)).await;
     Mock::given(method("POST"))
-        .and(path("/v1/diagnostics/abc123/complete"))
+        .and(path("/api/device/v1/diagnostics/abc123/complete"))
         .and(header("x-mastersos-device", "dev-1"))
         .respond_with(ResponseTemplate::new(204))
         .expect(1)
@@ -212,9 +212,11 @@ async fn already_complete_skips_put() {
     mount_complete(&e.srv, ResponseTemplate::new(204), None).await;
     let id = upload(&e.f, &cred(), req(), &e.file, true).await.unwrap();
     assert_eq!(id, "abc123");
-    assert!(requests(&e.srv, "POST", "/v1/diagnostics/abc123/complete")
-        .await
-        .is_empty());
+    assert!(
+        requests(&e.srv, "POST", "/api/device/v1/diagnostics/abc123/complete")
+            .await
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -226,7 +228,12 @@ async fn upload_mismatch_restarts_from_step_one() {
     mount_complete(&e.srv, ResponseTemplate::new(204), None).await;
     let id = upload(&e.f, &cred(), req(), &e.file, true).await.unwrap();
     assert_eq!(id, "abc123");
-    assert_eq!(requests(&e.srv, "POST", "/v1/diagnostics").await.len(), 2);
+    assert_eq!(
+        requests(&e.srv, "POST", "/api/device/v1/diagnostics")
+            .await
+            .len(),
+        2
+    );
     assert_eq!(requests(&e.srv, "PUT", "/s3/obj1").await.len(), 2);
 }
 
@@ -241,7 +248,12 @@ async fn expires_in_elapsed_restarts() {
     mount_complete(&e.srv, ResponseTemplate::new(204), None).await;
     let id = upload(&e.f, &cred(), req(), &e.file, true).await.unwrap();
     assert_eq!(id, "abc123");
-    assert_eq!(requests(&e.srv, "POST", "/v1/diagnostics").await.len(), 2);
+    assert_eq!(
+        requests(&e.srv, "POST", "/api/device/v1/diagnostics")
+            .await
+            .len(),
+        2
+    );
     assert!(requests(&e.srv, "PUT", "/s3/obj1").await.is_empty());
     assert_eq!(requests(&e.srv, "PUT", "/s3/obj2").await.len(), 1);
 }
@@ -264,7 +276,12 @@ async fn s3_request_expired_restarts() {
     mount_complete(&e.srv, ResponseTemplate::new(204), None).await;
     let id = upload(&e.f, &cred(), req(), &e.file, true).await.unwrap();
     assert_eq!(id, "abc123");
-    assert_eq!(requests(&e.srv, "POST", "/v1/diagnostics").await.len(), 2);
+    assert_eq!(
+        requests(&e.srv, "POST", "/api/device/v1/diagnostics")
+            .await
+            .len(),
+        2
+    );
     assert_eq!(requests(&e.srv, "PUT", "/s3/obj2").await.len(), 1);
 }
 
@@ -280,7 +297,9 @@ async fn not_yours_and_expired_give_up() {
         assert!(err.detail.contains(code), "{err}");
         assert_clean(&err);
         assert_eq!(
-            requests(&e.srv, "POST", "/v1/diagnostics").await.len(),
+            requests(&e.srv, "POST", "/api/device/v1/diagnostics")
+                .await
+                .len(),
             1,
             "{code}: no retry"
         );
@@ -294,7 +313,12 @@ async fn not_yours_and_expired_give_up() {
         .await
         .unwrap_err();
     assert_eq!(err.action, ErrorAction::GiveUp, "{err}");
-    assert_eq!(requests(&e.srv, "POST", "/v1/diagnostics").await.len(), 1);
+    assert_eq!(
+        requests(&e.srv, "POST", "/api/device/v1/diagnostics")
+            .await
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -412,7 +436,9 @@ async fn every_error_table_row_is_handled() {
         assert_eq!(err.action, want, "{status} {code:?}: {err}");
         assert_clean(&err);
         assert_eq!(
-            requests(&e.srv, "POST", "/v1/diagnostics").await.len(),
+            requests(&e.srv, "POST", "/api/device/v1/diagnostics")
+                .await
+                .len(),
             1,
             "{status} {code:?}: one request, the caller decides when to retry"
         );
@@ -432,7 +458,9 @@ async fn every_error_table_row_is_handled() {
         .unwrap_err();
     assert_eq!(err.action, Backoff, "{err}");
     assert_eq!(
-        requests(&e.srv, "POST", "/v1/diagnostics").await.len(),
+        requests(&e.srv, "POST", "/api/device/v1/diagnostics")
+            .await
+            .len(),
         MAX_ROUNDS as usize
     );
     // The flat `{"error": "<code>"}` form is read too.
@@ -461,7 +489,12 @@ async fn gives_up_after_three_rounds() {
     assert_eq!(MAX_ROUNDS, 3);
     assert_eq!(err.action, ErrorAction::Backoff, "{err}");
     assert_clean(&err);
-    assert_eq!(requests(&e.srv, "POST", "/v1/diagnostics").await.len(), 3);
+    assert_eq!(
+        requests(&e.srv, "POST", "/api/device/v1/diagnostics")
+            .await
+            .len(),
+        3
+    );
     assert_eq!(requests(&e.srv, "PUT", "/s3/obj1").await.len(), 3);
 }
 

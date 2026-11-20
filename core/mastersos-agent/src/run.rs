@@ -1,4 +1,4 @@
-//! The main loop: sync settings (`GET /v1/bundle?after=N&wait=0`) → verify → store → hand to the
+//! The main loop: sync settings (`GET /api/device/v1/bundle?after=N&wait=0`) → verify → store → hand to the
 //! apply task → report; failures back off, a bad bundle is remembered and not taken again.
 //!
 //! No long poll and no fallback polling (MQTT push plan, spec §6.1–6.2). Settings are synced at
@@ -1419,7 +1419,7 @@ impl Agent {
             }
             PushEvent::Status(i) => {
                 // A 401 on the grant is the fetch's 401 (spec §6.2): the sync that follows meets
-                // it on `/v1/bundle` and switches tokens there (`on_unauthorized`); the MQTT task
+                // it on `/api/device/v1/bundle` and switches tokens there (`on_unauthorized`); the MQTT task
                 // shares the fetcher's token.
                 if i.detail.as_deref() == Some(push::TOKEN_UNAUTHORIZED) {
                     self.sync_settings = true;
@@ -2209,7 +2209,7 @@ mod tests {
     async fn inbox_server() -> MockServer {
         let srv = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/v1/inbox"))
+            .and(path("/api/device/v1/inbox"))
             .respond_with(ResponseTemplate::new(200).set_body_json(InboxPage {
                 messages: vec![],
                 last_seq: 0,
@@ -2224,7 +2224,7 @@ mod tests {
             .await
             .unwrap()
             .iter()
-            .filter(|r| r.url.path() == "/v1/inbox")
+            .filter(|r| r.url.path() == "/api/device/v1/inbox")
             .count()
     }
 
@@ -2310,7 +2310,7 @@ mod tests {
     async fn quiet_change_reports_at_once() {
         let (dir, srv) = (tempfile::tempdir().unwrap(), inbox_server().await);
         Mock::given(method("POST"))
-            .and(path("/v1/status"))
+            .and(path("/api/device/v1/status"))
             .respond_with(ResponseTemplate::new(200))
             .mount(&srv)
             .await;
@@ -2337,7 +2337,7 @@ mod tests {
             .await
             .unwrap()
             .iter()
-            .filter(|r| r.url.path() == "/v1/status")
+            .filter(|r| r.url.path() == "/api/device/v1/status")
             .map(|r| serde_json::from_slice(&r.body).unwrap())
             .collect();
         assert_eq!(reports.len(), 1, "{reports:?}");

@@ -12,8 +12,8 @@
 //!   a language nor offers to change it. No settings yet: false, and the file may not exist;
 //! - `logo.png` and `logo-icon.png`: the sign-in logo (96 px high) and the quick menu icon
 //!   (40 x 40), each used only when its SHA-256 equals `[school] logo_sha256` /
-//!   `logo_icon_sha256`. Each is downloaded from `<seed.server_url>/logos/<sha256>.png` (128 KiB,
-//!   20 s) outside `Phase::Boot`, unless the cached file already matches; a download that does not
+//!   `logo_icon_sha256`. Each is downloaded from
+//!   `<origin of seed.server_url>/api/device/v1/logos/<sha256>.png` (128 KiB, 20 s) outside `Phase::Boot`, unless the cached file already matches; a download that does not
 //!   match is dropped (`null` in `branding.json`) and retried next round. The `logo.webp` an
 //!   earlier agent cached is removed;
 //! - the GDM dconf snippet `80-mastersos-branding` (`logo` key only: the login-screen extension shows
@@ -278,7 +278,7 @@ impl Image<'_> {
             safefs::remove_at(self.dir, file)?;
             return Ok(false);
         }
-        let url = format!("{}/logos/{hash}.png", self.server_url.trim_end_matches('/'));
+        let url = crate::fetch::logo_url(self.server_url, hash);
         match self.fetcher.fetch(&url) {
             Ok(b) if sha256_hex(&b) == hash => {
                 safefs::write_at(self.dir, file, &b, 0o644)
@@ -367,6 +367,15 @@ mod tests {
                 calls: RefCell::new(vec![]),
             }
         }
+    }
+
+    #[test]
+    fn logo_url_is_under_the_device_prefix() {
+        let h = "a".repeat(64);
+        assert_eq!(
+            crate::fetch::logo_url("https://mdm.example", &h),
+            format!("https://mdm.example/api/device/v1/logos/{h}.png")
+        );
     }
 
     impl LogoFetcher for Fake {
@@ -624,7 +633,9 @@ mod tests {
         assert_eq!(out, vec![ok(ITEM)]);
         assert_eq!(
             f.calls.borrow().as_slice(),
-            [format!("https://mdm.example/logos/{hash}.png")]
+            [format!(
+                "https://mdm.example/api/device/v1/logos/{hash}.png"
+            )]
         );
         let logo = p.public_dir.join("branding/logo.png");
         assert_eq!(std::fs::read(&logo).unwrap(), b"LOGO");
@@ -713,8 +724,8 @@ mod tests {
         assert_eq!(
             f.calls.borrow().as_slice(),
             [
-                format!("https://mdm.example/logos/{lh}.png"),
-                format!("https://mdm.example/logos/{ih}.png"),
+                format!("https://mdm.example/api/device/v1/logos/{lh}.png"),
+                format!("https://mdm.example/api/device/v1/logos/{ih}.png"),
             ]
         );
         assert_eq!(std::fs::read(dir.join("logo.png")).unwrap(), logo);

@@ -479,7 +479,7 @@ impl Lab {
                 "message": "这台机器托管的恢复密钥已到上限"}}));
         }
         Mock::given(method("POST"))
-            .and(path("/v1/escrow"))
+            .and(path("/api/device/v1/escrow"))
             .and(header("authorization", "Bearer tok"))
             .respond_with(r)
     }
@@ -548,7 +548,7 @@ impl Lab {
             .await
             .unwrap()
             .into_iter()
-            .filter(|r| r.url.path() == "/v1/escrow")
+            .filter(|r| r.url.path() == "/api/device/v1/escrow")
             .map(|r| r.body)
             .collect()
     }

@@ -163,7 +163,7 @@ impl Respond for Record {
     }
 }
 
-/// `POST /v1/diagnostics`: a presigned URL on the same server.
+/// `POST /api/device/v1/diagnostics`: a presigned URL on the same server.
 struct Presign {
     base: String,
     asked: Bodies,
@@ -214,7 +214,7 @@ fn error(status: u16, code: &str) -> ResponseTemplate {
     ResponseTemplate::new(status).set_body_json(json!({"error": {"code": code, "message": "no"}}))
 }
 
-/// The cloud: `POST /v1/support` answers `support`, `POST /v1/diagnostics` answers `step1`
+/// The cloud: `POST /api/device/v1/support` answers `support`, `POST /api/device/v1/diagnostics` answers `step1`
 /// (None: a presigned URL), the PUT `put`.
 async fn cloud(support: ResponseTemplate, step1: Option<ResponseTemplate>, put: u16) -> Cloud {
     let srv = MockServer::start().await;
@@ -225,14 +225,14 @@ async fn cloud(support: ResponseTemplate, step1: Option<ResponseTemplate>, put: 
         srv,
     };
     Mock::given(method("POST"))
-        .and(path("/v1/support"))
+        .and(path("/api/device/v1/support"))
         .respond_with(Record {
             bodies: c.support.clone(),
             answer: support,
         })
         .mount(&c.srv)
         .await;
-    let m = Mock::given(method("POST")).and(path("/v1/diagnostics"));
+    let m = Mock::given(method("POST")).and(path("/api/device/v1/diagnostics"));
     match step1 {
         Some(r) => {
             m.respond_with(Record {
@@ -260,7 +260,7 @@ async fn cloud(support: ResponseTemplate, step1: Option<ResponseTemplate>, put: 
         .mount(&c.srv)
         .await;
     Mock::given(method("POST"))
-        .and(path("/v1/diagnostics/att1/complete"))
+        .and(path("/api/device/v1/diagnostics/att1/complete"))
         .respond_with(ResponseTemplate::new(204))
         .mount(&c.srv)
         .await;
@@ -450,7 +450,7 @@ async fn too_many_retries_after() {
     let srv = MockServer::start().await;
     let support = Bodies::default();
     Mock::given(method("POST"))
-        .and(path("/v1/support"))
+        .and(path("/api/device/v1/support"))
         .respond_with(Record {
             bodies: support.clone(),
             answer: error(429, "too_many").insert_header("Retry-After", "600"),

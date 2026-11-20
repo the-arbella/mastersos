@@ -14,7 +14,7 @@
 //!   backoff); past the command's `expires_at` → ack `failed` `upload: <the last error>`.
 //! - `ack`: a final result whose send failed before; sent again with the backoff, given up
 //!   after [`ACK_KEEP_DAYS`] days (the server marks the command failed by itself then).
-//! - `support`: a help request ([`crate::support::send`]): `POST /v1/support`, the ticket into
+//! - `support`: a help request ([`crate::support::send`]): `POST /api/device/v1/support`, the ticket into
 //!   the support store, then the attachment collected into a [`Target::Ticket`] `archive`. A
 //!   ticket archive that arrives or is given up (`expired`, `not_yours`, dropped for room) marks
 //!   the request's attachment done; the request keeps its ticket.

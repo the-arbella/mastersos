@@ -109,7 +109,14 @@ struct AckRec {
 
 impl Respond for AckRec {
     fn respond(&self, r: &Request) -> ResponseTemplate {
-        let seq: u64 = r.url.path().split('/').nth(3).unwrap().parse().unwrap();
+        let seq: u64 = r
+            .url
+            .path()
+            .split('/')
+            .nth_back(1)
+            .unwrap()
+            .parse()
+            .unwrap();
         let b: InboxResult = serde_json::from_slice(&r.body).unwrap();
         self.acks
             .lock()
@@ -119,7 +126,7 @@ impl Respond for AckRec {
     }
 }
 
-/// `POST /v1/diagnostics`: a presigned URL on the same server, signed for the size asked.
+/// `POST /api/device/v1/diagnostics`: a presigned URL on the same server, signed for the size asked.
 struct Presign {
     base: String,
     asked: Arc<Mutex<Vec<serde_json::Value>>>,
@@ -160,14 +167,14 @@ async fn cloud(step1: Option<ResponseTemplate>, put: u16, ack_code: u16) -> Clou
     let acks: Acks = Default::default();
     let asked: Arc<Mutex<Vec<serde_json::Value>>> = Default::default();
     Mock::given(method("POST"))
-        .and(path_regex(r"^/v1/inbox/\d+/result$"))
+        .and(path_regex(r"^/api/device/v1/inbox/\d+/result$"))
         .respond_with(AckRec {
             acks: acks.clone(),
             code: ack_code,
         })
         .mount(&srv)
         .await;
-    let m = Mock::given(method("POST")).and(path("/v1/diagnostics"));
+    let m = Mock::given(method("POST")).and(path("/api/device/v1/diagnostics"));
     match step1 {
         Some(r) => m.respond_with(r).mount(&srv).await,
         None => {
@@ -185,7 +192,7 @@ async fn cloud(step1: Option<ResponseTemplate>, put: u16, ack_code: u16) -> Clou
         .mount(&srv)
         .await;
     Mock::given(method("POST"))
-        .and(path("/v1/diagnostics/abc123/complete"))
+        .and(path("/api/device/v1/diagnostics/abc123/complete"))
         .respond_with(ResponseTemplate::new(204))
         .mount(&srv)
         .await;
@@ -524,7 +531,7 @@ async fn retry_after_is_honoured_over_kicks() {
         .await
         .unwrap()
         .iter()
-        .filter(|q| q.url.path() == "/v1/diagnostics")
+        .filter(|q| q.url.path() == "/api/device/v1/diagnostics")
         .count();
     assert_eq!(tries, 1);
 }

@@ -381,7 +381,7 @@ fn settings_waiting_vs_unreachable() {
     assert_eq!(settings_status(false, None), (Settings::Waiting, None));
     let (s, d) = settings_status(
         false,
-        Some("error sending request for url (https://x/v1/bundle?after=3&wait=0): connection refused"),
+        Some("error sending request for url (https://x/api/device/v1/bundle?after=3): connection refused"),
     );
     assert_eq!(s, Settings::Unreachable);
     let d = d.unwrap();
@@ -846,7 +846,7 @@ mod job {
         lab.online();
         lab.have_chrome();
         lab.fetch_error.send_replace(Some(
-            "error sending request for url (https://cloud.example/v1/bundle?after=3&wait=0): connection refused"
+            "error sending request for url (https://cloud.example/api/device/v1/bundle?after=3): connection refused"
                 .into(),
         ));
         lab.round().await;
