@@ -713,13 +713,178 @@ async fn writes_nothing_outside_dir() {
 async fn plain_http_to_a_non_loopback_host_is_refused_locally() {
     let _l = LOCK.lock().await;
     let a = Kit::generate();
+    let key = recovery_key();
     let s = setup(
         &seed("http://192.0.2.1:8480", vec![a.trust_key()], None),
-        None,
+        Some(&key),
     );
     let r = run_check(&s.input, Utc::now()).await;
-    let st = step(&r, "status");
-    assert_eq!(st.error_code.as_deref(), Some("local_refused"), "{st:?}");
-    assert_eq!((st.route.as_deref(), st.status, st.ok), (None, None, false));
+    for name in ["status", "escrow"] {
+        let c = step(&r, name);
+        assert_eq!(c.error_code.as_deref(), Some("local_refused"), "{c:?}");
+        assert_eq!((c.route.as_deref(), c.status, c.ok), (None, None, false));
+    }
     assert!(!r.ok);
+}
+
+/// Heartbeat 204 and status 204: the steps after the bundle succeed.
+async fn mount_rest(srv: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/api/device/v1/heartbeat"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(srv)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/device/v1/status"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(srv)
+        .await;
+}
+
+async fn mount_bundle(srv: &MockServer, after: &str, t: ResponseTemplate) {
+    Mock::given(method("GET"))
+        .and(path("/api/device/v1/bundle"))
+        .and(query_param("after", after))
+        .respond_with(t)
+        .mount(srv)
+        .await;
+}
+
+/// One run against a server whose `bundle?after=2` answers `t`; the bundle entry.
+async fn first_bundle(a: &Kit, t: ResponseTemplate) -> Call {
+    let srv = MockServer::start().await;
+    mount_bundle(&srv, "2", t).await;
+    mount_rest(&srv).await;
+    let s = setup(&seed(&srv.uri(), vec![a.trust_key()], Some(3)), None);
+    let r = run_check(&s.input, Utc::now()).await;
+    assert!(!r.ok);
+    assert_eq!(r.calls.iter().filter(|c| c.step == "bundle").count(), 1);
+    assert!(step(&r, "status").ok);
+    step(&r, "bundle").clone()
+}
+
+#[tokio::test]
+async fn bundle_401_carries_the_server_code() {
+    let _l = LOCK.lock().await;
+    let a = Kit::generate();
+    let json = ResponseTemplate::new(401).set_body_json(serde_json::json!({
+        "error": { "code": "unauthorized", "message": "no" }
+    }));
+    let text = ResponseTemplate::new(401).set_body_string("Unauthorized");
+    for (t, code) in [(json, "unauthorized"), (text, "invalid_answer")] {
+        let b = first_bundle(&a, t).await;
+        assert_eq!(
+            (b.status, b.error_code.as_deref(), b.ok),
+            (Some(401), Some(code), false),
+            "{b:?}"
+        );
+        assert_eq!(
+            b.route.as_deref(),
+            Some("GET /api/device/v1/bundle?after=2")
+        );
+    }
+}
+
+#[tokio::test]
+async fn bundle_answers_that_do_not_verify() {
+    let _l = LOCK.lock().await;
+    let a = Kit::generate();
+    let r = [a.escrow_recipient()];
+    let (v3, _) = bundle(3, &[a.trust_key()], &r, &a.signer());
+    let (v2, _) = bundle(2, &[a.trust_key()], &r, &a.signer());
+    let cases = [
+        // The header names another version than the manifest.
+        (
+            ResponseTemplate::new(200)
+                .insert_header("X-Mastersos-Version", "4")
+                .set_body_bytes(v3.clone()),
+            "verify_failed",
+        ),
+        // The first version is below the seed's min_version.
+        (
+            ResponseTemplate::new(200)
+                .insert_header("X-Mastersos-Version", "2")
+                .set_body_bytes(v2),
+            "verify_failed",
+        ),
+        // No X-Mastersos-Version at all.
+        (
+            ResponseTemplate::new(200).set_body_bytes(v3),
+            "invalid_answer",
+        ),
+    ];
+    for (t, code) in cases {
+        let b = first_bundle(&a, t).await;
+        assert_eq!(
+            (b.status, b.error_code.as_deref(), b.version),
+            (Some(200), Some(code), None),
+            "{b:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn heartbeat_with_another_digest_fails() {
+    let _l = LOCK.lock().await;
+    let a = Kit::generate();
+    let srv = MockServer::start().await;
+    let (v3, _) = bundle(3, &[a.trust_key()], &[a.escrow_recipient()], &a.signer());
+    mount_bundle(
+        &srv,
+        "2",
+        ResponseTemplate::new(200)
+            .insert_header("X-Mastersos-Version", "3")
+            .set_body_bytes(v3),
+    )
+    .await;
+    mount_bundle(&srv, "3", ResponseTemplate::new(204)).await;
+    Mock::given(method("GET"))
+        .and(path("/api/device/v1/heartbeat"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(heartbeat(
+            3,
+            &"ab".repeat(32),
+            &a.signer(),
+        )))
+        .mount(&srv)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/device/v1/status"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&srv)
+        .await;
+    let s = setup(&seed(&srv.uri(), vec![a.trust_key()], Some(3)), None);
+    let r = run_check(&s.input, Utc::now()).await;
+    let h = step(&r, "heartbeat");
+    assert_eq!(
+        (h.status, h.ok, h.error_code.as_deref(), h.version),
+        (Some(200), false, Some("verify_failed"), Some(3)),
+        "{h:?}"
+    );
+    assert!(!r.ok);
+}
+
+/// A DIR that holds anything but an earlier run's directories is refused and left as it was.
+#[tokio::test]
+async fn a_foreign_dir_is_refused_untouched() {
+    let _l = LOCK.lock().await;
+    let a = Kit::generate();
+    let s = setup(
+        &seed("https://server.example", vec![a.trust_key()], None),
+        None,
+    );
+    let dir = &s.input.dir;
+    std::fs::create_dir(dir).unwrap();
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(dir.join("other.txt"), b"keep").unwrap();
+    let r = run_check(&s.input, Utc::now()).await;
+    assert_eq!(r.calls.len(), 1, "{r:#?}");
+    let c = &r.calls[0];
+    assert_eq!(
+        (c.step.as_str(), c.ok, c.error_code.as_deref()),
+        ("seed_import", false, Some("bad_input"))
+    );
+    assert_eq!(r.device_id, None);
+    assert!(!r.ok);
+    assert_eq!(mode(dir), 0o755);
+    assert_eq!(entries(dir), ["other.txt"]);
 }

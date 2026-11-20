@@ -587,6 +587,38 @@ async fn fetch_401_is_recognizable() {
     );
 }
 
+/// A bundle 401 is still [`Unauthorized`] for the main loop and also carries the server's JSON
+/// code ([`ServerRefused`]); a text body gives no code.
+#[tokio::test]
+async fn fetch_401_carries_the_server_code() {
+    let srv = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(query_param("after", "1"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+            "error": { "code": "unauthorized", "message": "no" }
+        })))
+        .mount(&srv)
+        .await;
+    Mock::given(method("GET"))
+        .and(query_param("after", "2"))
+        .respond_with(ResponseTemplate::new(401).set_body_string("nope"))
+        .mount(&srv)
+        .await;
+    let f = Fetcher::new(&seed(&srv.uri(), None), Some("t".into()));
+    for (after, code) in [(1, Some("unauthorized")), (2, None)] {
+        let e = f.fetch_now(after).await.unwrap_err();
+        assert!(
+            e.downcast_ref::<mastersos_agent::fetch::Unauthorized>()
+                .is_some(),
+            "{e:#}"
+        );
+        let r = e
+            .downcast_ref::<mastersos_agent::fetch::ServerRefused>()
+            .unwrap();
+        assert_eq!((r.status, r.code.as_deref()), (401, code));
+    }
+}
+
 /// m4: a stale mark carried back by a request sent before the token was switched (still in
 /// flight) speaks of the old token and is ignored.
 #[tokio::test]

@@ -466,7 +466,9 @@ impl Fetcher {
         self
     }
 
-    /// The only place a request of this fetcher goes out: the builder's own client (redirect
+    /// The only place a request to the server goes out (the one exception is the presigned
+    /// diagnostics `PUT` of [`Fetcher::diag_put`], which goes to storage, not the server: its query
+    /// string is the upload grant, a credential, so it is never recorded): the builder's own client (redirect
     /// policy, timeouts) and headers are kept as they are. With a recorder set it appends the
     /// method, the path and query, and the status (`None` without an answer).
     async fn send(&self, rb: reqwest::RequestBuilder) -> reqwest::Result<reqwest::Response> {
@@ -585,7 +587,12 @@ impl Fetcher {
             .context("request to bundle failed")?;
         self.observe(&resp, &used);
         match resp.status() {
-            StatusCode::UNAUTHORIZED => Err(anyhow::Error::new(Unauthorized)),
+            // [`Unauthorized`] for the main loop, over the server's [`ServerRefused`] code: both
+            // downcast.
+            StatusCode::UNAUTHORIZED => {
+                let code = read_error_body(resp).await.map(|b| b.code);
+                Err(anyhow::Error::new(ServerRefused { status: 401, code }).context(Unauthorized))
+            }
             StatusCode::NO_CONTENT => Ok(FetchOutcome::NoChange),
             StatusCode::OK => {
                 let version = resp

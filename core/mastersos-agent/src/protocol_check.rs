@@ -25,7 +25,6 @@ use serde::{Deserialize, Serialize};
 use crate::fetch::{
     escrow_transport_ok, DeviceAuthMissing, DeviceCred, EscrowRefused, Exchange, FetchOutcome,
     Fetcher, NotAvailable, Recorder, RenewFailed, RenewOutcome, ServerRefused, StatusNotSent,
-    Unauthorized,
 };
 use crate::luks::{escrow_request, SealedKey};
 use crate::seedpart::{self, Identity, Imported};
@@ -152,11 +151,6 @@ fn classify(e: &anyhow::Error, status: Option<u16>) -> (String, String) {
     if let Some(n) = e.downcast_ref::<NotAvailable>() {
         return ("not_available".into(), n.to_string());
     }
-    // The bundle and heartbeat do not read a 401's body: the server's code there is
-    // `unauthorized` (wire table, "every device route checks the fetch token first").
-    if let Some(u) = e.downcast_ref::<Unauthorized>() {
-        return ("unauthorized".into(), u.to_string());
-    }
     if let Some(d) = e.downcast_ref::<DeviceAuthMissing>() {
         return ("device_auth_missing".into(), d.to_string());
     }
@@ -250,6 +244,37 @@ fn finish(
     }
 }
 
+/// DIR: created 0700 when missing (its parent must exist). An existing DIR is used only when it
+/// is a directory (not a symlink) holding nothing but an earlier run's `seed-partition/` and
+/// `state/`; it is never modified (no chmod), so a wrong DIR is refused untouched.
+fn run_dir(dir: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(dir) {
+        Ok(m) if m.is_dir() => {
+            let rd = std::fs::read_dir(dir)
+                .map_err(|e| anyhow::anyhow!("reading {} failed: {e}", dir.display()))?;
+            for entry in rd {
+                let entry =
+                    entry.map_err(|e| anyhow::anyhow!("reading {} failed: {e}", dir.display()))?;
+                let name = entry.file_name();
+                if name != SEED_PART && name != STATE {
+                    anyhow::bail!(
+                        "{} holds {:?}, not only an earlier run's {SEED_PART}/ and {STATE}/; use an empty or new DIR",
+                        dir.display(),
+                        name
+                    );
+                }
+            }
+            Ok(())
+        }
+        Ok(_) => anyhow::bail!("{} is not a directory", dir.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(dir)
+            .map_err(|e| anyhow::anyhow!("creating {} failed: {e}", dir.display())),
+        Err(e) => anyhow::bail!("checking {} failed: {e}", dir.display()),
+    }
+}
+
 /// Creates `p` 0700 when missing (its parent must exist: nothing is created above DIR); refuses
 /// a symlink or a non-directory, and sets 0700.
 fn private_dir(p: &Path) -> Result<()> {
@@ -290,7 +315,7 @@ fn seed_import(input: &CheckInput) -> std::result::Result<(Device, String), (Str
     }
     let set_up = || -> Result<(PathBuf, PathBuf, Imported, Identity)> {
         let dir = std::path::absolute(&input.dir)?;
-        private_dir(&dir)?;
+        run_dir(&dir)?;
         let (seed_part, state) = (dir.join(SEED_PART), dir.join(STATE));
         private_dir(&seed_part)?;
         let fd = crate::safefs::open_abs_dir(&seed_part, false)?;
@@ -591,15 +616,15 @@ async fn escrow(
             "the LUKS UUID is not a lowercase 8-4-4-4-12 UUID",
         );
     }
+    if escrow_transport_ok(f.base(), lab).is_err() {
+        return c.fail("local_refused", LOCAL_TRANSPORT);
+    }
     let Some(recipients) = latest
         .map(|b| &b.manifest.school.escrow_recipients)
         .filter(|r| !r.is_empty())
     else {
         return c.fail("verify_failed", "the settings name no escrow recipients");
     };
-    if escrow_transport_ok(f.base(), lab).is_err() {
-        return c.fail("local_refused", LOCAL_TRANSPORT);
-    }
     let sealed = match SealedKey::seal(&key, recipients) {
         Ok(s) => s,
         Err(e) => {
@@ -667,6 +692,8 @@ async fn renewal(
     };
     secrets.push(token.clone());
     // DIR/seed-partition is a plain directory, not a mount point: skip that check.
+    // Saving is local (a disk problem under DIR, no answer to blame): the fixed code list has no
+    // closer match than `local_refused`.
     if let Err(e) = crate::token::save_with(&dev.state, &dev.seed_part, &token, false) {
         calls.push(c.fail(
             "local_refused",
