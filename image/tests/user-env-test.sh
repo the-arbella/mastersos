@@ -61,7 +61,11 @@ mode learning
 out=$(run "$tmp/gen/30-systemd-environment-d-generator")
 check "learning: DCONF_PROFILE left out" no "$(has '^DCONF_PROFILE=' "$out")"
 check "learning: GSETTINGS_BACKEND left out" no "$(has '^GSETTINGS_BACKEND=' "$out")"
-check "learning: no XDG_CONFIG_HOME of its own" no "$(has '^XDG_CONFIG_HOME=' "$out")"
+# The system's own environment.d may set XDG_CONFIG_HOME (GitHub's runners do, from /etc/environment): the generator
+# adds none of its own to what systemd's gives a home with no files
+mkdir -p "$tmp/empty-home"
+base=$(env -i HOME="$tmp/empty-home" PATH=/usr/bin:/bin "$sysd" | grep '^XDG_CONFIG_HOME=' || true)
+check "learning: no XDG_CONFIG_HOME of its own" "$base" "$(grep '^XDG_CONFIG_HOME=' <<<"$out" || true)"
 # An XDG_CONFIG_HOME already in the manager's environment does not bring the user's files back either
 mkdir -p "$home/cfg/environment.d"
 cp "$home/.config/environment.d/50-x.conf" "$home/cfg/environment.d/"
