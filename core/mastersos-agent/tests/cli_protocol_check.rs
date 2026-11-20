@@ -184,9 +184,27 @@ async fn protocol_check_prints_one_json_object_and_exits_0() {
 async fn protocol_check_exits_1_when_a_call_fails() {
     let a = Kit::generate();
     let srv = server(&a, 500).await;
-    let f = files(&srv.uri(), &a, &recovery_key());
-    let out = run(base(&f)).await;
+    let key = recovery_key();
+    let f = files(&srv.uri(), &a, &key);
+    let mut args = base(&f);
+    args.extend([
+        "--recovery-key".into(),
+        f.key.clone().into(),
+        "--luks-uuid".into(),
+        LUKS_UUID.into(),
+    ]);
+    let out = run(args).await;
     assert_eq!(out.status.code(), Some(1));
+    // the failure details are where a leak would show
+    let secret = identity_secret(&f.dir);
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for s in [key.as_str(), secret.as_str(), FETCH_TOKEN] {
+        assert!(!all.contains(s), "output holds a secret");
+    }
     let text = String::from_utf8(out.stdout).unwrap();
     let line = text.lines().find(|l| l.starts_with("bundle ")).unwrap();
     // the route column holds the method and the path, e.g. `GET /api/device/v1/bundle?after=2`

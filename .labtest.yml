@@ -45,8 +45,8 @@ builds:
     # the runner sets CARGO_TARGET_DIR outside the tree: copy the binaries to where `artifacts` looks
     run: >-
       cd core && cargo build --locked --release --bin mastersos --bin mastersos-agent
-      && t=${CARGO_TARGET_DIR:-target} && if [ "$t" != target ]; then mkdir -p target/release
-      && cp "$t/release/mastersos" "$t/release/mastersos-agent" target/release/; fi
+      && t=${CARGO_TARGET_DIR:-target} && mkdir -p target/release
+      && { [ "$t/release" -ef target/release ] || cp "$t/release/mastersos" "$t/release/mastersos-agent" target/release/; }
     artifacts: [core/target/release/mastersos, core/target/release/mastersos-agent]
     mem: 6G
     cpus: 8
