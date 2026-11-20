@@ -369,6 +369,7 @@ fn op_error(e: &OpError) -> CliError {
             c.problems = issues.clone().unwrap_or_default();
             c
         }
+        OpError::Usage(message) => CliError::usage(message),
         OpError::Failed(message) => CliError::new("local_file", message),
     }
 }
@@ -729,14 +730,14 @@ fn explain(c: &ExplainCmd, json: bool) -> Result<ExitCode, OpError> {
         } => {
             // As on a Device (`guest_user_config`): the guest session is never an administrator.
             if *kind == Kind::Guest && *admin {
-                return Err(OpError::Failed(
+                return Err(OpError::Usage(
                     "--admin does not apply to --kind guest: the guest session is never an administrator on a Device".into(),
                 ));
             }
             let (_, text, m) = local_manifest(dir.as_deref())?;
             if let Some(g) = device_group {
                 if !m.groups.iter().any(|x| &x.id == g) {
-                    return Err(OpError::Failed(format!(
+                    return Err(OpError::Usage(format!(
                         "there is no Group {g:?} in manifest.toml"
                     )));
                 }
@@ -2406,7 +2407,7 @@ fn hash_password() -> Result<ExitCode, OpError> {
 fn prompt_secret(text: &str) -> Result<zeroize::Zeroizing<String>, OpError> {
     use std::io::IsTerminal as _;
     if !std::io::stdin().is_terminal() {
-        return Err(OpError::Failed(
+        return Err(OpError::Usage(
             "stdin is not a terminal, so a password cannot be read safely".into(),
         ));
     }

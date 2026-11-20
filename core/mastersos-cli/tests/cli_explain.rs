@@ -621,3 +621,33 @@ fn migrate_json_shape() {
     assert_eq!(keys, ["check", "written"]);
     assert_eq!(v["written"], true);
 }
+
+/// Argument misuse is a usage error (code `usage`, exit 2), also with --json.
+#[test]
+fn explain_misuse_is_a_usage_error() {
+    let (home, dir) = settings(&spec_example_v3());
+    let d = dir.to_str().unwrap();
+    for args in [
+        vec![
+            "--json", "explain", "user", "--dir", d, "--kind", "guest", "--admin",
+        ],
+        vec![
+            "--json",
+            "explain",
+            "user",
+            "--dir",
+            d,
+            "--kind",
+            "sso",
+            "--device-group",
+            "nope",
+        ],
+    ] {
+        let o = mastersos(home.path(), &args);
+        let (out, err) = text(&o);
+        assert_eq!(o.status.code(), Some(2), "{args:?}: {out}{err}");
+        let v: serde_json::Value = serde_json::from_str(out.trim()).expect(&out);
+        assert_eq!(v["error"]["code"], "usage", "{args:?}");
+        assert!(v["error"]["problems"].is_array());
+    }
+}

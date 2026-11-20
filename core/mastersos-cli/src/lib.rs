@@ -31,21 +31,25 @@ pub enum OpError {
         message: String,
         issues: Option<Vec<Value>>,
     },
-    /// Bad parameters or a local file that cannot be used. The command line exits 1.
+    /// The command line is misused (arguments that do not go together, nobody to type a password). The command line exits 2.
+    Usage(String),
+    /// A local file that cannot be used, or a failed operation. The command line exits 1.
     Failed(String),
 }
 
 impl OpError {
     pub fn exit_code(&self) -> u8 {
         match self {
-            OpError::Refused { .. } => 2,
+            OpError::Refused { .. } | OpError::Usage(_) => 2,
             OpError::Failed(_) => 1,
         }
     }
 
     pub fn message(&self) -> &str {
         match self {
-            OpError::Refused { message, .. } | OpError::Failed(message) => message,
+            OpError::Refused { message, .. }
+            | OpError::Usage(message)
+            | OpError::Failed(message) => message,
         }
     }
 }

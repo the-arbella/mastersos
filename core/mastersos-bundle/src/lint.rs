@@ -1222,7 +1222,11 @@ fn lint_trust_keys(m: &Manifest, out: &mut Vec<Lint>) {
         let raw = STANDARD
             .decode(k.public_key.trim())
             .unwrap_or_else(|_| k.public_key.trim().as_bytes().to_vec());
-        if let Some(first) = seen.insert((k.alg.as_str(), raw), k.id.as_str()) {
+        // The same id as well is `trust_duplicate_id`'s, reported by `validate_all`: once is enough.
+        if let Some(first) = seen
+            .insert((k.alg.as_str(), raw), k.id.as_str())
+            .filter(|first| *first != k.id)
+        {
             out.push(
                 err(
                     "trust_duplicate_key",
@@ -4237,5 +4241,41 @@ name = "b"
             paused[0].path.as_deref(),
             Some("defaults.chrome.pause_until")
         );
+    }
+
+    #[test]
+    fn a_repeated_trust_key_is_one_issue() {
+        let m = |ids: [&str; 2]| {
+            Manifest::parse(&format!(
+                r#"
+version = 1
+[[trust]]
+id = "{}"
+alg = "ed25519"
+public_key = "KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio="
+[[trust]]
+id = "{}"
+alg = "ed25519"
+public_key = "KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio="
+[[config]]
+id = "c"
+name = "c"
+[[group]]
+id = "g"
+name = "g"
+config = "c"
+"#,
+                ids[0], ids[1]
+            ))
+            .unwrap()
+        };
+        let codes = |m: &Manifest| -> Vec<&'static str> {
+            let mut out = Vec::new();
+            lint_trust_keys(m, &mut out);
+            out.iter().map(|l| l.code).collect()
+        };
+        assert_eq!(codes(&m(["a", "b"])), ["trust_duplicate_key"]);
+        // The same id as well: `trust_duplicate_id` says it, this one stays quiet.
+        assert!(codes(&m(["a", "a"])).is_empty());
     }
 }

@@ -537,3 +537,26 @@ fn school_is_the_uuid_everywhere() {
         assert_eq!(h.matches("--school <UUID>").count(), 1, "{cmd:?}: {h}");
     }
 }
+
+#[test]
+fn json_without_a_command_is_a_usage_error() {
+    let home = tempfile::tempdir().unwrap();
+    let out = bare(home.path(), &["--json"]);
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON value");
+    assert_eq!(v["error"]["code"], "usage");
+    assert!(v["error"]["message"].is_string());
+    // Without --json the help goes to stderr as before.
+    let out = bare(home.path(), &[]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+}
+
+#[test]
+fn hash_password_without_a_terminal_is_a_usage_error() {
+    let home = tempfile::tempdir().unwrap();
+    let out = bare(home.path(), &["--json", "hash-password"]);
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON value");
+    assert_eq!(v["error"]["code"], "usage");
+}
