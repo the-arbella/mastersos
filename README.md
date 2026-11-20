@@ -47,28 +47,35 @@ PowerShell window afterwards. A given release:
 Check it with `mastersos --version`. Releases are tagged `cli-<commit>`; without a version the installers take the
 newest one. macOS builds are not notarized yet; installed this way they run without a warning.
 
-### 2. Connect to your school
+### 2. Sign in to your school
 
-On the admin site, open the **Command line** page and create a token. Then:
+If the `arbella` command line is installed and signed in, `mastersos` uses its sign-in and there is nothing to do. Otherwise:
 
 ```bash
-mastersos connect https://<your school's admin address>
+mastersos login --server https://<your school's server address>
 ```
 
-Paste the token when asked (it is not shown, and never goes on the command line). `connect` checks it and prints
-where it saved it:
+`login` shows a short code and opens the browser: confirm the code there. The sign-in is saved for your user only. Commands that
+change something sensitive (publishing, making a seed, registering or removing a school key) may ask for one more
+confirmation: `mastersos` then opens a page on this computer in the browser and waits for you. `mastersos logout` forgets the
+sign-in. There are no token files and no tokens to paste.
 
 | | macOS, Linux | Windows |
 |---|---|---|
-| token and settings (`config.toml`) | `~/.config/mastersos/` | `%APPDATA%\mastersos\` |
+| the sign-in (`credentials.json`, mode 0600) | `~/.config/mastersos/` | `%APPDATA%\mastersos\` |
 | what `mastersos` has verified of each server's versions (`--pin-dir`) | `~/.config/mastersos/pins/` | `%APPDATA%\mastersos\pins\` |
 
 Only your user account can read these files.
 
+The first time you use a school on a computer, `mastersos` prints the fingerprints of the school's trusted keys and asks you to
+compare them with your own copy (the printed school key, or the **School keys** page): confirm them in person. Without a
+person (`--yes`, `--json` or no terminal) it refuses unless every trusted key is anchored with `--key-file <file>` or
+`--trust-fingerprint <xxxx-xxxx-xxxx-xxxx>` (repeatable).
+
 ### 3. Make two school keys
 
 A **school key** is a small file, plus a printed copy, that approves settings for every computer and can unlock
-their disks. Make two on the command line with `mastersos key new --out <folder> --school <name>`, register each with `mastersos key register --key-file <file> --label <text>` (it uses the token from `mastersos connect`), and save each file to a USB stick. The file name ends in
+their disks. Make two on the command line with `mastersos key new --out <folder> --school-name <name>`, register each with `mastersos key register --key-file <file> --label <text>` (it uses your sign-in), and save each file to a USB stick. The file name ends in
 the key's **key code**, for example `myschool-school-key-11d903eb.kit`; the same code (`11d9-03eb`) is on the printed
 copy and on the **School keys** page. Keep the printed copies and the second stick in separate safe places.
 
@@ -147,7 +154,7 @@ The server keeps no draft: IT pulls the published version into a local directory
 `manifest.toml` there, checks and diffs it locally, and IT publishes.
 
 ```bash
-mastersos connect https://server.example/org/<organisation>/devices     # paste the token from the Command line page: not echoed, checked, then saved with the address
+mastersos login --server https://server.example     # confirm the code in the browser; skip this when `arbella` is signed in
 mastersos init ./school --key-file <school key file> [--key-file <second key>]   # a new school; for one that has published, use pull
 mastersos pull ./school          # download the latest published version, verified version by version, unpacked into a directory
 $EDITOR ./school/manifest.toml   # or let an AI assistant do it; a new Wi-Fi password is psk = "secret:<name>", the value goes in secrets.toml
@@ -169,7 +176,7 @@ an older version this computer has verified. `publish` runs `check`, synthesises
 refuses it (someone published after the base, or a blocking check failed).
 
 The config folder is `~/.config/mastersos/` on macOS and Linux (`XDG_CONFIG_HOME` is not read) and `%APPDATA%\mastersos\` on
-Windows. It holds the one token file and `config.toml` (both written by `connect`) and the pins, in `pins/` (`--pin-dir`
+Windows. It holds `credentials.json` (written by `login`, 0600) and the pins, in `pins/` (`--pin-dir`
 changes it). Paths the command line prints are absolute, written the way the platform writes them. Pins kept by an earlier
 install in its own separate folder are not read, so IT confirms the key fingerprints once after upgrading.
 
@@ -187,7 +194,7 @@ by copy and paste or from the server:
 
 - `--key-file <file>`: the school key file (`MASTERSKIT1...`), or `-` for the first line of stdin. A file in PEM form is
   refused. On an exFAT or FAT32 USB stick permissions cannot be expressed, so a file others can read loads with only the note
-  `Make sure no other user can read this school key file. Keep it on a USB stick whenever you can.`; the token file and
+  `Make sure no other user can read this school key file. Keep it on a USB stick whenever you can.`; `credentials.json` and
   `secrets.toml` stay strict. Before uploading, `publish` confirms the key is trusted and registered with the server and
   uploads nothing otherwise. It then verifies the chain on this computer, compares the digest it computed itself at upload,
   asks IT to type the version number, signs and commits; on success it quietly signs a 30-day monthly check-in (heartbeat). A
@@ -197,14 +204,18 @@ by copy and paste or from the server:
   to see where the secret will be sent.
 
 Other subcommands: `devices list|show`, `key new|register|list|add|remove`, `verify`, `heartbeat`, `recovery read`,
-`seed check`, `hash-password` (reads a password twice without echo and prints the IT account's hash for `secrets.toml`),
-`logo upload <login.png> <icon.png>`, `explain`, `migrate`, `spec`. `--json` is for scripts and AI assistants.
+`seed make|check`, `hash-password` (reads a password twice without echo and prints the IT account's hash for `secrets.toml`),
+`login`, `logout`, `explain`, `migrate`, `spec [SECTION]` (`spec --full` prints all of it). The school's logo is not
+uploaded by the command line: the server does not host logos yet (phase 4). `--json` is for scripts and AI assistants;
+global options: `--server <URL>`, `--school <UUID>`, `--pin-dir <DIR>`, `--yes` (nobody answers: nothing is asked) and `--trust-fingerprint <FP>`
+(repeatable). `--key-file` is taken by `init`, `publish`, `heartbeat`, `key register|add|remove` and `recovery read`.
 
-There is one token file (`token` in the config folder, or `--token-file`), written by `mastersos connect`: an API token
-from the admin site's **Command line** page. It has no purposes or kinds. **Never hand IT's
-token file to an AI assistant.**
+The credentials are the `arbella` sign-in when it exists, else the one `mastersos login` saved (`credentials.json` in the config
+folder, 0600). There are no token files. **Never hand `credentials.json` to an AI assistant.** An AI assistant runs only
+`check`, `diff`, `explain`, `spec` and `--json devices list|show`; IT runs `init`, `publish`, `key …` and `seed make`.
+`publish` needs `--yes` when there is no terminal; with `--json` errors are `{"error":{"code","message","problems"}}`.
 
-- The token is read only from a file or from a prompt without echo, never from the command line. A token file others can read is refused.
+- A pulled draft holds real Wi-Fi keys and the IT account's password hash: its directory is 0700 and its files 0600. Keep it private.
 - 退出码：0 成功；1 失败（网络、认证、服务端拒绝）；2 `check` 有 error。
 - 秘密（Wi-Fi 的 `psk`、`password`、`client_key`、`client_key_password`，IT 账号的 `password_hash`）在 `manifest.toml` 里是 `secret:<名字>` 引用。
   `check`：引用了不存在的秘密是错误（`secret_unknown`）；没人用的秘密是警告；引用秘密的网络换了层、换了 `ssid`、秘密换了字段，
@@ -333,28 +344,28 @@ kiosk PWA），同时联系厂商取得长期支持（设计 `docs/superpowers/s
 
 **学校钥匙是唯一的签名钥匙**（2026-11-04 起 IT 的流程里没有 passkey）：一个小文件加一份打印件，批准每台电脑的设置，
 也能解开它们的磁盘。IT 在任何一台电脑上有这个文件就能批准：命令行 `mastersos publish --key-file <文件>`。
-Make a school key with `mastersos key new --out <folder> --school <name>` and register it with
-`mastersos key register --key-file <file> --label <text>` (it uses the token from `mastersos connect`). The file is named
+Make a school key with `mastersos key new --out <folder> --school-name <name>` and register it with
+`mastersos key register --key-file <file> --label <text>` (it uses your sign-in). The file is named
 `<school>-school-key-<key code>.kit` and the printed copy carries the same key code; keep each file on its own USB stick,
 and make two, kept apart.
 `mastersos-bundle` 与 agent 仍然验旧的 `webauthn-es256` 签名（没有在用的学校，以后再删），只是不再产生新的。
 
 ### Trust on this computer
 
-- **`mastersos publish`, `verify`, `heartbeat`, `recovery read` and `seed check`** do not trust the server. Before approving,
+- **`mastersos publish`, `verify`, `heartbeat`, `recovery read`, `seed make` and `seed check`** do not trust the server. Before approving,
   they fetch every published version's original bundle from the version pinned on this computer and verify each like an agent
   does. The diff, digests and trusted-key changes are computed locally; the server's diff and lint are advisory.
 
 ### Commands for school keys and verification
 
 IT uses only `mastersos`. `--key-file` reads a school key file; `--key-file -` reads the first line of stdin (use a pipe or
-a redirect: pasting into a terminal echoes it). The server comes from `connect` (or `--server`), the token from the one
-token file (or `--token-file`).
+a redirect: pasting into a terminal echoes it). The server comes from `--server`, the directory's `mastersos.toml` or the saved sign-in;
+the credentials from `arbella` or `mastersos login`.
 
 ```bash
 # Make a school key offline: written to a new file only its owner can read (an existing file is refused); the terminal
 # shows only the key code and fingerprint, never the key. When --out is a directory the file is <school>-school-key-<key code>.kit
-mastersos key new --out /Volumes/USB --school myschool
+mastersos key new --out /Volumes/USB --school-name myschool
 # Register the school key and its disk-unlocking recipient; an already registered key only prints a note, and a run that failed midway can be repeated as is
 mastersos key register --key-file /Volumes/USB/myschool-school-key-11d903eb.kit --label "IT first key"
 # List the registered school keys, and add or remove one in the local settings directory
@@ -363,6 +374,8 @@ mastersos key list
 mastersos verify
 # Check an install file before using it: its trusted keys and min_version must equal the latest version verified here
 mastersos seed check seed.toml
+# Make the install file (seed) from the latest version verified here; written 0600, the fetch token goes only into the file
+mastersos seed make --out seed.toml [--group <id>]
 # Monthly check-in (heartbeat): version and digest come from the latest version verified here; --days is 1 to 31, default 30.
 # This computer's clock must be right: a difference of more than 10 minutes from the server is refused.
 # `mastersos publish` does it with every publish and the admin site reminds IT after a long gap, so this command is for special cases
@@ -380,7 +393,7 @@ mastersos recovery read <device_id> --key-file <file>
   签名的学校钥匙必须登记过、而且受信；服务端也用这一版自己的受信钥匙验。签完 pin 在第 1 版。
   本机已经有这台服务端的 pin 时，服务端却说什么都没发布过，拒绝签（可能是回滚或换了服务端），报出 pin 文件的路径；
   确知服务端是有意重建的，才删掉那个文件。pin 只会沿着验过的链往前走：版本不升、或不是从磁盘上那个 pin 验过来的，一律不写。
-  发布第一版之前没有装机文件可下载（`GET /v1/admin/seed` 回 409 `no_published_version`）。
+  发布第一版之前没有装机文件可做（`mastersos seed make` 回 `no_published_version`）。
 - **pin 与首次信任**：第一次对某台服务端批准时，本机还没有记录。它打印最新版受信钥匙的指纹，要求 IT 与自己的打印件对照后输入 `yes`，
   然后把 `(版本, trust)` 记进 `<配置目录>/mastersos/pins/` 下的 `<主机>.toml`（地址带端口时写成 `<主机>_<端口>.toml`；`--pin-dir` 可以改位置）。Pins kept by an earlier install in its own separate folder are not read, so IT confirms the key fingerprints once after upgrading.
   之后每一次都从这一版往下验，验过的最新版成为新的 pin。pin 按 `--server` 解析后的「主机[:端口]」命名：主机名转小写、默认端口去掉，

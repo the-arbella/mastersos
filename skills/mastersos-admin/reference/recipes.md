@@ -148,17 +148,17 @@ Issues: `wifi_invalid`, `wifi_ssid_duplicate`, `secret_unknown` (a `secret:` nam
 `secret_rerouted`, `wifi_open_implicit` (an older entry without `psk`, `eap` or `open = true`: Devices join it as
 open; leave it to IT, who writes `open = true` or a `psk` reference).
 
-## IT account, seeds per Group and the Install page
+## IT account and seeds per Group
 
 - The IT maintenance account (`it_account` in `[defaults]` or a Config) is created from a password hash.
   IT runs `mastersos hash-password` and puts the hash into `secrets.toml`; `password_hash` in `manifest.toml` stays
   a `secret:` reference. You never set it and never ask the person for the password.
-- Seeds (the file a USB stick carries) are made on the admin web page, **Install**: one school seed by
-  default, and more per Group when Devices of a Group should start in it. A seed carries the Wi-Fi and the
+- Seeds (the file a USB stick carries) are made by IT with `mastersos seed make --out <file> [--group <id>]`: one school
+  seed by default, and more per Group when Devices of a Group should start in it. A seed carries the Wi-Fi and the
   IT account of the *latest published* version, so a local change shows in new seeds only after IT
-  publishes. You cannot download, create or revoke seeds; tell the person to use the Install page.
+  publishes. You never run `seed make`, and never open or print a seed; tell the person to ask IT.
 - A seed is a key (it holds a fetch key, Wi-Fi passwords and the IT account's password hash): say so when
-  the person asks about USB sticks, and that a lost stick is revoked on the Install page.
+  the person asks about USB sticks.
 
 ## Add an enterprise Wi-Fi network
 

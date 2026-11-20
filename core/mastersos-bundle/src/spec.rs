@@ -755,6 +755,38 @@ mod tests {
         );
     }
 
+    /// The skill's never-print rules for a pulled draft (real Wi-Fi keys, the IT password hash)
+    /// and the commands it must not run stay in `SKILL.md`, and no removed command comes back.
+    #[test]
+    fn skill_keeps_its_never_print_rules() {
+        let skill = include_str!("../../../skills/mastersos-admin/SKILL.md");
+        let recipes = include_str!("../../../skills/mastersos-admin/reference/recipes.md");
+        let flat = skill.split_whitespace().collect::<Vec<_>>().join(" ");
+        for rule in [
+            "holds real Wi-Fi keys and the IT account's password hash",
+            "You never print, quote, summarise or copy their values",
+            "You never paste `manifest.toml` wholesale",
+            "You never run `mastersos publish` or `mastersos seed make`",
+            "Never read, print or paste `credentials.json`",
+            "Never read `secrets.toml`",
+        ] {
+            assert!(flat.contains(rule), "SKILL.md lost the rule: {rule}");
+        }
+        for text in [skill, recipes] {
+            // Built from parts so this list does not trip the repository-wide grep for them.
+            let gone = [
+                format!("mastersos {}", "connect"),
+                format!("mastersos {}", "logo upload"),
+                format!("--token{}", "-file"),
+                format!("spec --{}", "section"),
+                format!("--school{}<name>", " "),
+            ];
+            for g in &gone {
+                assert!(!text.contains(g.as_str()), "a removed command is back: {g}");
+            }
+        }
+    }
+
     /// Every TOML block of the skill's recipes, put into a minimal valid draft, has no error.
     #[test]
     fn skill_recipes_parse() {

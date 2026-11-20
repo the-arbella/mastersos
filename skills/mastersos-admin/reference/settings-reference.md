@@ -56,14 +56,14 @@ Some keys are written for you; do not write them by hand:
 | `[school] id` | `mastersos init` / `pull`: the school's id; do not change it |
 | `[school] escrow_recipients` | `mastersos init` / `key add` / `key remove`, with `[[trust]]` (disk unlocking) |
 | `[school] name` | `mastersos publish`, from the school's name |
-| `[school] logo_sha256`, `logo_icon_sha256` | IT, pasted from the output of `mastersos logo upload` |
+| `[school] logo_sha256`, `logo_icon_sha256` | IT; the server does not host logos yet (phase 4) |
 | `it_account` `password_hash` | a `secret:` reference; IT puts the hash (`mastersos hash-password`) in `secrets.toml` |
 
 ### How a Device finds its Group
 
 1. A `[[device]]` entry whose `serial` (or `device_id`) matches the Device;
 2. otherwise the Group named in the Device's installer seed, if it names one and that Group exists
-   (a seed made on the Install page for a Group names it);
+   (a seed made with `mastersos seed make --group` names it);
 3. otherwise the Group with id `default`. There must always be exactly one `default` Group.
 
 The Device then applies the Config its Group names. New Devices therefore start in `default`; move
@@ -73,7 +73,7 @@ them into their Group with `[[device]]` entries, written in `manifest.toml` like
 ### The installer seed
 
 The seed is the small file on the installer USB stick that lets a new Device find the school before
-it has downloaded any settings. A seed made on the console's Install page is for one Group and
+it has downloaded any settings. A seed made with `mastersos seed make` is for one Group and
 carries: the server address, the school id and name, the signing public keys, that Group's `group`,
 the latest published `[school.oidc]`, the Wi-Fi of that Group's Config as it comes out of the
 Defaults and the Config's own entries (the latest published Version, not your local changes), and the
@@ -379,7 +379,7 @@ Settings shared by every Device, whatever its Group.
 | `locale` | string | optional; Devices keep their current language | `xx_YY.UTF-8`; the image provides `th_TH.UTF-8`, `en_US.UTF-8`, `en_GB.UTF-8`, `zh_CN.UTF-8` | `locale = "th_TH.UTF-8"` | Other well-formed languages pass the check, but Devices report that the image lacks them. |
 | `wifi` | list of tables | optional; none | see [`[[school.wifi]]`](#schoolwifi); never an empty list | — | Moved to `[defaults] wifi` (written here in a `format = 2` text it is `school_wifi_moved`); versions that still carry it work as before: its networks come before the Defaults' ones. A Defaults or Config entry with the same `ssid` replaces the school's. Write entries or leave the key out: `wifi = []` is `invalid_value`. |
 | `name` | string | written by the server | 1-100 characters | `name = "Example International School"` | The school's display name, shown on Devices ("Managed by …"). Do not write it by hand (`format = 2`); a name that is empty, over 100 characters or holds control characters is `school_name_invalid`. |
-| `logo_sha256` | string | written by IT | 64 lowercase hex digits | — | The SHA-256 of the sign-in screen logo (a PNG 96 pixels high, at most 480 wide) Devices download from the school's server at `/logos/<sha256>.png` and show only when it matches; written, with `logo_icon_sha256`, when IT runs `mastersos logo upload` and pastes the lines it prints. Do not invent it (`format = 2`); anything else is `logo_sha256_invalid`, and one of the two keys without the other is `logo_incomplete`. |
+| `logo_sha256` | string | written by IT | 64 lowercase hex digits | — | The SHA-256 of the sign-in screen logo (a PNG 96 pixels high, at most 480 wide) Devices download from the school's server at `/logos/<sha256>.png` and show only when it matches; written, with `logo_icon_sha256`, by IT. The server does not host logos yet (phase 4), so no command makes these values today. Do not invent it (`format = 2`); anything else is `logo_sha256_invalid`, and one of the two keys without the other is `logo_incomplete`. |
 | `logo_icon_sha256` | string | written by IT | 64 lowercase hex digits | — | The SHA-256 of the quick menu icon (a PNG of 40 x 40 pixels), downloaded and checked like `logo_sha256`. Written together with `logo_sha256`; do not write it by hand (`format = 2`). |
 | `escrow_recipients` | list of strings | optional; no escrow | 1 to 8 age X25519 public keys (`age1…`) in canonical lowercase form, none twice; never an empty list | — | Devices encrypt their disk recovery key to these keys before sending it to the cloud. Written by `mastersos init` and `mastersos key add`; each must belong to a Recovery kit in trust (`escrow_recipient_unregistered`). Write the key with entries or leave it out: `escrow_recipients = []` is `invalid_value`. |
 
@@ -4174,10 +4174,10 @@ locked = { message = "This Device was reported lost. Please bring it to the IT o
 **Level:** error. **Meaning:** `[school]` has one of `logo_sha256` (the sign-in screen logo) and `logo_icon_sha256` (the quick menu icon) but not the other.
 
 <!-- prompt:omit -->
-**Why:** `mastersos logo upload` uploads the two images together and prints both keys; one alone comes from a hand edit, and Devices would show the logo in one place but not the other.
+**Why:** the two keys go together (the server does not host logos yet, phase 4); one alone comes from a hand edit, and Devices would show the logo in one place but not the other.
 <!-- /prompt:omit -->
 
-**How to fix:** ask IT to run `mastersos logo upload` again and paste both lines; or remove the remaining key.
+**How to fix:** remove the remaining key; the server does not host logos yet (phase 4).
 
 <!-- prompt:omit -->
 ```toml check=logo_incomplete
@@ -4204,7 +4204,7 @@ config = "standard"
 **Why:** Devices download the logo and show it only when its SHA-256 matches, so a malformed value can never match.
 <!-- /prompt:omit -->
 
-**How to fix:** do not write it by hand: ask IT to run `mastersos logo upload` and paste its output; or remove the key.
+**How to fix:** do not write it by hand: remove the key; the server does not host logos yet (phase 4).
 
 <!-- prompt:omit -->
 ```toml check=logo_sha256_invalid
@@ -4232,7 +4232,7 @@ config = "standard"
 **Why:** Devices download the logo from the school's server and show it only when its SHA-256 matches; a value that was written by hand or pasted from another school would name a logo the server cannot give.
 <!-- /prompt:omit -->
 
-**How to fix:** ask IT to run `mastersos logo upload` and paste its output; or remove the key. Needs the school's stored logos, so there is no standalone example.
+**How to fix:** remove the key; the server does not host logos yet (phase 4). Needs the school's stored logos, so there is no standalone example.
 
 ### `mastersos_claims_without_school_id`
 
