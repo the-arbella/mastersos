@@ -1,5 +1,5 @@
-//! The main loop: sync settings (`GET /v1/bundle?after=N&wait=0`) → verify → store → hand to the
-//! apply task → report; failures back off, a bad bundle is remembered and not taken again.
+//! The main loop: sync settings (`GET /api/device/v1/bundle?after=N`) → verify → store → hand to
+//! the apply task → report; failures back off, a bad bundle is remembered and not taken again.
 //!
 //! No long poll and no fallback polling (MQTT push plan, spec §6.1–6.2). Settings are synced at
 //! startup (retried with the backoff until one sync succeeds), on a doorbell for a version above
@@ -20,7 +20,7 @@
 //! is at least `heartbeat_every` old by the wall clock. It is verified with the keys the machine
 //! trusts now:
 //! - 说的就是本机这一版（版本与摘要都对）→ `fresh_until` 往后推到它的 `not_after`；
-//! - 说有更高的版本 → 立即再拉一次（`wait=0`）：拉到就照常接受，仍是「没有新版本」才记 `newer_withheld`；
+//! - 说有更高的版本 → 立即再拉一次：拉到就照常接受，仍是「没有新版本」才记 `newer_withheld`；
 //! - 其余（更旧、摘要不符、验签失败、`issued_at` 晚于本机时间超过 1 天）一律不采信，也不回报
 //!   错误项。本机时钟偏慢时宁可误报过期。
 //!
@@ -67,7 +67,7 @@ use crate::apply::{hex, sha256_hex};
 use crate::apply::{Applier, ApplyContext, Phase};
 use crate::apply_worker::{self, ApplyHandle, ApplyOutcome, ApplyRequest};
 use crate::config::{AgentConfig, FALLBACK_SECS};
-use crate::fetch::{DeviceCred, FetchOutcome, Fetcher};
+use crate::fetch::{DeviceCred, FetchOutcome, Fetcher, StatusNotSent};
 use crate::inbox;
 use crate::jobs::{self, CurrentGroup, Job, JobCtx, SideResults};
 use crate::login_queue::{self, Batch};
@@ -563,6 +563,9 @@ struct Agent {
     identity: Option<seedpart::Identity>,
     /// 为真时 `report()` 什么都不发（第一份回报等托管任务，见 `run_with_wake`）。
     reports_held: bool,
+    /// The cause of the last status report that was not sent at all, logged once; cleared when
+    /// a report is sent.
+    status_not_sent: Option<StatusNotSent>,
     /// 托管任务的第一轮跑完（或等够了）时被通知：放开回报、立即回报一次。
     report_gate: Option<Arc<Notify>>,
     /// 后台任务的结果变了（例如托管从失败变成功）：立即回报，不等定时回报。
@@ -789,6 +792,7 @@ impl Agent {
             job_wake: Arc::new(Notify::new()),
             identity,
             reports_held: hold_reports,
+            status_not_sent: None,
             report_gate: None,
             side_changed: None,
             seed_cache: None,
@@ -892,6 +896,7 @@ impl Agent {
             phase: Phase::Full,
             managed_paths: self.state.managed_paths.clone(),
             script_hashes: self.state.script_hashes.clone(),
+            fetch_token: Some(self.fetcher.token_source()),
         });
     }
 
@@ -1154,6 +1159,7 @@ impl Agent {
         let bundle = self.bundle.clone();
         let ident = self.machine.ident.clone();
         let seed = self.seed.clone();
+        let token = self.fetcher.token_source();
         let dir = bundle
             .as_deref()
             .map(|b| state::version_dir(&self.cfg.state_dir, b))
@@ -1179,6 +1185,7 @@ impl Agent {
                 device: sel.device,
                 ident: &ident,
                 manifest: Some(m),
+                fetch_token: Some(&token),
             })
         })
         .await
@@ -1277,7 +1284,8 @@ impl Agent {
 
     /// Syncs the inbox when due ([`inbox::sync`]); first reports a finished factory reset `done`.
     /// A failure keeps `sync_inbox` set and retries after the backoff (ruling 59) until one sync
-    /// succeeds; a 401 on the fetch token also syncs settings, which switches tokens.
+    /// succeeds; a 401 on the fetch token also syncs settings, which switches tokens. A 404
+    /// `not_available` is no failure: the next sync is 6 h later (jittered), the backoff unchanged.
     async fn maybe_sync_inbox(&mut self) {
         // Exam quiet: no fetch, and `sync_inbox` stays set so the sync happens once the quiet ends
         // (the `reset_done` ack below is skipped as well).
@@ -1344,6 +1352,18 @@ impl Agent {
                 self.inbox_attempt = 0;
                 self.inbox_retry = None;
             }
+            Some(e) if e.downcast_ref::<crate::fetch::NotAvailable>().is_some() => {
+                let d = crate::backoff::jittered(
+                    crate::fetch::NOT_AVAILABLE_RETRY,
+                    self.cfg.jitter.unit(),
+                );
+                log::info!(
+                    "inbox: the server does not offer the inbox yet; asking again in {} min",
+                    d.as_secs() / 60
+                );
+                self.inbox_retry = Some(later(d));
+                self.sync_inbox = true;
+            }
             Some(e) => {
                 log::warn!("inbox sync failed: {e:#}");
                 if e.downcast_ref::<crate::fetch::Unauthorized>().is_some() {
@@ -1380,6 +1400,7 @@ impl Agent {
             lab: crate::luks::image_is_lab(&self.cfg.root),
             persist,
             upload_queue: crate::upload::queue::Queue::new(&self.cfg.state_dir),
+            help_available: crate::support::HELP_AVAILABLE,
         }
     }
 
@@ -1419,8 +1440,8 @@ impl Agent {
             }
             PushEvent::Status(i) => {
                 // A 401 on the grant is the fetch's 401 (spec §6.2): the sync that follows meets
-                // it on `/v1/bundle` and switches tokens there (`on_unauthorized`); the MQTT task
-                // shares the fetcher's token.
+                // it on `/api/device/v1/bundle` and switches tokens there (`on_unauthorized`); the
+                // MQTT task shares the fetcher's token.
                 if i.detail.as_deref() == Some(push::TOKEN_UNAUTHORIZED) {
                     self.sync_settings = true;
                 }
@@ -1441,12 +1462,32 @@ impl Agent {
         let r = self.status_report();
         report::save_last(&self.cfg.state_dir, &r);
         let lab = crate::luks::image_is_lab(&self.cfg.root);
-        let cred = self.device_cred();
-        let sent = self.fetcher.report(&r, cred.as_ref(), lab).await;
-        if let Err(e) = &sent {
-            log::warn!("failed to report status: {e:#}");
+        let sent = match self.device_cred() {
+            Some(cred) => self.fetcher.report(&r, &cred, lab).await,
+            None => Err(StatusNotSent::NoIdentity.into()),
+        };
+        match &sent {
+            Ok(()) => self.status_not_sent = None,
+            Err(e) => match e.downcast_ref::<StatusNotSent>() {
+                Some(cause) => {
+                    if self.note_not_sent(*cause) {
+                        log::warn!("{e}");
+                    }
+                }
+                None => log::warn!("failed to report status: {e:#}"),
+            },
         }
         sent
+    }
+
+    /// Records why a report was not sent; true when the cause differs from the last one logged,
+    /// i.e. a log line is due (one per distinct cause, not one per attempt).
+    fn note_not_sent(&mut self, cause: StatusNotSent) -> bool {
+        if self.status_not_sent == Some(cause) {
+            return false;
+        }
+        self.status_not_sent = Some(cause);
+        true
     }
 
     /// 这一刻要回报的内容。
@@ -1944,7 +1985,7 @@ impl Agent {
                     ),
                 }
             }
-            Ok(crate::fetch::RenewOutcome::Refused(m)) => failed("fetch-token", m),
+            Ok(crate::fetch::RenewOutcome::Refused(m)) => failed("fetch-token", m.to_string()),
             Err(e) => failed("fetch-token", format!("{e:#}")),
         };
         log::info!(
@@ -2209,7 +2250,7 @@ mod tests {
     async fn inbox_server() -> MockServer {
         let srv = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/v1/inbox"))
+            .and(path("/api/device/v1/inbox"))
             .respond_with(ResponseTemplate::new(200).set_body_json(InboxPage {
                 messages: vec![],
                 last_seq: 0,
@@ -2224,7 +2265,7 @@ mod tests {
             .await
             .unwrap()
             .iter()
-            .filter(|r| r.url.path() == "/v1/inbox")
+            .filter(|r| r.url.path() == "/api/device/v1/inbox")
             .count()
     }
 
@@ -2305,12 +2346,81 @@ mod tests {
         assert!(agent.inbox_retry_due().is_some());
     }
 
+    /// The server does not offer the inbox yet (404 `not_available`): the next sync in 6 h, and
+    /// not counted as a failure.
+    #[tokio::test]
+    async fn inbox_not_available_retries_in_six_hours() {
+        let (dir, srv) = (tempfile::tempdir().unwrap(), MockServer::start().await);
+        Mock::given(method("GET"))
+            .and(path("/api/device/v1/inbox"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!(
+                {"error": {"code": "not_available", "message": "not offered"}}
+            )))
+            .mount(&srv)
+            .await;
+        let mut agent = inbox_agent(dir.path(), &srv).await;
+        agent.cfg.jitter = crate::backoff::Jitter::fixed(0.5);
+        agent.sync_inbox = true;
+        agent.sync_settings = false;
+        agent.maybe_sync_inbox().await;
+        assert_eq!(inbox_gets(&srv).await, 1);
+        let want = Instant::now() + Duration::from_secs(6 * 3600);
+        let got = agent.inbox_retry.expect("a retry is set");
+        let off = if got > want { got - want } else { want - got };
+        assert!(off <= Duration::from_secs(1), "off by {off:?}");
+        assert_eq!(agent.inbox_attempt, 0);
+        assert!(agent.sync_inbox);
+        assert!(!agent.sync_settings);
+    }
+
+    /// Without a device identity nothing is sent, and the cause is logged once.
+    #[tokio::test]
+    async fn no_status_without_device_identity_logs_once() {
+        let (dir, srv) = (tempfile::tempdir().unwrap(), inbox_server().await);
+        let mut agent = inbox_agent(dir.path(), &srv).await;
+        agent.mode = Mode::Resident;
+        agent.reports_held = false;
+        agent.identity = None;
+        assert!(agent.device_cred().is_none());
+        assert_eq!(agent.status_not_sent, None);
+        for _ in 0..3 {
+            let e = agent.report().await.unwrap_err();
+            assert_eq!(
+                e.downcast_ref::<StatusNotSent>(),
+                Some(&StatusNotSent::NoIdentity)
+            );
+            assert_eq!(agent.status_not_sent, Some(StatusNotSent::NoIdentity));
+        }
+        let posts = srv
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.url.path() == "/api/device/v1/status")
+            .count();
+        assert_eq!(posts, 0);
+    }
+
+    /// One log line per distinct cause, reset by a sent report.
+    #[tokio::test]
+    async fn not_sent_causes_are_logged_once_each() {
+        let (dir, srv) = (tempfile::tempdir().unwrap(), inbox_server().await);
+        let mut agent = inbox_agent(dir.path(), &srv).await;
+        assert!(agent.note_not_sent(StatusNotSent::NoIdentity));
+        assert!(!agent.note_not_sent(StatusNotSent::NoIdentity));
+        assert!(!agent.note_not_sent(StatusNotSent::NoIdentity));
+        assert!(agent.note_not_sent(StatusNotSent::Transport));
+        // A sent report clears the field (what `report` does on Ok).
+        agent.status_not_sent = None;
+        assert!(agent.note_not_sent(StatusNotSent::NoIdentity));
+    }
+
     /// Entering the quiet is reported at once (IT sees the exam), not at the next periodic report.
     #[tokio::test]
     async fn quiet_change_reports_at_once() {
         let (dir, srv) = (tempfile::tempdir().unwrap(), inbox_server().await);
         Mock::given(method("POST"))
-            .and(path("/v1/status"))
+            .and(path("/api/device/v1/status"))
             .respond_with(ResponseTemplate::new(200))
             .mount(&srv)
             .await;
@@ -2337,7 +2447,7 @@ mod tests {
             .await
             .unwrap()
             .iter()
-            .filter(|r| r.url.path() == "/v1/status")
+            .filter(|r| r.url.path() == "/api/device/v1/status")
             .map(|r| serde_json::from_slice(&r.body).unwrap())
             .collect();
         assert_eq!(reports.len(), 1, "{reports:?}");

@@ -114,7 +114,7 @@ pub struct State {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SeedImport {
     pub at: DateTime<Utc>,
-    /// 每把 trust 钥匙的指纹（`mastersos_bundle::trust_fingerprint`，与 `mastersos-sign seed-check` 相同）。
+    /// 每把 trust 钥匙的指纹（`mastersos_bundle::trust_fingerprint`，与 `mastersos seed check` 相同）。
     pub trust_fingerprints: Vec<String>,
 }
 

@@ -199,13 +199,13 @@ agent 的后台任务 `luks`（每小时一次，网络连上时也提前跑；�
    `cryptsetup open --test-passphrase --disable-external-tokens --key-file=-` 核对它真能解开分区——**不加
    `--disable-external-tokens` 时 cryptsetup 先试 TPM token，任何口令都「通过」**（VM 168 实测）——再写进
    `escrow-pending.json`（0600），然后才托管。服务器连不上时下一轮拿同一把重试，不会再登记一把。
-2. 托管（`POST /v1/escrow`）。204 才记下 `escrowed_luks_uuid`、删待托管文件；403、429、连不上都回报 `luks:escrow` 失败
+2. 托管（`POST /api/device/v1/escrow`）。204 才记下 `escrowed_luks_uuid`、删待托管文件；403、429、连不上都回报 `luks:escrow` 失败
    （带状态码与服务端的说明），不往下走。第一份状态回报等这一步的第一轮跑完（最多 90 秒；拉取与应用不等）。
    **托管只走 https**（终审 I4）：种子的 `server_url` 不是 `https://` 时，正式镜像的 agent 连第 1 步都不做、已有的待托管
    密钥也不发，回报 `luks:escrow` 失败「托管被拒（本机）：…只经 https 发送…」，pcrlock 因此一直不绑。例外只有 lab 镜像
    （签名 `/usr` 里构建时写下的 `/usr/lib/mastersos/profile` 是 `lab`；读不到按正式镜像）。本机回环地址（`127.0.0.1`、`::1`、
    `localhost`）在 4b 起也不再例外（Ruling 27）：测试在临时 root 里写 `usr/lib/mastersos/profile = lab`。换领 `fetch_token`
-   （`POST /v1/fetch-token`，请求体里有托管凭据）走同样的规则、同样不跟随重定向。mastersos-server 的 `public_url` 不是 https 时启动打一行警告（不拒绝：试验网就是 http）。
+   （`POST /api/device/v1/fetch-token`，请求体里有托管凭据）走同样的规则、同样不跟随重定向。mastersos-server 的 `public_url` 不是 https 时启动打一行警告（不拒绝：试验网就是 http）。
    托管请求**不跟随重定向**（3xx 当被拒：307/308 会带着请求体重发到 Location）；agent 别的 HTTP 请求（拉包、心跳、回报、
    设置包里的文件、Chrome 的源）跟随重定向，但一旦走过 https 就不许跳回 http。lab 的判断只看签名的 `/usr`，种子与 `/var`
    都改不了它。

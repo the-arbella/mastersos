@@ -40,6 +40,9 @@ pub struct ApplyRequest {
     pub phase: Phase,
     pub managed_paths: BTreeMap<String, String>,
     pub script_hashes: BTreeMap<String, String>,
+    /// The main loop's fetch token, read at each download ([`crate::fetch::TokenSource`]), for
+    /// [`ApplyContext::fetch_token`]: a retry after a token switch sends the new token.
+    pub fetch_token: Option<crate::fetch::TokenSource>,
 }
 
 #[derive(Debug, Clone)]
@@ -336,6 +339,7 @@ impl Worker {
             flag.clone(),
             quiet.clone(),
         );
+        let token = req.fetch_token.clone();
         let mut results = tokio::task::spawn_blocking(move || {
             let m = &b.manifest;
             let sel = select(m, &ident, seed.group.as_deref());
@@ -352,6 +356,7 @@ impl Worker {
                 device: sel.device,
                 ident: &ident,
                 manifest: Some(m),
+                fetch_token: token.as_ref(),
             })
         })
         .await
@@ -476,6 +481,7 @@ mod tests {
             phase: Phase::Full,
             managed_paths: BTreeMap::new(),
             script_hashes: BTreeMap::new(),
+            fetch_token: None,
         }
     }
 

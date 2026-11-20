@@ -48,6 +48,25 @@ enum Cmd {
     },
     /// Builds and merges the .deb app extensions once, then exits (mastersos-deb-apps.service). Exit code 1 when an app failed.
     DebApps,
+    /// Runs one protocol v1 network cycle against the server named by a seed and reports each call
+    /// (needs no root; uses neither --state-dir nor --seed-dir). Exit code 1 when a call failed.
+    ProtocolCheck {
+        /// The seed file (seed.toml).
+        #[arg(long)]
+        seed: PathBuf,
+        /// The working folder; the check writes only under it and reuses it on a re-run.
+        #[arg(long)]
+        state: PathBuf,
+        /// Prints one JSON object instead of one line per call.
+        #[arg(long)]
+        json: bool,
+        /// A recovery key file to escrow (a throwaway key; its text is never printed).
+        #[arg(long, requires = "luks_uuid")]
+        recovery_key: Option<PathBuf>,
+        /// The LUKS UUID the recovery key belongs to.
+        #[arg(long, requires = "recovery_key")]
+        luks_uuid: Option<String>,
+    },
     /// Remote diagnostics.
     Diag {
         #[command(subcommand)]
@@ -314,6 +333,47 @@ async fn agent_main() -> anyhow::Result<()> {
             let env = round::RoundEnv::production(Arc::new(RealRunner))?;
             let results = round::run_once(&env).await;
             if results.iter().any(|r| r.state == AppState::Failed) {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
+        Cmd::ProtocolCheck {
+            seed,
+            state,
+            json,
+            recovery_key,
+            luks_uuid,
+        } => {
+            use mastersos_agent::protocol_check::{run_check, CheckInput};
+            let input = CheckInput {
+                seed,
+                dir: state,
+                recovery_key,
+                luks_uuid,
+            };
+            let report = run_check(&input, chrono::Utc::now()).await;
+            if json {
+                println!("{}", serde_json::to_string(&report)?);
+            } else {
+                for c in &report.calls {
+                    let verdict = if c.skipped {
+                        "skipped"
+                    } else if c.ok {
+                        "ok"
+                    } else {
+                        "FAIL"
+                    };
+                    println!(
+                        "{} {} {} {} {}",
+                        c.step,
+                        c.route.as_deref().unwrap_or("-"),
+                        c.status.map_or("-".to_string(), |s| s.to_string()),
+                        verdict,
+                        c.detail
+                    );
+                }
+            }
+            if !report.ok {
                 std::process::exit(1);
             }
             Ok(())

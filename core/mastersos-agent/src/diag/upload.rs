@@ -1,5 +1,5 @@
-//! The three-step diagnostics upload (spec「接口: 上传」): `POST /v1/diagnostics` →
-//! presigned `PUT` to S3 → `POST /v1/diagnostics/{id}/complete`.
+//! The three-step diagnostics upload (spec「接口: 上传」): `POST /api/device/v1/diagnostics` →
+//! presigned `PUT` to S3 → `POST /api/device/v1/diagnostics/{id}/complete`.
 //!
 //! A round starts at step 1 and every round gets a new URL. A round starts again when the
 //! complete call says `upload_mismatch`, when the URL's `expires_in` has passed on the
@@ -49,7 +49,7 @@ pub async fn upload(
             // diag_upload_url only returns answers with complete or upload.
             return Err(DiagUploadError::new(
                 ErrorAction::Backoff,
-                "POST /v1/diagnostics: the answer has no upload",
+                "POST /api/device/v1/diagnostics: the answer has no upload",
             ));
         };
         if asked.elapsed() >= Duration::from_secs(u.expires_in) {

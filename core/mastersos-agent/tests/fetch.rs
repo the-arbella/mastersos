@@ -22,14 +22,14 @@ fn seed(url: &str, token: Option<&str>) -> Seed {
 async fn fetch_without_token_sends_no_auth() {
     let srv = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/v1/bundle"))
+        .and(path("/api/device/v1/bundle"))
         .respond_with(ResponseTemplate::new(204))
         .mount(&srv)
         .await;
     let f = Fetcher::from_seed(&seed(&format!("{}/", srv.uri()), None));
     assert_eq!(f.fetch_now(0).await.unwrap(), FetchOutcome::NoChange);
     let reqs = srv.received_requests().await.unwrap();
-    assert_eq!(reqs[0].url.path(), "/v1/bundle");
+    assert_eq!(reqs[0].url.path(), "/api/device/v1/bundle");
     assert!(reqs[0].headers.get("authorization").is_none());
 }
 
@@ -88,105 +88,82 @@ async fn fetch_aborts_oversized_body() {
     assert!(err.to_string().contains("size limit"), "{err}");
 }
 
+async fn status_mock(srv: &MockServer, status: u16, expect: u64) {
+    Mock::given(method("POST"))
+        .and(path("/api/device/v1/status"))
+        .respond_with(ResponseTemplate::new(status))
+        .expect(expect)
+        .mount(srv)
+        .await;
+}
+
 #[tokio::test]
-async fn report_posts_json_with_token() {
+async fn status_always_carries_the_device_headers() {
     let srv = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/status"))
+        .and(path("/api/device/v1/status"))
         .and(header("authorization", "Bearer tok"))
+        .and(header("x-mastersos-device", "dev-1"))
+        .and(header("x-mastersos-device-secret", "S".repeat(43).as_str()))
         .respond_with(ResponseTemplate::new(204))
         .expect(1)
         .mount(&srv)
         .await;
     let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
-    let r = StatusReport {
-        device_id: "d".into(),
-        serial: None,
-        model: None,
-        os_version: None,
-        agent_version: "0.1.0".into(),
-        bundle_version: Some(1),
-        group: "default".into(),
-        group_source: GroupSource::Default,
-        locked: false,
-        stale: false,
-        last_fetch_ok: None,
-        results: vec![],
-        fresh_until: None,
-        newer_withheld: None,
-        seed_trust_fingerprints: vec![],
-        imported_from_seed_at: None,
-        manifest_features: vec![],
-        os_pending_version: None,
-        quiet_since: None,
-        user_config: None,
-    };
-    f.report(&r, None, false).await.unwrap();
+    f.report(&status_report(), &cred(), true).await.unwrap();
     let body: serde_json::Value =
         serde_json::from_slice(&srv.received_requests().await.unwrap()[0].body).unwrap();
-    assert_eq!(body["device_id"], "d");
+    assert_eq!(body["device_id"], "dev-1");
 }
 
-/// The device headers ride along where the secret may travel (here http, so only on a lab
-/// image); elsewhere the report still goes, without them.
 #[tokio::test]
-async fn report_carries_device_headers_where_the_secret_may_travel() {
+async fn status_over_http_on_a_release_image_is_not_sent() {
     let srv = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/v1/status"))
-        .respond_with(ResponseTemplate::new(204))
-        .expect(2)
-        .mount(&srv)
-        .await;
+    status_mock(&srv, 204, 0).await;
     let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
-    let cred = mastersos_agent::fetch::DeviceCred {
-        device_id: "d".into(),
-        secret: "s3cret".into(),
+    let e = f
+        .report(&status_report(), &cred(), false)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        e.downcast_ref::<StatusNotSent>(),
+        Some(&StatusNotSent::Transport)
+    );
+    assert!(srv.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn status_over_http_on_a_lab_image_is_sent() {
+    let srv = MockServer::start().await;
+    status_mock(&srv, 204, 1).await;
+    let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
+    f.report(&status_report(), &cred(), true).await.unwrap();
+}
+
+#[tokio::test]
+async fn status_for_another_device_is_not_sent() {
+    let srv = MockServer::start().await;
+    status_mock(&srv, 204, 0).await;
+    let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
+    let other = DeviceCred {
+        device_id: "dev-2".into(),
+        secret: "S".repeat(43),
     };
-    let r = StatusReport {
-        device_id: "d".into(),
-        serial: None,
-        model: None,
-        os_version: None,
-        agent_version: "0.1.0".into(),
-        bundle_version: None,
-        group: "default".into(),
-        group_source: GroupSource::Default,
-        locked: false,
-        stale: false,
-        last_fetch_ok: None,
-        results: vec![],
-        fresh_until: None,
-        newer_withheld: None,
-        seed_trust_fingerprints: vec![],
-        imported_from_seed_at: None,
-        manifest_features: vec![],
-        os_pending_version: None,
-        quiet_since: None,
-        user_config: None,
-    };
-    f.report(&r, Some(&cred), true).await.unwrap();
-    f.report(&r, Some(&cred), false).await.unwrap();
-    let got = srv.received_requests().await.unwrap();
-    let h = |i: usize, n: &str| {
-        got[i]
-            .headers
-            .get(n)
-            .map(|v| v.to_str().unwrap().to_owned())
-    };
-    assert_eq!(h(0, "x-mastersos-device").as_deref(), Some("d"));
-    assert_eq!(h(0, "x-mastersos-device-secret").as_deref(), Some("s3cret"));
-    assert_eq!(h(1, "x-mastersos-device"), None);
-    assert_eq!(h(1, "x-mastersos-device-secret"), None);
+    let e = f.report(&status_report(), &other, true).await.unwrap_err();
+    assert_eq!(
+        e.downcast_ref::<StatusNotSent>(),
+        Some(&StatusNotSent::OtherDevice)
+    );
+    assert!(srv.received_requests().await.unwrap().is_empty());
 }
 
 /// A report carrying the device secret never follows a redirect: the secret stays with the
 /// configured server.
 #[tokio::test]
-async fn report_with_device_headers_does_not_follow_redirects() {
+async fn status_does_not_follow_redirects() {
     let srv = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/status"))
+        .and(path("/api/device/v1/status"))
         .respond_with(ResponseTemplate::new(307).insert_header("location", "/elsewhere"))
         .mount(&srv)
         .await;
@@ -197,80 +174,42 @@ async fn report_with_device_headers_does_not_follow_redirects() {
         .mount(&srv)
         .await;
     let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
-    let cred = mastersos_agent::fetch::DeviceCred {
-        device_id: "d".into(),
-        secret: "s3cret".into(),
-    };
-    let r: StatusReport = serde_json::from_value(serde_json::json!({
-        "device_id": "d",
-        "agent_version": "0.1.0",
-        "group": "default",
-        "group_source": "default",
-        "locked": false,
-        "stale": false,
-        "results": [],
-    }))
-    .unwrap();
-    assert!(f.report(&r, Some(&cred), true).await.is_err());
+    assert!(f.report(&status_report(), &cred(), true).await.is_err());
 }
 
 #[tokio::test]
-async fn report_rejection_is_error() {
+async fn status_rejection_is_error() {
     let srv = MockServer::start().await;
-    Mock::given(method("POST"))
-        .respond_with(ResponseTemplate::new(401))
-        .mount(&srv)
-        .await;
+    status_mock(&srv, 401, 1).await;
     let f = Fetcher::from_seed(&seed(&srv.uri(), None));
-    let r = StatusReport {
-        device_id: "d".into(),
-        serial: None,
-        model: None,
-        os_version: None,
-        agent_version: "0.1.0".into(),
-        bundle_version: None,
-        group: "default".into(),
-        group_source: GroupSource::Default,
-        locked: false,
-        stale: false,
-        last_fetch_ok: None,
-        results: vec![],
-        fresh_until: None,
-        newer_withheld: None,
-        seed_trust_fingerprints: vec![],
-        imported_from_seed_at: None,
-        manifest_features: vec![],
-        os_pending_version: None,
-        quiet_since: None,
-        user_config: None,
-    };
-    assert!(f.report(&r, None, false).await.is_err());
+    let e = f.report(&status_report(), &cred(), true).await.unwrap_err();
+    assert!(e.downcast_ref::<StatusNotSent>().is_none(), "{e:#}");
 }
 
 #[tokio::test]
 async fn heartbeat_fetch_outcomes() {
     let srv = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/v1/heartbeat"))
+        .and(path("/api/device/v1/heartbeat"))
         .and(header("authorization", "Bearer tok"))
         .respond_with(ResponseTemplate::new(200).set_body_string("[statement]\n"))
         .up_to_n_times(1)
         .mount(&srv)
         .await;
     Mock::given(method("GET"))
-        .and(path("/v1/heartbeat"))
+        .and(path("/api/device/v1/heartbeat"))
         .respond_with(ResponseTemplate::new(204))
         .up_to_n_times(1)
         .mount(&srv)
         .await;
     Mock::given(method("GET"))
-        .and(path("/v1/heartbeat"))
+        .and(path("/api/device/v1/heartbeat"))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![b'a'; 17 * 1024]))
         .up_to_n_times(1)
         .mount(&srv)
         .await;
     Mock::given(method("GET"))
-        .and(path("/v1/heartbeat"))
+        .and(path("/api/device/v1/heartbeat"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&srv)
         .await;
@@ -307,7 +246,7 @@ fn escrow_req() -> mastersos_bundle::EscrowRequest {
 async fn escrow_posts_with_token_and_reports_rejections() {
     let srv = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/escrow"))
+        .and(path("/api/device/v1/escrow"))
         .and(header("authorization", "Bearer tok"))
         .respond_with(ResponseTemplate::new(204))
         .up_to_n_times(1)
@@ -318,7 +257,7 @@ async fn escrow_posts_with_token_and_reports_rejections() {
         (429, "已到上限"),
     ] {
         Mock::given(method("POST"))
-            .and(path("/v1/escrow"))
+            .and(path("/api/device/v1/escrow"))
             .respond_with(
                 ResponseTemplate::new(code).set_body_json(serde_json::json!({
                     "error": {"code": "x", "message": msg}
@@ -329,7 +268,7 @@ async fn escrow_posts_with_token_and_reports_rejections() {
             .await;
     }
     Mock::given(method("POST"))
-        .and(path("/v1/escrow"))
+        .and(path("/api/device/v1/escrow"))
         .respond_with(ResponseTemplate::new(500).set_body_string("<html>oops</html>"))
         .mount(&srv)
         .await;
@@ -421,7 +360,7 @@ async fn escrow_does_not_follow_redirects() {
     let srv = MockServer::start().await;
     for code in [301u16, 302, 307, 308] {
         Mock::given(method("POST"))
-            .and(path("/v1/escrow"))
+            .and(path("/api/device/v1/escrow"))
             .respond_with(
                 ResponseTemplate::new(code)
                     .insert_header("location", format!("{}/elsewhere", srv.uri())),
@@ -450,32 +389,35 @@ fn redirects_never_downgrade_from_https() {
     let u = |s: &str| reqwest::Url::parse(s).unwrap();
     for (prev, next, ok) in [
         (
-            vec!["https://a.example/v1/bundle"],
+            vec!["https://a.example/api/device/v1/bundle"],
             "https://b.example/x",
             true,
         ),
         (
-            vec!["https://a.example/v1/bundle"],
+            vec!["https://a.example/api/device/v1/bundle"],
             "http://a.example/x",
             false,
         ),
         (
-            vec!["https://a.example/v1/bundle", "https://a.example/y"],
+            vec![
+                "https://a.example/api/device/v1/bundle",
+                "https://a.example/y",
+            ],
             "http://127.0.0.1/x",
             false,
         ),
         (
-            vec!["http://127.0.0.1:1/v1/bundle"],
+            vec!["http://127.0.0.1:1/api/device/v1/bundle"],
             "http://127.0.0.1:1/x",
             true,
         ),
         (
-            vec!["http://127.0.0.1:1/v1/bundle"],
+            vec!["http://127.0.0.1:1/api/device/v1/bundle"],
             "https://a.example/x",
             true,
         ),
         (
-            vec!["https://a.example/v1/bundle"],
+            vec!["https://a.example/api/device/v1/bundle"],
             "ftp://a.example/x",
             false,
         ),
@@ -523,13 +465,13 @@ async fn release_image_refuses_loopback_http_escrow() {
 async fn clone_sees_set_token_and_stale() {
     let srv = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/v1/heartbeat"))
+        .and(path("/api/device/v1/heartbeat"))
         .and(header("authorization", "Bearer old"))
         .respond_with(ResponseTemplate::new(204).insert_header("x-mastersos-fetch-token", "stale"))
         .mount(&srv)
         .await;
     Mock::given(method("GET"))
-        .and(path("/v1/heartbeat"))
+        .and(path("/api/device/v1/heartbeat"))
         .and(header("authorization", "Bearer new"))
         .respond_with(ResponseTemplate::new(204))
         .mount(&srv)
@@ -561,7 +503,7 @@ async fn renew_token_outcomes() {
     use mastersos_agent::fetch::RenewOutcome;
     let srv = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/fetch-token"))
+        .and(path("/api/device/v1/fetch-token"))
         .and(header("authorization", "Bearer old"))
         .respond_with(
             ResponseTemplate::new(200)
@@ -571,7 +513,7 @@ async fn renew_token_outcomes() {
         .mount(&srv)
         .await;
     Mock::given(method("POST"))
-        .and(path("/v1/fetch-token"))
+        .and(path("/api/device/v1/fetch-token"))
         .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
             "error": {"code": "forbidden", "message": "这台机器不能换领新令牌"}
         })))
@@ -579,7 +521,7 @@ async fn renew_token_outcomes() {
         .mount(&srv)
         .await;
     Mock::given(method("POST"))
-        .and(path("/v1/fetch-token"))
+        .and(path("/api/device/v1/fetch-token"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(serde_json::json!({"fetch_token": "bad token\n"})),
@@ -588,7 +530,7 @@ async fn renew_token_outcomes() {
         .mount(&srv)
         .await;
     Mock::given(method("POST"))
-        .and(path("/v1/fetch-token"))
+        .and(path("/api/device/v1/fetch-token"))
         .respond_with(
             ResponseTemplate::new(307)
                 .insert_header("location", format!("{}/elsewhere", srv.uri())),
@@ -614,7 +556,7 @@ async fn renew_token_outcomes() {
         serde_json::json!({"device_id": "dev-1", "escrow_secret": id.escrow_secret})
     );
     match f.renew_token(&id, true).await.unwrap() {
-        RenewOutcome::Refused(m) => assert_eq!(m, "这台机器不能换领新令牌"),
+        RenewOutcome::Refused(m) => assert_eq!(m.to_string(), "这台机器不能换领新令牌"),
         other => panic!("{other:?}"),
     }
     for _ in 0..2 {
@@ -645,13 +587,45 @@ async fn fetch_401_is_recognizable() {
     );
 }
 
+/// A bundle 401 is still [`Unauthorized`] for the main loop and also carries the server's JSON
+/// code ([`ServerRefused`]); a text body gives no code.
+#[tokio::test]
+async fn fetch_401_carries_the_server_code() {
+    let srv = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(query_param("after", "1"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+            "error": { "code": "unauthorized", "message": "no" }
+        })))
+        .mount(&srv)
+        .await;
+    Mock::given(method("GET"))
+        .and(query_param("after", "2"))
+        .respond_with(ResponseTemplate::new(401).set_body_string("nope"))
+        .mount(&srv)
+        .await;
+    let f = Fetcher::new(&seed(&srv.uri(), None), Some("t".into()));
+    for (after, code) in [(1, Some("unauthorized")), (2, None)] {
+        let e = f.fetch_now(after).await.unwrap_err();
+        assert!(
+            e.downcast_ref::<mastersos_agent::fetch::Unauthorized>()
+                .is_some(),
+            "{e:#}"
+        );
+        let r = e
+            .downcast_ref::<mastersos_agent::fetch::ServerRefused>()
+            .unwrap();
+        assert_eq!((r.status, r.code.as_deref()), (401, code));
+    }
+}
+
 /// m4: a stale mark carried back by a request sent before the token was switched (still in
 /// flight) speaks of the old token and is ignored.
 #[tokio::test]
 async fn stale_header_for_superseded_token_is_ignored() {
     let srv = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/v1/bundle"))
+        .and(path("/api/device/v1/bundle"))
         .and(header("authorization", "Bearer old"))
         .respond_with(
             ResponseTemplate::new(204)
@@ -674,7 +648,9 @@ async fn stale_header_for_superseded_token_is_ignored() {
 
 // ---------- MQTT push calls ----------
 
-use mastersos_agent::fetch::{CredRejected, DeviceAuthMissing, DeviceCred, Unauthorized};
+use mastersos_agent::fetch::{
+    CredRejected, DeviceAuthMissing, DeviceCred, StatusNotSent, Unauthorized,
+};
 use mastersos_bundle::{InboxResult, InboxResultState};
 
 fn cred() -> DeviceCred {
@@ -685,12 +661,11 @@ fn cred() -> DeviceCred {
 }
 
 #[tokio::test]
-async fn fetch_now_sends_wait0() {
+async fn fetch_now_reads_the_stale_header() {
     let srv = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/v1/bundle"))
+        .and(path("/api/device/v1/bundle"))
         .and(query_param("after", "5"))
-        .and(query_param("wait", "0"))
         .and(header("authorization", "Bearer tok"))
         .respond_with(ResponseTemplate::new(204).insert_header("x-mastersos-fetch-token", "stale"))
         .expect(1)
@@ -705,7 +680,7 @@ async fn fetch_now_sends_wait0() {
 async fn fetch_now_200_and_401() {
     let srv = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/v1/bundle"))
+        .and(path("/api/device/v1/bundle"))
         .and(header("authorization", "Bearer good"))
         .respond_with(
             ResponseTemplate::new(200)
@@ -715,7 +690,7 @@ async fn fetch_now_200_and_401() {
         .mount(&srv)
         .await;
     Mock::given(method("GET"))
-        .and(path("/v1/bundle"))
+        .and(path("/api/device/v1/bundle"))
         .respond_with(ResponseTemplate::new(401))
         .mount(&srv)
         .await;
@@ -736,7 +711,7 @@ async fn fetch_now_200_and_401() {
 async fn push_token_sends_cred_and_parses() {
     let srv = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/push-token"))
+        .and(path("/api/device/v1/push-token"))
         .and(header("authorization", "Bearer tok"))
         .and(wiremock::matchers::body_json(serde_json::json!({
             "device_id": "dev-1", "secret": "S".repeat(43)
@@ -781,7 +756,7 @@ async fn push_token_error_statuses() {
 async fn inbox_sends_device_headers() {
     let srv = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/v1/inbox"))
+        .and(path("/api/device/v1/inbox"))
         .and(query_param("after", "2"))
         .and(header("authorization", "Bearer tok"))
         .and(header("x-mastersos-device", "dev-1"))
@@ -840,7 +815,7 @@ async fn inbox_result_posts_and_409_is_ok() {
     ] {
         let srv = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/v1/inbox/7/result"))
+            .and(path("/api/device/v1/inbox/7/result"))
             .and(header("authorization", "Bearer tok"))
             .and(header("x-mastersos-device", "dev-1"))
             .and(header("x-mastersos-device-secret", "S".repeat(43).as_str()))
@@ -932,7 +907,7 @@ async fn device_secret_refused_over_http_on_release_image() {
 async fn device_secret_allowed_over_http_on_lab_image() {
     let srv = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1/inbox/1/result"))
+        .and(path("/api/device/v1/inbox/1/result"))
         .respond_with(ResponseTemplate::new(204))
         .expect(1)
         .mount(&srv)
@@ -972,7 +947,7 @@ fn bundle_download_bounds_are_pinned() {
 async fn fetch_now_outlasts_the_short_timeout() {
     let srv = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/v1/bundle"))
+        .and(path("/api/device/v1/bundle"))
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("X-Mastersos-Version", "2")
@@ -989,4 +964,483 @@ async fn fetch_now_outlasts_the_short_timeout() {
             version: 2
         }
     );
+}
+
+fn status_report() -> StatusReport {
+    StatusReport {
+        device_id: "dev-1".into(),
+        serial: None,
+        model: None,
+        os_version: None,
+        agent_version: "0.1.0".into(),
+        bundle_version: Some(1),
+        group: "default".into(),
+        group_source: GroupSource::Default,
+        locked: false,
+        stale: false,
+        last_fetch_ok: None,
+        results: vec![],
+        fresh_until: None,
+        newer_withheld: None,
+        seed_trust_fingerprints: vec![],
+        imported_from_seed_at: None,
+        manifest_features: vec![],
+        os_pending_version: None,
+        quiet_since: None,
+        user_config: None,
+    }
+}
+
+#[test]
+fn device_base_keeps_only_the_origin() {
+    use mastersos_agent::fetch::device_base;
+    for (url, want) in [
+        (
+            "https://server.example",
+            "https://server.example/api/device/v1/",
+        ),
+        (
+            "https://server.example/",
+            "https://server.example/api/device/v1/",
+        ),
+        (
+            "http://127.0.0.1:8480",
+            "http://127.0.0.1:8480/api/device/v1/",
+        ),
+        (
+            "https://server.example/org/x/devices",
+            "https://server.example/api/device/v1/",
+        ),
+        (
+            "https://server.example:8443/a?b=1#c",
+            "https://server.example:8443/api/device/v1/",
+        ),
+        ("not a url/", "not a url/api/device/v1/"),
+    ] {
+        assert_eq!(device_base(url), want, "{url}");
+    }
+}
+
+#[tokio::test]
+async fn bundle_request_has_no_wait_parameter() {
+    let srv = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&srv)
+        .await;
+    let f = Fetcher::from_seed(&seed(&srv.uri(), None));
+    f.fetch_now(4).await.unwrap();
+    let reqs = srv.received_requests().await.unwrap();
+    assert_eq!(reqs[0].url.path(), "/api/device/v1/bundle");
+    assert_eq!(reqs[0].url.query(), Some("after=4"));
+}
+
+#[tokio::test]
+async fn every_route_is_under_the_device_prefix() {
+    use mastersos_bundle::diag::{DiagUploadRequest, SupportRequest};
+    let srv = MockServer::start().await;
+    Mock::given(wiremock::matchers::any())
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&srv)
+        .await;
+    // An older seed may still carry a path: it is dropped.
+    let f = Fetcher::from_seed(&seed(&format!("{}/org/x/devices/", srv.uri()), Some("tok")));
+    // Answers are not the point here (204 is no valid body for some calls); the routes are.
+    let _ = f.fetch_now(1).await;
+    let _ = f.heartbeat().await;
+    let _ = f.report(&status_report(), &cred(), true).await;
+    let _ = f.escrow(&escrow_req(), true).await;
+    let _ = f.renew_token(&identity(), true).await;
+    let _ = f.push_token(&cred(), true).await;
+    let _ = f.inbox(&cred(), 0, true).await;
+    let done = InboxResult {
+        state: InboxResultState::Done,
+        detail: None,
+    };
+    let _ = f.inbox_result(&cred(), 7, &done, true).await;
+    let up = DiagUploadRequest::Inbox {
+        inbox_seq: 7,
+        bytes: 1,
+        sha256: "a".repeat(64),
+    };
+    let _ = f.diag_upload_url(&cred(), &up, true).await;
+    let _ = f.diag_complete(&cred(), "d1", true).await;
+    let support: SupportRequest = serde_json::from_value(serde_json::json!({
+        "client_id": "0192f3a4-5b6c-7d8e-9f00-112233445566", "category": "wifi", "text": "",
+        "user": {"kind": "none"}, "session": "login", "created_at": "2026-11-05T00:00:00Z",
+        "snapshot": {"os_version": "1"}, "screenshot": false,
+    }))
+    .unwrap();
+    let _ = f.support(&cred(), &support, true).await;
+
+    let mut got: Vec<String> = srv
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| r.url.path().to_string())
+        .collect();
+    assert!(
+        got.iter().all(|p| p.starts_with("/api/device/v1/")),
+        "{got:?}"
+    );
+    got.sort();
+    got.dedup();
+    let mut want: Vec<String> = [
+        "bundle",
+        "heartbeat",
+        "status",
+        "escrow",
+        "fetch-token",
+        "push-token",
+        "inbox",
+        "inbox/7/result",
+        "diagnostics",
+        "diagnostics/d1/complete",
+        "support",
+    ]
+    .iter()
+    .map(|r| format!("/api/device/v1/{r}"))
+    .collect();
+    want.sort();
+    assert_eq!(got, want);
+}
+
+fn err_json(code: &str) -> serde_json::Value {
+    serde_json::json!({"error": {"code": code, "message": "x"}})
+}
+
+async fn push_token_error(t: ResponseTemplate) -> anyhow::Error {
+    let srv = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/device/v1/push-token"))
+        .respond_with(t)
+        .mount(&srv)
+        .await;
+    let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
+    f.push_token(&cred(), true).await.unwrap_err()
+}
+
+#[tokio::test]
+async fn not_available_is_recognised_only_by_its_code() {
+    use mastersos_agent::fetch::{NotAvailable, ServerRefused};
+    let e =
+        push_token_error(ResponseTemplate::new(404).set_body_json(err_json("not_available"))).await;
+    assert!(e.downcast_ref::<NotAvailable>().is_some(), "{e:#}");
+    for t in [
+        ResponseTemplate::new(404).set_body_json(err_json("not_found")),
+        ResponseTemplate::new(404).set_body_string("not_available"),
+        ResponseTemplate::new(404).set_body_string("<html>not_available</html>"),
+    ] {
+        let e = push_token_error(t).await;
+        assert!(e.downcast_ref::<NotAvailable>().is_none(), "{e:#}");
+        assert_eq!(e.downcast_ref::<ServerRefused>().unwrap().status, 404);
+    }
+    // The code alone is not enough: the status must be 404.
+    let e =
+        push_token_error(ResponseTemplate::new(503).set_body_json(err_json("not_available"))).await;
+    assert!(e.downcast_ref::<NotAvailable>().is_none(), "{e:#}");
+}
+
+#[tokio::test]
+async fn error_body_with_details_is_parsed() {
+    use mastersos_agent::fetch::NotAvailable;
+    let e = push_token_error(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+        "error": {"code": "not_available", "message": "x", "details": {"a": 1}}
+    })))
+    .await;
+    assert!(e.downcast_ref::<NotAvailable>().is_some(), "{e:#}");
+}
+
+#[test]
+fn parse_error_body_sanitises() {
+    use mastersos_agent::fetch::parse_error_body;
+    let long = "a".repeat(400);
+    let b = parse_error_body(
+        serde_json::json!({"error": {"code": "c-1_x", "message": format!("h\u{7}i\n{long}")}})
+            .to_string()
+            .as_bytes(),
+    )
+    .unwrap();
+    assert_eq!(b.code, "c-1_x");
+    assert!(b.message.starts_with("hia"));
+    assert_eq!(b.message.chars().count(), 300);
+    for bad in [
+        r#"{"error":{"code":"a b","message":"m"}}"#,
+        r#"{"error":{"code":"","message":"m"}}"#,
+        r#"{"error":"flat"}"#,
+        r#"{"message":"m"}"#,
+        "<html></html>",
+        "",
+    ] {
+        assert!(parse_error_body(bad.as_bytes()).is_none(), "{bad}");
+    }
+    let code65 = format!(
+        r#"{{"error":{{"code":"{}","message":"m"}}}}"#,
+        "a".repeat(65)
+    );
+    assert!(parse_error_body(code65.as_bytes()).is_none());
+}
+
+#[tokio::test]
+async fn inbox_404_not_available_is_not_available() {
+    use mastersos_agent::fetch::NotAvailable;
+    let srv = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/device/v1/inbox"))
+        .respond_with(ResponseTemplate::new(404).set_body_json(err_json("not_available")))
+        .mount(&srv)
+        .await;
+    let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
+    let e = f.inbox(&cred(), 0, true).await.unwrap_err();
+    assert!(e.downcast_ref::<NotAvailable>().is_some(), "{e:#}");
+}
+
+async fn inbox_result_404(t: ResponseTemplate) -> anyhow::Error {
+    let srv = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/device/v1/inbox/7/result"))
+        .respond_with(t)
+        .mount(&srv)
+        .await;
+    let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
+    let r = InboxResult {
+        state: InboxResultState::Done,
+        detail: None,
+    };
+    f.inbox_result(&cred(), 7, &r, true).await.unwrap_err()
+}
+
+#[tokio::test]
+async fn inbox_result_404_not_available_is_not_available() {
+    use mastersos_agent::fetch::NotAvailable;
+    let e =
+        inbox_result_404(ResponseTemplate::new(404).set_body_json(err_json("not_available"))).await;
+    assert!(e.downcast_ref::<NotAvailable>().is_some(), "{e:#}");
+}
+
+#[tokio::test]
+async fn inbox_result_404_other_code_is_seq_unknown() {
+    use mastersos_agent::fetch::InboxSeqUnknown;
+    let e = inbox_result_404(ResponseTemplate::new(404).set_body_json(err_json("not_found"))).await;
+    assert!(e.downcast_ref::<InboxSeqUnknown>().is_some(), "{e:#}");
+}
+
+#[tokio::test]
+async fn escrow_refusal_ignores_a_plain_text_body() {
+    let srv = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(403).set_body_string("secret mismatch"))
+        .mount(&srv)
+        .await;
+    let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
+    let e = f.escrow(&escrow_req(), true).await.unwrap_err();
+    assert_eq!(format!("{e:#}"), "escrow refused (403)");
+}
+
+#[tokio::test]
+async fn escrow_refusal_carries_the_json_message() {
+    let srv = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+            "error": {"code": "secret_mismatch", "message": "Secret does not match"}
+        })))
+        .mount(&srv)
+        .await;
+    let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
+    let e = f.escrow(&escrow_req(), true).await.unwrap_err();
+    assert_eq!(
+        format!("{e:#}"),
+        "escrow refused (403): Secret does not match"
+    );
+}
+
+#[tokio::test]
+async fn bundle_error_names_status_and_code() {
+    use mastersos_agent::fetch::ServerRefused;
+    let srv = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(503).set_body_json(err_json("unavailable")))
+        .mount(&srv)
+        .await;
+    let f = Fetcher::from_seed(&seed(&srv.uri(), None));
+    let e = f.fetch_now(0).await.unwrap_err();
+    assert_eq!(
+        e.downcast_ref::<ServerRefused>(),
+        Some(&ServerRefused {
+            status: 503,
+            code: Some("unavailable".into())
+        })
+    );
+    assert_eq!(e.to_string(), "the server answered 503 unavailable");
+}
+
+#[tokio::test]
+async fn escrow_refusal_is_typed() {
+    use mastersos_agent::fetch::{EscrowRefused, ServerRefused};
+    let srv = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+            "error": {"code": "secret_mismatch", "message": "Secret does not match"}
+        })))
+        .mount(&srv)
+        .await;
+    let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
+    let e = f.escrow(&escrow_req(), true).await.unwrap_err();
+    let r = e.downcast_ref::<EscrowRefused>().unwrap();
+    assert_eq!(
+        r.refused,
+        ServerRefused {
+            status: 403,
+            code: Some("secret_mismatch".into())
+        }
+    );
+    assert_eq!(r.message.as_deref(), Some("Secret does not match"));
+}
+
+#[tokio::test]
+async fn renewal_refusals_are_typed() {
+    use mastersos_agent::fetch::{RenewFailed, RenewOutcome, ServerRefused};
+    let id = mastersos_agent::seedpart::Identity {
+        device_id: "dev-1".into(),
+        escrow_secret: "A".repeat(43),
+    };
+    let srv = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(err_json("not_enrolled")))
+        .up_to_n_times(1)
+        .mount(&srv)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(503).set_body_json(err_json("unavailable")))
+        .mount(&srv)
+        .await;
+    let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
+    match f.renew_token(&id, true).await.unwrap() {
+        RenewOutcome::Refused(r) => {
+            assert_eq!(r.refused.status, 403);
+            assert_eq!(r.refused.code.as_deref(), Some("not_enrolled"));
+            assert_eq!(r.to_string(), "x");
+        }
+        other => panic!("{other:?}"),
+    }
+    let e = f.renew_token(&id, true).await.unwrap_err();
+    let r = e.downcast_ref::<RenewFailed>().unwrap();
+    assert_eq!(
+        r.refused,
+        ServerRefused {
+            status: 503,
+            code: Some("unavailable".into())
+        }
+    );
+    assert_eq!(e.to_string(), "token renewal failed (503): x");
+}
+
+#[test]
+fn error_body_without_a_usable_message_is_still_parsed() {
+    use mastersos_agent::fetch::parse_error_body;
+    for body in [
+        r#"{"error":{"code":"not_available","message":null}}"#,
+        r#"{"error":{"code":"not_available"}}"#,
+        r#"{"error":{"code":"not_available","message":7}}"#,
+    ] {
+        let b = parse_error_body(body.as_bytes()).expect(body);
+        assert_eq!((b.code.as_str(), b.message.as_str()), ("not_available", ""));
+    }
+}
+
+async fn logo_server(t: ResponseTemplate) -> (MockServer, String) {
+    let srv = MockServer::start().await;
+    let h = "a".repeat(64);
+    Mock::given(method("GET"))
+        .and(path(format!("/api/device/v1/logos/{h}.png")))
+        .respond_with(t)
+        .mount(&srv)
+        .await;
+    let url = mastersos_agent::fetch::logo_url(&srv.uri(), &h);
+    (srv, url)
+}
+
+#[tokio::test]
+async fn logo_request_carries_the_fetch_token() {
+    use mastersos_agent::fetch::{fetch_logo, LogoFetch};
+    let (srv, url) =
+        logo_server(ResponseTemplate::new(200).set_body_bytes(b"PNG-BYTES".to_vec())).await;
+    assert_eq!(
+        fetch_logo(&url, Some("tok-logo")).await.unwrap(),
+        LogoFetch::Png(b"PNG-BYTES".to_vec())
+    );
+    let reqs = srv.received_requests().await.unwrap();
+    assert_eq!(reqs.len(), 1);
+    assert_eq!(
+        reqs[0].headers.get("authorization").unwrap(),
+        "Bearer tok-logo"
+    );
+}
+
+#[tokio::test]
+async fn logo_401_unauthorized_is_an_error_not_not_available() {
+    use mastersos_agent::fetch::{fetch_logo, NotAvailable, ServerRefused};
+    let (_srv, url) =
+        logo_server(ResponseTemplate::new(401).set_body_json(err_json("unauthorized"))).await;
+    let e = fetch_logo(&url, Some("tok-logo")).await.unwrap_err();
+    assert!(e.downcast_ref::<NotAvailable>().is_none(), "{e:#}");
+    assert_eq!(
+        e.downcast_ref::<ServerRefused>(),
+        Some(&ServerRefused {
+            status: 401,
+            code: Some("unauthorized".into())
+        })
+    );
+    assert!(!format!("{e:#} {e:?}").contains("tok-logo"), "{e:#}");
+}
+
+#[tokio::test]
+async fn logo_404_not_available_is_not_available() {
+    use mastersos_agent::fetch::{fetch_logo, LogoFetch};
+    let (_srv, url) =
+        logo_server(ResponseTemplate::new(404).set_body_json(err_json("not_available"))).await;
+    assert_eq!(
+        fetch_logo(&url, Some("tok")).await.unwrap(),
+        LogoFetch::NotAvailable
+    );
+}
+
+#[tokio::test]
+async fn logo_404_not_found_is_an_error() {
+    use mastersos_agent::fetch::{fetch_logo, ServerRefused};
+    for t in [
+        ResponseTemplate::new(404).set_body_json(err_json("not_found")),
+        ResponseTemplate::new(404).set_body_string("not_available"),
+        ResponseTemplate::new(404),
+        ResponseTemplate::new(503).set_body_json(err_json("not_available")),
+    ] {
+        let (_srv, url) = logo_server(t).await;
+        let e = fetch_logo(&url, Some("tok")).await.unwrap_err();
+        assert!(e.downcast_ref::<ServerRefused>().is_some(), "{e:#}");
+    }
+}
+
+#[tokio::test]
+async fn logo_does_not_follow_redirects() {
+    use mastersos_agent::fetch::fetch_logo;
+    let other = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"PNG".to_vec()))
+        .mount(&other)
+        .await;
+    let (_srv, url) = logo_server(
+        ResponseTemplate::new(302).insert_header("location", format!("{}/x.png", other.uri())),
+    )
+    .await;
+    assert!(fetch_logo(&url, Some("tok-logo")).await.is_err());
+    assert!(other.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn logo_over_128_kib_is_an_error() {
+    use mastersos_agent::fetch::fetch_logo;
+    let (_srv, url) =
+        logo_server(ResponseTemplate::new(200).set_body_bytes(vec![0u8; 128 * 1024 + 1])).await;
+    assert!(fetch_logo(&url, None).await.is_err());
 }

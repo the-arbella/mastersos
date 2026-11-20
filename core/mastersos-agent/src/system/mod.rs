@@ -161,6 +161,11 @@ pub struct SysState {
     /// runs it again next time even when the content is unchanged).
     #[serde(default)]
     pub branding_dconf_pending: bool,
+    /// The server answered the logo download with 404 `not_available`: the `branding` step does not
+    /// ask again before this time (a value more than the longest wait ahead is a clock that jumped
+    /// back, and is ignored).
+    #[serde(default)]
+    pub logo_retry_after: Option<chrono::DateTime<chrono::Utc>>,
     /// 下载失败过、换一轮也不会好的锁定应用图标地址；清单里不再用的地址去掉。
     #[serde(default)]
     pub kiosk_icon_failures: std::collections::BTreeSet<String>,
@@ -506,6 +511,7 @@ pub(crate) mod tests {
             device: None,
             ident: &crate::system::tests::test_ident(),
             manifest: None,
+            fetch_token: None,
         })
     }
 

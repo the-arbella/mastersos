@@ -50,6 +50,9 @@ pub struct ApplyContext<'a> {
     /// The whole settings (`None` in tests that need only the Config): the user-layer steps read the format 3
     /// user layer from it ([`ApplyContext::user_layer`]).
     pub manifest: Option<&'a Manifest>,
+    /// The main loop's fetch token, read when the `branding` step downloads a logo (so a token
+    /// switch after the request reaches the retries). Never logged nor put in a problem text.
+    pub fetch_token: Option<&'a crate::fetch::TokenSource>,
 }
 
 impl<'a> ApplyContext<'a> {

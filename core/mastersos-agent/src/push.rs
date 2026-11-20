@@ -20,9 +20,9 @@
 //!
 //! Every failure is reported as a [`PushEvent::Status`] with `ok = false` and a detail starting
 //! with `dns:`, `tcp:`, `tls:`, `auth:` or `token:` ([`classify`]), then retried after the
-//! ruling 59 backoff ([`crate::backoff`]). A 403 on `/v1/push-token` (the server does not accept
-//! the device credential) waits `backoff_max` instead. The broker token and the device secret
-//! never reach a log line, an error or a status detail.
+//! ruling 59 backoff ([`crate::backoff`]). A 403 on `/api/device/v1/push-token` (the server does
+//! not accept the device credential) waits `backoff_max` instead. The broker token and the device
+//! secret never reach a log line, an error or a status detail.
 //!
 //! Events are queued inside the task and handed to the main loop as it takes them, so a main loop
 //! busy applying settings never stalls the MQTT connection (and its keepalive). If the queue grows
@@ -53,7 +53,9 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::backoff::{backoff, jittered, Jitter};
-use crate::fetch::{CredRejected, DeviceCred, Fetcher, Unauthorized};
+use crate::fetch::{
+    CredRejected, DeviceCred, Fetcher, NotAvailable, Unauthorized, NOT_AVAILABLE_RETRY,
+};
 
 /// The status report item this task fills.
 pub const ITEM: &str = "push";
@@ -72,10 +74,13 @@ pub const RESET_BACKOFF_AFTER: Duration = KEEPALIVE;
 pub const MIN_RENEW_DELAY: Duration = Duration::from_secs(60);
 /// Events waiting for the main loop, at most, before they collapse into one `Connected`.
 pub const OUTBOX_CAP: usize = 64;
-/// The `push` status detail for a 401 on `/v1/push-token`: the fetch token was refused. The main
-/// loop answers it as it answers a 401 on `/v1/bundle` (spec §6.2): it syncs settings, whose 401
-/// switches to another saved token; the switched token is shared with this task's `Fetcher`.
+/// The `push` status detail for a 401 on `/api/device/v1/push-token`: the fetch token was refused.
+/// The main loop answers it as it answers a 401 on `/api/device/v1/bundle` (spec §6.2): it syncs
+/// settings, whose 401 switches to another saved token; the switched token is shared with this
+/// task's `Fetcher`.
 pub const TOKEN_UNAUTHORIZED: &str = "token: the server rejected the fetch token (401)";
+/// The `ok` status detail while the server answers the grant with 404 `not_available`.
+const NOT_OFFERED: &str = "not offered by the server yet";
 /// Resolving the broker's name gives up after this long.
 const DNS_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -104,9 +109,9 @@ pub struct PushTiming {
     pub renew_early_min: Duration,
     /// …and at most this long (60 min), uniformly in between.
     pub renew_early_max: Duration,
-    /// The image is a lab image: `/v1/push-token` may then go over plain http (the device secret
-    /// otherwise only travels over https; [`crate::fetch::escrow_transport_ok`]). The broker
-    /// connection is TLS either way.
+    /// The image is a lab image: `/api/device/v1/push-token` may then go over plain http (the
+    /// device secret otherwise only travels over https; [`crate::fetch::escrow_transport_ok`]). The
+    /// broker connection is TLS either way.
     pub lab: bool,
 }
 
@@ -241,8 +246,8 @@ fn failure_detail(err: &ConnectionError) -> String {
     format!("{}: {}", classify(err), reason(err))
 }
 
-/// "token: <reason>" for a failed `/v1/push-token`. `push_token`'s errors never carry the URL,
-/// the request body or the secret.
+/// "token: <reason>" for a failed `/api/device/v1/push-token`. `push_token`'s errors never carry
+/// the URL, the request body or the secret.
 fn token_detail(e: &anyhow::Error) -> String {
     if e.downcast_ref::<CredRejected>().is_some() {
         "token: the server rejected the device credential (403)".into()
@@ -481,6 +486,18 @@ async fn run(
                     })
                 }) {
                     Ok(g) => g,
+                    Err(e) if e.downcast_ref::<NotAvailable>().is_some() => {
+                        let wait = jittered(NOT_AVAILABLE_RETRY, cfg.jitter.unit());
+                        log::info!(
+                            "push: the server does not offer push yet; asking again in {} min",
+                            wait.as_secs() / 60
+                        );
+                        out.push(PushEvent::Status(passed(NOT_OFFERED.into())));
+                        if !idle(wait, &events, &mut out, &shutdown).await {
+                            return;
+                        }
+                        continue;
+                    }
                     Err(e) => {
                         let detail = token_detail(&e);
                         let wait = if e.downcast_ref::<CredRejected>().is_some() {
@@ -840,7 +857,7 @@ mod tests {
         use wiremock::{Mock, MockServer, ResponseTemplate};
         let srv = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/v1/push-token"))
+            .and(path("/api/device/v1/push-token"))
             .respond_with(ResponseTemplate::new(403))
             .mount(&srv)
             .await;
@@ -870,7 +887,7 @@ mod tests {
         use wiremock::{Mock, MockServer, ResponseTemplate};
         let srv = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/v1/push-token"))
+            .and(path("/api/device/v1/push-token"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 // Nothing listens on port 1: the TCP connect is refused.
                 "token": "BROKER-JWT-abc", "broker": "127.0.0.1:1", "client_id": "mastersos/s.dev-1",
@@ -1048,7 +1065,7 @@ mod tests {
         });
         let srv = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/v1/push-token"))
+            .and(path("/api/device/v1/push-token"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "token": "BROKER-JWT-abc", "broker": "127.0.0.1:1", "client_id": "mastersos/s.dev-1",
                 "topics": ["mastersos/s/settings", "mastersos/s/d/dev-1"],
@@ -1084,7 +1101,7 @@ mod tests {
                 .await
                 .unwrap()
                 .iter()
-                .filter(|r| r.url.path() == "/v1/push-token")
+                .filter(|r| r.url.path() == "/api/device/v1/push-token")
                 .count()
         };
         // The first grant, in real time with the clock held.
@@ -1110,6 +1127,91 @@ mod tests {
         }
         assert!(failures >= 5, "the broker was retried: {failures} failures");
         assert_eq!(tokens().await, 1, "one token for 2 h of retries");
+        stop.cancel();
+        h.await.unwrap();
+    }
+    /// The server does not offer push yet (404 `not_available`): an ok status saying so, no
+    /// failure, and the next grant request 6 h later (jitter factor 1 here).
+    #[tokio::test(start_paused = true)]
+    async fn push_token_not_available_waits_six_hours_without_failure() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let _watchdog = watchdog(
+            "push_token_not_available_waits_six_hours_without_failure",
+            120,
+        );
+        let _hold = tokio::spawn(async {
+            loop {
+                tokio::task::yield_now().await;
+            }
+        });
+        let srv = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/device/v1/push-token"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!(
+                {"error": {"code": "not_available", "message": "not offered"}}
+            )))
+            .mount(&srv)
+            .await;
+        fn any_tls() -> anyhow::Result<Arc<rustls::ClientConfig>> {
+            let cfg = rustls::ClientConfig::builder_with_provider(Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()?
+            .with_root_certificates(rustls::RootCertStore::empty())
+            .with_no_client_auth();
+            Ok(Arc::new(cfg))
+        }
+        let (tx, mut rx) = mpsc::channel(64);
+        let stop = CancellationToken::new();
+        let mut cfg = timing(0.5);
+        cfg.lab = true; // wiremock is plain http
+        let h = tokio::spawn(run(
+            Fetcher::from_seed(&seed(&srv.uri())),
+            cred(),
+            cfg,
+            tx,
+            stop.clone(),
+            any_tls,
+        ));
+        let srv = &srv;
+        let tokens = || async move {
+            srv.received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|r| r.url.path() == "/api/device/v1/push-token")
+                .count()
+        };
+        let mut statuses = vec![];
+        for _ in 0..500 {
+            while let Ok(ev) = rx.try_recv() {
+                if let PushEvent::Status(s) = ev {
+                    statuses.push(s);
+                }
+            }
+            if !statuses.is_empty() {
+                break;
+            }
+            settle(10).await;
+        }
+        assert_eq!(
+            statuses,
+            [passed("not offered by the server yet".into())],
+            "an ok status, not a failure"
+        );
+        assert_eq!(tokens().await, 1);
+        tokio::time::advance(Duration::from_secs(6 * 3600 - 1)).await;
+        settle(200).await;
+        assert_eq!(tokens().await, 1, "not asked again before 6 h");
+        tokio::time::advance(Duration::from_secs(2)).await;
+        for _ in 0..500 {
+            if tokens().await == 2 {
+                break;
+            }
+            settle(10).await;
+        }
+        assert_eq!(tokens().await, 2, "asked again after 6 h");
         stop.cancel();
         h.await.unwrap();
     }

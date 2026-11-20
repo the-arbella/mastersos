@@ -104,6 +104,7 @@ fn run_step_with(
         device: None,
         ident: &crate::system::tests::test_ident(),
         manifest: None,
+        fetch_token: None,
     };
     let p = paths(root);
     let mut env = Env {

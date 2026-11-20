@@ -14,10 +14,10 @@
 //!   backoff); past the command's `expires_at` → ack `failed` `upload: <the last error>`.
 //! - `ack`: a final result whose send failed before; sent again with the backoff, given up
 //!   after [`ACK_KEEP_DAYS`] days (the server marks the command failed by itself then).
-//! - `support`: a help request ([`crate::support::send`]): `POST /v1/support`, the ticket into
-//!   the support store, then the attachment collected into a [`Target::Ticket`] `archive`. A
-//!   ticket archive that arrives or is given up (`expired`, `not_yours`, dropped for room) marks
-//!   the request's attachment done; the request keeps its ticket.
+//! - `support`: a help request ([`crate::support::send`]): `POST /api/device/v1/support`, the
+//!   ticket into the support store, then the attachment collected into a [`Target::Ticket`]
+//!   `archive`. A ticket archive that arrives or is given up (`expired`, `not_yours`, dropped for
+//!   room) marks the request's attachment done; the request keeps its ticket.
 //!
 //! On battery below [`LOW_BATTERY_PERCENT`] % with no power connected only the small items go
 //! (acks, and Task 5's help requests); collections and archives wait for power. Over
@@ -579,6 +579,16 @@ pub fn low_battery(root: &Path) -> bool {
 /// the seed partition's `identity.json` (never created here), the fetch token as the agent
 /// keeps it. Without a credential nothing can be sent: the queue stays for later.
 pub async fn drain_main(cfg: &crate::AgentConfig) -> Result<()> {
+    drain_main_with(cfg, crate::support::HELP_AVAILABLE).await
+}
+
+/// [`drain_main`] with what this release offers given: without help requests and diagnostics
+/// (protocol v1 phase 1) nothing is sent and the queue stays.
+async fn drain_main_with(cfg: &crate::AgentConfig, help_available: bool) -> Result<()> {
+    if !help_available {
+        log::info!("upload queue: help requests and diagnostics are not available in this release, nothing sent");
+        return Ok(());
+    }
     let queue = Queue::new(&cfg.state_dir);
     if queue.list()?.is_empty() {
         queue.remove_orphans()?;

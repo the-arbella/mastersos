@@ -982,7 +982,44 @@ fn step_writes_support_json() {
         let f = p.public_dir.join(SUPPORT_JSON);
         assert_eq!(mode(&f), 0o644);
         let v: Value = serde_json::from_slice(&std::fs::read(&f).unwrap()).unwrap();
-        assert_eq!(v, json!({ "enabled": enabled }));
+        assert_eq!(v, json!({ "enabled": enabled && HELP_AVAILABLE }));
     }
     assert!(step().fast);
+}
+
+#[test]
+fn support_enabled_is_both() {
+    assert!(support_enabled(true, true));
+    assert!(!support_enabled(true, false));
+    assert!(!support_enabled(false, true));
+    assert!(!support_enabled(false, false));
+}
+
+#[test]
+fn support_json_is_off_in_phase_1_even_when_enabled() {
+    use crate::apply::Phase;
+    use crate::system::tests::{paths, tmp_root, with_ctx};
+    use mastersos_bundle::School;
+    use std::sync::atomic::AtomicBool;
+    let root = tmp_root();
+    let p = paths(root.path());
+    let r = FakeRunner::new();
+    let flag = AtomicBool::new(false);
+    let mut sys = crate::system::SysState::default();
+    let out = with_ctx(&School::default(), Phase::Full, &flag, |ctx| {
+        let mut c = ctx.config.clone();
+        c.support_enabled = true;
+        let ctx = crate::apply::ApplyContext { config: &c, ..*ctx };
+        let mut env = crate::system::Env {
+            paths: &p,
+            runner: &r,
+            sys: &mut sys,
+        };
+        (step().run)(&ctx, &mut env)
+    });
+    assert_eq!(out, vec![crate::system::ok(ITEM)]);
+    assert_eq!(
+        std::fs::read_to_string(p.public_dir.join(SUPPORT_JSON)).unwrap(),
+        "{\"enabled\":false}\n"
+    );
 }

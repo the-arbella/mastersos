@@ -109,7 +109,14 @@ struct AckRec {
 
 impl Respond for AckRec {
     fn respond(&self, r: &Request) -> ResponseTemplate {
-        let seq: u64 = r.url.path().split('/').nth(3).unwrap().parse().unwrap();
+        let seq: u64 = r
+            .url
+            .path()
+            .split('/')
+            .nth_back(1)
+            .unwrap()
+            .parse()
+            .unwrap();
         let b: InboxResult = serde_json::from_slice(&r.body).unwrap();
         self.acks
             .lock()
@@ -119,7 +126,8 @@ impl Respond for AckRec {
     }
 }
 
-/// `POST /v1/diagnostics`: a presigned URL on the same server, signed for the size asked.
+/// `POST /api/device/v1/diagnostics`: a presigned URL on the same server, signed for the size
+/// asked.
 struct Presign {
     base: String,
     asked: Arc<Mutex<Vec<serde_json::Value>>>,
@@ -160,14 +168,14 @@ async fn cloud(step1: Option<ResponseTemplate>, put: u16, ack_code: u16) -> Clou
     let acks: Acks = Default::default();
     let asked: Arc<Mutex<Vec<serde_json::Value>>> = Default::default();
     Mock::given(method("POST"))
-        .and(path_regex(r"^/v1/inbox/\d+/result$"))
+        .and(path_regex(r"^/api/device/v1/inbox/\d+/result$"))
         .respond_with(AckRec {
             acks: acks.clone(),
             code: ack_code,
         })
         .mount(&srv)
         .await;
-    let m = Mock::given(method("POST")).and(path("/v1/diagnostics"));
+    let m = Mock::given(method("POST")).and(path("/api/device/v1/diagnostics"));
     match step1 {
         Some(r) => m.respond_with(r).mount(&srv).await,
         None => {
@@ -185,7 +193,7 @@ async fn cloud(step1: Option<ResponseTemplate>, put: u16, ack_code: u16) -> Clou
         .mount(&srv)
         .await;
     Mock::given(method("POST"))
-        .and(path("/v1/diagnostics/abc123/complete"))
+        .and(path("/api/device/v1/diagnostics/abc123/complete"))
         .respond_with(ResponseTemplate::new(204))
         .mount(&srv)
         .await;
@@ -524,7 +532,7 @@ async fn retry_after_is_honoured_over_kicks() {
         .await
         .unwrap()
         .iter()
-        .filter(|q| q.url.path() == "/v1/diagnostics")
+        .filter(|q| q.url.path() == "/api/device/v1/diagnostics")
         .count();
     assert_eq!(tries, 1);
 }
@@ -691,4 +699,63 @@ fn device_batteries_do_not_count() {
     assert!(!low_battery(&m.paths().root), "the laptop is at 80 %");
     m.battery(10, "Discharging", false);
     assert!(low_battery(&m.paths().root));
+}
+
+/// A machine that can send: seed (the mock as the server, a fetch token), state with a device id,
+/// identity, the lab image (http allowed), and one `ack` item in the queue.
+fn sendable_cfg(m: &Machine, server: &str) -> crate::AgentConfig {
+    let seed_dir = m.tmp.path().join("seed");
+    let root = m.tmp.path().join("root");
+    std::fs::create_dir_all(&seed_dir).unwrap();
+    std::fs::create_dir_all(root.join("usr/lib/mastersos")).unwrap();
+    std::fs::write(root.join("usr/lib/mastersos/profile"), "lab\n").unwrap();
+    std::fs::write(
+        m.tmp.path().join("seed.toml"),
+        format!(
+            "server_url = \"{server}\"\nfetch_token = \"ft\"\n\n[[trust]]\nid = \"k\"\nalg = \"ed25519\"\npublic_key = \"{}\"\n",
+            "A".repeat(43) + "="
+        ),
+    )
+    .unwrap();
+    std::fs::write(m.tmp.path().join("state.json"), r#"{"device_id":"dev-1"}"#).unwrap();
+    std::fs::write(
+        seed_dir.join("identity.json"),
+        r#"{"device_id":"dev-1","escrow_secret":"s3cret-device"}"#,
+    )
+    .unwrap();
+    m.queue
+        .enqueue(&Item::new(
+            Job::Ack {
+                seq: 9,
+                state: InboxResultState::Done,
+                detail: "diag:abc123".into(),
+            },
+            Utc::now(),
+        ))
+        .unwrap();
+    crate::AgentConfig {
+        state_dir: m.tmp.path().to_path_buf(),
+        seed_dir,
+        seed_requires_mount: false,
+        root,
+        ..crate::AgentConfig::default()
+    }
+}
+
+/// Phase 1: the drain entry point sends nothing and leaves the queue as it is. The same machine
+/// with help available does send, so the test fails when the guard is gone.
+#[tokio::test]
+async fn drain_main_sends_nothing_in_phase_1() {
+    let m = Machine::new();
+    let c = cloud(None, 200, 204).await;
+    let cfg = sendable_cfg(&m, &c.srv.uri());
+    drain_main_with(&cfg, false).await.unwrap();
+    assert!(c.srv.received_requests().await.unwrap().is_empty());
+    assert_eq!(m.queue.list().unwrap().len(), 1, "the item stays");
+    drain_main_with(&cfg, true).await.unwrap();
+    assert_eq!(
+        acks(&c),
+        [(9, InboxResultState::Done, "diag:abc123".to_string())]
+    );
+    assert!(m.queue.is_empty());
 }

@@ -319,6 +319,7 @@ mod tests {
                 device: None,
                 ident: &crate::system::tests::test_ident(),
                 manifest: None,
+                fetch_token: None,
             };
             let r = run(
                 &ctx,

@@ -51,7 +51,7 @@ pub enum ItemState {
 /// `<client_id>.json`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Item {
-    /// What goes to `POST /v1/support`, as built when the student pressed Send.
+    /// What goes to `POST /api/device/v1/support`, as built when the student pressed Send.
     pub request: SupportRequest,
     /// The peer uid that submitted it: only that uid may ask for its status.
     pub uid: u32,

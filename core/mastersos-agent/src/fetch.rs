@@ -1,14 +1,15 @@
-//! Talking to mastersos-server: fetch the bundle (`wait=0`, never a long poll), the signed
+//! Talking to mastersos-server: fetch the bundle (a plain `GET`, never a long poll), the signed
 //! heartbeat, status reports, recovery-key escrow, fetch-token renewal, push grants, the inbox and
-//! the diagnostics upload (`POST /v1/diagnostics`, the presigned S3 `PUT`, the complete call) and
-//! help requests (`POST /v1/support`).
+//! the diagnostics upload (`POST diagnostics`, the presigned S3 `PUT`, the complete call) and
+//! help requests (`POST support`). Every route lives under [`DEVICE_PREFIX`] on the origin of
+//! the seed's `server_url` ([`device_base`]); a route is named here without that prefix.
 //!
 //! agent 的 HTTP 客户端只在这里构造（Ruling 27 m6）：跟随重定向的一律经 [`http_client`]
 //! （带 [`no_downgrade_redirects`]），托管与换领令牌经 [`no_redirect_client`]（不跟随）。
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -38,7 +39,7 @@ const MAX_RENEW_BODY_BYTES: usize = 4 * 1024;
 const SHORT_TIMEOUT: Duration = Duration::from_secs(30);
 /// The bundle download may give up after this long in all. A bundle is up to `MAX_BUNDLE_BYTES`
 /// (20 MiB), and a doorbell sends every machine of a school at once over a shared link, so this is
-/// far above the 30 s of the small calls. The server never holds a `wait=0` request, so a long
+/// far above the 30 s of the small calls. The server never holds a bundle request, so a long
 /// total only ever covers a slow transfer.
 pub const BUNDLE_TOTAL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// The bundle download gives up when no bytes arrive for this long.
@@ -74,7 +75,7 @@ pub const STALE_HEADER: &str = "x-mastersos-fetch-token";
 /// Total timeout of the presigned diagnostics `PUT`: up to 50 MiB over a slow school link. S3
 /// checks the URL's expiry when the request starts, so a long transfer is fine.
 pub const DIAG_PUT_TIMEOUT: Duration = Duration::from_secs(30 * 60);
-/// Cap of a `POST /v1/diagnostics` answer (a URL and a few headers: well under 8 KiB).
+/// Cap of a `POST /api/device/v1/diagnostics` answer (a URL and a few headers: well under 8 KiB).
 const MAX_DIAG_BODY_BYTES: usize = 64 * 1024;
 /// The longest `Retry-After` honoured; longer values are clamped to this.
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(24 * 3600);
@@ -106,11 +107,15 @@ pub fn http_client(o: HttpOpts) -> Client {
 }
 
 /// 托管与换领令牌用的客户端：不跟随任何重定向（307/308 会带着恢复密钥、托管凭据重发到 Location）。
-fn no_redirect_client(total: Duration) -> Client {
-    Client::builder()
+/// `connect`: a separate connect timeout (the logo download); `None` leaves only `total`.
+fn no_redirect_client(connect: Option<Duration>, total: Duration) -> Client {
+    let mut b = Client::builder()
         .timeout(total)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
+        .redirect(reqwest::redirect::Policy::none());
+    if let Some(c) = connect {
+        b = b.connect_timeout(c);
+    }
+    b.build()
         .expect("building the HTTP client failed (the TLS backend could not initialize)")
 }
 
@@ -126,7 +131,7 @@ impl std::fmt::Display for Unauthorized {
 
 impl std::error::Error for Unauthorized {}
 
-/// The server rejected the device credential (403 on `/v1/push-token`).
+/// The server rejected the device credential (403 on `/api/device/v1/push-token`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CredRejected;
 
@@ -204,13 +209,13 @@ impl std::fmt::Display for DiagUploadError {
 
 impl std::error::Error for DiagUploadError {}
 
-/// How the cloud took `POST /v1/diagnostics/{id}/complete`.
+/// How the cloud took `POST /api/device/v1/diagnostics/{id}/complete`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompleteOutcome {
     /// 2xx: size and SHA-256 matched; the archive has arrived.
     Done,
     /// The object did not match and was deleted (`409 upload_mismatch`, or any answer that
-    /// [`error_action`] says to restart on): start again from `POST /v1/diagnostics`.
+    /// [`error_action`] says to restart on): start again from `POST /api/device/v1/diagnostics`.
     Rejected,
 }
 
@@ -237,7 +242,73 @@ pub enum RenewOutcome {
     /// 服务端给了当前令牌。
     New(String),
     /// 服务端拒绝（403），带服务端的说明。
-    Refused(String),
+    Refused(RenewRefused),
+}
+
+/// The server refused a token renewal with 403. `Display` is the server's message, or a fixed
+/// sentence when it sent none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenewRefused {
+    pub refused: ServerRefused,
+    pub message: Option<String>,
+}
+
+impl std::fmt::Display for RenewRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.message {
+            Some(m) => f.write_str(m),
+            None => f.write_str("the server refused token renewal (403)"),
+        }
+    }
+}
+
+/// Any other non-success answer to a token renewal (not 403): the error of `renew_token`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenewFailed {
+    pub refused: ServerRefused,
+    pub message: Option<String>,
+}
+
+impl std::fmt::Display for RenewFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "token renewal failed ({})", self.refused.status)?;
+        match &self.message {
+            Some(m) => write!(f, ": {m}"),
+            None => Ok(()),
+        }
+    }
+}
+
+impl std::error::Error for RenewFailed {}
+
+/// The server refused an escrow (403, 429, ...). `Display` is `escrow refused (<status>)` with
+/// `: <message>` when the server sent a JSON message; `refused.code` carries the JSON code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EscrowRefused {
+    pub refused: ServerRefused,
+    pub message: Option<String>,
+}
+
+impl std::fmt::Display for EscrowRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "escrow refused ({})", self.refused.status)?;
+        match &self.message {
+            Some(m) => write!(f, ": {m}"),
+            None => Ok(()),
+        }
+    }
+}
+
+impl std::error::Error for EscrowRefused {}
+
+/// Status, code and non-empty message of a refusal.
+fn refusal_parts(status: u16, body: Option<ErrorBody>) -> (ServerRefused, Option<String>) {
+    let message = body
+        .as_ref()
+        .map(|b| b.message.clone())
+        .filter(|m| !m.is_empty());
+    let code = body.map(|b| b.code);
+    (ServerRefused { status, code }, message)
 }
 
 impl std::fmt::Debug for RenewOutcome {
@@ -255,6 +326,103 @@ pub enum FetchOutcome {
     NoChange,
 }
 
+/// Every device route of the server lives under this path.
+pub const DEVICE_PREFIX: &str = "/api/device/v1/";
+
+/// `scheme://host[:port]` of `server_url` plus [`DEVICE_PREFIX`]. A path, query or fragment in
+/// `server_url` (an older seed may still carry one) is dropped. An unparsable URL is kept as it is
+/// (trimmed of `/`), so the requests fail as they did before.
+pub fn device_base(server_url: &str) -> String {
+    match reqwest::Url::parse(server_url) {
+        Ok(u) if u.host_str().is_some() => {
+            format!("{}{DEVICE_PREFIX}", u.origin().ascii_serialization())
+        }
+        _ => format!("{}{DEVICE_PREFIX}", server_url.trim_end_matches('/')),
+    }
+}
+
+/// The URL of a branding logo: `<device base>logos/<sha256>.png`.
+pub fn logo_url(server_url: &str, sha256: &str) -> String {
+    format!("{}logos/{sha256}.png", device_base(server_url))
+}
+
+/// How long the agent waits after a 404 `not_available` (push grant, inbox, logos) before asking
+/// again; each wait is [`crate::backoff::jittered`] (factor 0.8-1.2).
+pub const NOT_AVAILABLE_RETRY: Duration = Duration::from_secs(6 * 3600);
+
+/// A logo download's result: the bytes, or the server does not offer logos yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LogoFetch {
+    Png(Vec<u8>),
+    NotAvailable,
+}
+
+/// Connecting for the logo download gives up after this long (the whole download after
+/// [`LOGO_TIMEOUT`](crate::system::branding::LOGO_TIMEOUT)).
+const LOGO_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// `GET logos/<sha256>.png` with the fetch token like every device request (Ruling R2), at most
+/// [`MAX_LOGO_BYTES`](crate::system::branding::MAX_LOGO_BYTES) in
+/// [`LOGO_TIMEOUT`](crate::system::branding::LOGO_TIMEOUT). It carries the token, so it follows no
+/// redirect ([`no_redirect_client`], 10 s to connect). A non-success answer is read by
+/// [`refused`], as for every other device route: 404 `not_available` is
+/// [`LogoFetch::NotAvailable`], anything else an error. Errors never carry the URL or the token.
+pub async fn fetch_logo(url: &str, token: Option<&str>) -> Result<LogoFetch> {
+    use crate::system::branding::{LOGO_TIMEOUT, MAX_LOGO_BYTES};
+    let mut req = no_redirect_client(Some(LOGO_CONNECT_TIMEOUT), LOGO_TIMEOUT).get(url);
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(reqwest::Error::without_url)
+        .context("request for the logo failed")?;
+    if !resp.status().is_success() {
+        let e = refusal(resp).await;
+        return if e.is::<NotAvailable>() {
+            Ok(LogoFetch::NotAvailable)
+        } else {
+            Err(e)
+        };
+    }
+    if resp
+        .content_length()
+        .is_some_and(|n| n > MAX_LOGO_BYTES as u64)
+    {
+        bail!("the logo is larger than 128 KiB");
+    }
+    match read_capped(resp, MAX_LOGO_BYTES).await {
+        Ok(b) => Ok(LogoFetch::Png(b)),
+        Err(e) => bail!("the logo: {e}"),
+    }
+}
+
+/// The fetch token in force, read when needed ([`Fetcher::token_source`]). No `Debug`: it would
+/// print the token; never log what [`TokenSource::current`] returns.
+#[derive(Clone)]
+pub struct TokenSource(Arc<RwLock<Option<String>>>);
+
+impl TokenSource {
+    /// The token the fetcher uses now.
+    pub fn current(&self) -> Option<String> {
+        self.0.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
+/// One HTTP exchange as `protocol-check` reports it ([`Fetcher::with_recorder`]): the method, the
+/// path and query exactly as sent (no scheme or host), and the answer's status (`None` when no
+/// answer came). Never a header or a body, so no token or secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Exchange {
+    pub method: &'static str,
+    pub route: String,
+    pub status: Option<u16>,
+}
+
+/// Where a recording [`Fetcher`] appends its [`Exchange`]s.
+pub type Recorder = Arc<Mutex<Vec<Exchange>>>;
+
 /// 克隆便宜（HTTP 客户端内部共享连接池）：主循环、心跳与后台任务各拿一份。
 /// 令牌与旧令牌标记放在共享的 `Arc` 里：任何一份上 [`Fetcher::set_token`]、任何一份收到
 /// `X-Mastersos-Fetch-Token: stale`，所有克隆都看得到。
@@ -271,6 +439,8 @@ pub struct Fetcher {
     base: String,
     token: Arc<RwLock<Option<String>>>,
     stale: Arc<AtomicBool>,
+    /// `protocol-check` only; the agent never sets one.
+    recorder: Option<Recorder>,
 }
 
 impl Fetcher {
@@ -280,12 +450,55 @@ impl Fetcher {
         Fetcher {
             client: http_client(short_opts()),
             bundle_client: http_client(bundle_opts()),
-            escrow_client: no_redirect_client(ESCROW_TIMEOUT),
+            escrow_client: no_redirect_client(None, ESCROW_TIMEOUT),
             upload_client: diag_put_client(),
-            base: seed.server_url.trim_end_matches('/').to_string(),
+            base: device_base(&seed.server_url),
             token: Arc::new(RwLock::new(token)),
             stale: Arc::new(AtomicBool::new(false)),
+            recorder: None,
         }
+    }
+
+    /// The same fetcher, appending every request it sends to `rec` ([`Exchange`]). Only
+    /// `protocol-check` records; the agent never does.
+    pub fn with_recorder(mut self, rec: Recorder) -> Fetcher {
+        self.recorder = Some(rec);
+        self
+    }
+
+    /// The only place a request to the server goes out (the one exception is the presigned
+    /// diagnostics `PUT` of [`Fetcher::diag_put`], which goes to storage, not the server: its query
+    /// string is the upload grant, a credential, so it is never recorded): the builder's own client
+    /// (redirect policy, timeouts) and headers are kept as they are. With a recorder set it appends
+    /// the method, the path and query, and the status (`None` without an answer).
+    async fn send(&self, rb: reqwest::RequestBuilder) -> reqwest::Result<reqwest::Response> {
+        let (client, req) = rb.build_split();
+        let req = req?;
+        let Some(rec) = &self.recorder else {
+            return client.execute(req).await;
+        };
+        let method = match *req.method() {
+            reqwest::Method::GET => "GET",
+            reqwest::Method::POST => "POST",
+            reqwest::Method::PUT => "PUT",
+            reqwest::Method::DELETE => "DELETE",
+            _ => "OTHER",
+        };
+        let url = req.url();
+        let route = match url.query() {
+            Some(q) => format!("{}?{q}", url.path()),
+            None => url.path().to_string(),
+        };
+        let resp = client.execute(req).await;
+        let status = resp.as_ref().ok().map(|r| r.status().as_u16());
+        rec.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(Exchange {
+                method,
+                route,
+                status,
+            });
+        resp
     }
 
     /// 用 `seed.toml` 里的令牌（不看换领存下的令牌文件；测试与只读种子的场合用）。
@@ -304,6 +517,12 @@ impl Fetcher {
         self.token.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
+    /// A handle that reads this fetcher's token (shared with every clone) whenever asked: the apply
+    /// worker's rounds use the token in force at the download, not the one of the request.
+    pub fn token_source(&self) -> TokenSource {
+        TokenSource(self.token.clone())
+    }
+
     /// 最近一个机器侧响应说这把令牌已退役（`X-Mastersos-Fetch-Token: stale`）。
     pub fn token_is_stale(&self) -> bool {
         self.stale.load(Ordering::SeqCst)
@@ -319,13 +538,18 @@ impl Fetcher {
         let stale = resp
             .headers()
             .get(STALE_HEADER)
-            .is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"stale"));
+            .is_some_and(|v| v.as_bytes() == b"stale");
         self.stale.store(stale, Ordering::SeqCst);
     }
 
-    /// 服务端地址（去掉了结尾的 `/`）。
+    /// The device API base: the origin of `server_url` plus [`DEVICE_PREFIX`] (ends with `/`).
     pub fn base(&self) -> &str {
         &self.base
+    }
+
+    /// The only route joiner: `route` has no leading slash (`"bundle"`, `"inbox/7/result"`).
+    fn url(&self, route: &str) -> String {
+        format!("{}{route}", self.base)
     }
 
     fn auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
@@ -344,28 +568,31 @@ impl Fetcher {
         }
     }
 
-    /// `GET /v1/bundle?after=N&wait=0`: the server answers at once, never holds the request.
+    /// `GET bundle?after=N`: the server answers at once, never holds the request.
     /// 200 → New, 204 → NoChange, 401 → [`Unauthorized`], anything else is an error. A body over
     /// `MAX_BUNDLE_BYTES` is aborted.
     pub async fn fetch_now(&self, after: u64) -> Result<FetchOutcome> {
         let req = self
             .bundle_client
-            .get(format!("{}/v1/bundle", self.base))
-            .query(&[("after", after)])
-            .query(&[("wait", 0u8)]);
+            .get(self.url("bundle"))
+            .query(&[("after", after)]);
         self.fetch_bundle(req).await
     }
 
     async fn fetch_bundle(&self, req: reqwest::RequestBuilder) -> Result<FetchOutcome> {
         let used = self.current_token();
         let mut resp = self
-            .auth_as(req, &used)
-            .send()
+            .send(self.auth_as(req, &used))
             .await
-            .context("request to /v1/bundle failed")?;
+            .context("request to bundle failed")?;
         self.observe(&resp, &used);
         match resp.status() {
-            StatusCode::UNAUTHORIZED => Err(anyhow::Error::new(Unauthorized)),
+            // [`Unauthorized`] for the main loop, over the server's [`ServerRefused`] code: both
+            // downcast.
+            StatusCode::UNAUTHORIZED => {
+                let code = read_error_body(resp).await.map(|b| b.code);
+                Err(anyhow::Error::new(ServerRefused { status: 401, code }).context(Unauthorized))
+            }
             StatusCode::NO_CONTENT => Ok(FetchOutcome::NoChange),
             StatusCode::OK => {
                 let version = resp
@@ -374,7 +601,10 @@ impl Fetcher {
                     .ok_or_else(|| anyhow!("the response has no X-Mastersos-Version"))?
                     .to_str()
                     .ok()
-                    .and_then(|v| v.trim().parse::<u64>().ok())
+                    .map(str::trim)
+                    // Decimal digits only: `u64::from_str` would also take a leading `+`.
+                    .filter(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
+                    .and_then(|v| v.parse::<u64>().ok())
                     .ok_or_else(|| anyhow!("X-Mastersos-Version is not an integer"))?;
                 if resp
                     .content_length()
@@ -391,7 +621,7 @@ impl Fetcher {
                 }
                 Ok(FetchOutcome::New { archive, version })
             }
-            other => bail!("the server returned {other}"),
+            _ => Err(refusal(resp).await),
         }
     }
 
@@ -400,13 +630,9 @@ impl Fetcher {
     pub async fn heartbeat(&self) -> Result<Option<String>> {
         let used = self.current_token();
         let mut resp = self
-            .auth_as(
-                self.client.get(format!("{}/v1/heartbeat", self.base)),
-                &used,
-            )
-            .send()
+            .send(self.auth_as(self.client.get(self.url("heartbeat")), &used))
             .await
-            .context("request to /v1/heartbeat failed")?;
+            .context("request to heartbeat failed")?;
         self.observe(&resp, &used);
         match resp.status() {
             StatusCode::NO_CONTENT => Ok(None),
@@ -424,13 +650,13 @@ impl Fetcher {
                     String::from_utf8(body).context("the heartbeat is not UTF-8")?,
                 ))
             }
-            other => bail!("the server returned {other}"),
+            _ => Err(refusal(resp).await),
         }
     }
 
-    /// `POST /v1/escrow` with `r` as the JSON body. Only the sealed form exists
+    /// `POST /api/device/v1/escrow` with `r` as the JSON body. Only the sealed form exists
     /// ([`mastersos_bundle::EscrowRequest`], plan 6 Task 13): a plaintext recovery key cannot be sent.
-    /// `POST /v1/escrow`：2xx 为成功（服务端对重复的同一把密钥也回 204）。被拒时错误信息是
+    /// `POST /api/device/v1/escrow`：2xx 为成功（服务端对重复的同一把密钥也回 204）。被拒时错误信息是
     /// 「托管被拒（<状态码>）：<服务端的 message>」——403（凭据不符）与 429（超上限）都原样带上
     /// 服务端的说明，IT 在回报里就能看到该做什么。错误里不带 URL（`without_url`），也不带请求体：
     /// 请求体里有恢复密钥与托管凭据。不跟随重定向（3xx 当被拒）。地址不是 https 时不发（[`escrow_transport_ok`]；`lab` 是镜像的 profile）。
@@ -440,29 +666,20 @@ impl Fetcher {
         }
         let used = self.current_token();
         let resp = self
-            .auth_as(
-                self.escrow_client
-                    .post(format!("{}/v1/escrow", self.base))
-                    .json(r),
-                &used,
-            )
-            .send()
+            .send(self.auth_as(self.escrow_client.post(self.url("escrow")).json(r), &used))
             .await
             .map_err(reqwest::Error::without_url)
-            .context("request to /v1/escrow failed")?;
+            .context("request to escrow failed")?;
         self.observe(&resp, &used);
         let status = resp.status();
         if status.is_success() {
             return Ok(());
         }
-        let message = read_error_message(resp).await;
-        match message {
-            Some(m) => bail!("escrow refused ({}): {m}", status.as_u16()),
-            None => bail!("escrow refused ({})", status.as_u16()),
-        }
+        let (refused, message) = refusal_parts(status.as_u16(), read_error_body(resp).await);
+        Err(anyhow::Error::new(EscrowRefused { refused, message }))
     }
 
-    /// `POST /v1/fetch-token`：凭 `identity.json` 的托管凭据换领当前令牌（Ruling 20）。
+    /// `POST /api/device/v1/fetch-token`：凭 `identity.json` 的托管凭据换领当前令牌（Ruling 20）。
     /// 200 → [`RenewOutcome::New`]（令牌不合格当错误）；403 → [`RenewOutcome::Refused`]（带服务端的说明）；
     /// 其余（401、3xx、5xx、连不上）是错误。不跟随重定向；地址不是 https 时不发（[`escrow_transport_ok`]，
     /// `lab` 是镜像的 profile）。错误里不带 URL、凭据与令牌。
@@ -477,15 +694,10 @@ impl Fetcher {
             escrow_secret: id.escrow_secret.clone(),
         };
         let mut resp = self
-            .auth(
-                self.escrow_client
-                    .post(format!("{}/v1/fetch-token", self.base))
-                    .json(&req),
-            )
-            .send()
+            .send(self.auth(self.escrow_client.post(self.url("fetch-token")).json(&req)))
             .await
             .map_err(reqwest::Error::without_url)
-            .context("request to /v1/fetch-token failed")?;
+            .context("request to fetch-token failed")?;
         let status = resp.status();
         match status {
             StatusCode::OK => {
@@ -508,16 +720,18 @@ impl Fetcher {
                 }
                 Ok(RenewOutcome::New(r.fetch_token))
             }
-            StatusCode::FORBIDDEN => Ok(RenewOutcome::Refused(
-                read_error_message(resp)
-                    .await
-                    .unwrap_or_else(|| "the server refused token renewal (403)".into()),
-            )),
-            other => bail!("token renewal failed ({})", other.as_u16()),
+            StatusCode::FORBIDDEN => {
+                let (refused, message) = refusal_parts(403, read_error_body(resp).await);
+                Ok(RenewOutcome::Refused(RenewRefused { refused, message }))
+            }
+            other => {
+                let (refused, message) = refusal_parts(other.as_u16(), read_error_body(resp).await);
+                Err(anyhow::Error::new(RenewFailed { refused, message }))
+            }
         }
     }
 
-    /// `POST /v1/push-token`: trade the escrow credential for an MQTT grant. 403 is
+    /// `POST /api/device/v1/push-token`: trade the escrow credential for an MQTT grant. 403 is
     /// [`CredRejected`], 401 is [`Unauthorized`]; other statuses (429, 503, 400) are plain errors.
     /// No redirects; errors never carry the URL, body or secret.
     pub async fn push_token(&self, cred: &DeviceCred, lab: bool) -> Result<PushTokenResponse> {
@@ -528,46 +742,44 @@ impl Fetcher {
         };
         let used = self.current_token();
         let resp = self
-            .auth_as(
-                self.escrow_client
-                    .post(format!("{}/v1/push-token", self.base))
-                    .json(&req),
+            .send(self.auth_as(
+                self.escrow_client.post(self.url("push-token")).json(&req),
                 &used,
-            )
-            .send()
+            ))
             .await
             .map_err(reqwest::Error::without_url)
-            .context("request to /v1/push-token failed")?;
+            .context("request to push-token failed")?;
         self.observe(&resp, &used);
         match resp.status() {
             StatusCode::OK => read_json(resp, "push-token response").await,
             StatusCode::UNAUTHORIZED => Err(anyhow::Error::new(Unauthorized)),
             StatusCode::FORBIDDEN => Err(anyhow::Error::new(CredRejected)),
-            other => bail!("push-token failed ({})", other.as_u16()),
+            _ => Err(refusal(resp).await),
         }
     }
 
-    /// `GET /v1/inbox?after=N` with the device headers. 401 with error code
+    /// `GET /api/device/v1/inbox?after=N` with the device headers. 401 with error code
     /// `device_auth_missing` is [`DeviceAuthMissing`]; any other 401 is [`Unauthorized`].
     pub async fn inbox(&self, cred: &DeviceCred, after: u64, lab: bool) -> Result<InboxPage> {
         let used = self.current_token();
+        let req = self
+            .device_request(reqwest::Method::GET, "inbox", cred, &used, lab)?
+            .query(&[("after", after)]);
         let resp = self
-            .device_request(reqwest::Method::GET, "/v1/inbox", cred, &used, lab)?
-            .query(&[("after", after)])
-            .send()
+            .send(req)
             .await
             .map_err(reqwest::Error::without_url)
-            .context("request to /v1/inbox failed")?;
+            .context("request to inbox failed")?;
         self.observe(&resp, &used);
         match resp.status() {
             StatusCode::OK => read_json(resp, "inbox response").await,
             StatusCode::UNAUTHORIZED => Err(unauthorized_kind(resp).await),
-            other => bail!("inbox failed ({})", other.as_u16()),
+            _ => Err(refusal(resp).await),
         }
     }
 
-    /// `POST /v1/inbox/{seq}/result`: 2xx is [`ResultAck::Recorded`], 409 (already final there)
-    /// [`ResultAck::Refused`], 404 the error [`InboxSeqUnknown`]; anything else is an error.
+    /// `POST /api/device/v1/inbox/{seq}/result`: 2xx is [`ResultAck::Recorded`], 409 (already final
+    /// there) [`ResultAck::Refused`], 404 the error [`InboxSeqUnknown`]; anything else is an error.
     pub async fn inbox_result(
         &self,
         cred: &DeviceCred,
@@ -576,16 +788,17 @@ impl Fetcher {
         lab: bool,
     ) -> Result<ResultAck> {
         let used = self.current_token();
-        let resp = self
+        let req = self
             .device_request(
                 reqwest::Method::POST,
-                &format!("/v1/inbox/{seq}/result"),
+                &format!("inbox/{seq}/result"),
                 cred,
                 &used,
                 lab,
             )?
-            .json(r)
-            .send()
+            .json(r);
+        let resp = self
+            .send(req)
             .await
             .map_err(reqwest::Error::without_url)
             .context("request to inbox result failed")?;
@@ -593,9 +806,16 @@ impl Fetcher {
         match resp.status() {
             s if s.is_success() => Ok(ResultAck::Recorded),
             StatusCode::CONFLICT => Ok(ResultAck::Refused),
-            StatusCode::NOT_FOUND => Err(anyhow::Error::new(InboxSeqUnknown)),
+            StatusCode::NOT_FOUND => {
+                let body = read_error_body(resp).await;
+                Err(if is_not_available(404, &body) {
+                    anyhow::Error::new(NotAvailable)
+                } else {
+                    anyhow::Error::new(InboxSeqUnknown)
+                })
+            }
             StatusCode::UNAUTHORIZED => Err(unauthorized_kind(resp).await),
-            other => bail!("inbox result rejected ({})", other.as_u16()),
+            _ => Err(refusal(resp).await),
         }
     }
 
@@ -613,55 +833,73 @@ impl Fetcher {
     fn device_request(
         &self,
         method: reqwest::Method,
-        path: &str,
+        route: &str,
         cred: &DeviceCred,
         used: &Option<String>,
         lab: bool,
     ) -> Result<reqwest::RequestBuilder> {
         self.secret_transport(lab)?;
-        let req = self
-            .escrow_client
-            .request(method, format!("{}{path}", self.base));
+        let req = self.escrow_client.request(method, self.url(route));
         Ok(self
             .auth_as(req, used)
             .header(DEVICE_HEADER, &cred.device_id)
             .header(DEVICE_SECRET_HEADER, &cred.secret))
     }
 
-    /// `POST /v1/status`. With `cred` the report also carries the device headers, so the server
-    /// can tell it from one sent with the school's token alone; they are left off (the report
-    /// still goes) where the device secret may not travel ([`Fetcher::secret_transport`]). With
-    /// the headers the request goes through [`Fetcher::device_request`], which never follows a
-    /// redirect, so the secret cannot be carried to another address.
-    pub async fn report(
-        &self,
-        r: &StatusReport,
-        cred: Option<&DeviceCred>,
-        lab: bool,
-    ) -> Result<()> {
+    /// `POST /api/device/v1/status`, always with the device credential through
+    /// [`Fetcher::device_request`] (no redirects, both device headers). Refused locally, before
+    /// any request, with [`StatusNotSent::Transport`] where the device secret may not travel
+    /// and with [`StatusNotSent::OtherDevice`] when the report names another device.
+    pub async fn report(&self, r: &StatusReport, cred: &DeviceCred, lab: bool) -> Result<()> {
+        if r.device_id != cred.device_id {
+            return Err(StatusNotSent::OtherDevice.into());
+        }
+        if self.secret_transport(lab).is_err() {
+            return Err(StatusNotSent::Transport.into());
+        }
         let used = self.current_token();
-        let req = match cred.filter(|_| self.secret_transport(lab).is_ok()) {
-            Some(cred) => self
-                .device_request(reqwest::Method::POST, "/v1/status", cred, &used, lab)?
-                .json(r),
-            None => self.auth_as(
-                self.client.post(format!("{}/v1/status", self.base)).json(r),
-                &used,
-            ),
-        };
-        let resp = req.send().await.context("request to /v1/status failed")?;
+        let req = self
+            .device_request(reqwest::Method::POST, "status", cred, &used, lab)?
+            .json(r);
+        let resp = self
+            .send(req)
+            .await
+            .map_err(reqwest::Error::without_url)
+            .context("request to status failed")?;
         self.observe(&resp, &used);
         if !resp.status().is_success() {
-            bail!("status report refused: {}", resp.status());
+            return Err(refusal(resp).await);
         }
         Ok(())
     }
 }
 
+/// Why a status report was not sent at all (nothing went on the wire).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusNotSent {
+    NoIdentity,
+    Transport,
+    OtherDevice,
+}
+
+impl std::fmt::Display for StatusNotSent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NoIdentity => "no status sent: no device identity",
+            Self::Transport => {
+                "no status sent: the device secret may not travel over this transport (https only; http on lab images)"
+            }
+            Self::OtherDevice => "no status sent: the report names another device",
+        })
+    }
+}
+
+impl std::error::Error for StatusNotSent {}
+
 /// The diagnostics upload (spec「接口: 上传」). Every failure is a [`DiagUploadError`] whose
 /// action comes from [`error_action`]; [`crate::diag::upload::upload`] drives the three steps.
 impl Fetcher {
-    /// Step 1, `POST /v1/diagnostics` with the device headers: `200` / `201` →
+    /// Step 1, `POST /api/device/v1/diagnostics` with the device headers: `200` / `201` →
     /// [`DiagUploadResponse`] (either `complete: true`, or an `upload` to use). Any other answer
     /// is a [`DiagUploadError`] with the [`error_action`] of its status and error code. No
     /// redirects; the device secret only travels over https (`lab` images may use http).
@@ -671,7 +909,7 @@ impl Fetcher {
         r: &DiagUploadRequest,
         lab: bool,
     ) -> std::result::Result<DiagUploadResponse, DiagUploadError> {
-        const STEP: &str = "POST /v1/diagnostics";
+        const STEP: &str = "POST diagnostics";
         if let Err(e) = r.validate() {
             return Err(DiagUploadError::new(
                 ErrorAction::Drop,
@@ -680,9 +918,12 @@ impl Fetcher {
         }
         let used = self.current_token();
         let req = self
-            .device_request(reqwest::Method::POST, "/v1/diagnostics", cred, &used, lab)
+            .device_request(reqwest::Method::POST, "diagnostics", cred, &used, lab)
             .map_err(|e| DiagUploadError::new(ErrorAction::Drop, format!("{STEP}: {e}")))?;
-        let resp = req.json(r).send().await.map_err(|e| net_error(STEP, e))?;
+        let resp = self
+            .send(req.json(r))
+            .await
+            .map_err(|e| net_error(STEP, e))?;
         self.observe(&resp, &used);
         let status = resp.status();
         if !(status == StatusCode::OK || status == StatusCode::CREATED) {
@@ -722,7 +963,7 @@ impl Fetcher {
         diag_put_with(&self.upload_client, u, file, lab).await
     }
 
-    /// Step 3, `POST /v1/diagnostics/{id}/complete` with the device headers: 2xx →
+    /// Step 3, `POST /api/device/v1/diagnostics/{id}/complete` with the device headers: 2xx →
     /// [`CompleteOutcome::Done`]; an answer whose [`error_action`] is
     /// [`ErrorAction::Restart`] (`409 upload_mismatch`) → [`CompleteOutcome::Rejected`]; any
     /// other answer is a [`DiagUploadError`].
@@ -743,13 +984,13 @@ impl Fetcher {
         let req = self
             .device_request(
                 reqwest::Method::POST,
-                &format!("/v1/diagnostics/{id}/complete"),
+                &format!("diagnostics/{id}/complete"),
                 cred,
                 &used,
                 lab,
             )
             .map_err(|e| DiagUploadError::new(ErrorAction::Drop, format!("{STEP}: {e}")))?;
-        let resp = req.send().await.map_err(|e| net_error(STEP, e))?;
+        let resp = self.send(req).await.map_err(|e| net_error(STEP, e))?;
         self.observe(&resp, &used);
         if resp.status().is_success() {
             return Ok(CompleteOutcome::Done);
@@ -762,18 +1003,18 @@ impl Fetcher {
         Err(e)
     }
 
-    /// `POST /v1/support` with the device headers (plan 2026-11-05 Task 5): `200` / `201` →
-    /// [`SupportResponse`] (the same `client_id` always gets the same ticket). Any other answer is
-    /// a [`DiagUploadError`] with the [`error_action`] of its status and error code (its detail
-    /// names this step, not an upload). A request the device secret may not travel with (http on
-    /// a release image) is kept and backed off, not dropped: it is the student's request.
+    /// `POST /api/device/v1/support` with the device headers (plan 2026-11-05 Task 5): `200` /
+    /// `201` → [`SupportResponse`] (the same `client_id` always gets the same ticket). Any other
+    /// answer is a [`DiagUploadError`] with the [`error_action`] of its status and error code (its
+    /// detail names this step, not an upload). A request the device secret may not travel with
+    /// (http on a release image) is kept and backed off, not dropped: it is the student's request.
     pub async fn support(
         &self,
         cred: &DeviceCred,
         r: &SupportRequest,
         lab: bool,
     ) -> std::result::Result<SupportResponse, DiagUploadError> {
-        const STEP: &str = "POST /v1/support";
+        const STEP: &str = "POST support";
         if let Err(e) = r.validate() {
             return Err(DiagUploadError::new(
                 ErrorAction::Drop,
@@ -782,9 +1023,12 @@ impl Fetcher {
         }
         let used = self.current_token();
         let req = self
-            .device_request(reqwest::Method::POST, "/v1/support", cred, &used, lab)
+            .device_request(reqwest::Method::POST, "support", cred, &used, lab)
             .map_err(|e| DiagUploadError::new(ErrorAction::Backoff, format!("{STEP}: {e}")))?;
-        let resp = req.json(r).send().await.map_err(|e| net_error(STEP, e))?;
+        let resp = self
+            .send(req.json(r))
+            .await
+            .map_err(|e| net_error(STEP, e))?;
         self.observe(&resp, &used);
         let status = resp.status();
         if !(status == StatusCode::OK || status == StatusCode::CREATED) {
@@ -819,7 +1063,7 @@ fn valid_ticket(t: &str) -> bool {
 
 /// The client of the presigned diagnostics `PUT`: never follows a redirect, [`DIAG_PUT_TIMEOUT`].
 fn diag_put_client() -> Client {
-    no_redirect_client(DIAG_PUT_TIMEOUT)
+    no_redirect_client(None, DIAG_PUT_TIMEOUT)
 }
 
 /// The presigned `PUT` of `file` ([`Fetcher::diag_put`]). Returns the 2xx status.
@@ -973,18 +1217,22 @@ async fn api_failure(step: &str, resp: reqwest::Response) -> DiagUploadError {
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.trim().parse::<u64>().ok())
         .map(|s| Duration::from_secs(s).min(MAX_RETRY_AFTER));
-    let body = read_capped(resp, MAX_ERROR_BODY_BYTES).await.ok();
-    let parsed = body.as_deref().and_then(ApiError::parse);
+    let body = read_error_body(resp).await;
+    if is_not_available(status, &body) {
+        return DiagUploadError::new(
+            ErrorAction::Backoff,
+            format!("{step}: not available on this server"),
+        );
+    }
+    let parsed = body.map(|b| ApiError {
+        code: b.code,
+        message: Some(b.message),
+    });
     if parsed.as_ref().is_some_and(|p| p.is_machine_bug()) {
         log::error!("diagnostics upload, {step}: the server says this machine's request is malformed ({status})");
     }
     let action = error_action(status, parsed.as_ref());
-    let code = parsed.as_ref().map(|p| p.code.as_str()).filter(|c| {
-        !c.is_empty()
-            && c.len() <= 64
-            && c.bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-    });
+    let code = parsed.as_ref().map(|p| p.code.as_str());
     let detail = match code {
         Some(c) => format!("{step}: the server answered {status} {c}"),
         None => format!("{step}: the server answered {status}"),
@@ -1065,39 +1313,130 @@ pub fn redirect_allowed(previous: &[reqwest::Url], next: &reqwest::Url) -> bool 
     }
 }
 
-/// 服务端错误体 `{"error": {"code", "message"}}` 里的 message（截短、去掉控制字符）；读不出就是 None。
-async fn read_error_message(mut resp: reqwest::Response) -> Option<String> {
-    let mut body = Vec::new();
-    while let Ok(Some(chunk)) = resp.chunk().await {
-        if body.len() + chunk.len() > MAX_ERROR_BODY_BYTES {
-            return None;
-        }
-        body.extend_from_slice(&chunk);
+/// The error code of a 404 that means "this server does not offer the route yet".
+pub const NOT_AVAILABLE: &str = "not_available";
+
+/// A server error body `{"error":{"code","message","details"?}}`, sanitised: `code` matches
+/// `[A-Za-z0-9_-]{1,64}`, `message` has no control characters and at most
+/// [`MAX_ERROR_MESSAGE_CHARS`] characters (it may be empty).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ErrorBody {
+    pub code: String,
+    pub message: String,
+}
+
+/// Reads an error body. Only the nested JSON shape counts (unknown fields such as `details` are
+/// ignored); an invalid `code`, HTML, text or any other JSON is `None`, so no body text other than
+/// a sanitised `message` ever reaches an error string.
+pub fn parse_error_body(body: &[u8]) -> Option<ErrorBody> {
+    use serde::Deserialize;
+    #[derive(Deserialize)]
+    struct Inner {
+        code: String,
+        #[serde(default, deserialize_with = "lenient_message")]
+        message: String,
     }
-    let v: serde_json::Value = serde_json::from_slice(&body).ok()?;
-    let m = v.get("error")?.get("message")?.as_str()?;
-    let m: String = m
+    // Decisions depend only on `code`: a missing, null or non-string message is "".
+    fn lenient_message<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+        Ok(match serde_json::Value::deserialize(d)? {
+            serde_json::Value::String(s) => s,
+            _ => String::new(),
+        })
+    }
+    #[derive(Deserialize)]
+    struct Wire {
+        error: Inner,
+    }
+    let Wire { error } = serde_json::from_slice(body).ok()?;
+    if !valid_code(&error.code) {
+        return None;
+    }
+    let message = error
+        .message
         .chars()
         .filter(|c| !c.is_control())
         .take(MAX_ERROR_MESSAGE_CHARS)
         .collect();
-    (!m.is_empty()).then_some(m)
+    Some(ErrorBody {
+        code: error.code,
+        message,
+    })
+}
+
+fn valid_code(c: &str) -> bool {
+    !c.is_empty()
+        && c.len() <= 64
+        && c.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// The single place that decides "not available": status 404 and the code [`NOT_AVAILABLE`].
+fn is_not_available(status: u16, body: &Option<ErrorBody>) -> bool {
+    status == 404 && body.as_ref().is_some_and(|b| b.code == NOT_AVAILABLE)
+}
+
+/// The server answered 404 `not_available`: it does not offer this route yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotAvailable;
+
+impl std::fmt::Display for NotAvailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the server does not offer this yet (404 not_available)")
+    }
+}
+
+impl std::error::Error for NotAvailable {}
+
+/// A non-success answer that is not one of the typed errors; `code` is the sanitised JSON code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerRefused {
+    pub status: u16,
+    pub code: Option<String>,
+}
+
+impl std::fmt::Display for ServerRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the server answered {}", self.status)?;
+        match &self.code {
+            Some(c) => write!(f, " {c}"),
+            None => Ok(()),
+        }
+    }
+}
+
+impl std::error::Error for ServerRefused {}
+
+/// Reads at most [`MAX_ERROR_BODY_BYTES`] of an answer and parses it as an error body. A body over
+/// the cap (or one that cannot be read) is treated as no body.
+async fn read_error_body(resp: reqwest::Response) -> Option<ErrorBody> {
+    let body = read_capped(resp, MAX_ERROR_BODY_BYTES).await.ok()?;
+    parse_error_body(&body)
+}
+
+/// The error for a non-success answer: [`NotAvailable`] or [`ServerRefused`] ([`refused`]).
+async fn refusal(resp: reqwest::Response) -> anyhow::Error {
+    let status = resp.status().as_u16();
+    let body = read_error_body(resp).await;
+    refused(status, body)
+}
+
+/// The one reading of a non-success answer on the device routes (push grant, inbox, logos, ...):
+/// 404 `not_available` is [`NotAvailable`], anything else [`ServerRefused`] with the sanitised
+/// code.
+fn refused(status: u16, body: Option<ErrorBody>) -> anyhow::Error {
+    if is_not_available(status, &body) {
+        return anyhow::Error::new(NotAvailable);
+    }
+    anyhow::Error::new(ServerRefused {
+        status,
+        code: body.map(|b| b.code),
+    })
 }
 
 /// Classifies a 401 from an inbox call by its JSON error code.
-async fn unauthorized_kind(mut resp: reqwest::Response) -> anyhow::Error {
-    let mut body = Vec::new();
-    while let Ok(Some(chunk)) = resp.chunk().await {
-        if body.len() + chunk.len() > MAX_ERROR_BODY_BYTES {
-            return anyhow::Error::new(Unauthorized);
-        }
-        body.extend_from_slice(&chunk);
-    }
-    let code = serde_json::from_slice::<serde_json::Value>(&body)
-        .ok()
-        .and_then(|v| v.get("error")?.get("code")?.as_str().map(String::from));
-    match code.as_deref() {
-        Some("device_auth_missing") => anyhow::Error::new(DeviceAuthMissing),
+async fn unauthorized_kind(resp: reqwest::Response) -> anyhow::Error {
+    match read_error_body(resp).await {
+        Some(b) if b.code == "device_auth_missing" => anyhow::Error::new(DeviceAuthMissing),
         _ => anyhow::Error::new(Unauthorized),
     }
 }
