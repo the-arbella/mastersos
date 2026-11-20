@@ -2398,9 +2398,10 @@ fn screen_text_is_ascii_only() {
 #[test]
 fn long_fields_fit_in_80_columns() {
     let long = "x".repeat(200);
+    let label = "x".repeat(50);
     let a = seed_with(
         Some(&long),
-        &format!("https://{long}"),
+        &format!("https://{label}.{label}.{label}.{label}"),
         &[&"s".repeat(32), "b"],
     );
     let name = format!("seed-{}.toml", "n".repeat(100));

@@ -351,6 +351,78 @@ pub fn update_mirror(url: &str) -> Result<(), String> {
     )
 }
 
+/// A seed's `server_url`: the server origin, `http://` or `https://` plus a host (a DNS name, a
+/// dotted IPv4 address or a bracketed IPv6 address), an optional `:port` (1-65535) and at most one
+/// trailing `/`. No userinfo, path, query or fragment: the agent appends the API paths itself.
+pub fn server_origin(url: &str) -> Result<(), String> {
+    let bad = |why: &str| Err(format!("{why} (e.g. https://server.example)"));
+    let Some(rest) = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+    else {
+        return bad("must start with http:// or https://");
+    };
+    if !url.bytes().all(|b| b.is_ascii_graphic()) {
+        return bad("contains whitespace, control or non-ASCII characters");
+    }
+    let authority = rest.strip_suffix('/').unwrap_or(rest);
+    if authority.bytes().any(|b| matches!(b, b'/' | b'?' | b'#')) {
+        return bad("must be the server origin (scheme, host, optional port), without a path");
+    }
+    if authority.contains(['@', '%', '\\']) {
+        return bad("must not carry credentials or escapes");
+    }
+    let port = if let Some(v6) = authority.strip_prefix('[') {
+        let Some((addr, after)) = v6.split_once(']') else {
+            return bad("has an unterminated [IPv6] host");
+        };
+        if addr.is_empty()
+            || !addr
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() || b == b':' || b == b'.')
+            || !addr.contains(':')
+        {
+            return bad("has a malformed [IPv6] host");
+        }
+        match after {
+            "" => None,
+            _ => match after.strip_prefix(':') {
+                Some(p) => Some(p),
+                None => return bad("has junk after the [IPv6] host"),
+            },
+        }
+    } else {
+        let (h, p) = match authority.rsplit_once(':') {
+            Some((h, p)) => (h, Some(p)),
+            None => (authority, None),
+        };
+        let dotted_quad = h.split('.').count() == 4
+            && h.split('.')
+                .all(|o| !o.is_empty() && o.len() <= 3 && o.bytes().all(|b| b.is_ascii_digit()));
+        if dotted_quad {
+            if !h
+                .split('.')
+                .all(|o| o.parse::<u16>().is_ok_and(|n| n <= 255))
+            {
+                return bad("has a malformed IPv4 host");
+            }
+        } else if h.is_empty() || !is_dns_name(h) {
+            return bad("has an empty or malformed host");
+        }
+        p
+    };
+    if let Some(p) = port {
+        let ok = !p.is_empty()
+            && p.len() <= 5
+            && p.bytes().all(|b| b.is_ascii_digit())
+            && p.parse::<u32>().is_ok_and(|n| (1..=65535).contains(&n));
+        if !ok {
+            return bad("has a bad port");
+        }
+    }
+    Ok(())
+}
+
 /// The spelling rules of [`update_mirror`], parameterized: `name` and `example` go into the error,
 /// `max` is the length cap in bytes. Shared with `ubuntu_mirror` ([`crate::deb::check_mirror`]).
 pub(crate) fn archive_url(url: &str, name: &str, example: &str, max: usize) -> Result<(), String> {
@@ -1272,6 +1344,40 @@ mod tests {
         ] {
             assert!(update_mirror(bad).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn server_origin_accepts_scheme_host_port() {
+        for ok in [
+            "https://server.example",
+            "https://server.example/",
+            "https://server.example:8443",
+            "http://127.0.0.1:8480",
+            "http://[::1]:9000",
+        ] {
+            assert!(server_origin(ok).is_ok(), "{ok}");
+        }
+    }
+
+    #[test]
+    fn server_origin_refuses_path_query_userinfo() {
+        for bad in [
+            "https://server.example/org/x/devices",
+            "https://server.example/api/device/v1/",
+            "https://server.example//",
+            "https://server.example?x=1",
+            "https://server.example#f",
+            "https://u@server.example",
+            "ftp://server.example",
+            "server.example",
+            "https://",
+            "https://server.example:0",
+            "https://server.example:65536",
+        ] {
+            assert!(server_origin(bad).is_err(), "{bad:?}");
+        }
+        let e = server_origin("https://server.example/org").unwrap_err();
+        assert!(e.contains("without a path"), "{e}");
     }
 
     #[test]

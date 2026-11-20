@@ -99,12 +99,15 @@ impl Seed {
     }
 
     /// The strict checks [`Seed::parse`] leaves out on purpose (like [`crate::checks`] stays out
-    /// of manifest parsing): each Wi-Fi entry passes [`crate::checks::wifi`] and no SSID appears
-    /// twice. The installer (an invalid seed in its menu), the server before serving a seed and
-    /// `mastersos-sign seed-check` call it; an installed agent never does, so a later rule change
+    /// of manifest parsing): the `server_url` is an origin ([`crate::checks::server_origin`]),
+    /// each Wi-Fi entry passes [`crate::checks::wifi`] and no SSID appears twice. The installer (an invalid seed in its menu), the server before serving a seed and
+    /// `mastersos seed check` call it; an installed agent never does, so a later rule change
     /// cannot stop a machine from starting — its wifi step skips bad entries one at a time.
     /// Messages name the entry and its SSID, never a secret.
     pub fn validate(&self) -> Result<(), BundleError> {
+        if let Err(e) = crate::checks::server_origin(&self.server_url) {
+            return Err(BundleError::Invalid(format!("seed server_url: {e}")));
+        }
         for (i, w) in self.wifi.iter().enumerate() {
             if let Err(e) = crate::checks::wifi(w) {
                 return Err(BundleError::Invalid(format!("seed wifi[{i}]: {e}")));
@@ -363,7 +366,7 @@ mod tests {
     #[test]
     fn cloud_seed_requires_fetch_token() {
         let cloud = Seed {
-            server_url: "https://cloud.arbellalabs.com/org/alpha/devices".into(),
+            server_url: "https://server.example".into(),
             trust: vec![key()],
             fetch_token: None,
             group: None,
@@ -404,7 +407,7 @@ mod tests {
     #[test]
     fn seed_roundtrips_wifi_and_school_name() {
         let mut seed = Seed {
-            server_url: "https://cloud.arbellalabs.com/org/eis/devices".into(),
+            server_url: "https://server.example".into(),
             trust: vec![key()],
             fetch_token: Some("tok".into()),
             group: None,
@@ -449,7 +452,7 @@ mod tests {
     #[test]
     fn seed_rejects_bad_wifi_without_echoing_secret() {
         let base = Seed {
-            server_url: "u".into(),
+            server_url: "https://server.example".into(),
             trust: vec![key()],
             fetch_token: None,
             group: None,
@@ -508,7 +511,7 @@ mod tests {
     fn seed_roundtrips_it_account_and_redacts() {
         let hash = "$y$j9T$saltsaltsalt$0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef./";
         let mut seed = Seed {
-            server_url: "https://cloud.arbellalabs.com/org/eis/devices".into(),
+            server_url: "https://server.example".into(),
             trust: vec![key()],
             fetch_token: Some("tok".into()),
             group: Some("staff".into()),
@@ -536,5 +539,28 @@ mod tests {
             Err(BundleError::Invalid(m)) => assert!(!m.contains("$6$x"), "{m}"),
             other => panic!("wanted Invalid, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn validate_refuses_server_url_with_path() {
+        let mut seed = Seed {
+            server_url: "https://server.example".into(),
+            trust: vec![key()],
+            fetch_token: None,
+            group: None,
+            oidc: None,
+            min_version: None,
+            school_id: None,
+            wifi: vec![],
+            school_name: None,
+            it_account: None,
+        };
+        seed.validate().unwrap();
+        seed.server_url = "https://server.example/org/x/devices".into();
+        let Err(BundleError::Invalid(m)) = seed.validate() else {
+            panic!("wanted Invalid");
+        };
+        assert!(m.contains("server_url"), "{m}");
+        assert!(m.contains("without a path"), "{m}");
     }
 }
