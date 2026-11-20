@@ -365,10 +365,9 @@ VM 166；或被人手工改过）agent 只回报 `luks:tpm` 失败「数据分�
 `reset = { id = "<UUIDv4>", requested_at = "<服务端此刻>" }`——与挂失锁定一样**只改草稿、发布才生效，签名覆盖它**。
 发布页的 lint 以 `device_reset_requested` 警告列出每台要恢复出厂的机器；`reset.id` 不是 1–64 个字母、数字或 `-` 时是
 `device_reset_id_invalid` 错误（带换行的 id 永远对不上 `reset-done` 里的行，会每次开机都恢复出厂）。发布前可以撤销
-（请求体 `null`）。`mastersos` 命令行与 `mastersos mcp` 没有这个操作，整份写草稿与还原旧版本时也拒绝增加、改动或删除任何 `[[device]].reset`
-（与 `trust` 一样的第二道防线，只在 MCP 进程里）：AI 经 MCP 不能增加、改动或删除 `reset`。这**不是**说 AI 排不了恢复出厂——
+（请求体 `null`）。`mastersos` 命令行没有这个操作。这**不是**说 AI 排不了恢复出厂——
 它照样能起草一个 `when = "apply"`（以 root 运行）的分组脚本，里面自己调 `systemd-factory-reset request`。真正的关口仍是
-人看过再发布（发布要 publish 范围，MCP 拿不到；发布页列出 lint 与差异），所以发布时要细看脚本与 `[[device]]` 的改动。
+人看过再发布（发布要 IT 用学校钥匙批准，AI 拿不到；发布页列出 lint 与差异），所以发布时要细看脚本与 `[[device]]` 的改动。
 
 agent 在接受新包之后、以及常驻启动时载入本地的包之后检查（`apply-local` 不检查：GDM 之前不做破坏性的事），按序：
 

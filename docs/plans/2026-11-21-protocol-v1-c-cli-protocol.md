@@ -29,6 +29,31 @@ Ambiguities found (the plan's choice in brackets; the server team confirms, we d
 
 Server-team answers used here (2026-11-20): `POST seed` returns exactly `{"server_url","school_id","fetch_token"}`; production `auth-config` has `client_id`, `scopes ["openid","email","offline_access"]` and `step_up_acr: ""` (empty is the main path; tokens carry `auth_time`, no `acr`); feature names are opaque to the server; their e2e wants the non-interactive mode pinned in Task 9.
 
+## Answers from the server team (2026-11-20), binding for this plan
+
+These close B1 and B2: the parts marked BLOCKED are implemented as follows.
+
+- **B1.** `GET /api/cli/v1/schools` (bearer) returns a JSON array of the caller's schools, each object exactly `{"id","name","time_zone"}`; an empty array when the caller administers none. `init` without `--school` lists them and takes the only one, or asks which; publish stamps `[school] name` from the entry whose `id` is the school's.
+- **B2.** The audience goes as `resource=<audience>` (RFC 8707), never `audience=`: on the device authorization request, and on the step-up authorization request together with `prompt=login` and `max_age=0`. `acr_values` is sent only when `step_up_acr` is not empty.
+- **`arbella auth token --json`** prints one JSON object on stdout: `{"fleet_url","access_token","expires_at"}`, `expires_at` RFC 3339 UTC with second precision and `Z`. `--json` is required. `--step-up` does a fresh browser sign-in first (prompts on stderr only), then prints the same object. Exit codes: 2 usage, 3 not signed in (stdout carries `{"error":{"code","message"}}`), 4 forbidden, 5 conflict, 6 step-up failed. The CLI maps 3 to "run `arbella login`" and never parses stderr.
+- **Bodies.** `POST seed` and `POST keys/probe` take an empty body or `{}`; any member is refused with 400 `invalid`. The CLI sends no body.
+- **Errors.** `{"error":{"code","message","details"?}}`; branch on `code` only (`version_conflict` carries `details.latest_version`, shown to the person).
+- **`features_used`.** Opaque to the server; no `format_1`.
+- **`issued_at`.** UTC with `Z`.
+- **base64 is per field, not one rule.** Nonces, signatures and digests are canonical standard base64 with padding and no line breaks. At least one escrow field is URL-safe without padding on the server. Every task that encodes or decodes a field takes the encoding from the protocol text for that field and pins it with a test vector from `mastersos-bundle/testdata`; where the text is silent, ask the server team for that field before writing the code.
+- **Device routes** check the fetch token first: without a valid token every route answers 401 `unauthorized`, the reserved ones included.
+- **End to end (Tasks 10 and 11).** The server team provides one script that starts a throwaway database, the server and a test issuer on loopback http, creates a school with an admin, enables MastersOS, and prints the server URL and the school id; plus a stub `arbella` on PATH that mints tokens without a browser. Fetch-token rotation is the server's operator command, exposed by that script. Our runner job and the lab call the script; we do not start the server ourselves.
+
+- **Confirmed by the server team:** the non-interactive mode of Task 9 (`--key-file`, `--yes`, `--json`, `--server`, `--school`, exits 0/1/2, error shape `{"error":{"code","message","problems"}}`) and plan A's `protocol-check` JSON. `arbella` without credentials exits 3 and prints `{"error":{"code":"not_signed_in","message":…,"problems":[]}}` on stdout; our own `not_logged_in` code stays ours.
+
+- **The end-to-end harness (Tasks 10 and 11), as built by the server team.** One binary, `fleet-e2e-server`, with no Docker and no browser: it starts its own throwaway database, a test issuer and the real server on loopback http, with one school, an admin and MastersOS enabled. When ready it prints one JSON line on stdout (also `--ready-file PATH`): `{"server_url","issuer","school_id","admin_sub","admin_email","control_url","arbella_stub","pid"}`. SIGINT or SIGTERM stops it and removes everything.
+  - The stub: put the `arbella_stub` directory first on `PATH` and set `FLEET_E2E_CONTROL=<control_url>`. `arbella auth token --json` and `--step-up --json` then print the real object; `FLEET_E2E_SIGNED_OUT=1` gives exit 3 with the `not_signed_in` JSON. A normal token has an old `auth_time`, so step-up routes answer `401 step_up_required` until `--step-up` is used.
+  - Control endpoint (loopback): `POST /token` (`step_up=true`), `POST /fetch-token/rotate` (optional `compromised_at`), `POST /fetch-token/drop-retired`, `GET /healthz`.
+  - There is no clock control. Time-based behaviour (heartbeat validity, the feature gate's window) is covered by unit tests, and the end to end uses real time only.
+  - Both binaries are Linux x86_64 build artifacts of the server team's own runner build. Task 10 takes their paths from two environment variables and fails with a clear message when they are missing; it never builds the server.
+
+- **Who runs the first cross-repo end to end (agreed with the server team).** Their repository owns the runner suite: it starts the harness and runs our driving script with our binaries. Task 10 therefore delivers one executable at a stable path, `tools/e2e/protocol-v1.sh`, taking `--server-url`, `--school-id`, `--arbella-stub DIR`, `--control-url`, `--bin-dir DIR` (holding `mastersos` and `mastersos-agent`) and `--work-dir DIR`; exit 0 or non-zero; one JSON summary on stdout listing each step with `ok`. It writes only under the work directory. Our binaries come from plan A's `linux-bins` build (`.labtest-out/linux-bins/` on the Mac) and are copied, with `tools/e2e/`, into the other repository's untracked `e2e-in/mastersos/` before their job is started. We send them the script's path and commit.
+
 ## Global Constraints
 
 - Files, comments, errors and script output in English; end-user (Device) text only through gettext (`image/system-i18n/*.po`, every catalogue). CLI output is English (school IT tool, not localised).

@@ -1,4 +1,4 @@
-//! 测试辅助：软件实现的 passkey（feature `test-util`）。server、agent、mcp、sign
+//! 测试辅助：软件实现的 passkey（feature `test-util`）。server、agent、命令行
 //! 的测试都用它当 IT 的 passkey。
 
 use std::collections::BTreeSet;

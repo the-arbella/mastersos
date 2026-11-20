@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Installs the MastersOS command line (mastersos.exe, mastersos-sign.exe) for the current Windows user.
+Installs the MastersOS command line (mastersos.exe) for the current Windows user.
 
 .DESCRIPTION
 Downloads mastersos-x86_64-pc-windows-msvc.zip and SHA256SUMS from the GitHub release, checks the SHA-256 before
@@ -118,7 +118,7 @@ function Install-MastersOS([string]$Version) {
 
         $unpacked = Join-Path $tmp 'x'
         Expand-Archive -LiteralPath $zip -DestinationPath $unpacked
-        $names = @('mastersos.exe', 'mastersos-sign.exe')
+        $names = @('mastersos.exe')
         foreach ($name in $names) {
             if (-not (Test-Path -LiteralPath (Join-Path $unpacked $name) -PathType Leaf)) {
                 Stop-Install "$asset has no ${name}: nothing installed"
@@ -134,8 +134,8 @@ function Install-MastersOS([string]$Version) {
             Remove-Item -Force -ErrorAction SilentlyContinue
         foreach ($name in $names) {
             $path = Join-Path $dir $name
-            # A running mastersos.exe (`mastersos mcp`) cannot be overwritten, but it can be renamed; the name is new
-            # every time, so a locked leftover can never stop the second program from being replaced
+            # A running mastersos.exe cannot be overwritten, but it can be renamed; the name is new
+            # every time, so a locked leftover can never stop the program from being replaced
             if (Test-Path -LiteralPath $path) {
                 $old = "$path.$([Guid]::NewGuid().ToString('N')).old"
                 Move-Item -LiteralPath $path -Destination $old -Force
@@ -153,8 +153,21 @@ function Install-MastersOS([string]$Version) {
         Stop-Install "installed $exe, but it does not run on this computer"
     }
     Write-Output "Installed $exe"
-    Write-Output "Installed $(Join-Path $dir 'mastersos-sign.exe')"
     Write-Output "$installed"
+
+    # An earlier installer put a second program in this folder; its key commands are part of mastersos now.
+    # Renamed first like a running mastersos.exe, so a locked copy is reported, never fatal.
+    $stale = Join-Path $dir 'mastersos-sign.exe'
+    if (Test-Path -LiteralPath $stale) {
+        try {
+            $gone = "$stale.$([Guid]::NewGuid().ToString('N')).old"
+            Move-Item -LiteralPath $stale -Destination $gone -Force -ErrorAction Stop
+            Remove-Item -LiteralPath $gone -Force -ErrorAction SilentlyContinue
+            Write-Output "Removed the old $stale (now part of mastersos)"
+        } catch {
+            Write-Output "Could not remove the old $stale (now part of mastersos): close it and delete it by hand"
+        }
+    }
 
     # The user PATH (never the machine PATH), read and written raw so %VARIABLES% in it stay unexpanded
     $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')

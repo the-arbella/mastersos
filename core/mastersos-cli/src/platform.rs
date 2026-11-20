@@ -13,7 +13,7 @@ use zeroize::Zeroizing;
 /// FAT32 or exFAT cannot keep a file private.
 pub const KEY_FILE_NOTE: &str = "Make sure no other user can read this school key file. Keep it on a USB stick whenever you can.";
 
-/// The settings directory of `app` (`mastersos` or `mastersos-sign`): `~/.config/<app>` on macOS
+/// The settings directory of `app` (`mastersos`): `~/.config/<app>` on macOS
 /// and Linux (XDG_CONFIG_HOME is ignored, so existing settings and pins never move);
 /// `%APPDATA%\<app>` on Windows.
 pub fn config_dir(app: &str) -> Result<PathBuf> {
@@ -617,7 +617,7 @@ mod tests {
             &[("HOME", "/h")][..],
             &[("XDG_CONFIG_HOME", "/x"), ("HOME", "/h")][..],
         ] {
-            for app in ["mastersos", "mastersos-sign"] {
+            for app in ["mastersos", "other-app"] {
                 assert_eq!(
                     config_dir_from(app, env(vars)).unwrap(),
                     Path::new("/h/.config").join(app)

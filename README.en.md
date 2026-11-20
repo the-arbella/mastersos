@@ -28,21 +28,19 @@ paths that are not in this repository.
 
 - `mastersos-bundle`: settings bundle manifest, packing, signing and verification (Ed25519; old WebAuthn
   signatures are still verified, never made), the monthly check-in (heartbeat), pre-publish lint. Shared by the
-  agent and `mastersos-sign`.
+  agent and `mastersos`.
 - `mastersos-agent`: runs on each device. It fetches, verifies and applies settings.
-- `mastersos-mcp`: the `mastersos` command line for people and AI assistants (`mastersos mcp` is a stdio MCP server).
-  People edit a local settings folder and publish it with a school key; an AI assistant can read, check and diff,
-  but cannot publish.
-- `mastersos-sign`: command line for school keys: make one, register it, approve an upload on another computer,
-  read a computer's disk recovery code.
+- `mastersos-cli`: the `mastersos` command line, the only one. People edit a local settings folder and publish it with a
+  school key; the same program makes and registers school keys, verifies published versions, renews the monthly check-in
+  and reads a computer's disk recovery code. An AI assistant can read, check and diff, but cannot publish.
 - `mastersos-installer`: USB installer and first-boot user setup for unmanaged devices.
 
 ## Trust model in brief
 
 A device applies only a bundle approved with one of the school's trusted keys. The **school key** (a small file plus
 a printed copy) is the one key type: IT approves with it from any computer that has the file
-(`mastersos publish --school-key <file>`). The trusted keys come only from school key files
-IT holds (`mastersos init`, `mastersos keys add|remove`), never from the server. The cloud stores and delivers
+(`mastersos publish --key-file <file>`). The trusted keys come only from school key files
+IT holds (`mastersos init`, `mastersos key add|remove`), never from the server. The cloud stores and delivers
 bundles but cannot forge one, and an AI assistant can prepare a change but a person has to approve it.
 
 ## Build and test

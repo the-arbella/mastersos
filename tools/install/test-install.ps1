@@ -121,14 +121,19 @@ try {
     if (-not (Test-Path -LiteralPath $portFile)) { Fail 'the local release server did not start' (Join-Path $tmp 'server.err') }
     $base = "http://127.0.0.1:$((Get-Content -Raw -LiteralPath $portFile).Trim())"
 
-    # 1. A given version: both programs installed, the absolute path and the version printed, user PATH updated
+    # 1. A given version: the program installed, the absolute path and the version printed, user PATH updated; a
+    # mastersos-sign.exe left in the same folder by an earlier installer is removed, with one line saying so
+    $dir = Join-Path $tmp 'case1\Programs\mastersos'
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    Set-Content -LiteralPath (Join-Path $dir 'mastersos-sign.exe') -Value 'stale'
     $code = Invoke-Installer -Name 'case1' -ReleaseBase $base -Arguments @('-Version', $Tag)
     $log = Join-Path $tmp 'case1.log'
-    $dir = Join-Path $tmp 'case1\Programs\mastersos'
     if ($code -ne 0) { Fail "install -Version $Tag exited $code" $log }
-    foreach ($name in 'mastersos.exe', 'mastersos-sign.exe') {
-        if (-not (Test-Path -LiteralPath (Join-Path $dir $name) -PathType Leaf)) { Fail "$name not installed" $log }
-    }
+    if (-not (Test-Path -LiteralPath (Join-Path $dir 'mastersos.exe') -PathType Leaf)) { Fail 'mastersos.exe not installed' $log }
+    if (Test-Path -LiteralPath (Join-Path $dir 'mastersos-sign.exe')) { Fail 'stale mastersos-sign.exe not removed' $log }
+    $removed = "Removed the old $(Join-Path $dir 'mastersos-sign.exe') (now part of mastersos)"
+    if (-not (Get-Content -Raw -LiteralPath $log).Contains($removed)) { Fail 'removal message missing' $log }
+    if (@(Select-String -LiteralPath $log -Pattern 'mastersos-sign' -SimpleMatch).Count -ne 1) { Fail 'removal not reported in exactly one line' $log }
     $out = & (Join-Path $dir 'mastersos.exe') --version
     if ("$out" -notmatch $VersionPattern) { Fail "installed mastersos --version printed: $out" $log }
     $text = Get-Content -Raw -LiteralPath $log
@@ -145,6 +150,9 @@ try {
     $userPath = [string]$envKey.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
     if (@($userPath -split ';' | Where-Object { $_ -eq $dir }).Count -ne 1) { Fail 'user PATH has the folder twice' $log }
     if (@(Get-ChildItem -LiteralPath $dir -Filter '*.old').Count -ne 0) { Fail 'old copies left behind' $log }
+    if ((Get-Content -Raw -LiteralPath $log).Contains('mastersos-sign')) { Fail 'installer names mastersos-sign with nothing to remove' $log }
+    $out = & (Join-Path $dir 'mastersos.exe') --version
+    if ("$out" -notmatch $VersionPattern) { Fail "upgraded mastersos --version printed: $out" $log }
     Pass 'reinstall over an existing copy'
 
     # 3. No version, piped into Invoke-Expression: the newest cli-* release, on the list's second page
