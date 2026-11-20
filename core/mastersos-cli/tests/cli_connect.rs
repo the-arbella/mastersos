@@ -187,7 +187,7 @@ fn help_hides_setup_and_uses_school_key_words() {
         .output()
         .unwrap();
     let help = String::from_utf8_lossy(&out.stdout).to_lowercase();
-    assert!(help.contains("--school-key"), "{help}");
+    assert!(help.contains("--key-file"), "{help}");
     for word in ["heartbeat", "kit", "trust", "escrow", "digest", "0600"] {
         assert!(!help.contains(word), "{word}: {help}");
     }

@@ -1,6 +1,6 @@
-//! The recovery kit on the command line (plan 6 design §5.2, ruling 10): `kit new`, `--kit` for
-//! `sign` / `heartbeat` / `register` (which registers the kit's escrow recipient too), and
-//! `escrow-read`.
+//! The school key (recovery kit) on the command line (plan 6 design §5.2, ruling 10): `key new`,
+//! `--key-file` for `publish`, `heartbeat` and `key register` (which registers the kit's escrow
+//! recipient too), and `recovery read`.
 //!
 //! The kit text is the school's master secret: it is written only to a 0600 file that did not
 //! exist, read from such a file or from stdin, and never printed, logged or put in an error.
@@ -18,7 +18,7 @@ use mastersos_bundle::{is_recovery_key, trust_fingerprint, TrustKey};
 use serde::Deserialize;
 use zeroize::Zeroizing;
 
-use super::{write_secret, Api};
+use super::Api;
 use crate::safe;
 
 /// Longest kit file or stdin line read; a kit text is 69 characters, 87 when grouped.
@@ -26,7 +26,7 @@ const KIT_INPUT_MAX: u64 = 1024;
 /// Largest sealed row opened; the server keeps them at most 2 KiB.
 const SEALED_MAX: usize = 8 * 1024;
 
-/// What `kit new` may print: the kit's public parts.
+/// What `key new` may print: the kit's public parts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KitSummary {
     pub key_id: String,
@@ -50,7 +50,7 @@ pub fn kit_new(out: &Path) -> Result<KitSummary> {
     kit_new_in(out, None).map(|(summary, _)| summary)
 }
 
-/// The file name `kit new` gives a school key written into a directory:
+/// The file name `key new` gives a school key written into a directory:
 /// `<slug>-school-key-<code8>.kit`, or `school-key-<code8>.kit` without a usable school name.
 /// `<code8>` is the key code without its dash.
 pub fn school_key_file_name(school: Option<&str>, key_id: &str) -> String {
@@ -80,7 +80,7 @@ pub fn school_key_file_name(school: Option<&str>, key_id: &str) -> String {
     }
 }
 
-/// `kit new --out <FILE|DIR> [--school <slug>]`: when `out` is an existing directory the file is
+/// `key new --out <FILE|DIR> [--school <slug>]`: when `out` is an existing directory the file is
 /// named by [`school_key_file_name`]. Returns the summary and the path written.
 pub fn kit_new_in(out: &Path, school: Option<&str>) -> Result<(KitSummary, std::path::PathBuf)> {
     let kit = Kit::generate();
@@ -91,11 +91,28 @@ pub fn kit_new_in(out: &Path, school: Option<&str>) -> Result<(KitSummary, std::
     };
     let mut text = kit.to_display();
     text.push('\n');
-    write_secret(&path, text.as_bytes())?;
+    write_new_private(&path, text.as_bytes())?;
     Ok((KitSummary::of(&kit), path))
 }
 
+/// Write the school key to a new owner-only file ([`crate::platform::create_private`]); an
+/// existing file is refused, and a half-written one removed.
+fn write_new_private(path: &Path, data: &[u8]) -> Result<()> {
+    let mut f = crate::platform::create_private(path)?;
+    let written = f.write_all(data).and_then(|()| f.sync_all());
+    if let Err(e) = written {
+        drop(f);
+        let _ = std::fs::remove_file(path);
+        bail!("cannot write {}: {e}", path.display());
+    }
+    Ok(())
+}
+
+/// A key file that is a PEM file (an old PKCS#8 key) is refused by name, before it is parsed.
 fn parse(text: &str, from: &str) -> Result<Kit> {
+    if text.trim_start().starts_with("-----BEGIN") {
+        bail!("{from} is a PEM key, not a school key file; school keys are made with mastersos key new");
+    }
     Kit::parse(text).with_context(|| format!("cannot read the school key from {from}"))
 }
 
@@ -115,7 +132,17 @@ pub fn load_kit(path: &Path) -> Result<Kit> {
     parse(&text, &path.display().to_string())
 }
 
-/// Read a kit from the first line of `input` (`--kit -`); later lines stay for the prompts.
+/// A `--key-file`: a school key file, or `-` for the first line of stdin (later lines stay for
+/// the prompts).
+pub fn load_key_file(path: &Path) -> Result<Kit> {
+    if path.as_os_str() == "-" {
+        read_kit(&mut std::io::stdin().lock())
+    } else {
+        load_kit(path)
+    }
+}
+
+/// Read a kit from the first line of `input` (`--key-file -`); later lines stay for the prompts.
 pub fn read_kit(input: &mut dyn BufRead) -> Result<Kit> {
     let mut line = Zeroizing::new(String::with_capacity(KIT_INPUT_MAX as usize + 1));
     input
@@ -155,7 +182,7 @@ pub fn is_already_registered(e: &anyhow::Error) -> bool {
     super::server_error_code(e) == Some("key_exists")
 }
 
-/// Register the kit's escrow recipient (`POST /v1/admin/escrow-recipients`, `keys` scope), bound
+/// Register the kit's escrow recipient (`POST /v1/admin/escrow-recipients`), bound
 /// to the kit's recovery key: the kit signs the binding message over a fresh probe nonce of this
 /// school, built locally from the nonce (the server's `message_b64` is never signed). A
 /// recipient registered already is reported and left as it is.
@@ -258,9 +285,9 @@ struct Row {
 }
 
 /// Fetch a machine's escrowed rows and open the sealed ones locally with the kit's escrow
-/// identity; prints one line per row and returns how many were opened. Needs a token with
-/// `read` and `recovery`; every read leaves an audit row on the server.
-pub async fn escrow_read(
+/// identity; prints one line per row and returns how many were opened. What the token may
+/// read is the server's to decide; every read leaves an audit row on the server.
+pub async fn recovery_read(
     api: &Api,
     kit: &Kit,
     device_id: &str,
@@ -369,5 +396,35 @@ mod name_tests {
         let (_, p2) = kit_new_in(&own, None).unwrap();
         assert_eq!(p2, own);
         assert!(kit_new_in(&own, None).is_err());
+    }
+
+    /// The paper kits already handed out stay readable: every text form of the shared vectors
+    /// loads from an owner-only file and gives the vector's key id and recipient.
+    #[test]
+    fn kit_vectors_still_parse() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../mastersos-bundle/testdata/kit-vectors.json"
+        );
+        let file: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let vectors = file["vectors"].as_array().unwrap();
+        assert!(!vectors.is_empty());
+        let dir = tempfile::tempdir().unwrap();
+        for (i, v) in vectors.iter().enumerate() {
+            for form in ["text", "display"] {
+                let p = dir.path().join(format!("{i}-{form}.kit"));
+                let mut f = crate::platform::create_private(&p).unwrap();
+                std::io::Write::write_all(&mut f, v[form].as_str().unwrap().as_bytes()).unwrap();
+                drop(f);
+                let kit = load_kit(&p).unwrap();
+                assert_eq!(kit.key_id(), v["key_id"].as_str().unwrap(), "{i} {form}");
+                assert_eq!(
+                    kit.escrow_recipient(),
+                    v["escrow_recipient"].as_str().unwrap(),
+                    "{i} {form}"
+                );
+            }
+        }
     }
 }

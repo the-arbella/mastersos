@@ -1,4 +1,4 @@
-//! `mastersos init --school-key` and `mastersos keys add|remove|list`: the trusted keys and the
+//! `mastersos init --key-file` and `mastersos key add|remove|list`: the trusted keys and the
 //! disk-unlocking recipients come only from school key files; the server is only asked whether
 //! they are registered.
 
@@ -183,7 +183,7 @@ async fn init_writes_trust_from_school_keys() {
     let dir = t.path().join("school");
     let o = run(
         home.path(),
-        args(&[&"init", &dir, &"--school-key", &pa, &"--school-key", &pb]),
+        args(&[&"init", &dir, &"--key-file", &pa, &"--key-file", &pb]),
     )
     .await;
     let (out, err) = text(&o);
@@ -216,12 +216,12 @@ async fn init_refuses_unregistered_key() {
     let s = server(&[&other]).await;
     let home = connected_home(&s.uri());
     let dir = t.path().join("school");
-    let o = run(home.path(), args(&[&"init", &dir, &"--school-key", &pa])).await;
+    let o = run(home.path(), args(&[&"init", &dir, &"--key-file", &pa])).await;
     let (out, err) = text(&o);
     assert!(!o.status.success(), "{out}{err}");
     assert!(
         err.contains("is not registered for")
-            && err.contains("mastersos-sign register")
+            && err.contains("mastersos key register")
             && !err.contains("signing page"),
         "{err}"
     );
@@ -248,22 +248,22 @@ async fn init_refuses_key_registered_with_another_public_key() {
     .await;
     let home = connected_home(&s.uri());
     let dir = t.path().join("school");
-    let o = run(home.path(), args(&[&"init", &dir, &"--school-key", &pa])).await;
+    let o = run(home.path(), args(&[&"init", &dir, &"--key-file", &pa])).await;
     assert!(!o.status.success());
     assert!(text(&o).1.contains("is not registered for"));
     assert!(!dir.exists());
 }
 
 #[test]
-fn init_without_key_points_to_mastersos_sign() {
+fn init_without_key_points_to_key_new() {
     let home = tempfile::tempdir().unwrap();
     let dir = home.path().join("school");
     let o = mastersos(home.path(), &["init".as_ref(), dir.as_os_str()]);
     assert!(!o.status.success());
     let err = String::from_utf8_lossy(&o.stderr);
-    assert!(err.contains("--school-key"), "{err}");
-    assert!(err.contains("mastersos-sign school-key new"), "{err}");
-    assert!(err.contains("mastersos-sign register"), "{err}");
+    assert!(err.contains("--key-file"), "{err}");
+    assert!(err.contains("mastersos key new"), "{err}");
+    assert!(err.contains("mastersos key register"), "{err}");
     assert!(!err.contains("signing page"), "{err}");
     assert!(!dir.exists(), "nothing may be created");
 }
@@ -271,7 +271,7 @@ fn init_without_key_points_to_mastersos_sign() {
 /// A folder made by `init` trusting `a`.
 async fn folder_with(home: &Path, t: &Path, pa: &Path) -> PathBuf {
     let dir = t.join("school");
-    let o = run(home, args(&[&"init", &dir, &"--school-key", &pa])).await;
+    let o = run(home, args(&[&"init", &dir, &"--key-file", &pa])).await;
     let (out, err) = text(&o);
     assert!(o.status.success(), "{out}{err}");
     dir
@@ -293,11 +293,11 @@ async fn keys_add_then_remove_round_trip() {
     )
     .unwrap();
 
-    let o = run(home.path(), args(&[&"keys", &"add", &pb, &"--dir", &dir])).await;
+    let o = run(home.path(), args(&[&"key", &"add", &pb, &"--dir", &dir])).await;
     let (out, err) = text(&o);
     assert!(o.status.success(), "{out}{err}");
     assert!(
-        out.contains("Now publish with a school key that is already trusted: mastersos publish --school-key <file>"),
+        out.contains("Now publish with a school key that is already trusted: mastersos publish --key-file <file>"),
         "{out}"
     );
     let abs = std::path::absolute(&dir).unwrap().display().to_string();
@@ -307,7 +307,7 @@ async fn keys_add_then_remove_round_trip() {
     assert_eq!(recipients, [a.escrow_recipient(), b.escrow_recipient()]);
 
     // Adding it again changes nothing.
-    let o = run(home.path(), args(&[&"keys", &"add", &pb, &"--dir", &dir])).await;
+    let o = run(home.path(), args(&[&"key", &"add", &pb, &"--dir", &dir])).await;
     assert!(!o.status.success());
     assert_eq!(manifest(&dir).0.len(), 2);
 
@@ -315,15 +315,12 @@ async fn keys_add_then_remove_round_trip() {
     let code_b = code(&b).replace('-', "");
     let o = run(
         home.path(),
-        args(&[&"keys", &"remove", &code_b, &"--dir", &dir]),
+        args(&[&"key", &"remove", &code_b, &"--dir", &dir]),
     )
     .await;
     let (out, err) = text(&o);
     assert!(o.status.success(), "{out}{err}");
-    assert!(
-        out.contains("mastersos publish --school-key <file>"),
-        "{out}"
-    );
+    assert!(out.contains("mastersos publish --key-file <file>"), "{out}");
     let (trust, recipients) = manifest(&dir);
     assert_eq!(trust, [a.trust_key()]);
     assert_eq!(recipients, [a.escrow_recipient()]);
@@ -340,7 +337,7 @@ async fn keys_add_refuses_unregistered_key() {
     let home = connected_home(&s.uri());
     let dir = folder_with(home.path(), t.path(), &pa).await;
     let before = std::fs::read_to_string(dir.join("manifest.toml")).unwrap();
-    let o = run(home.path(), args(&[&"keys", &"add", &pb, &"--dir", &dir])).await;
+    let o = run(home.path(), args(&[&"key", &"add", &pb, &"--dir", &dir])).await;
     assert!(!o.status.success());
     assert!(text(&o).1.contains("is not registered for"));
     assert_eq!(
@@ -359,7 +356,7 @@ async fn keys_remove_refuses_last_key() {
     let before = std::fs::read_to_string(dir.join("manifest.toml")).unwrap();
     let o = run(
         home.path(),
-        args(&[&"keys", &"remove", &code(&a), &"--dir", &dir]),
+        args(&[&"key", &"remove", &code(&a), &"--dir", &dir]),
     )
     .await;
     let (out, err) = text(&o);
@@ -379,7 +376,7 @@ async fn keys_list_marks_local_trust() {
     let s = server(&[&a, &b]).await;
     let home = connected_home(&s.uri());
     let dir = folder_with(home.path(), t.path(), &pa).await;
-    let o = run(home.path(), args(&[&"keys", &"list", &"--dir", &dir])).await;
+    let o = run(home.path(), args(&[&"key", &"list", &"--dir", &dir])).await;
     let (out, err) = text(&o);
     assert!(o.status.success(), "{out}{err}");
     let row = |c: &str| {
@@ -410,7 +407,7 @@ async fn keys_remove_keeps_unmarked_recipients_and_needs_no_server() {
     let s = server(&[&a, &b]).await;
     let home = connected_home(&s.uri());
     let dir = folder_with(home.path(), t.path(), &pa).await;
-    let o = run(home.path(), args(&[&"keys", &"add", &pb, &"--dir", &dir])).await;
+    let o = run(home.path(), args(&[&"key", &"add", &pb, &"--dir", &dir])).await;
     assert!(o.status.success(), "{:?}", text(&o));
     // Written by hand: nothing ties b's recipient to b any more.
     let m = std::fs::read_to_string(dir.join("manifest.toml")).unwrap();
@@ -422,7 +419,7 @@ async fn keys_remove_keeps_unmarked_recipients_and_needs_no_server() {
     drop(s);
     let o = run(
         empty.path(),
-        args(&[&"keys", &"remove", &code(&b), &"--dir", &dir]),
+        args(&[&"key", &"remove", &code(&b), &"--dir", &dir]),
     )
     .await;
     let (out, err) = text(&o);
@@ -434,7 +431,7 @@ async fn keys_remove_keeps_unmarked_recipients_and_needs_no_server() {
     assert!(out.contains(&b.escrow_recipient()), "{out}");
     assert!(out.contains("by hand"), "{out}");
     assert!(
-        out.contains("If you still have that key's file, run again with --school-key <file>"),
+        out.contains("If you still have that key's file, run again with --key-file <file>"),
         "{out}"
     );
     assert!(!out.contains("the server says"), "{out}");
@@ -451,7 +448,7 @@ async fn keys_remove_keeps_unmarked_recipients_and_needs_no_server() {
 /// before key codes were noted there).
 async fn untagged_folder(home: &Path, t: &Path, pa: &Path, pb: &Path, kits: &[&Kit]) -> PathBuf {
     let dir = folder_with(home, t, pa).await;
-    let o = run(home, args(&[&"keys", &"add", &pb, &"--dir", &dir])).await;
+    let o = run(home, args(&[&"key", &"add", &pb, &"--dir", &dir])).await;
     assert!(o.status.success(), "{:?}", text(&o));
     let mut m = std::fs::read_to_string(dir.join("manifest.toml")).unwrap();
     for k in kits {
@@ -477,10 +474,10 @@ async fn keys_remove_with_school_key_file_removes_its_untagged_recipient() {
     let o = run(
         empty.path(),
         args(&[
-            &"keys",
+            &"key",
             &"remove",
             &code(&b),
-            &"--school-key",
+            &"--key-file",
             &pb,
             &"--dir",
             &dir,
@@ -510,10 +507,10 @@ async fn keys_remove_refuses_school_key_file_of_another_key() {
     let o = run(
         home.path(),
         args(&[
-            &"keys",
+            &"key",
             &"remove",
             &code(&b),
-            &"--school-key",
+            &"--key-file",
             &pa,
             &"--dir",
             &dir,
@@ -552,7 +549,7 @@ async fn keys_remove_shows_what_the_server_says_but_removes_nothing_more() {
     let before = s.received_requests().await.unwrap().len();
     let o = run(
         home.path(),
-        args(&[&"keys", &"remove", &code(&b), &"--dir", &dir]),
+        args(&[&"key", &"remove", &code(&b), &"--dir", &dir]),
     )
     .await;
     let (out, err) = text(&o);
@@ -578,7 +575,7 @@ async fn keys_remove_shows_what_the_server_says_but_removes_nothing_more() {
         "{out}"
     );
     assert!(!out.contains(['\u{1b}', '\u{7}']), "{out:?}");
-    assert!(out.contains("--school-key <file>"), "{out}");
+    assert!(out.contains("--key-file <file>"), "{out}");
     assert!(out.contains("by hand"), "{out}");
     // Only reads.
     let reqs = s.received_requests().await.unwrap();
@@ -603,7 +600,7 @@ async fn keys_list_filters_control_characters() {
     )
     .await;
     let home = connected_home(&s.uri());
-    let o = run(home.path(), args(&[&"keys", &"list"])).await;
+    let o = run(home.path(), args(&[&"key", &"list"])).await;
     let (out, err) = text(&o);
     assert!(o.status.success(), "{out}{err}");
     assert!(!out.contains(['\u{1b}', '\u{7}']), "{out:?}");
@@ -619,7 +616,7 @@ async fn loose_token_file_says_how_to_fix_it() {
     let home = connected_home(&s.uri());
     let token = config_dir(home.path()).join("token");
     std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o644)).unwrap();
-    let o = run(home.path(), args(&[&"keys", &"list"])).await;
+    let o = run(home.path(), args(&[&"key", &"list"])).await;
     let (out, err) = text(&o);
     assert!(!o.status.success(), "{out}{err}");
     assert!(err.contains("mastersos connect"), "{err}");

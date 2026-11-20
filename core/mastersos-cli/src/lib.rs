@@ -1,5 +1,6 @@
 //! mastersos: the command line. Settings are edited in a local directory ([`workdir`]) and
-//! published from there ([`publish`]); the server holds no draft.
+//! published from there ([`publish`]); the server holds no draft. The school key signs on this
+//! computer ([`sign`]).
 //!
 //! - Server responses are data: they are returned as they are and never acted on.
 //! - The token only goes in the `Authorization` header (marked sensitive): not in logs or errors.
@@ -28,7 +29,7 @@ use serde_json::{json, Value};
 
 pub use tools::{Body, Req};
 
-/// 错误文字最多留这么多字符：服务端的话不能把工具结果撑成一整页。
+/// The most characters of error text kept: what the server says cannot fill a whole page.
 const MAX_ERROR_CHARS: usize = 2000;
 
 /// Start failed: a wrong address, no connection, an invalid token, ...
@@ -47,14 +48,15 @@ impl std::fmt::Display for StartError {
 
 impl std::error::Error for StartError {}
 
-/// 管理 API 的客户端：服务器地址加一个 bearer token。
+/// The admin API client: the server address and a bearer token.
 #[derive(Clone)]
 pub struct Api {
     base: Url,
     client: reqwest::Client,
 }
 
-/// 不让 token 出现在任何 Debug 输出里（它本来也不在这个结构体里，只在客户端的默认头里）。
+/// Keeps the token out of every Debug output (it is not in this struct anyway, only in the
+/// client's default headers).
 impl std::fmt::Debug for Api {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Api")
@@ -79,7 +81,7 @@ impl Api {
         headers.insert(AUTHORIZATION, auth);
         let client = reqwest::Client::builder()
             .default_headers(headers)
-            // 不跟随重定向：被攻破的服务端不能借跳转把请求带到别处。
+            // No redirects: a compromised server cannot send the request elsewhere.
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(30))
             .build()
@@ -94,7 +96,7 @@ impl Api {
                 .path_segments_mut()
                 .expect("an http(s) URL always has a path");
             p.pop_if_empty();
-            // push 会把 `/`、`?`、`#` 之类转义，参数里的 id 逃不出自己那一段。
+            // push escapes `/`, `?`, `#` and the like: an id cannot leave its own segment.
             for s in segments {
                 p.push(s);
             }
@@ -122,7 +124,7 @@ impl Api {
                 .body(b),
         };
         let res = rb.send().await.map_err(|e| {
-            // reqwest 的错误可能带 URL，但不带请求头，token 不会漏。
+            // A reqwest error may carry the URL but never the headers: the token does not leak.
             format!(
                 "Could not reach the server: {}",
                 clip(&e.without_url().to_string())
@@ -175,7 +177,7 @@ pub fn check_server(server: &str) -> Result<Url, StartError> {
             "The server address must be https://host[:port]: {server}"
         )));
     }
-    // http 会把 token 明文送上网络；只有本机回环（测试、本机演示）可以。
+    // http would send the token in clear text: only the loopback address (tests, local demos) may.
     let host = base.host_str().unwrap_or_default();
     let loopback = host.eq_ignore_ascii_case("localhost")
         || host

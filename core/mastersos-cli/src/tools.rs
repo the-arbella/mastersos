@@ -1,4 +1,4 @@
-//! The server requests the command line makes (`devices`, `keys list`, `spec`): a name plus JSON
+//! The server requests the command line makes (`devices`, `key list`, `spec`): a name plus JSON
 //! arguments become one read-only admin API request ([`build`]).
 
 use reqwest::Method;

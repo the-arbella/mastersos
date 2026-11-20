@@ -811,8 +811,8 @@ fn changes<V: PartialEq>(
 // —— Trusted keys and disk-unlocking recipients in manifest.toml ——
 //
 // `[[trust]]` and `[school].escrow_recipients` are written only from school key files IT holds
-// (`init --school-key`, `keys add`); the server is never the source of what goes in. Each
-// recipient carries a `# school key <code>` comment so that `keys remove` finds it offline.
+// (`init --key-file`, `key add`); the server is never the source of what goes in. Each
+// recipient carries a `# school key <code>` comment so that `key remove` finds it offline.
 
 const RECIPIENT_TAG: &str = "# school key ";
 
@@ -829,7 +829,7 @@ pub fn normalize_key_code(code: &str) -> Option<String> {
         .then(|| format!("{}-{}", &hex[..4], &hex[4..]))
 }
 
-/// The code IT sees for a trusted key: its key code, or its id when it has none (a Passkey).
+/// The code IT sees for a trusted key: its key code, or its id when it has none.
 pub fn shown_code(key_id: &str) -> String {
     mastersos_bundle::keyid::key_code(key_id).unwrap_or_else(|| key_id.to_owned())
 }
@@ -857,9 +857,6 @@ fn trust_table(k: &TrustKey) -> toml_edit::Table {
     t["id"] = toml_edit::value(k.id.as_str());
     t["alg"] = toml_edit::value(k.alg.as_str());
     t["public_key"] = toml_edit::value(k.public_key.as_str());
-    if let Some(rp) = &k.rp_id {
-        t["rp_id"] = toml_edit::value(rp.as_str());
-    }
     t
 }
 
@@ -1083,7 +1080,7 @@ pub fn remove_school_key(
             _ => bail!("More than one school key has code {want}; edit manifest.toml by hand"),
         }
         if aot.iter().filter(|t| is_school_key(t)).count() == 1 {
-            bail!("cannot remove the last school key: computers would accept no new settings. Add another one first (`mastersos keys add <FILE>`)");
+            bail!("cannot remove the last school key: computers would accept no new settings. Add another one first (`mastersos key add <FILE>`)");
         }
         let i = hits[0];
         let first_prefix = (i == 0)
@@ -1617,7 +1614,7 @@ mod tests {
     }
 
     #[test]
-    fn pull_after_passkey_publish_is_clean() {
+    fn pull_after_a_published_upload_is_clean() {
         let t = tempfile::tempdir().unwrap();
         let dir = t.path().join("school");
         let w = pulled(&dir);

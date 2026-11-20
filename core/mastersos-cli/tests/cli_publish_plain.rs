@@ -245,7 +245,7 @@ fn text(o: &Output) -> (String, String) {
 /// A folder made by `mastersos init` trusting the school key at `key`.
 async fn folder(home: &Path, t: &Path, key: &Path) -> PathBuf {
     let dir = t.join("school");
-    let o = run(home, args(&[&"init", &dir, &"--school-key", &key]), "").await;
+    let o = run(home, args(&[&"init", &dir, &"--key-file", &key]), "").await;
     let (out, err) = text(&o);
     assert!(o.status.success(), "{out}{err}");
     dir
@@ -315,7 +315,7 @@ async fn publish_with_school_key_signs_checkin() {
     let dir = folder(home.path(), t.path(), &key).await;
     let o = run(
         home.path(),
-        args(&[&"publish", &dir, &"--school-key", &key]),
+        args(&[&"publish", &dir, &"--key-file", &key]),
         "1\nyes\n",
     )
     .await;
@@ -364,7 +364,7 @@ async fn publish_heartbeat_failure_keeps_version() {
     let dir = folder(home.path(), t.path(), &key).await;
     let o = run(
         home.path(),
-        args(&[&"publish", &dir, &"--school-key", &key]),
+        args(&[&"publish", &dir, &"--key-file", &key]),
         "1\ntrust\n",
     )
     .await;
@@ -392,7 +392,7 @@ async fn publish_without_school_key_uploads_nothing() {
     assert_eq!(o.status.code(), Some(1), "{out}{err}");
     assert_eq!(
         err.trim_end(),
-        "mastersos: Publishing needs the school key file: mastersos publish --school-key <FILE>"
+        "mastersos: Publishing needs the school key file: mastersos publish --key-file <PATH>"
     );
     assert!(out.is_empty(), "{out}");
     // Nothing was uploaded: no request to create a pending bundle, and none at all after init.
@@ -417,7 +417,7 @@ async fn json_publish_reports_the_checkin() {
     let dir = folder(home.path(), t.path(), &key).await;
     let o = run(
         home.path(),
-        args(&[&"--json", &"publish", &dir, &"--school-key", &key]),
+        args(&[&"--json", &"publish", &dir, &"--key-file", &key]),
         "1\ntrust\n",
     )
     .await;
@@ -437,7 +437,7 @@ async fn json_publish_reports_the_checkin() {
     let dir = folder(home.path(), t.path(), &key).await;
     let o = run(
         home.path(),
-        args(&[&"--json", &"publish", &dir, &"--school-key", &key]),
+        args(&[&"--json", &"publish", &dir, &"--key-file", &key]),
         "1\ntrust\n",
     )
     .await;
@@ -460,7 +460,7 @@ async fn publish_later_version_signs_its_checkin() {
     let dir = folder(home.path(), t.path(), &key).await;
     let o = run(
         home.path(),
-        args(&[&"publish", &dir, &"--school-key", &key]),
+        args(&[&"publish", &dir, &"--key-file", &key]),
         "1\nyes\n",
     )
     .await;
@@ -474,7 +474,7 @@ async fn publish_later_version_signs_its_checkin() {
     // The trusted keys do not change: only the version number is asked for.
     let o = run(
         home.path(),
-        args(&[&"publish", &dir, &"--school-key", &key]),
+        args(&[&"publish", &dir, &"--key-file", &key]),
         "2\n",
     )
     .await;
@@ -513,7 +513,7 @@ async fn publish_key_change_answered_no_publishes_nothing() {
     let before = manifest(&dir);
     let o = run(
         home.path(),
-        args(&[&"publish", &dir, &"--school-key", &key]),
+        args(&[&"publish", &dir, &"--key-file", &key]),
         "1\nno\n",
     )
     .await;
@@ -568,7 +568,7 @@ async fn publish_checks_in_even_when_the_folder_cannot_record_it() {
         .await;
     let o = run(
         home.path(),
-        args(&[&"publish", &dir, &"--school-key", &key]),
+        args(&[&"publish", &dir, &"--key-file", &key]),
         "1\nyes\n",
     )
     .await;
@@ -587,12 +587,12 @@ async fn publish_checks_in_even_when_the_folder_cannot_record_it() {
 fn help_texts_are_in_plain_words() {
     let mut commands: Vec<Vec<&str>> = vec![vec![]];
     for c in [
-        "init", "pull", "check", "diff", "devices", "spec", "publish", "keys", "connect",
+        "init", "pull", "check", "diff", "devices", "spec", "publish", "key", "connect",
     ] {
         commands.push(vec![c]);
     }
-    commands.push(vec!["keys", "add"]);
-    commands.push(vec!["keys", "remove"]);
+    commands.push(vec!["key", "add"]);
+    commands.push(vec!["key", "remove"]);
     for c in commands {
         let o = Command::new(env!("CARGO_BIN_EXE_mastersos"))
             .args(&c)
@@ -601,6 +601,12 @@ fn help_texts_are_in_plain_words() {
             .unwrap();
         let help = String::from_utf8_lossy(&o.stdout).into_owned();
         assert!(o.status.success(), "{c:?}: {help}");
+        // The monthly check-in command keeps its name in the command list.
+        let help: String = help
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("heartbeat "))
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(
             !help.to_lowercase().contains("signing page"),
             "{c:?}: {help}"
