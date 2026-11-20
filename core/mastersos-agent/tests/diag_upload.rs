@@ -463,14 +463,9 @@ async fn every_error_table_row_is_handled() {
             .len(),
         MAX_ROUNDS as usize
     );
-    // The flat `{"error": "<code>"}` form is read too.
+    // The nested form with another code gives up the same way.
     let e = env().await;
-    mount_step1(
-        &e.srv,
-        ResponseTemplate::new(409).set_body_json(serde_json::json!({"error": "not_yours"})),
-        None,
-    )
-    .await;
+    mount_step1(&e.srv, api_error(409, "not_yours"), None).await;
     let err = upload(&e.f, &cred(), req(), &e.file, true)
         .await
         .unwrap_err();

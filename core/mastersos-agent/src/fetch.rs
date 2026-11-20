@@ -238,7 +238,73 @@ pub enum RenewOutcome {
     /// 服务端给了当前令牌。
     New(String),
     /// 服务端拒绝（403），带服务端的说明。
-    Refused(String),
+    Refused(RenewRefused),
+}
+
+/// The server refused a token renewal with 403. `Display` is the server's message, or a fixed
+/// sentence when it sent none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenewRefused {
+    pub refused: ServerRefused,
+    pub message: Option<String>,
+}
+
+impl std::fmt::Display for RenewRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.message {
+            Some(m) => f.write_str(m),
+            None => f.write_str("the server refused token renewal (403)"),
+        }
+    }
+}
+
+/// Any other non-success answer to a token renewal (not 403): the error of `renew_token`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenewFailed {
+    pub refused: ServerRefused,
+    pub message: Option<String>,
+}
+
+impl std::fmt::Display for RenewFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "token renewal failed ({})", self.refused.status)?;
+        match &self.message {
+            Some(m) => write!(f, ": {m}"),
+            None => Ok(()),
+        }
+    }
+}
+
+impl std::error::Error for RenewFailed {}
+
+/// The server refused an escrow (403, 429, ...). `Display` is `escrow refused (<status>)` with
+/// `: <message>` when the server sent a JSON message; `refused.code` carries the JSON code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EscrowRefused {
+    pub refused: ServerRefused,
+    pub message: Option<String>,
+}
+
+impl std::fmt::Display for EscrowRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "escrow refused ({})", self.refused.status)?;
+        match &self.message {
+            Some(m) => write!(f, ": {m}"),
+            None => Ok(()),
+        }
+    }
+}
+
+impl std::error::Error for EscrowRefused {}
+
+/// Status, code and non-empty message of a refusal.
+fn refusal_parts(status: u16, body: Option<ErrorBody>) -> (ServerRefused, Option<String>) {
+    let message = body
+        .as_ref()
+        .map(|b| b.message.clone())
+        .filter(|m| !m.is_empty());
+    let code = body.map(|b| b.code);
+    (ServerRefused { status, code }, message)
 }
 
 impl std::fmt::Debug for RenewOutcome {
@@ -472,14 +538,8 @@ impl Fetcher {
         if status.is_success() {
             return Ok(());
         }
-        let message = read_error_body(resp)
-            .await
-            .map(|b| b.message)
-            .filter(|m| !m.is_empty());
-        match message {
-            Some(m) => bail!("escrow refused ({}): {m}", status.as_u16()),
-            None => bail!("escrow refused ({})", status.as_u16()),
-        }
+        let (refused, message) = refusal_parts(status.as_u16(), read_error_body(resp).await);
+        Err(anyhow::Error::new(EscrowRefused { refused, message }))
     }
 
     /// `POST /api/device/v1/fetch-token`：凭 `identity.json` 的托管凭据换领当前令牌（Ruling 20）。
@@ -524,14 +584,14 @@ impl Fetcher {
                 }
                 Ok(RenewOutcome::New(r.fetch_token))
             }
-            StatusCode::FORBIDDEN => Ok(RenewOutcome::Refused(
-                read_error_body(resp)
-                    .await
-                    .map(|b| b.message)
-                    .filter(|m| !m.is_empty())
-                    .unwrap_or_else(|| "the server refused token renewal (403)".into()),
-            )),
-            other => bail!("token renewal failed ({})", other.as_u16()),
+            StatusCode::FORBIDDEN => {
+                let (refused, message) = refusal_parts(403, read_error_body(resp).await);
+                Ok(RenewOutcome::Refused(RenewRefused { refused, message }))
+            }
+            other => {
+                let (refused, message) = refusal_parts(other.as_u16(), read_error_body(resp).await);
+                Err(anyhow::Error::new(RenewFailed { refused, message }))
+            }
         }
     }
 
@@ -991,26 +1051,17 @@ async fn api_failure(step: &str, resp: reqwest::Response) -> DiagUploadError {
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.trim().parse::<u64>().ok())
         .map(|s| Duration::from_secs(s).min(MAX_RETRY_AFTER));
-    let raw = read_capped(resp, MAX_ERROR_BODY_BYTES).await.ok();
-    let body = raw.as_deref().and_then(parse_error_body);
+    let body = read_error_body(resp).await;
     if is_not_available(status, &body) {
         return DiagUploadError::new(
             ErrorAction::Backoff,
             format!("{step}: not available on this server"),
         );
     }
-    // `parse_error_body` is the reader. Only the flat `{"error":"<code>"}` form, which the diag
-    // contract also allows, falls back to `ApiError::parse`, and its code must pass the same check.
-    let parsed = match body {
-        Some(b) => Some(ApiError {
-            code: b.code,
-            message: Some(b.message),
-        }),
-        None => raw
-            .as_deref()
-            .and_then(ApiError::parse)
-            .filter(|p| valid_code(&p.code)),
-    };
+    let parsed = body.map(|b| ApiError {
+        code: b.code,
+        message: Some(b.message),
+    });
     if parsed.as_ref().is_some_and(|p| p.is_machine_bug()) {
         log::error!("diagnostics upload, {step}: the server says this machine's request is malformed ({status})");
     }
@@ -1112,12 +1163,21 @@ pub struct ErrorBody {
 /// ignored); an invalid `code`, HTML, text or any other JSON is `None`, so no body text other than a
 /// sanitised `message` ever reaches an error string.
 pub fn parse_error_body(body: &[u8]) -> Option<ErrorBody> {
-    #[derive(serde::Deserialize)]
+    use serde::Deserialize;
+    #[derive(Deserialize)]
     struct Inner {
         code: String,
+        #[serde(default, deserialize_with = "lenient_message")]
         message: String,
     }
-    #[derive(serde::Deserialize)]
+    // Decisions depend only on `code`: a missing, null or non-string message is "".
+    fn lenient_message<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+        Ok(match serde_json::Value::deserialize(d)? {
+            serde_json::Value::String(s) => s,
+            _ => String::new(),
+        })
+    }
+    #[derive(Deserialize)]
     struct Wire {
         error: Inner,
     }
@@ -1180,7 +1240,8 @@ impl std::fmt::Display for ServerRefused {
 
 impl std::error::Error for ServerRefused {}
 
-/// Reads at most [`MAX_ERROR_BODY_BYTES`] of an answer and parses it as an error body.
+/// Reads at most [`MAX_ERROR_BODY_BYTES`] of an answer and parses it as an error body. A body over
+/// the cap (or one that cannot be read) is treated as no body.
 async fn read_error_body(resp: reqwest::Response) -> Option<ErrorBody> {
     let body = read_capped(resp, MAX_ERROR_BODY_BYTES).await.ok()?;
     parse_error_body(&body)

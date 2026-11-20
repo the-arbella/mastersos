@@ -1944,7 +1944,7 @@ impl Agent {
                     ),
                 }
             }
-            Ok(crate::fetch::RenewOutcome::Refused(m)) => failed("fetch-token", m),
+            Ok(crate::fetch::RenewOutcome::Refused(m)) => failed("fetch-token", m.to_string()),
             Err(e) => failed("fetch-token", format!("{e:#}")),
         };
         log::info!(

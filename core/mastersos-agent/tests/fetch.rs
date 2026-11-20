@@ -617,7 +617,7 @@ async fn renew_token_outcomes() {
         serde_json::json!({"device_id": "dev-1", "escrow_secret": id.escrow_secret})
     );
     match f.renew_token(&id, true).await.unwrap() {
-        RenewOutcome::Refused(m) => assert_eq!(m, "这台机器不能换领新令牌"),
+        RenewOutcome::Refused(m) => assert_eq!(m.to_string(), "这台机器不能换领新令牌"),
         other => panic!("{other:?}"),
     }
     for _ in 0..2 {
@@ -1300,4 +1300,78 @@ async fn bundle_error_names_status_and_code() {
         })
     );
     assert_eq!(e.to_string(), "the server answered 503 unavailable");
+}
+
+#[tokio::test]
+async fn escrow_refusal_is_typed() {
+    use mastersos_agent::fetch::{EscrowRefused, ServerRefused};
+    let srv = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+            "error": {"code": "secret_mismatch", "message": "Secret does not match"}
+        })))
+        .mount(&srv)
+        .await;
+    let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
+    let e = f.escrow(&escrow_req(), true).await.unwrap_err();
+    let r = e.downcast_ref::<EscrowRefused>().unwrap();
+    assert_eq!(
+        r.refused,
+        ServerRefused {
+            status: 403,
+            code: Some("secret_mismatch".into())
+        }
+    );
+    assert_eq!(r.message.as_deref(), Some("Secret does not match"));
+}
+
+#[tokio::test]
+async fn renewal_refusals_are_typed() {
+    use mastersos_agent::fetch::{RenewFailed, RenewOutcome, ServerRefused};
+    let id = mastersos_agent::seedpart::Identity {
+        device_id: "dev-1".into(),
+        escrow_secret: "A".repeat(43),
+    };
+    let srv = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(err_json("not_enrolled")))
+        .up_to_n_times(1)
+        .mount(&srv)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(503).set_body_json(err_json("unavailable")))
+        .mount(&srv)
+        .await;
+    let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
+    match f.renew_token(&id, true).await.unwrap() {
+        RenewOutcome::Refused(r) => {
+            assert_eq!(r.refused.status, 403);
+            assert_eq!(r.refused.code.as_deref(), Some("not_enrolled"));
+            assert_eq!(r.to_string(), "x");
+        }
+        other => panic!("{other:?}"),
+    }
+    let e = f.renew_token(&id, true).await.unwrap_err();
+    let r = e.downcast_ref::<RenewFailed>().unwrap();
+    assert_eq!(
+        r.refused,
+        ServerRefused {
+            status: 503,
+            code: Some("unavailable".into())
+        }
+    );
+    assert_eq!(e.to_string(), "token renewal failed (503): x");
+}
+
+#[test]
+fn error_body_without_a_usable_message_is_still_parsed() {
+    use mastersos_agent::fetch::parse_error_body;
+    for body in [
+        r#"{"error":{"code":"not_available","message":null}}"#,
+        r#"{"error":{"code":"not_available"}}"#,
+        r#"{"error":{"code":"not_available","message":7}}"#,
+    ] {
+        let b = parse_error_body(body.as_bytes()).expect(body);
+        assert_eq!((b.code.as_str(), b.message.as_str()), ("not_available", ""));
+    }
 }
