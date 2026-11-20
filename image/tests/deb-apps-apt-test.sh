@@ -144,6 +144,16 @@ apt -s install "$T/mastersos-apt-probe.deb" >"$T/sim1" 2>&1 || {
 	ls -l "$work/lists" >&2 || true
 	echo "--- policy:" >&2
 	env -i APT_CONFIG="$work/apt.conf" LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin apt-cache "${apt_opts[@]}" policy x11-utils >&2 || true
+	echo "--- architecture settings apt sees with the agent's configuration:" >&2
+	env -i APT_CONFIG="$work/apt.conf" LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin apt-config "${apt_opts[@]}" dump 2>&1 | grep -iE 'variant|architect' >&2 || true
+	echo "--- and where the host sets a variant:" >&2
+	grep -rIis 'variant' /etc/apt /etc/dpkg /usr/share/apt 2>/dev/null | head -20 >&2 || true
+	dpkg --print-architecture >&2 || true
+	echo "--- the same update and policy with no variants:" >&2
+	mkdir -p "$T/nv/lists/partial"
+	env -i APT_CONFIG="$work/apt.conf" LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin apt-get "${apt_opts[@]}" -o "Dir::State::lists=$T/nv/lists" -o 'APT::Architecture-Variants=' update 2>&1 | tail -5 >&2 || true
+	ls "$T/nv/lists" >&2 || true
+	env -i APT_CONFIG="$work/apt.conf" LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin apt-cache "${apt_opts[@]}" -o "Dir::State::lists=$T/nv/lists" -o 'APT::Architecture-Variants=' policy x11-utils >&2 || true
 	fail "simulation 1"
 }
 grep -qE '^Inst x11-utils \([^ ]+ .*\[amd64\]\)' "$T/sim1" || {
