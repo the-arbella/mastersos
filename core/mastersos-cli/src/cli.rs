@@ -171,7 +171,7 @@ enum Cmd {
     /// A computer's disk recovery keys
     #[command(subcommand)]
     Recovery(RecoveryCmd),
-    /// Install files
+    /// Seeds: the file a Device is installed with (its first trusted keys, server, school and fetch token)
     #[command(subcommand)]
     Seed(SeedCmd),
     /// Read a password twice without echo and print its yescrypt hash for the IT account (it_account.password_hash)
@@ -325,11 +325,32 @@ enum RecoveryCmd {
 
 #[derive(Subcommand)]
 enum SeedCmd {
-    /// Compare an install file with the keys and version verified on this computer
+    /// Make a seed from the latest version verified on this computer (its trusted keys, min_version, the Group's Wi-Fi and IT account) and a fetch token from the server; written for this user only
+    Make {
+        /// The Group the Devices installed with this seed start in (default: the default Group)
+        #[arg(long)]
+        group: Option<String>,
+        /// The seed file to write (owner-only). An existing file is replaced only with --yes, and never through a link
+        #[arg(long, value_name = "FILE")]
+        out: PathBuf,
+        /// A settings directory whose mastersos.toml names the server and the school (default: the current directory, when it is one)
+        #[arg(long, value_name = "DIR")]
+        dir: Option<PathBuf>,
+        /// The school's id (a lowercase UUID; default: `school_id` in the settings directory's mastersos.toml, else the only school of this account)
+        #[arg(long, value_name = "UUID")]
+        school: Option<String>,
+    },
+    /// Check a seed against the chain verified on this computer: its trusted keys, min_version, server, school, the fetch token's shape and the fingerprints in its header. Exit 0 when it matches, 1 when not
     Check {
-        /// The install file
+        /// The seed file
         #[arg(value_name = "FILE")]
         file: PathBuf,
+        /// A settings directory whose mastersos.toml names the server and the school (default: the current directory, when it is one)
+        #[arg(long, value_name = "DIR")]
+        dir: Option<PathBuf>,
+        /// The school's id (a lowercase UUID; default: `school_id` in the settings directory's mastersos.toml, else the only school of this account)
+        #[arg(long, value_name = "UUID")]
+        school: Option<String>,
     },
 }
 
@@ -457,6 +478,22 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         pin_flag: pin_flag.clone(),
         fingerprints: trust_fingerprint.clone(),
     };
+    // `seed check` exits 1 with its own report when the seed does not match.
+    if let Cmd::Seed(SeedCmd::Check { file, dir, school }) = &cmd {
+        return Ok(
+            match seed_check_v1(&o, file, dir.as_deref(), school.as_deref()).await {
+                Ok((out, ok)) => {
+                    print!("{out}");
+                    if ok {
+                        ExitCode::SUCCESS
+                    } else {
+                        ExitCode::from(1)
+                    }
+                }
+                Err(e) => finish(Err(e), json),
+            },
+        );
+    }
     // Protocol v1 commands: credentials from arbella or `mastersos login`, no config file.
     if matches!(
         cmd,
@@ -467,6 +504,7 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
             | Cmd::Heartbeat { .. }
             | Cmd::Recovery(_)
             | Cmd::Devices(_)
+            | Cmd::Seed(_)
             | Cmd::Key(
                 KeyCmd::Register { .. }
                     | KeyCmd::List { .. }
@@ -513,14 +551,6 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         }) => return keys_remove(dir.as_deref(), code, key_file.as_deref(), &o).await,
         _ => {}
     }
-    // The install file is read before the network too, so a wrong path fails fast.
-    let seed_text = match &cmd {
-        Cmd::Seed(SeedCmd::Check { file }) => Some(
-            std::fs::read_to_string(file)
-                .map_err(|e| OpError::Failed(format!("Could not read {}: {e}", file.display())))?,
-        ),
-        _ => None,
-    };
     let cfg = load_config()?;
     let server = server.or(cfg.server).ok_or_else(|| {
         OpError::Failed(
@@ -553,14 +583,11 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         | Cmd::Publish { .. }
         | Cmd::Heartbeat { .. }
         | Cmd::Recovery(_)
-        | Cmd::Devices(_) => {
+        | Cmd::Devices(_)
+        | Cmd::Seed(_) => {
             unreachable!("handled above")
         }
         Cmd::Spec { section, full } => spec(&api, section, full).await,
-        Cmd::Seed(SeedCmd::Check { .. }) => {
-            let text = seed_text.ok_or_else(|| fail("no install file"))?;
-            seed_check(&server, &token_file, &pin_dir()?, &text).await
-        }
         Cmd::Logo(LogoCmd::Upload { login, icon }) => {
             let body = logo_body(&login, &icon)?;
             let text = api
@@ -631,11 +658,6 @@ fn pin_dir_op(flag: Option<&Path>) -> Result<PathBuf, OpError> {
     resolve_pin_dir(flag).map_err(|e| OpError::Failed(e.message))
 }
 
-/// An error of the signing code: it may hold strings from the server, so it is escaped.
-fn sign_fail(e: anyhow::Error) -> OpError {
-    OpError::Failed(crate::safe::text(&format!("{e:#}")))
-}
-
 /// `mastersos key new`: no network. The school key itself is never printed.
 fn key_new(out: &Path, school: Option<&str>, json: bool) -> Result<String, CliError> {
     let (k, path) = crate::sign::kit::kit_new_in(out, school).map_err(local_file)?;
@@ -652,20 +674,6 @@ fn key_new(out: &Path, school: Option<&str>, json: bool) -> Result<String, CliEr
         k.fingerprint,
         shown.display()
     ))
-}
-
-/// `mastersos seed check <FILE>`, with the file's text (read before the network).
-async fn seed_check(
-    server: &str,
-    token_file: &Path,
-    pins: &Path,
-    text: &str,
-) -> Result<ExitCode, OpError> {
-    let api = sign_api(server, token_file)?;
-    crate::sign::seed_check(&api, pins, text, &mut std::io::stdout())
-        .await
-        .map_err(sign_fail)?;
-    Ok(ExitCode::SUCCESS)
 }
 
 /// `mastersos connect <SERVER_URL>`: ask for the token without echo, check it with `whoami`, then
@@ -1083,10 +1091,6 @@ fn migrate(dir: Option<&Path>, pins: &Path, write: bool, json: bool) -> Result<E
     })
 }
 
-fn sign_api(server: &str, token_file: &Path) -> Result<crate::sign::Api, OpError> {
-    crate::sign::Api::from_token_file(server, token_file).map_err(fail)
-}
-
 /// A school key file read for `init` or `key add`.
 struct SchoolKey {
     kit: mastersos_bundle::kit::Kit,
@@ -1417,6 +1421,27 @@ async fn v1_command(o: &V1, cmd: Cmd) -> Result<String, CliError> {
                 interactive,
             };
             key_unregister(&ctx, &code, keys.first(), &mut confirm, out).await
+        }
+        Cmd::Seed(SeedCmd::Make {
+            group,
+            out: path,
+            dir,
+            school,
+        }) => {
+            let ctx = KeyCtx {
+                o,
+                dir: dir.as_deref(),
+                school: school.as_deref(),
+                interactive,
+            };
+            // Without a person nothing is read from stdin.
+            let mut nobody = std::io::empty();
+            let confirm: &mut dyn std::io::BufRead = if interactive {
+                &mut confirm
+            } else {
+                &mut nobody
+            };
+            seed_make_v1(&ctx, group.as_deref(), &path, confirm, out).await
         }
         _ => Err(CliError::usage("not a protocol v1 command")),
     }
@@ -2329,6 +2354,120 @@ async fn publish_v1(
         ));
     }
     Ok(format!("Published version {version}\n"))
+}
+
+/// `mastersos seed make --out FILE [--group G] [--dir DIR | --school UUID --server URL]`: the
+/// chain verified here first, then the seed (see [`crate::seed`]). The fetch token is written
+/// into the file only; the trusted keys are printed.
+async fn seed_make_v1(
+    ctx: &KeyCtx<'_>,
+    group: Option<&str>,
+    path: &Path,
+    confirm: &mut dyn std::io::BufRead,
+    out: &mut dyn std::io::Write,
+) -> Result<String, CliError> {
+    // Before the network: an existing file without --yes, a link, a folder others can change.
+    crate::platform::check_out_file(path, ctx.o.yes).map_err(local_file)?;
+    let meta = ctx.meta()?;
+    let (server, school) = ctx.server(meta.as_ref(), confirm, out).await?;
+    let origin = server.origin().origin().ascii_serialization();
+    let pins = resolve_pin_dir(ctx.o.pin_flag.as_deref())?;
+    let verified =
+        crate::sign::chain::verify_chain((&server).into(), &pins, &ctx.o.anchors(), confirm, out)
+            .await
+            .map_err(crate::seed::nothing_published)?;
+    let seed =
+        crate::seed::make(&server, &origin, &school, &verified, group, path, ctx.o.yes).await?;
+    let shown = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let version = seed.min_version.unwrap_or_default();
+    if ctx.o.json {
+        let trust: Vec<Value> = seed
+            .trust
+            .iter()
+            .map(|k| json!({"key_id": k.id, "fingerprint": mastersos_bundle::trust_fingerprint(k)}))
+            .collect();
+        return Ok(format!(
+            "{}\n",
+            json!({"out": shown.display().to_string(), "school_id": school,
+                "min_version": version, "group": seed.group, "trust_fingerprints": trust})
+        ));
+    }
+    let mut s = format!(
+        "Wrote the seed for school {school} (version {version}, Group {}) to {}.\nIts trusted keys; compare the fingerprints with the ones IT verified:\n",
+        crate::safe::field(seed.group.as_deref().unwrap_or(mastersos_bundle::DEFAULT_GROUP)),
+        shown.display()
+    );
+    for k in &seed.trust {
+        s.push_str(&format!("    {}\n", crate::sign::key_line(k)));
+    }
+    Ok(s)
+}
+
+/// `mastersos seed check FILE [--dir DIR | --school UUID --server URL]`: the file is read before
+/// the network, then the chain is verified here and the seed compared with it. The report and
+/// whether the seed matches; never the fetch token or a Wi-Fi key.
+async fn seed_check_v1(
+    o: &V1,
+    file: &Path,
+    dir: Option<&Path>,
+    school: Option<&str>,
+) -> Result<(String, bool), CliError> {
+    use std::io::IsTerminal as _;
+    let text = crate::seed::read_seed_file(file)?;
+    let stdin = std::io::stdin();
+    let interactive = !o.yes && !o.json && stdin.is_terminal();
+    let mut lock = stdin.lock();
+    let mut nobody = std::io::empty();
+    let confirm: &mut dyn std::io::BufRead = if interactive { &mut lock } else { &mut nobody };
+    let (mut stdout, mut stderr) = (std::io::stdout(), std::io::stderr());
+    let out: &mut dyn std::io::Write = if o.json { &mut stderr } else { &mut stdout };
+    let ctx = KeyCtx {
+        o,
+        dir,
+        school,
+        interactive,
+    };
+    let meta = ctx.meta()?;
+    let (server, school) = ctx.server(meta.as_ref(), confirm, out).await?;
+    let origin = server.origin().origin().ascii_serialization();
+    let pins = resolve_pin_dir(o.pin_flag.as_deref())?;
+    let verified =
+        crate::sign::chain::verify_chain((&server).into(), &pins, &o.anchors(), confirm, out)
+            .await?;
+    let r = crate::seed::check(&server, &origin, &school, &verified, &text).await?;
+    let ok = r.ok();
+    if o.json {
+        return Ok((
+            format!(
+                "{}\n",
+                json!({"ok": ok, "version": r.version, "problems": r.problems, "notes": r.notes})
+            ),
+            ok,
+        ));
+    }
+    let mut s = if ok {
+        let mut s = format!(
+            "The seed matches version {} verified here. Its trusted keys:\n",
+            r.version
+        );
+        for k in &r.trust {
+            s.push_str(&format!("    {}\n", crate::sign::key_line(k)));
+        }
+        s
+    } else {
+        let mut s = format!(
+            "The seed does not match version {} verified here; do not install Devices with it:\n",
+            r.version
+        );
+        for p in &r.problems {
+            s.push_str(&format!("  * {p}\n"));
+        }
+        s
+    };
+    for n in &r.notes {
+        s.push_str(&format!("Note: {n}\n"));
+    }
+    Ok((s, ok))
 }
 
 /// `mastersos heartbeat --key-file PATH [--days N] [--school UUID]`: the check-in for the latest

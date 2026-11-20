@@ -17,6 +17,7 @@ pub mod logo;
 pub mod platform;
 pub mod publish;
 pub mod safe;
+pub mod seed;
 pub mod server;
 pub mod sign;
 pub mod tools;

@@ -134,8 +134,9 @@ impl Seed {
         toml::to_string(self).expect("Seed 只含字符串与表，必能序列化为 TOML")
     }
 
-    /// 同 [`Seed::to_toml`]，开头加注释：每把 trust 钥匙一行 `# <id>  <alg>  <指纹>`，
-    /// 再加一行提示去和管理网页上的指纹对照。种子是新机器的信任锚，IT 装机前要核对。
+    /// [`Seed::to_toml`] with a header comment: one line `# <id>  <alg>  <fingerprint>` per trust
+    /// key, then a line asking IT to compare them with the fingerprints it verified. A seed is a new
+    /// machine's trust anchor: IT checks it before installing.
     pub fn to_toml_with_header(&self) -> String {
         let mut out = String::new();
         for k in &self.trust {
@@ -147,7 +148,9 @@ impl Seed {
                 trust_fingerprint(k)
             ));
         }
-        out.push_str("# 请与管理网页「钥匙」页上的指纹对照\n\n");
+        out.push_str(
+            "# Compare these fingerprints with the ones IT verified (mastersos verify).\n\n",
+        );
         out.push_str(&self.to_toml());
         out
     }
@@ -314,7 +317,9 @@ mod tests {
             "# school-2026  ed25519  {}\n",
             trust_fingerprint(&key())
         )));
-        assert!(with_header.contains("# 请与管理网页「钥匙」页上的指纹对照\n"));
+        assert!(with_header.contains(
+            "# Compare these fingerprints with the ones IT verified (mastersos verify).\n"
+        ));
         assert_eq!(Seed::parse(&with_header).unwrap(), seed);
         // 不写 min_version 就没有这个键。
         seed.min_version = None;

@@ -84,6 +84,94 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Whether a secret file for another computer (a seed) may be written at `path`, and whether one
+/// is there already. Its folder may be on a USB stick, so it is not made private; it is refused
+/// when another account could swap the file in it ([`check_out_dir`]). An existing path is
+/// refused unless `replace`, and then only when it is a regular file of the current user, not a
+/// link (never followed).
+pub fn check_out_file(path: &Path, replace: bool) -> Result<bool> {
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    check_out_dir(parent)?;
+    let Some(f) = sys::open_no_follow(path)? else {
+        return Ok(false);
+    };
+    if !replace {
+        bail!(
+            "{} already exists; pass --yes to replace it",
+            path.display()
+        );
+    }
+    let meta = f
+        .metadata()
+        .with_context(|| format!("cannot read the metadata of {}", path.display()))?;
+    if !meta.is_file() {
+        bail!(
+            "{} is not a regular file; refusing to replace it",
+            path.display()
+        );
+    }
+    sys::check_owner(&f, path)?;
+    Ok(true)
+}
+
+/// Write a secret file for another computer: [`check_out_file`], then a new file
+/// ([`create_private`]: owner-only, exclusive, never through a link) or, with `replace`, a
+/// replacement of the current user's file ([`write_private`]: a new file renamed over it).
+pub fn write_out_file(path: &Path, bytes: &[u8], replace: bool) -> Result<()> {
+    if check_out_file(path, replace)? {
+        return write_private(path, bytes);
+    }
+    let mut f = create_private(path)?;
+    let written = f.write_all(bytes).and_then(|()| f.sync_all());
+    if let Err(e) = written {
+        drop(f);
+        let _ = std::fs::remove_file(path);
+        bail!("cannot write {}: {e}", path.display());
+    }
+    Ok(())
+}
+
+/// The folder a file for another computer goes into (Unix): it must belong to the current user
+/// or root, and other users must not be able to write to it unless it is sticky (like /tmp,
+/// where nobody can replace another's file). A link to a folder counts as that folder. Elsewhere
+/// nothing is checked here: on Windows the file's own owner-only DACL protects it.
+#[cfg(unix)]
+fn check_out_dir(dir: &Path) -> Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+    let f = File::open(dir).with_context(|| format!("cannot open {}", dir.display()))?;
+    let meta = f
+        .metadata()
+        .with_context(|| format!("cannot read the metadata of {}", dir.display()))?;
+    if !meta.is_dir() {
+        bail!("{} is not a directory", dir.display());
+    }
+    let me = nix::unistd::getuid().as_raw();
+    if meta.uid() != me && meta.uid() != 0 {
+        bail!(
+            "{} belongs to uid {}, not to the current user (uid {me}): that account could replace the file; write it into a folder of your own",
+            dir.display(),
+            meta.uid()
+        );
+    }
+    let mode = meta.mode();
+    if mode & 0o022 != 0 && mode & 0o1000 == 0 {
+        bail!(
+            "other users can write to {} (mode {:o}) and could replace the file; write it into a folder only you can change",
+            dir.display(),
+            mode & 0o7777
+        );
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn check_out_dir(_dir: &Path) -> Result<()> {
+    Ok(())
+}
+
 /// Refuse a file other accounts can read or change. Unix: another owner, or any group/other mode
 /// bit. Windows: an owner other than the current user or Administrators, no DACL, or an allow
 /// entry that grants read, write or control of the file to anyone but the current user, SYSTEM

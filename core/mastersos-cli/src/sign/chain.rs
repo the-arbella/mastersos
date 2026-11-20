@@ -1,10 +1,8 @@
 //! Verifying the chain here: from the pinned version to the latest, one version at a time, as the
 //! agent does (Ruling 15).
 //!
-//! The pin is `<pin_dir>/<host>[_<port>]+<school>.toml` for a protocol v1 server (one chain per
-//! origin and school): the version verified last time, its content digest and its trust. The old
-//! admin API ([`Source::Old`], until seed check moves to protocol v1) keeps its
-//! `<host>[_<port>][+<path segment>…].toml`.
+//! The pin is `<pin_dir>/<host>[_<port>]+<school>.toml` (one chain per origin and school): the
+//! version verified last time, its content digest and its trust.
 //! - **No pin** (first use): the fingerprint of every key in the latest version's trust is
 //!   printed, a school key file's own key marked. Without a person (`--yes`, `--json`, or stdin
 //!   not a terminal) the trust is taken only when every key in it is anchored ([`Anchors`]): a
@@ -38,22 +36,14 @@ use mastersos_bundle::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{ask, hex, key_line, Api, TrustDelta};
+use super::{ask, hex, key_line, TrustDelta};
 use crate::server::{CliError, Server};
 
 /// Where the versions come from.
 #[derive(Clone, Copy)]
 pub enum Source<'a> {
-    /// The old admin API (seed check until it moves to protocol v1).
-    Old(&'a Api),
     /// The protocol v1 CLI API of one school.
     New(&'a Server),
-}
-
-impl<'a> From<&'a Api> for Source<'a> {
-    fn from(a: &'a Api) -> Self {
-        Source::Old(a)
-    }
 }
 
 impl<'a> From<&'a Server> for Source<'a> {
@@ -79,44 +69,34 @@ pub fn pin_key_v1(origin: &reqwest::Url, school: &str) -> String {
 
 impl Source<'_> {
     fn pin_name(&self) -> Result<String, CliError> {
-        match self {
-            Source::Old(a) => Ok(a.pin_name()),
-            Source::New(s) => Ok(pin_name_v1(s.origin(), s.school()?)),
-        }
+        let Source::New(s) = self;
+        Ok(pin_name_v1(s.origin(), s.school()?))
     }
 
     /// What the pin records as its `host`.
     fn pin_key(&self) -> Result<String, CliError> {
-        match self {
-            Source::Old(a) => Ok(a.host()),
-            Source::New(s) => Ok(pin_key_v1(s.origin(), s.school()?)),
-        }
+        let Source::New(s) = self;
+        Ok(pin_key_v1(s.origin(), s.school()?))
     }
 
     /// For people: what this computer checks.
     fn describe(&self) -> String {
-        match self {
-            Source::Old(a) => a.host(),
-            Source::New(s) => format!(
-                "school {} on {}",
-                s.school().unwrap_or("?"),
-                s.origin().origin().ascii_serialization()
-            ),
-        }
+        let Source::New(s) = self;
+        format!(
+            "school {} on {}",
+            s.school().unwrap_or("?"),
+            s.origin().origin().ascii_serialization()
+        )
     }
 
     async fn latest_version(&self) -> Result<u64> {
-        match self {
-            Source::Old(a) => a.latest_version().await,
-            Source::New(s) => Ok(s.latest_version().await?),
-        }
+        let Source::New(s) = self;
+        Ok(s.latest_version().await?)
     }
 
     async fn version_archive(&self, v: u64) -> Result<Vec<u8>> {
-        match self {
-            Source::Old(a) => a.version_archive(v).await,
-            Source::New(s) => Ok(s.version_archive(v).await?),
-        }
+        let Source::New(s) = self;
+        Ok(s.version_archive(v).await?)
     }
 }
 
@@ -476,9 +456,7 @@ pub async fn verify_chain(
 /// The pin the old admin API wrote for a protocol v1 source's host (`<host>[_<port>].toml`), with
 /// the `host` it must record.
 pub(crate) fn legacy_pin_path(src: Source<'_>, pin_dir: &Path) -> Option<(PathBuf, String)> {
-    let Source::New(s) = src else {
-        return None;
-    };
+    let Source::New(s) = src;
     let o = s.origin();
     let host = o.host_str()?.to_owned();
     let key = match o.port() {
@@ -797,6 +775,24 @@ async fn first_use(
         return Err(not_confirmed(
             "a --trust-fingerprint value is not one of the keys shown",
             unknown,
+        ));
+    }
+    // A fingerprint is a short hash: one shared by two of the keys names neither of them.
+    let ambiguous: Vec<serde_json::Value> = given
+        .iter()
+        .filter(|f| {
+            m.trust
+                .iter()
+                .filter(|t| mastersos_bundle::trust_fingerprint(t) == **f)
+                .count()
+                > 1
+        })
+        .map(|f| serde_json::json!(crate::safe::field(f)))
+        .collect();
+    if !ambiguous.is_empty() {
+        return Err(not_confirmed(
+            "a --trust-fingerprint value is ambiguous: more than one of the keys shown has it",
+            ambiguous,
         ));
     }
     let unanchored: Vec<String> = m
@@ -1144,6 +1140,34 @@ mod tests {
                 .collect();
             names.sort();
             names
+        }
+
+        /// Two trusted keys with one fingerprint (here the same public key under two ids): a
+        /// `--trust-fingerprint` value cannot tell them apart, so it anchors neither.
+        #[tokio::test]
+        async fn a_fingerprint_shared_by_two_keys_is_ambiguous() {
+            let mock = MockServer::start().await;
+            let t = signer(1).trust_key();
+            let text = format!(
+                "version = 1\nissued_at = \"2026-11-03T00:00:00Z\"\n\n[[trust]]\nid = \"key-1\"\nalg = \"ed25519\"\npublic_key = \"{pk}\"\n\n[[trust]]\nid = \"key-1b\"\nalg = \"ed25519\"\npublic_key = \"{pk}\"\n\n[school]\nid = \"{SCHOOL}\"\n\n[[config]]\nid = \"default\"\nname = \"Default\"\ninterface = \"learning\"\nlogin_methods = [\"local\"]\n\n[[group]]\nid = \"default\"\nname = \"Ungrouped\"\nconfig = \"default\"\n",
+                pk = t.public_key
+            );
+            let a1 = pack(
+                &Contents {
+                    manifest_text: text,
+                    files: Default::default(),
+                },
+                &signer(1),
+            )
+            .unwrap();
+            serve(&mock, SCHOOL, &[a1]).await;
+            let pins = tempfile::tempdir().unwrap();
+            let s = server(&mock, SCHOOL);
+            let (r, _) = verify(&s, pins.path(), true, "").await;
+            let e = r.unwrap_err();
+            assert_eq!(e.code, "trust_not_confirmed", "{}", e.message);
+            assert!(e.message.contains("ambiguous"), "{}", e.message);
+            assert!(pin_files(pins.path()).is_empty());
         }
 
         #[tokio::test]
