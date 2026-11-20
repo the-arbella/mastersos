@@ -52,6 +52,8 @@ These close B1 and B2: the parts marked BLOCKED are implemented as follows.
   - There is no clock control. Time-based behaviour (heartbeat validity, the feature gate's window) is covered by unit tests, and the end to end uses real time only.
   - Both binaries are Linux x86_64 build artifacts of the server team's own runner build. Task 10 takes their paths from two environment variables and fails with a clear message when they are missing; it never builds the server.
 
+- **Who runs the first cross-repo end to end (agreed with the server team).** Their repository owns the runner suite: it starts the harness and runs our driving script with our binaries. Task 10 therefore delivers one executable at a stable path, `tools/e2e/protocol-v1.sh`, taking `--server-url`, `--school-id`, `--arbella-stub DIR`, `--control-url`, `--bin-dir DIR` (holding `mastersos` and `mastersos-agent`) and `--work-dir DIR`; exit 0 or non-zero; one JSON summary on stdout listing each step with `ok`. It writes only under the work directory. Our binaries come from plan A's `linux-bins` build (`.labtest-out/linux-bins/` on the Mac) and are copied, with `tools/e2e/`, into the other repository's untracked `e2e-in/mastersos/` before their job is started. We send them the script's path and commit.
+
 ## Global Constraints
 
 - Files, comments, errors and script output in English; end-user (Device) text only through gettext (`image/system-i18n/*.po`, every catalogue). CLI output is English (school IT tool, not localised).
