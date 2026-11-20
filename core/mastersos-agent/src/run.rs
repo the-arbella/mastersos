@@ -1,4 +1,4 @@
-//! The main loop: sync settings (`GET /api/device/v1/bundle?after=N&wait=0`) → verify → store → hand to the
+//! The main loop: sync settings (`GET /api/device/v1/bundle?after=N`) → verify → store → hand to the
 //! apply task → report; failures back off, a bad bundle is remembered and not taken again.
 //!
 //! No long poll and no fallback polling (MQTT push plan, spec §6.1–6.2). Settings are synced at
@@ -20,7 +20,7 @@
 //! is at least `heartbeat_every` old by the wall clock. It is verified with the keys the machine
 //! trusts now:
 //! - 说的就是本机这一版（版本与摘要都对）→ `fresh_until` 往后推到它的 `not_after`；
-//! - 说有更高的版本 → 立即再拉一次（`wait=0`）：拉到就照常接受，仍是「没有新版本」才记 `newer_withheld`；
+//! - 说有更高的版本 → 立即再拉一次：拉到就照常接受，仍是「没有新版本」才记 `newer_withheld`；
 //! - 其余（更旧、摘要不符、验签失败、`issued_at` 晚于本机时间超过 1 天）一律不采信，也不回报
 //!   错误项。本机时钟偏慢时宁可误报过期。
 //!

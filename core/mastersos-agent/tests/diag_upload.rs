@@ -588,3 +588,17 @@ async fn release_image_refuses_http() {
     assert_clean(&err);
     assert!(e.srv.received_requests().await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn not_available_is_a_backoff_with_its_own_detail() {
+    let e = env().await;
+    mount_step1(&e.srv, api_error(404, "not_available"), None).await;
+    let err = upload(&e.f, &cred(), req(), &e.file, true)
+        .await
+        .unwrap_err();
+    assert_eq!(err.action, ErrorAction::Backoff, "{err}");
+    assert!(
+        err.to_string().contains("not available on this server"),
+        "{err}"
+    );
+}

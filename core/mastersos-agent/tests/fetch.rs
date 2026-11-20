@@ -1132,3 +1132,172 @@ async fn every_route_is_under_the_device_prefix() {
     want.sort();
     assert_eq!(got, want);
 }
+
+fn err_json(code: &str) -> serde_json::Value {
+    serde_json::json!({"error": {"code": code, "message": "x"}})
+}
+
+async fn push_token_error(t: ResponseTemplate) -> anyhow::Error {
+    let srv = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/device/v1/push-token"))
+        .respond_with(t)
+        .mount(&srv)
+        .await;
+    let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
+    f.push_token(&cred(), true).await.unwrap_err()
+}
+
+#[tokio::test]
+async fn not_available_is_recognised_only_by_its_code() {
+    use mastersos_agent::fetch::{NotAvailable, ServerRefused};
+    let e =
+        push_token_error(ResponseTemplate::new(404).set_body_json(err_json("not_available"))).await;
+    assert!(e.downcast_ref::<NotAvailable>().is_some(), "{e:#}");
+    for t in [
+        ResponseTemplate::new(404).set_body_json(err_json("not_found")),
+        ResponseTemplate::new(404).set_body_string("not_available"),
+        ResponseTemplate::new(404).set_body_string("<html>not_available</html>"),
+    ] {
+        let e = push_token_error(t).await;
+        assert!(e.downcast_ref::<NotAvailable>().is_none(), "{e:#}");
+        assert_eq!(e.downcast_ref::<ServerRefused>().unwrap().status, 404);
+    }
+    // The code alone is not enough: the status must be 404.
+    let e =
+        push_token_error(ResponseTemplate::new(503).set_body_json(err_json("not_available"))).await;
+    assert!(e.downcast_ref::<NotAvailable>().is_none(), "{e:#}");
+}
+
+#[tokio::test]
+async fn error_body_with_details_is_parsed() {
+    use mastersos_agent::fetch::NotAvailable;
+    let e = push_token_error(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+        "error": {"code": "not_available", "message": "x", "details": {"a": 1}}
+    })))
+    .await;
+    assert!(e.downcast_ref::<NotAvailable>().is_some(), "{e:#}");
+}
+
+#[test]
+fn parse_error_body_sanitises() {
+    use mastersos_agent::fetch::parse_error_body;
+    let long = "a".repeat(400);
+    let b = parse_error_body(
+        serde_json::json!({"error": {"code": "c-1_x", "message": format!("h\u{7}i\n{long}")}})
+            .to_string()
+            .as_bytes(),
+    )
+    .unwrap();
+    assert_eq!(b.code, "c-1_x");
+    assert!(b.message.starts_with("hia"));
+    assert_eq!(b.message.chars().count(), 300);
+    for bad in [
+        r#"{"error":{"code":"a b","message":"m"}}"#,
+        r#"{"error":{"code":"","message":"m"}}"#,
+        r#"{"error":"flat"}"#,
+        r#"{"message":"m"}"#,
+        "<html></html>",
+        "",
+    ] {
+        assert!(parse_error_body(bad.as_bytes()).is_none(), "{bad}");
+    }
+    let code65 = format!(
+        r#"{{"error":{{"code":"{}","message":"m"}}}}"#,
+        "a".repeat(65)
+    );
+    assert!(parse_error_body(code65.as_bytes()).is_none());
+}
+
+#[tokio::test]
+async fn inbox_404_not_available_is_not_available() {
+    use mastersos_agent::fetch::NotAvailable;
+    let srv = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/device/v1/inbox"))
+        .respond_with(ResponseTemplate::new(404).set_body_json(err_json("not_available")))
+        .mount(&srv)
+        .await;
+    let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
+    let e = f.inbox(&cred(), 0, true).await.unwrap_err();
+    assert!(e.downcast_ref::<NotAvailable>().is_some(), "{e:#}");
+}
+
+async fn inbox_result_404(t: ResponseTemplate) -> anyhow::Error {
+    let srv = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/device/v1/inbox/7/result"))
+        .respond_with(t)
+        .mount(&srv)
+        .await;
+    let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
+    let r = InboxResult {
+        state: InboxResultState::Done,
+        detail: None,
+    };
+    f.inbox_result(&cred(), 7, &r, true).await.unwrap_err()
+}
+
+#[tokio::test]
+async fn inbox_result_404_not_available_is_not_available() {
+    use mastersos_agent::fetch::NotAvailable;
+    let e =
+        inbox_result_404(ResponseTemplate::new(404).set_body_json(err_json("not_available"))).await;
+    assert!(e.downcast_ref::<NotAvailable>().is_some(), "{e:#}");
+}
+
+#[tokio::test]
+async fn inbox_result_404_other_code_is_seq_unknown() {
+    use mastersos_agent::fetch::InboxSeqUnknown;
+    let e = inbox_result_404(ResponseTemplate::new(404).set_body_json(err_json("not_found"))).await;
+    assert!(e.downcast_ref::<InboxSeqUnknown>().is_some(), "{e:#}");
+}
+
+#[tokio::test]
+async fn escrow_refusal_ignores_a_plain_text_body() {
+    let srv = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(403).set_body_string("secret mismatch"))
+        .mount(&srv)
+        .await;
+    let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
+    let e = f.escrow(&escrow_req(), true).await.unwrap_err();
+    assert_eq!(format!("{e:#}"), "escrow refused (403)");
+}
+
+#[tokio::test]
+async fn escrow_refusal_carries_the_json_message() {
+    let srv = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+            "error": {"code": "secret_mismatch", "message": "Secret does not match"}
+        })))
+        .mount(&srv)
+        .await;
+    let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
+    let e = f.escrow(&escrow_req(), true).await.unwrap_err();
+    assert_eq!(
+        format!("{e:#}"),
+        "escrow refused (403): Secret does not match"
+    );
+}
+
+#[tokio::test]
+async fn bundle_error_names_status_and_code() {
+    use mastersos_agent::fetch::ServerRefused;
+    let srv = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(503).set_body_json(err_json("unavailable")))
+        .mount(&srv)
+        .await;
+    let f = Fetcher::from_seed(&seed(&srv.uri(), None));
+    let e = f.fetch_now(0).await.unwrap_err();
+    assert_eq!(
+        e.downcast_ref::<ServerRefused>(),
+        Some(&ServerRefused {
+            status: 503,
+            code: Some("unavailable".into())
+        })
+    );
+    assert_eq!(e.to_string(), "the server answered 503 unavailable");
+}

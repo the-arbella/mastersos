@@ -416,7 +416,7 @@ impl Fetcher {
                 }
                 Ok(FetchOutcome::New { archive, version })
             }
-            other => bail!("the server returned {other}"),
+            _ => Err(refusal(resp).await),
         }
     }
 
@@ -446,7 +446,7 @@ impl Fetcher {
                     String::from_utf8(body).context("the heartbeat is not UTF-8")?,
                 ))
             }
-            other => bail!("the server returned {other}"),
+            _ => Err(refusal(resp).await),
         }
     }
 
@@ -472,7 +472,10 @@ impl Fetcher {
         if status.is_success() {
             return Ok(());
         }
-        let message = read_error_message(resp).await;
+        let message = read_error_body(resp)
+            .await
+            .map(|b| b.message)
+            .filter(|m| !m.is_empty());
         match message {
             Some(m) => bail!("escrow refused ({}): {m}", status.as_u16()),
             None => bail!("escrow refused ({})", status.as_u16()),
@@ -522,8 +525,10 @@ impl Fetcher {
                 Ok(RenewOutcome::New(r.fetch_token))
             }
             StatusCode::FORBIDDEN => Ok(RenewOutcome::Refused(
-                read_error_message(resp)
+                read_error_body(resp)
                     .await
+                    .map(|b| b.message)
+                    .filter(|m| !m.is_empty())
                     .unwrap_or_else(|| "the server refused token renewal (403)".into()),
             )),
             other => bail!("token renewal failed ({})", other.as_u16()),
@@ -554,7 +559,7 @@ impl Fetcher {
             StatusCode::OK => read_json(resp, "push-token response").await,
             StatusCode::UNAUTHORIZED => Err(anyhow::Error::new(Unauthorized)),
             StatusCode::FORBIDDEN => Err(anyhow::Error::new(CredRejected)),
-            other => bail!("push-token failed ({})", other.as_u16()),
+            _ => Err(refusal(resp).await),
         }
     }
 
@@ -573,7 +578,7 @@ impl Fetcher {
         match resp.status() {
             StatusCode::OK => read_json(resp, "inbox response").await,
             StatusCode::UNAUTHORIZED => Err(unauthorized_kind(resp).await),
-            other => bail!("inbox failed ({})", other.as_u16()),
+            _ => Err(refusal(resp).await),
         }
     }
 
@@ -604,9 +609,16 @@ impl Fetcher {
         match resp.status() {
             s if s.is_success() => Ok(ResultAck::Recorded),
             StatusCode::CONFLICT => Ok(ResultAck::Refused),
-            StatusCode::NOT_FOUND => Err(anyhow::Error::new(InboxSeqUnknown)),
+            StatusCode::NOT_FOUND => {
+                let body = read_error_body(resp).await;
+                Err(if is_not_available(404, &body) {
+                    anyhow::Error::new(NotAvailable)
+                } else {
+                    anyhow::Error::new(InboxSeqUnknown)
+                })
+            }
             StatusCode::UNAUTHORIZED => Err(unauthorized_kind(resp).await),
-            other => bail!("inbox result rejected ({})", other.as_u16()),
+            _ => Err(refusal(resp).await),
         }
     }
 
@@ -658,7 +670,7 @@ impl Fetcher {
         let resp = req.send().await.context("request to status failed")?;
         self.observe(&resp, &used);
         if !resp.status().is_success() {
-            bail!("status report refused: {}", resp.status());
+            return Err(refusal(resp).await);
         }
         Ok(())
     }
@@ -979,18 +991,31 @@ async fn api_failure(step: &str, resp: reqwest::Response) -> DiagUploadError {
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.trim().parse::<u64>().ok())
         .map(|s| Duration::from_secs(s).min(MAX_RETRY_AFTER));
-    let body = read_capped(resp, MAX_ERROR_BODY_BYTES).await.ok();
-    let parsed = body.as_deref().and_then(ApiError::parse);
+    let raw = read_capped(resp, MAX_ERROR_BODY_BYTES).await.ok();
+    let body = raw.as_deref().and_then(parse_error_body);
+    if is_not_available(status, &body) {
+        return DiagUploadError::new(
+            ErrorAction::Backoff,
+            format!("{step}: not available on this server"),
+        );
+    }
+    // `parse_error_body` is the reader. Only the flat `{"error":"<code>"}` form, which the diag
+    // contract also allows, falls back to `ApiError::parse`, and its code must pass the same check.
+    let parsed = match body {
+        Some(b) => Some(ApiError {
+            code: b.code,
+            message: Some(b.message),
+        }),
+        None => raw
+            .as_deref()
+            .and_then(ApiError::parse)
+            .filter(|p| valid_code(&p.code)),
+    };
     if parsed.as_ref().is_some_and(|p| p.is_machine_bug()) {
         log::error!("diagnostics upload, {step}: the server says this machine's request is malformed ({status})");
     }
     let action = error_action(status, parsed.as_ref());
-    let code = parsed.as_ref().map(|p| p.code.as_str()).filter(|c| {
-        !c.is_empty()
-            && c.len() <= 64
-            && c.bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-    });
+    let code = parsed.as_ref().map(|p| p.code.as_str());
     let detail = match code {
         Some(c) => format!("{step}: the server answered {status} {c}"),
         None => format!("{step}: the server answered {status}"),
@@ -1071,39 +1096,113 @@ pub fn redirect_allowed(previous: &[reqwest::Url], next: &reqwest::Url) -> bool 
     }
 }
 
-/// 服务端错误体 `{"error": {"code", "message"}}` 里的 message（截短、去掉控制字符）；读不出就是 None。
-async fn read_error_message(mut resp: reqwest::Response) -> Option<String> {
-    let mut body = Vec::new();
-    while let Ok(Some(chunk)) = resp.chunk().await {
-        if body.len() + chunk.len() > MAX_ERROR_BODY_BYTES {
-            return None;
-        }
-        body.extend_from_slice(&chunk);
+/// The error code of a 404 that means "this server does not offer the route yet".
+pub const NOT_AVAILABLE: &str = "not_available";
+
+/// A server error body `{"error":{"code","message","details"?}}`, sanitised: `code` matches
+/// `[A-Za-z0-9_-]{1,64}`, `message` has no control characters and at most
+/// [`MAX_ERROR_MESSAGE_CHARS`] characters (it may be empty).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ErrorBody {
+    pub code: String,
+    pub message: String,
+}
+
+/// Reads an error body. Only the nested JSON shape counts (unknown fields such as `details` are
+/// ignored); an invalid `code`, HTML, text or any other JSON is `None`, so no body text other than a
+/// sanitised `message` ever reaches an error string.
+pub fn parse_error_body(body: &[u8]) -> Option<ErrorBody> {
+    #[derive(serde::Deserialize)]
+    struct Inner {
+        code: String,
+        message: String,
     }
-    let v: serde_json::Value = serde_json::from_slice(&body).ok()?;
-    let m = v.get("error")?.get("message")?.as_str()?;
-    let m: String = m
+    #[derive(serde::Deserialize)]
+    struct Wire {
+        error: Inner,
+    }
+    let Wire { error } = serde_json::from_slice(body).ok()?;
+    if !valid_code(&error.code) {
+        return None;
+    }
+    let message = error
+        .message
         .chars()
         .filter(|c| !c.is_control())
         .take(MAX_ERROR_MESSAGE_CHARS)
         .collect();
-    (!m.is_empty()).then_some(m)
+    Some(ErrorBody {
+        code: error.code,
+        message,
+    })
+}
+
+fn valid_code(c: &str) -> bool {
+    !c.is_empty()
+        && c.len() <= 64
+        && c.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// The single place that decides "not available": status 404 and the code [`NOT_AVAILABLE`].
+fn is_not_available(status: u16, body: &Option<ErrorBody>) -> bool {
+    status == 404 && body.as_ref().is_some_and(|b| b.code == NOT_AVAILABLE)
+}
+
+/// The server answered 404 `not_available`: it does not offer this route yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotAvailable;
+
+impl std::fmt::Display for NotAvailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the server does not offer this yet (404 not_available)")
+    }
+}
+
+impl std::error::Error for NotAvailable {}
+
+/// A non-success answer that is not one of the typed errors; `code` is the sanitised JSON code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerRefused {
+    pub status: u16,
+    pub code: Option<String>,
+}
+
+impl std::fmt::Display for ServerRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the server answered {}", self.status)?;
+        match &self.code {
+            Some(c) => write!(f, " {c}"),
+            None => Ok(()),
+        }
+    }
+}
+
+impl std::error::Error for ServerRefused {}
+
+/// Reads at most [`MAX_ERROR_BODY_BYTES`] of an answer and parses it as an error body.
+async fn read_error_body(resp: reqwest::Response) -> Option<ErrorBody> {
+    let body = read_capped(resp, MAX_ERROR_BODY_BYTES).await.ok()?;
+    parse_error_body(&body)
+}
+
+/// The error for a non-success answer: [`NotAvailable`] or [`ServerRefused`].
+async fn refusal(resp: reqwest::Response) -> anyhow::Error {
+    let status = resp.status().as_u16();
+    let body = read_error_body(resp).await;
+    if is_not_available(status, &body) {
+        return anyhow::Error::new(NotAvailable);
+    }
+    anyhow::Error::new(ServerRefused {
+        status,
+        code: body.map(|b| b.code),
+    })
 }
 
 /// Classifies a 401 from an inbox call by its JSON error code.
-async fn unauthorized_kind(mut resp: reqwest::Response) -> anyhow::Error {
-    let mut body = Vec::new();
-    while let Ok(Some(chunk)) = resp.chunk().await {
-        if body.len() + chunk.len() > MAX_ERROR_BODY_BYTES {
-            return anyhow::Error::new(Unauthorized);
-        }
-        body.extend_from_slice(&chunk);
-    }
-    let code = serde_json::from_slice::<serde_json::Value>(&body)
-        .ok()
-        .and_then(|v| v.get("error")?.get("code")?.as_str().map(String::from));
-    match code.as_deref() {
-        Some("device_auth_missing") => anyhow::Error::new(DeviceAuthMissing),
+async fn unauthorized_kind(resp: reqwest::Response) -> anyhow::Error {
+    match read_error_body(resp).await {
+        Some(b) if b.code == "device_auth_missing" => anyhow::Error::new(DeviceAuthMissing),
         _ => anyhow::Error::new(Unauthorized),
     }
 }
