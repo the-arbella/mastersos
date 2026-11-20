@@ -23,6 +23,14 @@ const STEP_UP_REUSE: Duration = Duration::from_secs(4 * 60);
 const MAX_ERROR_CHARS: usize = 300;
 /// The most bytes read from an error body.
 const MAX_ERROR_BODY: usize = 64 * 1024;
+/// The most bytes of a JSON answer.
+const MAX_JSON_BODY: usize = 4 * 1024 * 1024;
+/// The most bytes of an archive download (protocol §4.4).
+const MAX_ARCHIVE_BODY: usize = 20 * 1024 * 1024;
+/// Total time of a JSON call, and of an upload or download.
+const JSON_TIMEOUT: Duration = Duration::from_secs(60);
+const BYTES_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const VERSION_HEADER: &str = "x-mastersos-version";
 
 /// An error the command line reports: a server answer or a local failure. `code` is the only thing
@@ -96,10 +104,11 @@ pub fn print_error(e: &CliError, json: bool) {
     eprint!("{err}");
 }
 
-/// The process exit code for an error: 2 for a failed check or a refused reroute, else 1.
+/// The process exit code for an error: 2 for a local check error or a usage error, else 1. A
+/// server answer is always 1, whatever code it carries.
 pub fn exit_code(e: &CliError) -> i32 {
-    match e.code.as_str() {
-        "check_failed" | "reroute_refused" => 2,
+    match (e.status, e.code.as_str()) {
+        (None, "check_failed" | "reroute_refused" | "usage") => 2,
         _ => 1,
     }
 }
@@ -128,14 +137,12 @@ fn clean(s: &str) -> String {
         .collect()
 }
 
+/// Exactly `localhost`, `127.0.0.1` and `::1`.
 fn is_loopback(url: &Url) -> bool {
-    let host = url.host_str().unwrap_or_default();
-    host.eq_ignore_ascii_case("localhost")
-        || host
-            .trim_start_matches('[')
-            .trim_end_matches(']')
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| ip.is_loopback())
+    matches!(
+        url.host_str().map(str::to_ascii_lowercase).as_deref(),
+        Some("localhost" | "127.0.0.1" | "[::1]")
+    )
 }
 
 /// An origin that passes the bundle's check, `https` or `http` to the loopback only.
@@ -172,7 +179,8 @@ fn is_school_id(s: &str) -> bool {
 fn build_client() -> Result<reqwest::Client, CliError> {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(60))
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(JSON_TIMEOUT)
         .build()
         .map_err(|_| CliError::new("network", "could not build the HTTP client"))
 }
@@ -250,26 +258,27 @@ impl Server {
         })
     }
 
-    fn join(&self, prefix: &str, route: &str) -> Url {
+    fn join(&self, prefix: &str, route: &str) -> Result<Url, CliError> {
         let base = self.origin.as_str().trim_end_matches('/');
-        let url = Url::parse(&format!("{base}{prefix}{route}"));
-        match url {
-            // A route that climbs out of the prefix (dot segments) is dropped, not followed.
-            Ok(u) if u.path().starts_with(prefix) => u,
-            _ => Url::parse(&format!("{base}{prefix}")).unwrap_or_else(|_| self.origin.clone()),
+        let bad = || CliError::usage("the route is not a valid path below the API prefix");
+        let url = Url::parse(&format!("{base}{prefix}{route}")).map_err(|_| bad())?;
+        // A route that climbs out of the prefix (dot segments) is an error, never a request.
+        if url.path().starts_with(prefix) {
+            Ok(url)
+        } else {
+            Err(bad())
         }
     }
 
     /// `<origin>/api/cli/v1/schools/<school>/mastersos/<route>`. The route's segments are
-    /// already encoded (see [`segment`]). Without a school the route is the bare prefix: such a
-    /// request fails on the server, and [`Server::school`] is what callers check first.
-    pub fn school_url(&self, route: &str) -> Url {
-        let school = self.school.as_deref().unwrap_or("none");
+    /// already encoded (see [`segment`]). `not_configured` without a school: no request is built.
+    pub fn school_url(&self, route: &str) -> Result<Url, CliError> {
+        let school = self.school()?;
         self.join(&format!("/api/cli/v1/schools/{school}/mastersos/"), route)
     }
 
     /// `<origin>/api/cli/v1/<route>`.
-    pub fn cli_url(&self, route: &str) -> Url {
+    pub fn cli_url(&self, route: &str) -> Result<Url, CliError> {
         self.join("/api/cli/v1/", route)
     }
 
@@ -293,6 +302,7 @@ impl Server {
         url: &Url,
         body: &Body<'_>,
         token: &str,
+        timeout: Duration,
     ) -> Result<reqwest::Response, CliError> {
         let mut auth = HeaderValue::from_str(&format!("Bearer {token}"))
             .map_err(|_| CliError::new("not_logged_in", "the access token is unusable"))?;
@@ -300,6 +310,7 @@ impl Server {
         let mut rb = self
             .client
             .request(method.clone(), url.clone())
+            .timeout(timeout)
             .header(AUTHORIZATION, auth);
         rb = match body {
             Body::None if *method == Method::POST => rb.header(CONTENT_LENGTH, "0"),
@@ -317,9 +328,10 @@ impl Server {
         method: Method,
         url: Url,
         body: Body<'_>,
+        timeout: Duration,
     ) -> Result<reqwest::Response, CliError> {
         let token = self.current_token().await?;
-        let mut res = self.attempt(&method, &url, &body, &token).await?;
+        let mut res = self.attempt(&method, &url, &body, &token, timeout).await?;
         if res.status().as_u16() == 401 {
             let err = read_error(res).await;
             if err.code != "step_up_required" {
@@ -327,7 +339,7 @@ impl Server {
             }
             // A cached step-up token the server no longer accepts is replaced like any other.
             let fresh = self.creds.step_up().await?;
-            res = self.attempt(&method, &url, &body, &fresh).await?;
+            res = self.attempt(&method, &url, &body, &fresh, timeout).await?;
             if res.status().is_success() {
                 let mut guard = self.step_up.lock().unwrap_or_else(|p| p.into_inner());
                 *guard = Some((fresh, (self.now)()));
@@ -341,7 +353,7 @@ impl Server {
     }
 
     async fn json_of<T: DeserializeOwned>(res: reqwest::Response) -> Result<T, CliError> {
-        let bytes = res.bytes().await.map_err(network_error)?;
+        let bytes = read_capped(res, MAX_JSON_BODY).await?;
         // An empty answer reads as `null`: `()` and `Option` accept it.
         let slice: &[u8] = if bytes.is_empty() { b"null" } else { &bytes };
         serde_json::from_slice(slice).map_err(|_| {
@@ -353,8 +365,9 @@ impl Server {
     }
 
     pub async fn get_json<T: DeserializeOwned>(&self, route: &str) -> Result<T, CliError> {
+        let url = self.school_url(route)?;
         let res = self
-            .call(Method::GET, self.school_url(route), Body::None)
+            .call(Method::GET, url, Body::None, JSON_TIMEOUT)
             .await?;
         Self::json_of(res).await
     }
@@ -366,16 +379,18 @@ impl Server {
     ) -> Result<T, CliError> {
         let bytes = serde_json::to_vec(body)
             .map_err(|_| CliError::new("invalid_answer", "the request body cannot be encoded"))?;
+        let url = self.school_url(route)?;
         let res = self
-            .call(Method::POST, self.school_url(route), Body::Json(&bytes))
+            .call(Method::POST, url, Body::Json(&bytes), JSON_TIMEOUT)
             .await?;
         Self::json_of(res).await
     }
 
     /// A POST with no body (`Content-Length: 0`).
     pub async fn post_empty<T: DeserializeOwned>(&self, route: &str) -> Result<T, CliError> {
+        let url = self.school_url(route)?;
         let res = self
-            .call(Method::POST, self.school_url(route), Body::None)
+            .call(Method::POST, url, Body::None, JSON_TIMEOUT)
             .await?;
         Self::json_of(res).await
     }
@@ -386,35 +401,56 @@ impl Server {
         bytes: Vec<u8>,
         content_type: &str,
     ) -> Result<T, CliError> {
+        let url = self.school_url(route)?;
         let res = self
             .call(
                 Method::POST,
-                self.school_url(route),
+                url,
                 Body::Bytes(&bytes, content_type),
+                BYTES_TIMEOUT,
             )
             .await?;
         Self::json_of(res).await
     }
 
     pub async fn delete(&self, route: &str) -> Result<(), CliError> {
-        self.call(Method::DELETE, self.school_url(route), Body::None)
+        let url = self.school_url(route)?;
+        self.call(Method::DELETE, url, Body::None, JSON_TIMEOUT)
             .await
             .map(|_| ())
     }
 
     /// The body bytes and the `X-Mastersos-Version` header, when present.
     pub async fn get_bytes(&self, route: &str) -> Result<(Vec<u8>, Option<u64>), CliError> {
+        let url = self.school_url(route)?;
         let res = self
-            .call(Method::GET, self.school_url(route), Body::None)
+            .call(Method::GET, url, Body::None, BYTES_TIMEOUT)
             .await?;
         let version = res
             .headers()
             .get(VERSION_HEADER)
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<u64>().ok());
-        let bytes = res.bytes().await.map_err(network_error)?;
-        Ok((bytes.to_vec(), version))
+        let bytes = read_capped(res, MAX_ARCHIVE_BODY).await?;
+        Ok((bytes, version))
     }
+}
+
+/// The body of an answer, read chunk by chunk and refused (`invalid_answer`) as soon as it passes
+/// `cap` bytes, also when `Content-Length` announces more.
+async fn read_capped(mut res: reqwest::Response, cap: usize) -> Result<Vec<u8>, CliError> {
+    let too_big = || CliError::new("invalid_answer", "the server's answer is too large");
+    if res.content_length().is_some_and(|n| n > cap as u64) {
+        return Err(too_big());
+    }
+    let mut out = Vec::new();
+    while let Some(chunk) = res.chunk().await.map_err(network_error)? {
+        if out.len() + chunk.len() > cap {
+            return Err(too_big());
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Ok(out)
 }
 
 /// Turn a non-success answer into an error: the envelope's `code`, `message` and `details`, or
@@ -426,12 +462,9 @@ async fn read_error(res: reqwest::Response) -> CliError {
         &format!("the server answered HTTP {status} without an error body"),
     );
     err.status = Some(status);
-    let Ok(bytes) = res.bytes().await else {
+    let Ok(bytes) = read_capped(res, MAX_ERROR_BODY).await else {
         return err;
     };
-    if bytes.len() > MAX_ERROR_BODY {
-        return err;
-    }
     #[derive(Deserialize)]
     struct Envelope {
         error: Inner,
@@ -449,6 +482,9 @@ async fn read_error(res: reqwest::Response) -> CliError {
         if !code.is_empty() {
             err.code = code;
             err.message = clean(&error.message);
+            if err.message.is_empty() {
+                err.message = format!("the server refused the request ({})", err.code);
+            }
             err.details = error.details;
         }
     }
@@ -467,7 +503,7 @@ pub struct AuthConfig {
 
 /// The sign-in settings of a server; no token is sent.
 pub async fn auth_config(origin: &Url) -> Result<AuthConfig, CliError> {
-    require_secure(origin)?;
+    let origin = check_origin(origin.as_str())?;
     let base = origin.as_str().trim_end_matches('/');
     let url = Url::parse(&format!("{base}/api/cli/v1/auth-config"))
         .map_err(|_| CliError::usage("the server address is not a URL"))?;
@@ -513,11 +549,11 @@ mod tests {
     fn school_routes_are_under_the_cli_prefix() {
         let s = server(Credentials::fixed("t"));
         assert_eq!(
-            s.school_url("publish/pending").as_str(),
+            s.school_url("publish/pending").unwrap().as_str(),
             format!("https://server.example{PREFIX}publish/pending")
         );
         assert_eq!(
-            s.cli_url("auth-config").as_str(),
+            s.cli_url("auth-config").unwrap().as_str(),
             "https://server.example/api/cli/v1/auth-config"
         );
     }
@@ -528,7 +564,9 @@ mod tests {
         let seg = segment("a/../b").unwrap();
         assert_eq!(seg, "a%2F..%2Fb");
         assert_eq!(
-            s.school_url(&format!("devices/{seg}/recovery-keys")).path(),
+            s.school_url(&format!("devices/{seg}/recovery-keys"))
+                .unwrap()
+                .path(),
             format!("{PREFIX}devices/a%2F..%2Fb/recovery-keys")
         );
         assert!(segment("..").is_err());
@@ -559,6 +597,7 @@ mod tests {
         assert!(ok("http://127.0.0.1:8080"));
         assert!(ok("http://[::1]:8080"));
         assert!(ok("http://localhost:8080"));
+        assert!(!ok("http://127.0.0.2:8080"));
         assert!(ok("https://server.example"));
         assert!(!ok("http://server.example"));
         assert!(!ok("http://10.0.0.1"));
@@ -800,7 +839,14 @@ mod tests {
         assert!(err.starts_with("mastersos: bad manifest\n"));
         assert!(err.contains("wrong"));
         assert_eq!(exit_code(&e), 2);
+        assert_eq!(exit_code(&CliError::new("usage", "x")), 2);
         assert_eq!(exit_code(&CliError::new("reroute_refused", "x")), 2);
+        // A server answer exits 1, whatever code it carries.
+        for code in ["check_failed", "usage"] {
+            let mut from_server = CliError::new(code, "x");
+            from_server.status = Some(400);
+            assert_eq!(exit_code(&from_server), 1, "{code}");
+        }
         assert_eq!(exit_code(&CliError::new("network", "x")), 1);
     }
 
@@ -824,11 +870,111 @@ mod tests {
         // An unusable token is refused without being shown.
         let bad = Server::new(
             "http://127.0.0.1:1",
-            None,
+            Some(SCHOOL),
             Credentials::fixed("a\nSECRET-TOKEN-VALUE"),
         )
         .unwrap();
         let e = bad.get_json::<Value>("a").await.unwrap_err();
         assert!(!format!("{e:?}").contains(secret));
+    }
+
+    #[tokio::test]
+    async fn no_school_sends_nothing() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .mount(&mock)
+            .await;
+        let s = Server::new(&mock.uri(), None, Credentials::fixed("t")).unwrap();
+        let codes = [
+            s.get_json::<Value>("a").await.unwrap_err().code,
+            s.post_json::<_, Value>("a", &json!({}))
+                .await
+                .unwrap_err()
+                .code,
+            s.post_empty::<Value>("a").await.unwrap_err().code,
+            s.post_bytes::<Value>("a", vec![1], "application/gzip")
+                .await
+                .unwrap_err()
+                .code,
+            s.delete("a").await.unwrap_err().code,
+            s.get_bytes("a").await.unwrap_err().code,
+        ];
+        assert!(codes.iter().all(|c| c == "not_configured"), "{codes:?}");
+        assert!(mock.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn route_climbing_out_of_the_prefix_is_refused() {
+        let mock = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&mock)
+            .await;
+        let s = local(&mock, Credentials::fixed("t"));
+        assert_eq!(s.delete("keys/../..").await.unwrap_err().code, "usage");
+        assert!(s.school_url("../../x").is_err());
+        assert!(mock.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn oversized_answers_are_refused() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("{PREFIX}big-json")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_bytes(vec![b' '; 4 * 1024 * 1024 + 1]),
+            )
+            .mount(&mock)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("{PREFIX}big-archive")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_bytes(vec![0u8; 20 * 1024 * 1024 + 1]),
+            )
+            .mount(&mock)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("{PREFIX}big-error")))
+            .respond_with(ResponseTemplate::new(500).set_body_bytes(vec![b'x'; 100 * 1024]))
+            .mount(&mock)
+            .await;
+        let s = local(&mock, Credentials::fixed("t"));
+        let e = s.get_json::<Value>("big-json").await.unwrap_err();
+        assert_eq!(e.code, "invalid_answer");
+        assert!(e.message.contains("too large"));
+        let e = s.get_bytes("big-archive").await.unwrap_err();
+        assert!(e.message.contains("too large"), "{e:?}");
+        let e = s.get_json::<Value>("big-error").await.unwrap_err();
+        assert_eq!((e.code.as_str(), e.status), ("invalid_answer", Some(500)));
+    }
+
+    #[tokio::test]
+    async fn auth_config_checks_the_origin() {
+        for bad in [
+            "http://server.example",
+            "http://127.0.0.2:9",
+            "https://server.example/x",
+        ] {
+            let e = auth_config(&Url::parse(bad).unwrap()).await.unwrap_err();
+            assert_eq!(e.code, "usage", "{bad}");
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_message_falls_back_to_the_code() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .set_body_json(json!({"error": {"code": "forbidden", "message": "\u{7}"}})),
+            )
+            .mount(&mock)
+            .await;
+        let e = local(&mock, Credentials::fixed("t"))
+            .get_json::<Value>("a")
+            .await
+            .unwrap_err();
+        assert_eq!(e.message, "the server refused the request (forbidden)");
     }
 }
