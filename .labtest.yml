@@ -38,3 +38,16 @@ suites:
     cpus: 4
     timeout: 30m
     paths: [image/**, skills/**, tools/**, core/**, .github/**, docs/**]
+builds:
+  linux-bins:
+    setup: rustup toolchain install 1.98 --profile minimal
+    setup_key: [.labtest.yml, core/rust-toolchain.toml]
+    # the runner sets CARGO_TARGET_DIR outside the tree: copy the binaries to where `artifacts` looks
+    run: >-
+      cd core && cargo build --locked --release --bin mastersos --bin mastersos-agent
+      && t=${CARGO_TARGET_DIR:-target} && if [ "$t" != target ]; then mkdir -p target/release
+      && cp "$t/release/mastersos" "$t/release/mastersos-agent" target/release/; fi
+    artifacts: [core/target/release/mastersos, core/target/release/mastersos-agent]
+    mem: 6G
+    cpus: 8
+    timeout: 40m
