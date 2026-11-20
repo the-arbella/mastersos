@@ -342,6 +342,63 @@ pub fn logo_url(server_url: &str, sha256: &str) -> String {
     format!("{}logos/{sha256}.png", device_base(server_url))
 }
 
+/// How long the agent waits after a 404 `not_available` (push grant, inbox, logos) before asking
+/// again; each wait is [`crate::backoff::jittered`] (factor 0.8-1.2).
+pub const NOT_AVAILABLE_RETRY: Duration = Duration::from_secs(6 * 3600);
+
+/// A logo download's result: the bytes, or the server does not offer logos yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LogoFetch {
+    Png(Vec<u8>),
+    NotAvailable,
+}
+
+/// `GET logos/<sha256>.png` with the fetch token like every device request (Ruling R2), at most
+/// [`MAX_LOGO_BYTES`](crate::system::branding::MAX_LOGO_BYTES) in
+/// [`LOGO_TIMEOUT`](crate::system::branding::LOGO_TIMEOUT). It carries the token, so it follows no
+/// redirect ([`no_redirect_client`]). [`logo_answer`] reads a non-success answer; errors never carry
+/// the URL or the token.
+pub async fn fetch_logo(url: &str, token: Option<&str>) -> Result<LogoFetch> {
+    use crate::system::branding::{LOGO_TIMEOUT, MAX_LOGO_BYTES};
+    let mut req = no_redirect_client(LOGO_TIMEOUT).get(url);
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(reqwest::Error::without_url)
+        .context("request for the logo failed")?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = read_error_body(resp).await;
+        return logo_answer(status.as_u16(), body);
+    }
+    if resp
+        .content_length()
+        .is_some_and(|n| n > MAX_LOGO_BYTES as u64)
+    {
+        bail!("the logo is larger than 128 KiB");
+    }
+    match read_capped(resp, MAX_LOGO_BYTES).await {
+        Ok(b) => Ok(LogoFetch::Png(b)),
+        Err(e) => bail!("the logo: {e}"),
+    }
+}
+
+/// The one place that reads a non-success logo answer: 404 `not_available` waits
+/// ([`NOT_AVAILABLE_RETRY`]); anything else (401 `unauthorized`, 404 `not_found`, a body that is
+/// not the error JSON) is an ordinary failed download.
+fn logo_answer(status: u16, body: Option<ErrorBody>) -> Result<LogoFetch> {
+    if is_not_available(status, &body) {
+        return Ok(LogoFetch::NotAvailable);
+    }
+    Err(anyhow::Error::new(ServerRefused {
+        status,
+        code: body.map(|b| b.code),
+    }))
+}
+
 /// 克隆便宜（HTTP 客户端内部共享连接池）：主循环、心跳与后台任务各拿一份。
 /// 令牌与旧令牌标记放在共享的 `Arc` 里：任何一份上 [`Fetcher::set_token`]、任何一份收到
 /// `X-Mastersos-Fetch-Token: stale`，所有克隆都看得到。

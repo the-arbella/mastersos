@@ -1316,3 +1316,99 @@ fn error_body_without_a_usable_message_is_still_parsed() {
         assert_eq!((b.code.as_str(), b.message.as_str()), ("not_available", ""));
     }
 }
+
+async fn logo_server(t: ResponseTemplate) -> (MockServer, String) {
+    let srv = MockServer::start().await;
+    let h = "a".repeat(64);
+    Mock::given(method("GET"))
+        .and(path(format!("/api/device/v1/logos/{h}.png")))
+        .respond_with(t)
+        .mount(&srv)
+        .await;
+    let url = mastersos_agent::fetch::logo_url(&srv.uri(), &h);
+    (srv, url)
+}
+
+#[tokio::test]
+async fn logo_request_carries_the_fetch_token() {
+    use mastersos_agent::fetch::{fetch_logo, LogoFetch};
+    let (srv, url) =
+        logo_server(ResponseTemplate::new(200).set_body_bytes(b"PNG-BYTES".to_vec())).await;
+    assert_eq!(
+        fetch_logo(&url, Some("tok-logo")).await.unwrap(),
+        LogoFetch::Png(b"PNG-BYTES".to_vec())
+    );
+    let reqs = srv.received_requests().await.unwrap();
+    assert_eq!(reqs.len(), 1);
+    assert_eq!(
+        reqs[0].headers.get("authorization").unwrap(),
+        "Bearer tok-logo"
+    );
+}
+
+#[tokio::test]
+async fn logo_401_unauthorized_is_an_error_not_not_available() {
+    use mastersos_agent::fetch::{fetch_logo, NotAvailable, ServerRefused};
+    let (_srv, url) =
+        logo_server(ResponseTemplate::new(401).set_body_json(err_json("unauthorized"))).await;
+    let e = fetch_logo(&url, Some("tok-logo")).await.unwrap_err();
+    assert!(e.downcast_ref::<NotAvailable>().is_none(), "{e:#}");
+    assert_eq!(
+        e.downcast_ref::<ServerRefused>(),
+        Some(&ServerRefused {
+            status: 401,
+            code: Some("unauthorized".into())
+        })
+    );
+    assert!(!format!("{e:#} {e:?}").contains("tok-logo"), "{e:#}");
+}
+
+#[tokio::test]
+async fn logo_404_not_available_is_not_available() {
+    use mastersos_agent::fetch::{fetch_logo, LogoFetch};
+    let (_srv, url) =
+        logo_server(ResponseTemplate::new(404).set_body_json(err_json("not_available"))).await;
+    assert_eq!(
+        fetch_logo(&url, Some("tok")).await.unwrap(),
+        LogoFetch::NotAvailable
+    );
+}
+
+#[tokio::test]
+async fn logo_404_not_found_is_an_error() {
+    use mastersos_agent::fetch::{fetch_logo, ServerRefused};
+    for t in [
+        ResponseTemplate::new(404).set_body_json(err_json("not_found")),
+        ResponseTemplate::new(404).set_body_string("not_available"),
+        ResponseTemplate::new(404),
+        ResponseTemplate::new(503).set_body_json(err_json("not_available")),
+    ] {
+        let (_srv, url) = logo_server(t).await;
+        let e = fetch_logo(&url, Some("tok")).await.unwrap_err();
+        assert!(e.downcast_ref::<ServerRefused>().is_some(), "{e:#}");
+    }
+}
+
+#[tokio::test]
+async fn logo_does_not_follow_redirects() {
+    use mastersos_agent::fetch::fetch_logo;
+    let other = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"PNG".to_vec()))
+        .mount(&other)
+        .await;
+    let (_srv, url) = logo_server(
+        ResponseTemplate::new(302).insert_header("location", format!("{}/x.png", other.uri())),
+    )
+    .await;
+    assert!(fetch_logo(&url, Some("tok-logo")).await.is_err());
+    assert!(other.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn logo_over_128_kib_is_an_error() {
+    use mastersos_agent::fetch::fetch_logo;
+    let (_srv, url) =
+        logo_server(ResponseTemplate::new(200).set_body_bytes(vec![0u8; 128 * 1024 + 1])).await;
+    assert!(fetch_logo(&url, None).await.is_err());
+}

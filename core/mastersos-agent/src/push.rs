@@ -53,7 +53,9 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::backoff::{backoff, jittered, Jitter};
-use crate::fetch::{CredRejected, DeviceCred, Fetcher, Unauthorized};
+use crate::fetch::{
+    CredRejected, DeviceCred, Fetcher, NotAvailable, Unauthorized, NOT_AVAILABLE_RETRY,
+};
 
 /// The status report item this task fills.
 pub const ITEM: &str = "push";
@@ -76,6 +78,8 @@ pub const OUTBOX_CAP: usize = 64;
 /// loop answers it as it answers a 401 on `/api/device/v1/bundle` (spec §6.2): it syncs settings, whose 401
 /// switches to another saved token; the switched token is shared with this task's `Fetcher`.
 pub const TOKEN_UNAUTHORIZED: &str = "token: the server rejected the fetch token (401)";
+/// The `ok` status detail while the server answers the grant with 404 `not_available`.
+const NOT_OFFERED: &str = "not offered by the server yet";
 /// Resolving the broker's name gives up after this long.
 const DNS_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -481,6 +485,18 @@ async fn run(
                     })
                 }) {
                     Ok(g) => g,
+                    Err(e) if e.downcast_ref::<NotAvailable>().is_some() => {
+                        let wait = jittered(NOT_AVAILABLE_RETRY, cfg.jitter.unit());
+                        log::info!(
+                            "push: the server does not offer push yet; asking again in {} min",
+                            wait.as_secs() / 60
+                        );
+                        out.push(PushEvent::Status(passed(NOT_OFFERED.into())));
+                        if !idle(wait, &events, &mut out, &shutdown).await {
+                            return;
+                        }
+                        continue;
+                    }
                     Err(e) => {
                         let detail = token_detail(&e);
                         let wait = if e.downcast_ref::<CredRejected>().is_some() {
@@ -1110,6 +1126,91 @@ mod tests {
         }
         assert!(failures >= 5, "the broker was retried: {failures} failures");
         assert_eq!(tokens().await, 1, "one token for 2 h of retries");
+        stop.cancel();
+        h.await.unwrap();
+    }
+    /// The server does not offer push yet (404 `not_available`): an ok status saying so, no
+    /// failure, and the next grant request 6 h later (jitter factor 1 here).
+    #[tokio::test(start_paused = true)]
+    async fn push_token_not_available_waits_six_hours_without_failure() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let _watchdog = watchdog(
+            "push_token_not_available_waits_six_hours_without_failure",
+            120,
+        );
+        let _hold = tokio::spawn(async {
+            loop {
+                tokio::task::yield_now().await;
+            }
+        });
+        let srv = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/device/v1/push-token"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!(
+                {"error": {"code": "not_available", "message": "not offered"}}
+            )))
+            .mount(&srv)
+            .await;
+        fn any_tls() -> anyhow::Result<Arc<rustls::ClientConfig>> {
+            let cfg = rustls::ClientConfig::builder_with_provider(Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()?
+            .with_root_certificates(rustls::RootCertStore::empty())
+            .with_no_client_auth();
+            Ok(Arc::new(cfg))
+        }
+        let (tx, mut rx) = mpsc::channel(64);
+        let stop = CancellationToken::new();
+        let mut cfg = timing(0.5);
+        cfg.lab = true; // wiremock is plain http
+        let h = tokio::spawn(run(
+            Fetcher::from_seed(&seed(&srv.uri())),
+            cred(),
+            cfg,
+            tx,
+            stop.clone(),
+            any_tls,
+        ));
+        let srv = &srv;
+        let tokens = || async move {
+            srv.received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|r| r.url.path() == "/api/device/v1/push-token")
+                .count()
+        };
+        let mut statuses = vec![];
+        for _ in 0..500 {
+            while let Ok(ev) = rx.try_recv() {
+                if let PushEvent::Status(s) = ev {
+                    statuses.push(s);
+                }
+            }
+            if !statuses.is_empty() {
+                break;
+            }
+            settle(10).await;
+        }
+        assert_eq!(
+            statuses,
+            [passed("not offered by the server yet".into())],
+            "an ok status, not a failure"
+        );
+        assert_eq!(tokens().await, 1);
+        tokio::time::advance(Duration::from_secs(6 * 3600 - 1)).await;
+        settle(200).await;
+        assert_eq!(tokens().await, 1, "not asked again before 6 h");
+        tokio::time::advance(Duration::from_secs(2)).await;
+        for _ in 0..500 {
+            if tokens().await == 2 {
+                break;
+            }
+            settle(10).await;
+        }
+        assert_eq!(tokens().await, 2, "asked again after 6 h");
         stop.cancel();
         h.await.unwrap();
     }

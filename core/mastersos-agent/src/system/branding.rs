@@ -13,8 +13,11 @@
 //! - `logo.png` and `logo-icon.png`: the sign-in logo (96 px high) and the quick menu icon
 //!   (40 x 40), each used only when its SHA-256 equals `[school] logo_sha256` /
 //!   `logo_icon_sha256`. Each is downloaded from
-//!   `<origin of seed.server_url>/api/device/v1/logos/<sha256>.png` (128 KiB, 20 s) outside `Phase::Boot`, unless the cached file already matches; a download that does not
-//!   match is dropped (`null` in `branding.json`) and retried next round. The `logo.webp` an
+//!   `<origin of seed.server_url>/api/device/v1/logos/<sha256>.png` (128 KiB, 20 s, with the
+//!   round's fetch token, no redirects) outside `Phase::Boot`, unless the cached file already
+//!   matches; a download that fails or does not match is dropped (`null` in `branding.json`),
+//!   reported and retried next round. A 404 `not_available` is not a problem: neither image is
+//!   asked for again for 6 h (jittered, `SysState::logo_retry_after`). The `logo.webp` an
 //!   earlier agent cached is removed;
 //! - the GDM dconf snippet `80-mastersos-branding` (`logo` key only: the login-screen extension shows
 //!   the name and domains from `branding.json`, so there is no banner fallback). The lock banner
@@ -25,13 +28,16 @@
 use std::path::Path;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use mastersos_bundle::{ItemResult, Seed};
 use serde::Serialize;
 
 use super::banner::{gv_text, GDM_DCONF_DIR};
 use super::{failed, ok, Env, Step};
 use crate::apply::{is_not_found, sha256_hex, ApplyContext, Phase};
+use crate::backoff::{jittered, Jitter, JITTER_HIGH};
+use crate::fetch::{LogoFetch, NOT_AVAILABLE_RETRY};
 use crate::runner::{run_ok, Cmd};
 use crate::safefs;
 
@@ -63,36 +69,17 @@ pub fn step() -> Step {
 
 /// Where the logo comes from; tests inject a fake.
 pub trait LogoFetcher {
-    fn fetch(&self, url: &str) -> Result<Vec<u8>>;
+    fn fetch(&self, url: &str) -> Result<LogoFetch>;
 }
 
-struct HttpFetcher;
+/// [`crate::fetch::fetch_logo`] with the fetch token of this round (no `Debug`: it holds the token).
+struct HttpFetcher<'a> {
+    token: Option<&'a str>,
+}
 
-impl LogoFetcher for HttpFetcher {
-    fn fetch(&self, url: &str) -> Result<Vec<u8>> {
-        let url = url.to_string();
-        let fut = async move {
-            let client = crate::fetch::http_client(crate::fetch::HttpOpts {
-                connect: Duration::from_secs(10),
-                read: Some(Duration::from_secs(10)),
-                total: Some(LOGO_TIMEOUT),
-            });
-            let mut resp = client.get(&url).send().await?.error_for_status()?;
-            if resp
-                .content_length()
-                .is_some_and(|n| n > MAX_LOGO_BYTES as u64)
-            {
-                bail!("the logo is larger than 128 KiB");
-            }
-            let mut buf = Vec::new();
-            while let Some(chunk) = resp.chunk().await? {
-                buf.extend_from_slice(&chunk);
-                if buf.len() > MAX_LOGO_BYTES {
-                    bail!("the logo is larger than 128 KiB");
-                }
-            }
-            Ok(buf)
-        };
+impl LogoFetcher for HttpFetcher<'_> {
+    fn fetch(&self, url: &str) -> Result<LogoFetch> {
+        let fut = crate::fetch::fetch_logo(url, self.token);
         match tokio::runtime::Handle::try_current() {
             Ok(h) => h.block_on(fut),
             Err(_) => tokio::runtime::Builder::new_current_thread()
@@ -138,7 +125,17 @@ fn run(ctx: &ApplyContext, env: &mut Env) -> Vec<ItemResult> {
         icon_sha256: ctx.school.logo_icon_sha256.as_deref(),
         locale_managed: ctx.school.locale.is_some(),
     };
-    apply(&want, &ctx.seed.server_url, ctx.phase, env, &HttpFetcher)
+    let fetcher = HttpFetcher {
+        token: ctx.fetch_token,
+    };
+    apply(
+        &want,
+        &ctx.seed.server_url,
+        ctx.phase,
+        Utc::now(),
+        env,
+        &fetcher,
+    )
 }
 
 /// Before the first settings: only the seed's school name.
@@ -150,19 +147,38 @@ fn run_seed(seed: &Seed, env: &mut Env) -> Vec<ItemResult> {
         icon_sha256: None,
         locale_managed: false,
     };
-    apply(&want, &seed.server_url, Phase::Boot, env, &HttpFetcher)
+    // Boot never downloads: no token needed.
+    let fetcher = HttpFetcher { token: None };
+    apply(
+        &want,
+        &seed.server_url,
+        Phase::Boot,
+        Utc::now(),
+        env,
+        &fetcher,
+    )
 }
 
 fn apply(
     want: &Want,
     server_url: &str,
     phase: Phase,
+    now: DateTime<Utc>,
     env: &mut Env,
     fetcher: &dyn LogoFetcher,
 ) -> Vec<ItemResult> {
     let mut problems = Vec::new();
     let name = want.name.map(str::trim).filter(|n| !n.is_empty());
-    let logo_path = match sync_files(want, name, server_url, phase, env, fetcher, &mut problems) {
+    let dl = Download {
+        server_url,
+        phase,
+        now,
+        fetcher,
+    };
+    let mut retry = env.sys.logo_retry_after;
+    let synced = sync_files(want, name, &dl, env, &mut retry, &mut problems);
+    env.sys.logo_retry_after = retry;
+    let logo_path = match synced {
         Ok(p) => p,
         Err(e) => {
             problems.push(format!("{e:#}"));
@@ -192,10 +208,9 @@ fn apply(
 fn sync_files(
     want: &Want,
     name: Option<&str>,
-    server_url: &str,
-    phase: Phase,
+    dl: &Download,
     env: &Env,
-    fetcher: &dyn LogoFetcher,
+    retry: &mut Option<DateTime<Utc>>,
     problems: &mut Vec<String>,
 ) -> Result<Option<String>> {
     let public = super::public_dir(env.paths)?;
@@ -211,12 +226,7 @@ fn sync_files(
     let dir = safefs::open_dir_at(&public, Path::new(DIR), true)?;
     safefs::set_mode(&dir, 0o755)?;
     safefs::remove_at(&dir, LEGACY_LOGO_FILE)?;
-    let image = Image {
-        dir: &dir,
-        server_url,
-        phase,
-        fetcher,
-    };
+    let image = Image { dir: &dir, dl };
     let path = |used: bool, file: &str| {
         used.then(|| {
             env.paths
@@ -228,11 +238,11 @@ fn sync_files(
         })
     };
     let logo = path(
-        image.sync(LOGO_FILE, want.logo_sha256, problems)?,
+        image.sync(LOGO_FILE, want.logo_sha256, retry, problems)?,
         LOGO_FILE,
     );
     let icon = path(
-        image.sync(ICON_FILE, want.icon_sha256, problems)?,
+        image.sync(ICON_FILE, want.icon_sha256, retry, problems)?,
         ICON_FILE,
     );
     let json = serde_json::to_vec_pretty(&Branding {
@@ -246,19 +256,41 @@ fn sync_files(
     Ok(logo)
 }
 
+/// How one round downloads the images.
+struct Download<'a> {
+    server_url: &'a str,
+    phase: Phase,
+    now: DateTime<Utc>,
+    fetcher: &'a dyn LogoFetcher,
+}
+
 /// Where one round keeps and fetches the images.
 struct Image<'a> {
     dir: &'a std::os::fd::OwnedFd,
-    server_url: &'a str,
-    phase: Phase,
-    fetcher: &'a dyn LogoFetcher,
+    dl: &'a Download<'a>,
+}
+
+/// The server said `not_available` and the wait has not passed. A wait longer than the longest
+/// jittered [`NOT_AVAILABLE_RETRY`] is a clock that jumped back: it does not hold the download.
+fn logo_wait_pending(retry: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
+    let longest = NOT_AVAILABLE_RETRY.mul_f64(JITTER_HIGH);
+    retry.is_some_and(|t| {
+        now < t && chrono::Duration::from_std(longest).is_ok_and(|max| t - now <= max)
+    })
 }
 
 impl Image<'_> {
     /// Makes `file` hold the image whose SHA-256 is `hash` (or removes it for `None`); returns
     /// whether it is there and matches. A cached file that matches is kept without a download;
-    /// at boot nothing is downloaded.
-    fn sync(&self, file: &str, hash: Option<&str>, problems: &mut Vec<String>) -> Result<bool> {
+    /// at boot, and while a `not_available` wait (`retry`) holds, nothing is downloaded. A 404
+    /// `not_available` sets the wait and is not a problem; a logo that matches clears it.
+    fn sync(
+        &self,
+        file: &str,
+        hash: Option<&str>,
+        retry: &mut Option<DateTime<Utc>>,
+        problems: &mut Vec<String>,
+    ) -> Result<bool> {
         let Some(hash) = hash else {
             safefs::remove_at(self.dir, file)?;
             return Ok(false);
@@ -267,7 +299,7 @@ impl Image<'_> {
         if cached.as_deref().is_some_and(|b| sha256_hex(b) == hash) {
             return Ok(true);
         }
-        if self.phase == Phase::Boot {
+        if self.dl.phase == Phase::Boot {
             return Ok(false);
         }
         // The server's lint keeps the value well formed; never build a URL from anything else.
@@ -278,14 +310,32 @@ impl Image<'_> {
             safefs::remove_at(self.dir, file)?;
             return Ok(false);
         }
-        let url = crate::fetch::logo_url(self.server_url, hash);
-        match self.fetcher.fetch(&url) {
-            Ok(b) if sha256_hex(&b) == hash => {
+        let now = self.dl.now;
+        if logo_wait_pending(*retry, now) {
+            safefs::remove_at(self.dir, file)?;
+            return Ok(false);
+        }
+        let url = crate::fetch::logo_url(self.dl.server_url, hash);
+        match self.dl.fetcher.fetch(&url) {
+            Ok(LogoFetch::NotAvailable) => {
+                let wait = jittered(NOT_AVAILABLE_RETRY, Jitter::system().unit());
+                log::info!(
+                    "branding: the server does not offer logos yet; asking again in {} min",
+                    wait.as_secs() / 60
+                );
+                *retry = chrono::Duration::from_std(wait)
+                    .ok()
+                    .and_then(|w| now.checked_add_signed(w));
+                safefs::remove_at(self.dir, file)?;
+                Ok(false)
+            }
+            Ok(LogoFetch::Png(b)) if sha256_hex(&b) == hash => {
                 safefs::write_at(self.dir, file, &b, 0o644)
                     .with_context(|| format!("writing the cached {file}"))?;
+                *retry = None;
                 Ok(true)
             }
-            Ok(_) => {
+            Ok(LogoFetch::Png(_)) => {
                 problems.push(format!(
                     "the logo from {url} does not match the settings' sha256; not used"
                 ));
@@ -346,7 +396,7 @@ mod tests {
     /// Answers every URL with `reply`, except a `/logos/<sha>.png` whose sha is one of `known`'s,
     /// which gets those bytes.
     struct Fake {
-        reply: Result<Vec<u8>, String>,
+        reply: Result<LogoFetch, String>,
         known: Vec<Vec<u8>>,
         calls: RefCell<Vec<String>>,
     }
@@ -354,7 +404,7 @@ mod tests {
     impl Fake {
         fn bytes(b: &[u8]) -> Fake {
             Fake {
-                reply: Ok(b.to_vec()),
+                reply: Ok(LogoFetch::Png(b.to_vec())),
                 known: vec![],
                 calls: RefCell::new(vec![]),
             }
@@ -365,6 +415,22 @@ mod tests {
                 reply: Err("404 Not Found".into()),
                 known: known.iter().map(|b| b.to_vec()).collect(),
                 calls: RefCell::new(vec![]),
+            }
+        }
+
+        fn failing(why: &str) -> Fake {
+            Fake {
+                reply: Err(why.into()),
+                known: vec![],
+                calls: RefCell::new(vec![]),
+            }
+        }
+
+        /// The server answers 404 `not_available` (except for `known` logos).
+        fn not_available(known: &[&[u8]]) -> Fake {
+            Fake {
+                reply: Ok(LogoFetch::NotAvailable),
+                ..Fake::serving(known)
             }
         }
     }
@@ -379,14 +445,14 @@ mod tests {
     }
 
     impl LogoFetcher for Fake {
-        fn fetch(&self, url: &str) -> Result<Vec<u8>> {
+        fn fetch(&self, url: &str) -> Result<LogoFetch> {
             self.calls.borrow_mut().push(url.to_string());
             if let Some(b) = self
                 .known
                 .iter()
                 .find(|b| url.ends_with(&format!("/logos/{}.png", sha256_hex(b))))
             {
-                return Ok(b.clone());
+                return Ok(LogoFetch::Png(b.clone()));
             }
             self.reply.clone().map_err(|e| anyhow::anyhow!(e))
         }
@@ -404,12 +470,24 @@ mod tests {
         runner: &FakeRunner,
         sys: &mut SysState,
     ) -> Vec<ItemResult> {
+        go_at(p, want, Utc::now(), fetcher, sys, runner, phase)
+    }
+
+    fn go_at(
+        p: &SysPaths,
+        want: &Want,
+        now: DateTime<Utc>,
+        fetcher: &dyn LogoFetcher,
+        sys: &mut SysState,
+        runner: &FakeRunner,
+        phase: Phase,
+    ) -> Vec<ItemResult> {
         let mut env = Env {
             paths: p,
             runner,
             sys,
         };
-        apply(want, "https://mdm.example", phase, &mut env, fetcher)
+        apply(want, "https://mdm.example", phase, now, &mut env, fetcher)
     }
 
     fn json(p: &SysPaths) -> serde_json::Value {
@@ -483,6 +561,7 @@ mod tests {
             device: None,
             ident: &crate::system::tests::test_ident(),
             manifest: None,
+            fetch_token: None,
         };
         let r = FakeRunner::new();
         let mut sys = SysState::default();
@@ -537,6 +616,7 @@ mod tests {
                 device: None,
                 ident: &crate::system::tests::test_ident(),
                 manifest: None,
+                fetch_token: None,
             };
             let mut sys = SysState::default();
             run(
@@ -835,6 +915,255 @@ mod tests {
         assert_eq!(out, vec![ok(ITEM)]);
         assert!(f.calls.borrow().is_empty());
         assert_eq!(json(&p)["logo"], serde_json::Value::Null);
+    }
+
+    fn hours(h: i64) -> chrono::Duration {
+        chrono::Duration::hours(h)
+    }
+
+    /// The retry lands within the jittered 6 h (4.8 h to 7.2 h).
+    fn assert_retry_in_six_hours(sys: &SysState, now: DateTime<Utc>) {
+        let t = sys.logo_retry_after.expect("logo_retry_after is set");
+        let (lo, hi) = (
+            now + chrono::Duration::minutes(288),
+            now + chrono::Duration::minutes(432),
+        );
+        assert!(lo <= t && t <= hi, "{t} not within [{lo}, {hi}]");
+    }
+
+    /// The logo is cached and matches; the new icon is answered 404 `not_available`: the logo
+    /// stays in use, the item is ok, the retry is set.
+    #[test]
+    fn logo_not_available_keeps_cache_and_reports_ok() {
+        let root = tmp_root();
+        let p = paths(root.path());
+        let d = domains();
+        let logo = b"LOGO-PNG".as_slice();
+        let (lh, ih) = (sha256_hex(logo), sha256_hex(b"ICON-PNG"));
+        let r = FakeRunner::new();
+        let mut sys = SysState::default();
+        let now = Utc::now();
+        go_at(
+            &p,
+            &named(&d, Some(&lh)),
+            now,
+            &Fake::serving(&[logo]),
+            &mut sys,
+            &r,
+            Phase::Full,
+        );
+        let want = Want {
+            icon_sha256: Some(&ih),
+            ..named(&d, Some(&lh))
+        };
+        let f = Fake::not_available(&[]);
+        let out = go_at(&p, &want, now, &f, &mut sys, &r, Phase::Full);
+        assert_eq!(out, vec![ok(ITEM)]);
+        assert_eq!(f.calls.borrow().len(), 1, "only the icon was asked for");
+        let dir = p.public_dir.join("branding");
+        assert_eq!(std::fs::read(dir.join("logo.png")).unwrap(), logo);
+        let j = json(&p);
+        assert_eq!(j["logo"], dir.join("logo.png").to_str().unwrap());
+        assert_eq!(j["logo_icon"], serde_json::Value::Null);
+        assert!(snippet(&p).is_some());
+        assert_retry_in_six_hours(&sys, now);
+    }
+
+    #[test]
+    fn logo_not_available_without_cache_shows_no_logo() {
+        let root = tmp_root();
+        let p = paths(root.path());
+        let d = domains();
+        let hash = sha256_hex(b"LOGO");
+        let mut sys = SysState::default();
+        let now = Utc::now();
+        let f = Fake::not_available(&[]);
+        let r = FakeRunner::new();
+        let out = go_at(
+            &p,
+            &named(&d, Some(&hash)),
+            now,
+            &f,
+            &mut sys,
+            &r,
+            Phase::Full,
+        );
+        assert_eq!(out, vec![ok(ITEM)]);
+        assert_eq!(f.calls.borrow().len(), 1);
+        assert_eq!(json(&p)["logo"], serde_json::Value::Null);
+        assert!(!p.public_dir.join("branding/logo.png").exists());
+        assert!(snippet(&p).is_none());
+        assert_retry_in_six_hours(&sys, now);
+    }
+
+    /// Within the wait nothing is asked (and nothing reported); after it, the server is asked
+    /// again, and a logo that matches clears the wait.
+    #[test]
+    fn logo_not_available_waits_before_retrying() {
+        let root = tmp_root();
+        let p = paths(root.path());
+        let d = domains();
+        let hash = sha256_hex(b"LOGO");
+        let want = named(&d, Some(&hash));
+        let mut sys = SysState::default();
+        let r = FakeRunner::new();
+        let now = Utc::now();
+        let f = Fake::not_available(&[]);
+        go_at(&p, &want, now, &f, &mut sys, &r, Phase::Full);
+        assert_eq!(f.calls.borrow().len(), 1);
+        let out = go_at(&p, &want, now + hours(1), &f, &mut sys, &r, Phase::Full);
+        assert_eq!(out, vec![ok(ITEM)]);
+        assert_eq!(f.calls.borrow().len(), 1, "not asked again within the wait");
+        assert_eq!(json(&p)["logo"], serde_json::Value::Null);
+        // The icon is held by the same wait.
+        let ih = sha256_hex(b"ICON");
+        let both = Want {
+            icon_sha256: Some(&ih),
+            ..named(&d, Some(&hash))
+        };
+        go_at(&p, &both, now + hours(2), &f, &mut sys, &r, Phase::Full);
+        assert_eq!(f.calls.borrow().len(), 1);
+        // Past the longest wait: asked again; the logo is there now and clears the wait.
+        let g = Fake::bytes(b"LOGO");
+        let out = go_at(&p, &want, now + hours(8), &g, &mut sys, &r, Phase::Full);
+        assert_eq!(out, vec![ok(ITEM)]);
+        assert_eq!(g.calls.borrow().len(), 1);
+        assert_eq!(sys.logo_retry_after, None);
+        assert!(p.public_dir.join("branding/logo.png").exists());
+    }
+
+    /// A wait more than 7.2 h ahead is a clock that jumped back: the logo is downloaded.
+    #[test]
+    fn logo_retry_survives_a_clock_jump_back() {
+        let root = tmp_root();
+        let p = paths(root.path());
+        let d = domains();
+        let hash = sha256_hex(b"LOGO");
+        let now = Utc::now();
+        let mut sys = SysState {
+            logo_retry_after: Some(now + hours(72)),
+            ..SysState::default()
+        };
+        let f = Fake::bytes(b"LOGO");
+        let out = go_at(
+            &p,
+            &named(&d, Some(&hash)),
+            now,
+            &f,
+            &mut sys,
+            &FakeRunner::new(),
+            Phase::Full,
+        );
+        assert_eq!(out, vec![ok(ITEM)]);
+        assert_eq!(f.calls.borrow().len(), 1);
+        assert_eq!(sys.logo_retry_after, None);
+        assert!(p.public_dir.join("branding/logo.png").exists());
+    }
+
+    fn failure_sets_no_wait(why: &str) {
+        let root = tmp_root();
+        let p = paths(root.path());
+        let d = domains();
+        let hash = sha256_hex(b"LOGO");
+        let mut sys = SysState::default();
+        let f = Fake::failing(why);
+        let r = FakeRunner::new();
+        let out = go_at(
+            &p,
+            &named(&d, Some(&hash)),
+            Utc::now(),
+            &f,
+            &mut sys,
+            &r,
+            Phase::Full,
+        );
+        assert!(!out[0].ok, "{why}");
+        assert!(out[0].detail.as_deref().unwrap().contains(why), "{out:?}");
+        assert_eq!(sys.logo_retry_after, None, "{why}");
+        assert_eq!(json(&p)["logo"], serde_json::Value::Null);
+        // Retried next round, as today.
+        go_at(
+            &p,
+            &named(&d, Some(&hash)),
+            Utc::now(),
+            &f,
+            &mut sys,
+            &r,
+            Phase::Full,
+        );
+        assert_eq!(f.calls.borrow().len(), 2, "{why}");
+    }
+
+    #[test]
+    fn logo_other_404_is_a_failure() {
+        failure_sets_no_wait("the server answered 404 not_found");
+    }
+
+    #[test]
+    fn logo_401_is_a_failure() {
+        failure_sets_no_wait("the server answered 401 unauthorized");
+    }
+
+    /// The real download path: the round's fetch token goes with the logo request.
+    #[test]
+    fn logo_download_carries_the_rounds_fetch_token() {
+        use crate::system::tests::{config, group};
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let hash = sha256_hex(b"LOGO");
+        let srv = rt.block_on(async {
+            let srv = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path(format!("/api/device/v1/logos/{hash}.png")))
+                .and(header("authorization", "Bearer FT-round"))
+                .respond_with(ResponseTemplate::new(200).set_body_bytes(b"LOGO".to_vec()))
+                .mount(&srv)
+                .await;
+            srv
+        });
+        let root = tmp_root();
+        let p = paths(root.path());
+        let (g, c) = (group(), config());
+        let school = mastersos_bundle::School {
+            name: Some(NAME.into()),
+            logo_sha256: Some(hash.clone()),
+            ..Default::default()
+        };
+        let mut seed = test_seed();
+        seed.server_url = srv.uri();
+        let dir = tempfile::tempdir().unwrap();
+        let flag = std::sync::atomic::AtomicBool::new(false);
+        let ctx = ApplyContext {
+            seed: &seed,
+            school: &school,
+            group: &g,
+            config: &c,
+            lock: None,
+            bundle_dir: dir.path(),
+            phase: Phase::Full,
+            superseded: &flag,
+            quiet: &std::sync::atomic::AtomicBool::new(false),
+            device: None,
+            ident: &crate::system::tests::test_ident(),
+            manifest: None,
+            fetch_token: Some("FT-round"),
+        };
+        let r = FakeRunner::new();
+        let mut sys = SysState::default();
+        let out = run(
+            &ctx,
+            &mut Env {
+                paths: &p,
+                runner: &r,
+                sys: &mut sys,
+            },
+        );
+        assert_eq!(out, vec![ok(ITEM)]);
+        assert_eq!(
+            std::fs::read(p.public_dir.join("branding/logo.png")).unwrap(),
+            b"LOGO"
+        );
     }
 
     #[test]

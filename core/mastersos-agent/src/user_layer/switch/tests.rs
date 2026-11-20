@@ -59,6 +59,7 @@ fn render_with(root: &Path, m: &Manifest) -> SysPaths {
         device: None,
         ident: &ident,
         manifest: Some(m),
+        fetch_token: None,
     };
     let p = paths(root);
     let r = render::tests::CompileRunner::default();

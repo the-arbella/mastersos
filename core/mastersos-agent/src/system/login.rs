@@ -2538,6 +2538,7 @@ client_id = "laptops"
             device: None,
             ident: &crate::system::tests::test_ident(),
             manifest: None,
+            fetch_token: None,
         };
         run(
             &ctx,
@@ -4138,6 +4139,7 @@ client_id = "laptops"
             device: None,
             ident: &ident,
             manifest: Some(&m),
+            fetch_token: None,
         };
         let r = FakeRunner::new();
         let mut sys = SysState::default();
@@ -4188,6 +4190,7 @@ client_id = "laptops"
             device: None,
             ident: &ident,
             manifest: Some(&m),
+            fetch_token: None,
         };
         let r = FakeRunner::new();
         let mut sys = SysState::default();
@@ -4627,6 +4630,7 @@ client_id = "laptops"
             device: None,
             ident: &crate::system::tests::test_ident(),
             manifest: None,
+            fetch_token: None,
         };
         let env = Env {
             paths: &p,

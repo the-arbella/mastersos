@@ -84,6 +84,7 @@ fn run_step_with(
         device: None,
         ident: &ident,
         manifest: Some(m),
+        fetch_token: None,
     };
     let p = paths(root);
     let mut env = Env {

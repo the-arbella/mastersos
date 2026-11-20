@@ -896,6 +896,7 @@ impl Agent {
             phase: Phase::Full,
             managed_paths: self.state.managed_paths.clone(),
             script_hashes: self.state.script_hashes.clone(),
+            fetch_token: self.fetcher.current_token(),
         });
     }
 
@@ -1158,6 +1159,7 @@ impl Agent {
         let bundle = self.bundle.clone();
         let ident = self.machine.ident.clone();
         let seed = self.seed.clone();
+        let token = self.fetcher.current_token();
         let dir = bundle
             .as_deref()
             .map(|b| state::version_dir(&self.cfg.state_dir, b))
@@ -1183,6 +1185,7 @@ impl Agent {
                 device: sel.device,
                 ident: &ident,
                 manifest: Some(m),
+                fetch_token: token.as_deref(),
             })
         })
         .await
@@ -1281,7 +1284,8 @@ impl Agent {
 
     /// Syncs the inbox when due ([`inbox::sync`]); first reports a finished factory reset `done`.
     /// A failure keeps `sync_inbox` set and retries after the backoff (ruling 59) until one sync
-    /// succeeds; a 401 on the fetch token also syncs settings, which switches tokens.
+    /// succeeds; a 401 on the fetch token also syncs settings, which switches tokens. A 404
+    /// `not_available` is no failure: the next sync is 6 h later (jittered), the backoff unchanged.
     async fn maybe_sync_inbox(&mut self) {
         // Exam quiet: no fetch, and `sync_inbox` stays set so the sync happens once the quiet ends
         // (the `reset_done` ack below is skipped as well).
@@ -1347,6 +1351,18 @@ impl Agent {
             None => {
                 self.inbox_attempt = 0;
                 self.inbox_retry = None;
+            }
+            Some(e) if e.downcast_ref::<crate::fetch::NotAvailable>().is_some() => {
+                let d = crate::backoff::jittered(
+                    crate::fetch::NOT_AVAILABLE_RETRY,
+                    self.cfg.jitter.unit(),
+                );
+                log::info!(
+                    "inbox: the server does not offer the inbox yet; asking again in {} min",
+                    d.as_secs() / 60
+                );
+                self.inbox_retry = Some(later(d));
+                self.sync_inbox = true;
             }
             Some(e) => {
                 log::warn!("inbox sync failed: {e:#}");
@@ -2327,6 +2343,33 @@ mod tests {
         // Loud again: the retry is armed.
         agent.quiet_tx.as_ref().unwrap().send(None).unwrap();
         assert!(agent.inbox_retry_due().is_some());
+    }
+
+    /// The server does not offer the inbox yet (404 `not_available`): the next sync in 6 h, and
+    /// not counted as a failure.
+    #[tokio::test]
+    async fn inbox_not_available_retries_in_six_hours() {
+        let (dir, srv) = (tempfile::tempdir().unwrap(), MockServer::start().await);
+        Mock::given(method("GET"))
+            .and(path("/api/device/v1/inbox"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!(
+                {"error": {"code": "not_available", "message": "not offered"}}
+            )))
+            .mount(&srv)
+            .await;
+        let mut agent = inbox_agent(dir.path(), &srv).await;
+        agent.cfg.jitter = crate::backoff::Jitter::fixed(0.5);
+        agent.sync_inbox = true;
+        agent.sync_settings = false;
+        agent.maybe_sync_inbox().await;
+        assert_eq!(inbox_gets(&srv).await, 1);
+        let want = Instant::now() + Duration::from_secs(6 * 3600);
+        let got = agent.inbox_retry.expect("a retry is set");
+        let off = if got > want { got - want } else { want - got };
+        assert!(off <= Duration::from_secs(1), "off by {off:?}");
+        assert_eq!(agent.inbox_attempt, 0);
+        assert!(agent.sync_inbox);
+        assert!(!agent.sync_settings);
     }
 
     /// Without a device identity nothing is sent, and the cause is logged once.

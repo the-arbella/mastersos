@@ -40,6 +40,9 @@ pub struct ApplyRequest {
     pub phase: Phase,
     pub managed_paths: BTreeMap<String, String>,
     pub script_hashes: BTreeMap<String, String>,
+    /// [`Fetcher::current_token`](crate::fetch::Fetcher::current_token) when the request was
+    /// built, for [`ApplyContext::fetch_token`]. No `Debug` on this struct: it would print it.
+    pub fetch_token: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -336,6 +339,7 @@ impl Worker {
             flag.clone(),
             quiet.clone(),
         );
+        let token = req.fetch_token.clone();
         let mut results = tokio::task::spawn_blocking(move || {
             let m = &b.manifest;
             let sel = select(m, &ident, seed.group.as_deref());
@@ -352,6 +356,7 @@ impl Worker {
                 device: sel.device,
                 ident: &ident,
                 manifest: Some(m),
+                fetch_token: token.as_deref(),
             })
         })
         .await
@@ -476,6 +481,7 @@ mod tests {
             phase: Phase::Full,
             managed_paths: BTreeMap::new(),
             script_hashes: BTreeMap::new(),
+            fetch_token: None,
         }
     }
 

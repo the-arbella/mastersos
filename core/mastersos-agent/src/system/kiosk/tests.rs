@@ -144,6 +144,7 @@ fn run_with(
         device: None,
         ident: &crate::system::tests::test_ident(),
         manifest: None,
+        fetch_token: None,
     };
     (step().run)(&ctx, &mut env)
 }
