@@ -429,6 +429,41 @@ pub struct SealedKey {
     pub recipients_fp: String,
 }
 
+impl SealedKey {
+    /// `key` sealed with age to every one of `recipients`, with their
+    /// [`mastersos_bundle::recipients_fp`]. Errors never carry the key.
+    pub fn seal(
+        key: &str,
+        recipients: &[String],
+    ) -> Result<SealedKey, mastersos_bundle::BundleError> {
+        Ok(SealedKey {
+            recovery_key_age: mastersos_bundle::seal(key, recipients)?,
+            recipients_fp: mastersos_bundle::recipients_fp(recipients),
+        })
+    }
+}
+
+/// The escrow request body for a sealed key, validated: the one shape the LUKS job and
+/// `protocol-check` send. Errors name the field, never its value.
+pub fn escrow_request(
+    device_id: &str,
+    serial: Option<String>,
+    luks_uuid: &str,
+    sealed: &SealedKey,
+    escrow_secret: &str,
+) -> Result<EscrowRequest, mastersos_bundle::BundleError> {
+    let req = EscrowRequest {
+        device_id: device_id.to_string(),
+        serial,
+        luks_uuid: luks_uuid.to_string(),
+        recovery_key_age: sealed.recovery_key_age.clone(),
+        recipients_fp: sealed.recipients_fp.clone(),
+        escrow_secret: escrow_secret.to_string(),
+    };
+    req.validate()?;
+    Ok(req)
+}
+
 /// Only the length of the armor.
 impl std::fmt::Debug for SealedKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1014,14 +1049,12 @@ impl<'a> Round<'a> {
                 detail: WAIT_RECIPIENTS.into(),
             });
         };
-        let recovery_key_age = mastersos_bundle::seal(key, recipients).map_err(|e| StepError {
+        let sealed = SealedKey::seal(key, recipients).map_err(|e| StepError {
             item: "luks:escrow",
             detail: format!("sealing the recovery key failed: {e}"),
         })?;
-        Ok(SealedKey {
-            recovery_key_age,
-            recipients_fp: fp.clone(),
-        })
+        debug_assert_eq!(sealed.recipients_fp, *fp);
+        Ok(sealed)
     }
 
     async fn escrow(&self, info: &LuksInfo, p: Pending) -> std::result::Result<(), StepError> {
@@ -1069,18 +1102,17 @@ impl<'a> Round<'a> {
                 s
             }
         };
-        let req = EscrowRequest {
-            device_id: self.cx.ident.device_id.clone(),
-            serial: self.cx.ident.serial.clone(),
-            luks_uuid: info.uuid.clone(),
-            recovery_key_age: sealed.recovery_key_age.clone(),
-            recipients_fp: sealed.recipients_fp.clone(),
-            escrow_secret: id.escrow_secret.clone(),
-        };
         // The bundle's errors name the field, never its value.
-        if let Err(e) = req.validate() {
-            return Err(escrow_err(format!("invalid escrow request: {e}")));
-        }
+        let req = match escrow_request(
+            &self.cx.ident.device_id,
+            self.cx.ident.serial.clone(),
+            &info.uuid,
+            &sealed,
+            &id.escrow_secret,
+        ) {
+            Ok(r) => r,
+            Err(e) => return Err(escrow_err(format!("invalid escrow request: {e}"))),
+        };
         if let Err(e) = self
             .cx
             .fetcher

@@ -9,7 +9,7 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -357,16 +357,16 @@ pub enum LogoFetch {
     NotAvailable,
 }
 
+/// Connecting for the logo download gives up after this long (the whole download after
+/// [`LOGO_TIMEOUT`](crate::system::branding::LOGO_TIMEOUT)).
+const LOGO_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// `GET logos/<sha256>.png` with the fetch token like every device request (Ruling R2), at most
 /// [`MAX_LOGO_BYTES`](crate::system::branding::MAX_LOGO_BYTES) in
 /// [`LOGO_TIMEOUT`](crate::system::branding::LOGO_TIMEOUT). It carries the token, so it follows no
 /// redirect ([`no_redirect_client`], 10 s to connect). A non-success answer is read by
 /// [`refused`], as for every other device route: 404 `not_available` is
 /// [`LogoFetch::NotAvailable`], anything else an error. Errors never carry the URL or the token.
-/// Connecting for the logo download gives up after this long (the whole download after
-/// [`LOGO_TIMEOUT`](crate::system::branding::LOGO_TIMEOUT)).
-const LOGO_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-
 pub async fn fetch_logo(url: &str, token: Option<&str>) -> Result<LogoFetch> {
     use crate::system::branding::{LOGO_TIMEOUT, MAX_LOGO_BYTES};
     let mut req = no_redirect_client(Some(LOGO_CONNECT_TIMEOUT), LOGO_TIMEOUT).get(url);
@@ -410,6 +410,19 @@ impl TokenSource {
     }
 }
 
+/// One HTTP exchange as `protocol-check` reports it ([`Fetcher::with_recorder`]): the method, the
+/// path and query exactly as sent (no scheme or host), and the answer's status (`None` when no
+/// answer came). Never a header or a body, so no token or secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Exchange {
+    pub method: &'static str,
+    pub route: String,
+    pub status: Option<u16>,
+}
+
+/// Where a recording [`Fetcher`] appends its [`Exchange`]s.
+pub type Recorder = Arc<Mutex<Vec<Exchange>>>;
+
 /// 克隆便宜（HTTP 客户端内部共享连接池）：主循环、心跳与后台任务各拿一份。
 /// 令牌与旧令牌标记放在共享的 `Arc` 里：任何一份上 [`Fetcher::set_token`]、任何一份收到
 /// `X-Mastersos-Fetch-Token: stale`，所有克隆都看得到。
@@ -426,6 +439,8 @@ pub struct Fetcher {
     base: String,
     token: Arc<RwLock<Option<String>>>,
     stale: Arc<AtomicBool>,
+    /// `protocol-check` only; the agent never sets one.
+    recorder: Option<Recorder>,
 }
 
 impl Fetcher {
@@ -440,7 +455,48 @@ impl Fetcher {
             base: device_base(&seed.server_url),
             token: Arc::new(RwLock::new(token)),
             stale: Arc::new(AtomicBool::new(false)),
+            recorder: None,
         }
+    }
+
+    /// The same fetcher, appending every request it sends to `rec` ([`Exchange`]). Only
+    /// `protocol-check` records; the agent never does.
+    pub fn with_recorder(mut self, rec: Recorder) -> Fetcher {
+        self.recorder = Some(rec);
+        self
+    }
+
+    /// The only place a request of this fetcher goes out: the builder's own client (redirect
+    /// policy, timeouts) and headers are kept as they are. With a recorder set it appends the
+    /// method, the path and query, and the status (`None` without an answer).
+    async fn send(&self, rb: reqwest::RequestBuilder) -> reqwest::Result<reqwest::Response> {
+        let (client, req) = rb.build_split();
+        let req = req?;
+        let Some(rec) = &self.recorder else {
+            return client.execute(req).await;
+        };
+        let method = match *req.method() {
+            reqwest::Method::GET => "GET",
+            reqwest::Method::POST => "POST",
+            reqwest::Method::PUT => "PUT",
+            reqwest::Method::DELETE => "DELETE",
+            _ => "OTHER",
+        };
+        let url = req.url();
+        let route = match url.query() {
+            Some(q) => format!("{}?{q}", url.path()),
+            None => url.path().to_string(),
+        };
+        let resp = client.execute(req).await;
+        let status = resp.as_ref().ok().map(|r| r.status().as_u16());
+        rec.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(Exchange {
+                method,
+                route,
+                status,
+            });
+        resp
     }
 
     /// 用 `seed.toml` 里的令牌（不看换领存下的令牌文件；测试与只读种子的场合用）。
@@ -524,8 +580,7 @@ impl Fetcher {
     async fn fetch_bundle(&self, req: reqwest::RequestBuilder) -> Result<FetchOutcome> {
         let used = self.current_token();
         let mut resp = self
-            .auth_as(req, &used)
-            .send()
+            .send(self.auth_as(req, &used))
             .await
             .context("request to bundle failed")?;
         self.observe(&resp, &used);
@@ -565,8 +620,7 @@ impl Fetcher {
     pub async fn heartbeat(&self) -> Result<Option<String>> {
         let used = self.current_token();
         let mut resp = self
-            .auth_as(self.client.get(self.url("heartbeat")), &used)
-            .send()
+            .send(self.auth_as(self.client.get(self.url("heartbeat")), &used))
             .await
             .context("request to heartbeat failed")?;
         self.observe(&resp, &used);
@@ -602,8 +656,7 @@ impl Fetcher {
         }
         let used = self.current_token();
         let resp = self
-            .auth_as(self.escrow_client.post(self.url("escrow")).json(r), &used)
-            .send()
+            .send(self.auth_as(self.escrow_client.post(self.url("escrow")).json(r), &used))
             .await
             .map_err(reqwest::Error::without_url)
             .context("request to escrow failed")?;
@@ -631,8 +684,7 @@ impl Fetcher {
             escrow_secret: id.escrow_secret.clone(),
         };
         let mut resp = self
-            .auth(self.escrow_client.post(self.url("fetch-token")).json(&req))
-            .send()
+            .send(self.auth(self.escrow_client.post(self.url("fetch-token")).json(&req)))
             .await
             .map_err(reqwest::Error::without_url)
             .context("request to fetch-token failed")?;
@@ -680,11 +732,10 @@ impl Fetcher {
         };
         let used = self.current_token();
         let resp = self
-            .auth_as(
+            .send(self.auth_as(
                 self.escrow_client.post(self.url("push-token")).json(&req),
                 &used,
-            )
-            .send()
+            ))
             .await
             .map_err(reqwest::Error::without_url)
             .context("request to push-token failed")?;
@@ -701,10 +752,11 @@ impl Fetcher {
     /// `device_auth_missing` is [`DeviceAuthMissing`]; any other 401 is [`Unauthorized`].
     pub async fn inbox(&self, cred: &DeviceCred, after: u64, lab: bool) -> Result<InboxPage> {
         let used = self.current_token();
-        let resp = self
+        let req = self
             .device_request(reqwest::Method::GET, "inbox", cred, &used, lab)?
-            .query(&[("after", after)])
-            .send()
+            .query(&[("after", after)]);
+        let resp = self
+            .send(req)
             .await
             .map_err(reqwest::Error::without_url)
             .context("request to inbox failed")?;
@@ -726,7 +778,7 @@ impl Fetcher {
         lab: bool,
     ) -> Result<ResultAck> {
         let used = self.current_token();
-        let resp = self
+        let req = self
             .device_request(
                 reqwest::Method::POST,
                 &format!("inbox/{seq}/result"),
@@ -734,8 +786,9 @@ impl Fetcher {
                 &used,
                 lab,
             )?
-            .json(r)
-            .send()
+            .json(r);
+        let resp = self
+            .send(req)
             .await
             .map_err(reqwest::Error::without_url)
             .context("request to inbox result failed")?;
@@ -795,10 +848,11 @@ impl Fetcher {
             return Err(StatusNotSent::Transport.into());
         }
         let used = self.current_token();
-        let resp = self
+        let req = self
             .device_request(reqwest::Method::POST, "status", cred, &used, lab)?
-            .json(r)
-            .send()
+            .json(r);
+        let resp = self
+            .send(req)
             .await
             .map_err(reqwest::Error::without_url)
             .context("request to status failed")?;
@@ -856,7 +910,10 @@ impl Fetcher {
         let req = self
             .device_request(reqwest::Method::POST, "diagnostics", cred, &used, lab)
             .map_err(|e| DiagUploadError::new(ErrorAction::Drop, format!("{STEP}: {e}")))?;
-        let resp = req.json(r).send().await.map_err(|e| net_error(STEP, e))?;
+        let resp = self
+            .send(req.json(r))
+            .await
+            .map_err(|e| net_error(STEP, e))?;
         self.observe(&resp, &used);
         let status = resp.status();
         if !(status == StatusCode::OK || status == StatusCode::CREATED) {
@@ -923,7 +980,7 @@ impl Fetcher {
                 lab,
             )
             .map_err(|e| DiagUploadError::new(ErrorAction::Drop, format!("{STEP}: {e}")))?;
-        let resp = req.send().await.map_err(|e| net_error(STEP, e))?;
+        let resp = self.send(req).await.map_err(|e| net_error(STEP, e))?;
         self.observe(&resp, &used);
         if resp.status().is_success() {
             return Ok(CompleteOutcome::Done);
@@ -958,7 +1015,10 @@ impl Fetcher {
         let req = self
             .device_request(reqwest::Method::POST, "support", cred, &used, lab)
             .map_err(|e| DiagUploadError::new(ErrorAction::Backoff, format!("{STEP}: {e}")))?;
-        let resp = req.json(r).send().await.map_err(|e| net_error(STEP, e))?;
+        let resp = self
+            .send(req.json(r))
+            .await
+            .map_err(|e| net_error(STEP, e))?;
         self.observe(&resp, &used);
         let status = resp.status();
         if !(status == StatusCode::OK || status == StatusCode::CREATED) {
