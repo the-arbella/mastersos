@@ -28,7 +28,7 @@ concurrency:
   group: cli-release-${{ inputs.ref || github.ref }}
   cancel-in-progress: false
 
-# Git settings as environment for every checkout (see cli-tests in mastersos.yml): image/ has paths NTFS cannot
+# Git settings as environment for every checkout: image/ has paths NTFS cannot
 # hold, and nothing is converted to CRLF
 env:
   GIT_CONFIG_COUNT: 2
@@ -62,11 +62,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { target: aarch64-apple-darwin, os: macos-latest, tool: cargo }
+          - { target: aarch64-apple-darwin, os: macos-latest, tool: cargo, test: true }
           - { target: x86_64-apple-darwin, os: macos-latest, tool: cargo }
           - { target: x86_64-unknown-linux-musl, os: ubuntu-latest, tool: cross }
           - { target: aarch64-unknown-linux-musl, os: ubuntu-latest, tool: cross }
-          - { target: x86_64-pc-windows-msvc, os: windows-latest, tool: cargo }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest, tool: cargo, test: true }
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -87,6 +87,10 @@ jobs:
       # The musl builds need a C cross toolchain for ring: cross's images (core/Cross.toml), same version as the tag there
       - if: matrix.tool == 'cross'
         run: cargo install cross --locked --version 0.2.5
+      # The command line's tests on this system (the runner's own architecture only), before anything is built for release
+      - name: Test
+        if: matrix.test
+        run: cargo test --locked -p mastersos-bundle -p mastersos-sign -p mastersos-mcp --no-fail-fast
       - name: Build
         env:
           TARGET: ${{ matrix.target }}
