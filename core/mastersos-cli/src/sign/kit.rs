@@ -18,8 +18,11 @@ use mastersos_bundle::{is_recovery_key, trust_fingerprint, TrustKey};
 use serde::Deserialize;
 use zeroize::Zeroizing;
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+
 use super::Api;
 use crate::safe;
+use crate::server::{CliError, Server};
 
 /// Longest kit file or stdin line read; a kit text is 69 characters, 87 when grouped.
 const KIT_INPUT_MAX: u64 = 1024;
@@ -89,6 +92,13 @@ pub fn kit_new_in(out: &Path, school: Option<&str>) -> Result<(KitSummary, std::
     } else {
         out.to_path_buf()
     };
+    // The folder must be ours (another account could swap files in it); the file itself is made
+    // by create_private: new, owner-only, and never through a link.
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    crate::platform::check_dir_owner(parent)?;
     let mut text = kit.to_display();
     text.push('\n');
     write_new_private(&path, text.as_bytes())?;
@@ -176,96 +186,130 @@ pub async fn ensure_registered(api: &Api, tk: &TrustKey) -> Result<()> {
     Ok(())
 }
 
-/// Whether `e` is the server's `key_exists` (the key or recipient is registered already), read
-/// from the structured error ([`super::ServerError`]), not its text.
-pub fn is_already_registered(e: &anyhow::Error) -> bool {
-    super::server_error_code(e) == Some("key_exists")
+/// What `key register` did, for the person and for `--json`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Registered {
+    pub key_id: String,
+    pub fingerprint: String,
+    /// The server had the key already (`409 key_exists`).
+    pub key_already: bool,
+    pub recipient: String,
+    /// The server had the recipient already (`409 recipient_exists`).
+    pub recipient_already: bool,
 }
 
-/// Register the kit's escrow recipient (`POST /v1/admin/escrow-recipients`), bound
-/// to the kit's recovery key: the kit signs the binding message over a fresh probe nonce of this
-/// school, built locally from the nonce (the server's `message_b64` is never signed). A
-/// recipient registered already is reported and left as it is.
-pub async fn register_escrow_recipient(
-    api: &Api,
-    kit: &Kit,
-    label: &str,
-    out: &mut dyn Write,
-) -> Result<()> {
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
-    use mastersos_bundle::Signer as _;
+fn invalid_answer(what: &str) -> CliError {
+    CliError::new("invalid_answer", what)
+}
 
+/// The label as the server counts it: trimmed, 1 to 64 characters.
+fn checked_label(label: &str) -> Result<&str, CliError> {
+    let l = mastersos_bundle::keyid::trim_label(label);
+    if l.is_empty() || l.chars().count() > 64 {
+        return Err(CliError::usage("the label must be 1 to 64 characters"));
+    }
+    Ok(l)
+}
+
+/// `POST keys/probe`: a nonce of 32 bytes (std-pad base64, strict), and the server's message
+/// equal to `"mastersos-keyprobe-v1\n" || nonce` computed here. Nothing is signed or posted
+/// when either differs. Returns the nonce text as sent and the nonce bytes.
+async fn probe(server: &Server) -> Result<(String, Vec<u8>), CliError> {
     #[derive(Deserialize)]
     struct Probe {
         nonce_b64: String,
+        message_b64: String,
     }
-    #[derive(Deserialize)]
-    struct Registered {
-        recipient: String,
-        bound_key_id: String,
-    }
-    let recipient = kit.escrow_recipient();
-    let probe: Probe = api
-        .post_json(
-            &["v1", "admin", "signing-keys", "probe"],
-            None,
-            "get a probe for the escrow recipient",
-        )
-        .await?;
+    let p: Probe = server.post_empty("keys/probe").await?;
     let nonce = STANDARD
-        .decode(&probe.nonce_b64)
-        .context("the probe nonce is not base64")?;
+        .decode(&p.nonce_b64)
+        .map_err(|_| invalid_answer("the probe nonce is not standard base64"))?;
     if nonce.len() != 32 {
-        bail!(
-            "the probe nonce should be 32 bytes, the server gave {}",
-            nonce.len()
-        );
+        return Err(invalid_answer("the probe nonce is not 32 bytes"));
     }
+    if STANDARD.encode(mastersos_bundle::keyid::keyprobe_message(&nonce)) != p.message_b64 {
+        return Err(invalid_answer(
+            "the probe message is not the one this computer expects; nothing was signed",
+        ));
+    }
+    Ok((p.nonce_b64, nonce))
+}
+
+/// `key register`: the school key (`POST keys/probe`, `POST keys`), then the escrow recipient
+/// bound to it with a fresh probe (`POST escrow-recipients`). Both messages are built here from
+/// the nonce; the server's `message_b64` is only compared. A key or recipient that is registered
+/// already is reported and left as it is.
+pub async fn register(server: &Server, kit: &Kit, label: &str) -> Result<Registered, CliError> {
+    use mastersos_bundle::Signer as _;
+    let label = checked_label(label)?;
+    let tk = kit.trust_key();
+    let fingerprint = trust_fingerprint(&tk);
+    let recipient = kit.escrow_recipient();
+    if recipient.len() != 62
+        || !recipient.starts_with("age1")
+        || recipient != recipient.to_lowercase()
+    {
+        return Err(CliError::new(
+            "local_file",
+            "the school key gives no canonical disk-unlocking recipient",
+        ));
+    }
+
+    let (nonce_b64, nonce) = probe(server).await?;
+    let body = serde_json::json!({
+        "label": label,
+        "trust_key": {"id": tk.id, "alg": "ed25519", "public_key": tk.public_key},
+        "nonce_b64": nonce_b64,
+        "signature": {
+            "key_id": tk.id,
+            "alg": "ed25519",
+            "sig": STANDARD.encode(kit.signer().sign(&mastersos_bundle::keyid::keyprobe_message(&nonce))),
+        },
+    });
+    #[derive(Deserialize)]
+    struct Answer {
+        key_id: String,
+        fingerprint: String,
+    }
+    let key_already = match server.post_json::<_, Answer>("keys", &body).await {
+        Ok(a) if a.key_id == tk.id && a.fingerprint == fingerprint => false,
+        Ok(_) => {
+            return Err(invalid_answer(
+                "the server registered a different key than this computer computed",
+            ))
+        }
+        Err(e) if e.code == "key_exists" => true,
+        Err(e) => return Err(e),
+    };
+
+    let (nonce_b64, nonce) = probe(server).await?;
     let msg = mastersos_bundle::kit::recipient_binding_message(&recipient, &nonce);
     let body = serde_json::json!({
         "recipient": recipient,
-        "bound_key_id": kit.key_id(),
-        "nonce_b64": probe.nonce_b64,
+        "bound_key_id": tk.id,
+        "nonce_b64": nonce_b64,
         "sig_b64": STANDARD.encode(kit.signer().sign(&msg)),
         "label": label,
     });
-    let r: Registered = match api
-        .post_json(
-            &["v1", "admin", "escrow-recipients"],
-            Some(&body),
-            "register the escrow recipient",
-        )
+    let recipient_already = match server
+        .post_json::<_, serde_json::Value>("escrow-recipients", &body)
         .await
     {
-        Ok(r) => r,
-        Err(e) if is_already_registered(&e) => {
-            writeln!(
-                out,
-                "Disk unlocking for school key {} is already registered.",
-                code_of(kit)
-            )?;
-            return Ok(());
-        }
+        Ok(_) => false,
+        Err(e) if e.code == "recipient_exists" => true,
         Err(e) => return Err(e),
     };
-    if r.recipient != recipient || r.bound_key_id != kit.key_id() {
-        bail!(
-            "the server registered {} bound to {}, not {recipient} bound to {}",
-            safe::field(&r.recipient),
-            safe::field(&r.bound_key_id),
-            kit.key_id()
-        );
-    }
-    writeln!(
-        out,
-        "Disk unlocking registered for school key {}.",
-        code_of(kit)
-    )?;
-    Ok(())
+    Ok(Registered {
+        key_id: tk.id,
+        fingerprint,
+        key_already,
+        recipient,
+        recipient_already,
+    })
 }
 
 /// The key code of `kit` (its key id where there is none).
-fn code_of(kit: &Kit) -> String {
+pub fn code_of(kit: &Kit) -> String {
     mastersos_bundle::keyid::key_code(&kit.key_id()).unwrap_or_else(|| kit.key_id())
 }
 

@@ -51,6 +51,13 @@ pub fn create_private(path: &Path) -> Result<File> {
     })
 }
 
+/// Refuse a directory that belongs to another account (Unix; Windows judges the owner by the
+/// file's own DACL). The directory may be reached through a link: it is the directory that counts.
+/// For the folder a new school key is written into.
+pub fn check_dir_owner(dir: &Path) -> Result<()> {
+    sys::check_dir_owner(dir)
+}
+
 /// Create or replace `path` with `bytes`, readable by the current user only: a new temporary
 /// file next to it ([`create_private`]), then a rename over it.
 pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -241,6 +248,15 @@ mod sys {
             );
         }
         Ok(())
+    }
+
+    /// The directory must belong to the current user: another account could swap what is in it.
+    pub fn check_dir_owner(dir: &Path) -> Result<()> {
+        let f = File::open(dir).with_context(|| format!("cannot open {}", dir.display()))?;
+        if !meta(&f, dir)?.is_dir() {
+            bail!("{} is not a directory", dir.display());
+        }
+        check_owner(&f, dir)
     }
 
     pub const CANNOT_HIDE_TYPING: &str =
@@ -522,6 +538,11 @@ mod sys {
 
     /// The owner is judged with the DACL in [`not_private`].
     pub fn check_owner(_f: &File, _path: &Path) -> Result<()> {
+        Ok(())
+    }
+
+    /// The key file is created with a DACL for the current user only, wherever it is.
+    pub fn check_dir_owner(_dir: &Path) -> Result<()> {
         Ok(())
     }
 

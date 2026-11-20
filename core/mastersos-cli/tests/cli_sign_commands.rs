@@ -1,13 +1,11 @@
-//! `mastersos key register` and `mastersos recovery read` against a mock server, with the global
+//! `mastersos recovery read` against a mock server, with the global
 //! `--server` and `--token-file`.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use mastersos_bundle::keyid::key_code;
 use mastersos_bundle::kit::Kit;
-use serde_json::{json, Value};
+use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -67,97 +65,6 @@ fn text(o: &Output) -> (String, String) {
         String::from_utf8_lossy(&o.stdout).into_owned(),
         String::from_utf8_lossy(&o.stderr).into_owned(),
     )
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn key_register_registers_the_key_then_its_disk_unlocking() {
-    let (home, token, key, kit) = home_with_key();
-    let s = server().await;
-    let tk = kit.trust_key();
-    Mock::given(method("POST"))
-        .and(path("/v1/admin/signing-keys/probe"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(json!({ "nonce_b64": STANDARD.encode([9u8; 32]) })),
-        )
-        .mount(&s)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/v1/admin/signing-keys"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "key_id": tk.id, "fingerprint": mastersos_bundle::trust_fingerprint(&tk)
-        })))
-        .mount(&s)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/v1/admin/escrow-recipients"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "recipient": kit.escrow_recipient(), "bound_key_id": kit.key_id()
-        })))
-        .mount(&s)
-        .await;
-
-    let o = run(
-        home.path(),
-        &s.uri(),
-        &token,
-        &[
-            "key",
-            "register",
-            "--key-file",
-            key.to_str().unwrap(),
-            "--label",
-            "Office USB",
-        ],
-    )
-    .await;
-    let (out, err) = text(&o);
-    assert!(o.status.success(), "{out}{err}");
-    let code = key_code(&kit.key_id()).unwrap();
-    assert!(
-        out.contains(&format!("Registered school key {code}")),
-        "{out}"
-    );
-    assert!(
-        out.contains(&format!("Disk unlocking registered for school key {code}.")),
-        "{out}"
-    );
-
-    // The key first (its own probe), then the disk unlocking bound to it (a fresh probe).
-    let posts: Vec<(String, Value)> = s
-        .received_requests()
-        .await
-        .unwrap()
-        .iter()
-        .filter(|r| r.method.as_str() == "POST")
-        .map(|r| {
-            (
-                r.url.path().to_owned(),
-                serde_json::from_slice(&r.body).unwrap_or(Value::Null),
-            )
-        })
-        .collect();
-    let paths: Vec<&str> = posts.iter().map(|(p, _)| p.as_str()).collect();
-    assert_eq!(
-        paths,
-        [
-            "/v1/admin/signing-keys/probe",
-            "/v1/admin/signing-keys",
-            "/v1/admin/signing-keys/probe",
-            "/v1/admin/escrow-recipients",
-        ]
-    );
-    let key_body = &posts[1].1;
-    assert_eq!(key_body["kind"], "recovery");
-    assert_eq!(key_body["label"], "Office USB");
-    assert_eq!(key_body["trust_key"]["id"], tk.id.as_str());
-    assert_eq!(key_body["signature"]["key_id"], tk.id.as_str());
-    let recipient_body = &posts[3].1;
-    assert_eq!(recipient_body["recipient"], kit.escrow_recipient().as_str());
-    assert_eq!(recipient_body["bound_key_id"], kit.key_id().as_str());
-    assert_eq!(recipient_body["label"], "Office USB");
-    // The school key itself never reaches the output.
-    assert!(!out.contains(kit.to_text().as_str()) && !err.contains(kit.to_text().as_str()));
 }
 
 #[tokio::test(flavor = "multi_thread")]

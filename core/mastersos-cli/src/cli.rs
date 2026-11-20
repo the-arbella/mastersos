@@ -257,15 +257,21 @@ enum KeyCmd {
         /// The school key file (keep it on a USB stick; only you should be able to read it), or `-` for the first line of stdin
         #[arg(long = "key-file", value_name = "PATH")]
         key_file: PathBuf,
-        /// A name people will recognise
+        /// A name people will recognise (1 to 64 characters)
         #[arg(long, value_name = "TEXT")]
         label: String,
+        /// The school's id (a lowercase UUID; default: `school_id` in the settings directory's mastersos.toml, else the schools you administer are listed and the only one is taken)
+        #[arg(long, value_name = "UUID")]
+        school: Option<String>,
     },
-    /// List the school keys registered for this school: key code, label, registered date, whether the published settings and the local directory have them
+    /// List the school keys registered for this school: key code, label, registered date, whether the latest published settings and the local directory have them, when each last signed
     List {
         /// The settings directory (default: the current directory)
         #[arg(long)]
         dir: Option<PathBuf>,
+        /// The school's id (a lowercase UUID; default: `school_id` in the settings directory's mastersos.toml, else the schools you administer are listed and the only one is taken)
+        #[arg(long, value_name = "UUID")]
+        school: Option<String>,
     },
     /// Add the school key in FILE (registered with `mastersos key register`) to the local manifest.toml; then publish with a school key already in use
     Add {
@@ -275,8 +281,11 @@ enum KeyCmd {
         /// The settings directory (default: the current directory)
         #[arg(long)]
         dir: Option<PathBuf>,
+        /// The school's id (a lowercase UUID; default: `school_id` in the settings directory's mastersos.toml, else the schools you administer are listed and the only one is taken)
+        #[arg(long, value_name = "UUID")]
+        school: Option<String>,
     },
-    /// Remove the school key with this key code (for example 11d9-03eb) from the local manifest.toml; then publish
+    /// Remove the school key with this key code (for example 11d9-03eb) from the local manifest.toml (then publish), or with --unregister from the server
     Remove {
         /// The key code, with or without the dash
         #[arg(value_name = "KEY CODE")]
@@ -287,6 +296,12 @@ enum KeyCmd {
         /// The settings directory (default: the current directory)
         #[arg(long)]
         dir: Option<PathBuf>,
+        /// Instead of editing the local manifest.toml, delete the school key (and its disk unlocking) from the server; refused while the latest published settings still use it
+        #[arg(long)]
+        unregister: bool,
+        /// The school's id (a lowercase UUID; default: `school_id` in the settings directory's mastersos.toml, else the schools you administer are listed and the only one is taken)
+        #[arg(long, value_name = "UUID")]
+        school: Option<String>,
     },
 }
 
@@ -421,18 +436,29 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         Cmd::Logout => return Ok(finish(crate::auth::logout(json), json)),
         _ => {}
     }
+    let o = V1 {
+        json,
+        yes,
+        server: server.clone(),
+        pin_flag: pin_flag.clone(),
+        fingerprints: trust_fingerprint.clone(),
+    };
     // Protocol v1 commands: credentials from arbella or `mastersos login`, no config file.
     if matches!(
         cmd,
-        Cmd::Init { .. } | Cmd::Pull { .. } | Cmd::Verify { .. }
+        Cmd::Init { .. }
+            | Cmd::Pull { .. }
+            | Cmd::Verify { .. }
+            | Cmd::Key(
+                KeyCmd::Register { .. }
+                    | KeyCmd::List { .. }
+                    | KeyCmd::Add { .. }
+                    | KeyCmd::Remove {
+                        unregister: true,
+                        ..
+                    }
+            )
     ) {
-        let o = V1 {
-            json,
-            yes,
-            server: server.clone(),
-            pin_flag: pin_flag.clone(),
-            fingerprints: trust_fingerprint.clone(),
-        };
         return Ok(finish(v1_command(&o, cmd).await, json));
     }
     if let Cmd::Connect { server_url } = &cmd {
@@ -453,7 +479,9 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         Cmd::Explain(c) => return explain(c, json),
         Cmd::Migrate { dir, write } => return migrate(dir.as_deref(), &pin_dir()?, *write, json),
         Cmd::HashPassword => return hash_password(),
-        Cmd::Key(KeyCmd::New { out, school }) => return key_new(out, school.as_deref()),
+        Cmd::Key(KeyCmd::New { out, school }) => {
+            return Ok(finish(key_new(out, school.as_deref(), json), json))
+        }
         Cmd::Logo(LogoCmd::Upload { login, icon }) => {
             // Wrong sizes are refused before the config, the token or the network is touched.
             logo_body(login, icon)?;
@@ -463,16 +491,8 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
             code,
             key_file,
             dir,
-        }) => {
-            return keys_remove(
-                dir.as_deref(),
-                code,
-                key_file.as_deref(),
-                server.as_deref(),
-                token_file.as_deref(),
-            )
-            .await
-        }
+            ..
+        }) => return keys_remove(dir.as_deref(), code, key_file.as_deref(), &o).await,
         // Settings are approved on this computer with the school key; nothing is uploaded without it.
         Cmd::Publish { key_file: None, .. } => {
             return Err(OpError::Failed(
@@ -481,11 +501,6 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         }
         _ => {}
     }
-    // School key files that cannot be read (not private, not a school key) stop before the network.
-    let school_keys = match &cmd {
-        Cmd::Key(KeyCmd::Add { file, .. }) => load_school_keys(std::slice::from_ref(file))?,
-        _ => Vec::new(),
-    };
     let sign_with = match &cmd {
         Cmd::Publish {
             key_file: Some(p), ..
@@ -493,9 +508,7 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         _ => None,
     };
     let kit = match &cmd {
-        Cmd::Heartbeat { key_file, .. }
-        | Cmd::Recovery(RecoveryCmd::Read { key_file, .. })
-        | Cmd::Key(KeyCmd::Register { key_file, .. }) => {
+        Cmd::Heartbeat { key_file, .. } | Cmd::Recovery(RecoveryCmd::Read { key_file, .. }) => {
             Some(crate::sign::kit::load_key_file(key_file).map_err(fail)?)
         }
         _ => None,
@@ -534,8 +547,7 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         | Cmd::Explain(_)
         | Cmd::Migrate { .. }
         | Cmd::HashPassword
-        | Cmd::Key(KeyCmd::New { .. })
-        | Cmd::Key(KeyCmd::Remove { .. })
+        | Cmd::Key(_)
         | Cmd::Init { .. }
         | Cmd::Pull { .. }
         | Cmd::Verify { .. } => {
@@ -557,19 +569,6 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
                 json,
             )
             .await
-        }
-        Cmd::Key(KeyCmd::Register { label, .. }) => {
-            key_register(
-                &server,
-                &token_file,
-                kit.ok_or_else(|| fail("no school key"))?,
-                &label,
-            )
-            .await
-        }
-        Cmd::Key(KeyCmd::List { dir }) => keys_list(&api, &out, dir.as_deref()).await,
-        Cmd::Key(KeyCmd::Add { dir, .. }) => {
-            keys_add(&api, &server, dir.as_deref(), &school_keys).await
         }
         Cmd::Heartbeat { days, .. } => {
             heartbeat(
@@ -669,49 +668,22 @@ fn sign_fail(e: anyhow::Error) -> OpError {
     OpError::Failed(crate::safe::text(&format!("{e:#}")))
 }
 
-/// `mastersos key new`: no network.
-fn key_new(out: &Path, school: Option<&str>) -> Result<ExitCode, OpError> {
-    let (k, path) = crate::sign::kit::kit_new_in(out, school).map_err(sign_fail)?;
-    println!(
-        "key code:    {}",
-        mastersos_bundle::keyid::key_code(&k.key_id).unwrap_or(k.key_id)
-    );
-    println!("fingerprint: {}", k.fingerprint);
+/// `mastersos key new`: no network. The school key itself is never printed.
+fn key_new(out: &Path, school: Option<&str>, json: bool) -> Result<String, CliError> {
+    let (k, path) = crate::sign::kit::kit_new_in(out, school).map_err(local_file)?;
+    let code = mastersos_bundle::keyid::key_code(&k.key_id).unwrap_or_else(|| k.key_id.clone());
     let shown = std::path::absolute(&path).unwrap_or(path);
-    println!("school key:  {}", shown.display());
-    println!(
-        "Print the school key file on paper and lock the printout away, register it with \
-         `mastersos key register --key-file <file>`, then move the file to a USB stick \
-         and delete it from this computer."
-    );
-    Ok(ExitCode::SUCCESS)
-}
-
-/// `mastersos key register`: the school key, then the disk unlocking bound to it.
-async fn key_register(
-    server: &str,
-    token_file: &Path,
-    kit: &mastersos_bundle::kit::Kit,
-    label: &str,
-) -> Result<ExitCode, OpError> {
-    use crate::sign::kit::{is_already_registered, register_escrow_recipient};
-    let api = sign_api(server, token_file)?;
-    match crate::sign::register(&api, kit, label).await {
-        Ok(id) => match mastersos_bundle::keyid::key_code(&id) {
-            Some(code) => println!("Registered school key {code} ({id})."),
-            None => println!("Registered key {id}."),
-        },
-        // Registered before (say the disk-unlocking step failed): go on to that step.
-        Err(e) if is_already_registered(&e) => println!(
-            "School key {} is already registered.",
-            mastersos_bundle::keyid::key_code(&kit.key_id()).unwrap_or_else(|| kit.key_id())
-        ),
-        Err(e) => return Err(sign_fail(e)),
+    if json {
+        return Ok(format!(
+            "{}\n",
+            json!({"key_code": code, "key_id": k.key_id, "fingerprint": k.fingerprint, "path": shown.display().to_string()})
+        ));
     }
-    register_escrow_recipient(&api, kit, label, &mut std::io::stdout())
-        .await
-        .map_err(sign_fail)?;
-    Ok(ExitCode::SUCCESS)
+    Ok(format!(
+        "key code:    {code}\nfingerprint: {}\nschool key:  {}\nPrint the school key file on paper and lock the printout away, register it with `mastersos key register --key-file <file>`, then move the file to a USB stick and delete it from this computer.\n",
+        k.fingerprint,
+        shown.display()
+    ))
 }
 
 /// `mastersos heartbeat`.
@@ -1254,33 +1226,6 @@ fn migrate(dir: Option<&Path>, pins: &Path, write: bool, json: bool) -> Result<E
     })
 }
 
-/// The school id and name the server says this token belongs to (the name for messages only; the
-/// host when there is none).
-async fn school_info(api: &Api, server: &str) -> Result<(String, String), OpError> {
-    let text = api.send(Req::get(&["v1", "auth", "config"])).await?;
-    let v: Value = serde_json::from_str(&text).map_err(fail)?;
-    let id = v["school_id"]
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| OpError::Failed("the server did not say which school this is".into()))?;
-    let name = v["name"]
-        .as_str()
-        .map(|n| {
-            n.chars()
-                .filter(|c| !c.is_control())
-                .take(64)
-                .collect::<String>()
-        })
-        .filter(|n| !n.trim().is_empty())
-        .unwrap_or_else(|| {
-            reqwest::Url::parse(server)
-                .ok()
-                .and_then(|u| u.host_str().map(str::to_owned))
-                .unwrap_or_else(|| "this school".to_owned())
-        });
-    Ok((id, name))
-}
-
 fn sign_api(server: &str, token_file: &Path) -> Result<crate::sign::Api, OpError> {
     crate::sign::Api::from_token_file(server, token_file).map_err(fail)
 }
@@ -1326,66 +1271,6 @@ fn load_school_keys(paths: &[PathBuf]) -> Result<Vec<SchoolKey>, OpError> {
     Ok(out)
 }
 
-/// `GET /v1/admin/signing-keys`, as far as the command line reads it.
-#[derive(Deserialize)]
-struct ListedKey {
-    key_id: String,
-    #[serde(default)]
-    alg: String,
-    #[serde(default)]
-    public_key: String,
-    #[serde(default)]
-    label: String,
-    #[serde(default)]
-    created_at: Option<String>,
-    #[serde(default)]
-    in_published_trust: bool,
-}
-
-/// `GET /v1/admin/escrow-recipients`, as far as the command line reads it.
-#[derive(Deserialize)]
-struct ListedRecipient {
-    recipient: String,
-    #[serde(default)]
-    bound_key_id: Option<String>,
-}
-
-async fn get_list<T: serde::de::DeserializeOwned>(
-    api: &Api,
-    what: &str,
-) -> Result<Vec<T>, OpError> {
-    let text = api.send(Req::get(&["v1", "admin", what])).await?;
-    serde_json::from_str(&text)
-        .map_err(|e| OpError::Failed(format!("the server's list of {what} cannot be read: {e}")))
-}
-
-/// Every school key must be registered for this school: its public key among the registered
-/// signing keys (compared by key, not by id or label) and its recipient among the registered
-/// recipients. The server's lists only answer yes or no; nothing from them is written.
-async fn ensure_registered(
-    api: &Api,
-    school_keys: &[SchoolKey],
-    school: &str,
-) -> Result<(), OpError> {
-    let keys: Vec<ListedKey> = get_list(api, "signing-keys").await?;
-    let recipients: Vec<ListedRecipient> = get_list(api, "escrow-recipients").await?;
-    for k in school_keys {
-        let tk = k.kit.trust_key();
-        let recipient = k.kit.escrow_recipient();
-        let key_ok = keys
-            .iter()
-            .any(|l| l.alg == tk.alg.as_str() && l.public_key == tk.public_key);
-        let recipient_ok = recipients.iter().any(|r| r.recipient == recipient);
-        if !key_ok || !recipient_ok {
-            return Err(OpError::Failed(format!(
-                "This school key ({}) is not registered for {school}. Register it first with `mastersos key register --key-file <file> --label <name>`.",
-                k.code()
-            )));
-        }
-    }
-    Ok(())
-}
-
 fn absolute(p: &Path) -> Result<PathBuf, OpError> {
     std::path::absolute(p).map_err(|e| OpError::Failed(format!("Bad path {}: {e}", p.display())))
 }
@@ -1403,50 +1288,6 @@ fn trusted_line(manifest_text: &str) -> Result<String, OpError> {
 const PUBLISH_NEXT: &str =
     "Now publish with a school key that is already trusted: mastersos publish --key-file <file>";
 
-/// The settings directory the `keys` commands edit; it must belong to this server and school.
-async fn keys_dir(
-    api: &Api,
-    server: &str,
-    dir: Option<&Path>,
-) -> Result<(Workdir, String), OpError> {
-    let w = Workdir::open(dir.unwrap_or_else(|| Path::new("."))).map_err(fail)?;
-    let m = w.meta().map_err(fail)?;
-    let (id, name) = school_info(api, server).await?;
-    if m.school_id != id || !same_server(&m.server, server) {
-        return Err(OpError::Failed(format!(
-            "{} belongs to school {} on {}, not to {id} on {server}",
-            absolute(&w.root)?.display(),
-            m.school_id,
-            m.server
-        )));
-    }
-    Ok((w, name))
-}
-
-/// `mastersos key add <FILE>`: only the local manifest.toml changes.
-async fn keys_add(
-    api: &Api,
-    server: &str,
-    dir: Option<&Path>,
-    school_keys: &[SchoolKey],
-) -> Result<ExitCode, OpError> {
-    let (w, name) = keys_dir(api, server, dir).await?;
-    ensure_registered(api, school_keys, &name).await?;
-    let mut text = w.manifest().map_err(fail)?;
-    for k in school_keys {
-        text = workdir::add_trusted_key(&text, &k.kit.trust_key(), &k.kit.escrow_recipient())
-            .map_err(fail)?;
-    }
-    w.write_manifest(&text).map_err(fail)?;
-    let path = absolute(&w.root.join("manifest.toml"))?;
-    for k in school_keys {
-        println!("Added school key {} to {}.", k.code(), path.display());
-    }
-    println!("{}", trusted_line(&text)?);
-    println!("{PUBLISH_NEXT}");
-    Ok(ExitCode::SUCCESS)
-}
-
 /// `mastersos key remove <KEY CODE> [--key-file <PATH>]`: only local data decides what is
 /// removed. The disk-unlocking entry goes when its `# school key <code>` comment ties it to the
 /// key, or when it is the one derived from the key's own file. Entries without either are listed
@@ -1456,8 +1297,7 @@ async fn keys_remove(
     dir: Option<&Path>,
     code: &str,
     key_file: Option<&Path>,
-    server: Option<&str>,
-    token_file: Option<&Path>,
+    o: &V1,
 ) -> Result<ExitCode, OpError> {
     let file = match key_file {
         Some(p) => {
@@ -1495,7 +1335,7 @@ async fn keys_remove(
     w.write_manifest(&r.text).map_err(fail)?;
     println!("Removed school key {shown} from {}.", path.display());
     if file.is_none() && !r.recipient_removed && !r.unmarked.is_empty() {
-        let said = server_says(&w, server, token_file).await;
+        let said = server_says(&w, o).await;
         println!(
             "manifest.toml has disk-unlocking entries (under [school]) that this command could not match to {shown}:"
         );
@@ -1521,36 +1361,26 @@ fn printable(s: &str) -> String {
 }
 
 /// Best effort, for display only: the key code the server binds each disk-unlocking entry to,
-/// when this computer is connected to the folder's own school. Any failure gives nothing.
-async fn server_says(
-    w: &Workdir,
-    server: Option<&str>,
-    token_file: Option<&Path>,
-) -> std::collections::HashMap<String, String> {
+/// when this computer is signed in and the folder belongs to the server `--server` names (if any).
+/// Any failure gives nothing.
+async fn server_says(w: &Workdir, o: &V1) -> std::collections::HashMap<String, String> {
     let fetch = async {
-        let cfg = load_config().ok()?;
-        let server = server.map(str::to_owned).or(cfg.server)?;
-        let token_file = match token_file.map(Path::to_path_buf).or(cfg.token_file) {
-            Some(p) => p,
-            None => config_dir().ok()?.join("token"),
-        };
-        crate::platform::check_private(&token_file).ok()?;
         let m = w.meta().ok()?;
-        if !same_server(&m.server, &server) {
-            return None;
+        if let Some(flag) = &o.server {
+            if origin_of(flag).ok()? != m.server {
+                return None;
+            }
         }
-        let api = connect(&server, &token_file).await.ok()?;
-        let (id, _) = school_info(&api, &server).await.ok()?;
-        if id != m.school_id {
-            return None;
-        }
-        let listed: Vec<ListedRecipient> = get_list(&api, "escrow-recipients").await.ok()?;
+        let (creds, _) = crate::auth::resolve(Some(&m.server)).await.ok()?;
+        let server = Server::new(&m.server, Some(&m.school_id), creds).ok()?;
+        let listed: Vec<Value> = server.get_json("escrow-recipients").await.ok()?;
         Some(
             listed
-                .into_iter()
+                .iter()
                 .filter_map(|l| {
-                    let code = printable(&workdir::shown_code(&l.bound_key_id?));
-                    (!code.is_empty()).then_some((l.recipient, code))
+                    let recipient = l.get("recipient")?.as_str()?;
+                    let code = printable(&workdir::shown_code(l.get("bound_key_id")?.as_str()?));
+                    (!code.is_empty()).then(|| (recipient.to_owned(), code))
                 })
                 .collect(),
         )
@@ -1560,71 +1390,6 @@ async fn server_says(
         .ok()
         .flatten()
         .unwrap_or_default()
-}
-
-/// `mastersos key list`: the registered school keys, and whether the local directory has each.
-async fn keys_list(api: &Api, out: &Out, dir: Option<&Path>) -> Result<ExitCode, OpError> {
-    let local: Option<Vec<mastersos_bundle::TrustKey>> = match dir {
-        Some(d) => {
-            let w = Workdir::open(d).map_err(fail)?;
-            Some(workdir::trusted_keys(&w.manifest().map_err(fail)?).map_err(fail)?)
-        }
-        None => match Workdir::open(Path::new(".")) {
-            Ok(w) => workdir::trusted_keys(&w.manifest().map_err(fail)?).ok(),
-            Err(_) => None,
-        },
-    };
-    let text = api.send(Req::get(&["v1", "admin", "signing-keys"])).await?;
-    let in_folder = |public_key: &str| {
-        local
-            .as_ref()
-            .map(|l| l.iter().any(|k| k.public_key == public_key))
-    };
-    if out.json {
-        let mut v: Value = serde_json::from_str(&text).map_err(fail)?;
-        if let Value::Array(items) = &mut v {
-            for i in items {
-                let here = in_folder(i["public_key"].as_str().unwrap_or_default());
-                i["in_this_folder"] = json!(here);
-            }
-        }
-        println!("{v}");
-        return Ok(ExitCode::SUCCESS);
-    }
-    let keys: Vec<ListedKey> = serde_json::from_str(&text).map_err(|e| {
-        OpError::Failed(format!(
-            "the server's list of signing-keys cannot be read: {e}"
-        ))
-    })?;
-    let yes_no = |b: bool| if b { "yes" } else { "no" }.to_owned();
-    let rows = keys
-        .iter()
-        .map(|k| {
-            vec![
-                printable(&workdir::shown_code(&k.key_id)),
-                printable(&k.label),
-                k.created_at
-                    .as_deref()
-                    .map_or("-".into(), |t| printable(t).chars().take(10).collect()),
-                yes_no(k.in_published_trust),
-                in_folder(&k.public_key).map_or("-".into(), yes_no),
-            ]
-        })
-        .collect();
-    println!(
-        "{}",
-        table(
-            &[
-                "KEY CODE",
-                "LABEL",
-                "REGISTERED",
-                "PUBLISHED",
-                "IN THIS FOLDER"
-            ],
-            rows
-        )
-    );
-    Ok(ExitCode::SUCCESS)
 }
 
 // —— Protocol v1: init, pull, verify ——
@@ -1652,7 +1417,7 @@ impl V1 {
     }
 }
 
-/// Run `init`, `pull` or `verify`: what to print on stdout, or the error. With `--json` the
+/// Run `init`, `pull`, `verify` or a `key` command that talks to the server: what to print on stdout, or the error. With `--json` the
 /// dialogue (fingerprints, chain notes) goes to stderr and stdout holds one JSON value.
 async fn v1_command(o: &V1, cmd: Cmd) -> Result<String, CliError> {
     use std::io::IsTerminal as _;
@@ -1664,6 +1429,12 @@ async fn v1_command(o: &V1, cmd: Cmd) -> Result<String, CliError> {
             ))
         }
         Cmd::Init { key_file, .. } => load_school_keys(key_file)
+            .map_err(|e| CliError::new("key_file_invalid", e.message()))?,
+        Cmd::Key(KeyCmd::Register { key_file: f, .. })
+        | Cmd::Key(KeyCmd::Add { file: f, .. })
+        | Cmd::Key(KeyCmd::Remove {
+            key_file: Some(f), ..
+        }) => load_school_keys(std::slice::from_ref(f))
             .map_err(|e| CliError::new("key_file_invalid", e.message()))?,
         _ => Vec::new(),
     };
@@ -1704,6 +1475,48 @@ async fn v1_command(o: &V1, cmd: Cmd) -> Result<String, CliError> {
             .await
         }
         Cmd::Verify { school } => verify_v1(o, school.as_deref(), &mut confirm, out).await,
+        Cmd::Key(KeyCmd::Register { label, school, .. }) => {
+            let ctx = KeyCtx {
+                o,
+                dir: None,
+                school: school.as_deref(),
+                interactive,
+            };
+            key_register(&ctx, &keys, &label, &mut confirm, out).await
+        }
+        Cmd::Key(KeyCmd::List { dir, school }) => {
+            let ctx = KeyCtx {
+                o,
+                dir: dir.as_deref(),
+                school: school.as_deref(),
+                interactive,
+            };
+            key_list(&ctx, &mut confirm, out).await
+        }
+        Cmd::Key(KeyCmd::Add { dir, school, .. }) => {
+            let ctx = KeyCtx {
+                o,
+                dir: dir.as_deref(),
+                school: school.as_deref(),
+                interactive,
+            };
+            key_add(&ctx, &keys, &mut confirm, out).await
+        }
+        Cmd::Key(KeyCmd::Remove {
+            code,
+            dir,
+            school,
+            unregister: true,
+            ..
+        }) => {
+            let ctx = KeyCtx {
+                o,
+                dir: dir.as_deref(),
+                school: school.as_deref(),
+                interactive,
+            };
+            key_unregister(&ctx, &code, keys.first(), &mut confirm, out).await
+        }
         _ => Err(CliError::usage("not a protocol v1 command")),
     }
 }
@@ -1845,6 +1658,275 @@ pub(crate) fn choose_school(
     }
 }
 
+/// What a `key` command that talks to the server is given.
+struct KeyCtx<'a> {
+    o: &'a V1,
+    /// `--dir`.
+    dir: Option<&'a Path>,
+    /// `--school`.
+    school: Option<&'a str>,
+    interactive: bool,
+}
+
+impl KeyCtx<'_> {
+    /// The settings directory's mastersos.toml: `--dir` must be one, the current directory may
+    /// be.
+    fn meta(&self) -> Result<Option<Meta>, CliError> {
+        let meta = dir_meta(self.dir.unwrap_or_else(|| Path::new(".")))?;
+        if meta.is_none() {
+            if let Some(d) = self.dir {
+                return Err(CliError::usage(&format!(
+                    "{} is not a settings directory (no mastersos.toml)",
+                    d.display()
+                )));
+            }
+        }
+        Ok(meta)
+    }
+
+    /// The server for this command: the school from `--school`, the directory, or the account's
+    /// schools (the only one, or asked for).
+    async fn server(
+        &self,
+        meta: Option<&Meta>,
+        confirm: &mut dyn std::io::BufRead,
+        out: &mut dyn std::io::Write,
+    ) -> Result<(Server, String), CliError> {
+        let (creds, origin) = resolve_v1(self.o, meta).await?;
+        let school = if self.school.is_some() || meta.is_some() {
+            school_of(self.school, meta)?
+        } else {
+            let list = Server::new(&origin, None, creds.clone())?.schools().await?;
+            choose_school(list, self.interactive, confirm, out)?.id
+        };
+        Ok((Server::new(&origin, Some(&school), creds)?, school))
+    }
+}
+
+/// `mastersos key register --key-file PATH --label TEXT`.
+async fn key_register(
+    ctx: &KeyCtx<'_>,
+    keys: &[SchoolKey],
+    label: &str,
+    confirm: &mut dyn std::io::BufRead,
+    out: &mut dyn std::io::Write,
+) -> Result<String, CliError> {
+    let kit = &keys
+        .first()
+        .ok_or_else(|| CliError::usage("no school key"))?
+        .kit;
+    let meta = ctx.meta()?;
+    let (server, _) = ctx.server(meta.as_ref(), confirm, out).await?;
+    let r = crate::sign::kit::register(&server, kit, label).await?;
+    let code = crate::sign::kit::code_of(kit);
+    if ctx.o.json {
+        return Ok(format!(
+            "{}\n",
+            json!({"key_id": r.key_id, "key_code": code, "fingerprint": r.fingerprint,
+                "key_already_registered": r.key_already,
+                "recipient": r.recipient, "recipient_already_registered": r.recipient_already})
+        ));
+    }
+    let mut s = String::new();
+    if r.key_already {
+        s.push_str(&format!("School key {code} is already registered.\n"));
+    } else {
+        s.push_str(&format!("Registered school key {code} ({}).\n", r.key_id));
+    }
+    if r.recipient_already {
+        s.push_str(&format!(
+            "Disk unlocking for school key {code} is already registered.\n"
+        ));
+    } else {
+        s.push_str(&format!(
+            "Disk unlocking registered for school key {code}.\n"
+        ));
+    }
+    Ok(s)
+}
+
+/// `mastersos key list [--dir DIR]`: the registered school keys and disk-unlocking recipients,
+/// and whether the local directory trusts each key.
+async fn key_list(
+    ctx: &KeyCtx<'_>,
+    confirm: &mut dyn std::io::BufRead,
+    out: &mut dyn std::io::Write,
+) -> Result<String, CliError> {
+    let meta = ctx.meta()?;
+    let local: Option<Vec<mastersos_bundle::TrustKey>> = match &meta {
+        Some(_) => {
+            let w = Workdir::open(ctx.dir.unwrap_or_else(|| Path::new("."))).map_err(local_file)?;
+            Some(workdir::trusted_keys(&w.manifest().map_err(local_file)?).map_err(local_file)?)
+        }
+        None => None,
+    };
+    let (server, _) = ctx.server(meta.as_ref(), confirm, out).await?;
+    let mut keys: Vec<Value> = server.get_json("keys").await?;
+    let recipients: Vec<Value> = server.get_json("escrow-recipients").await?;
+    let text_of = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(printable);
+    let in_directory = |v: &Value| {
+        let pk = v.get("public_key").and_then(Value::as_str);
+        match (&local, pk) {
+            (Some(l), Some(pk)) => l.iter().any(|k| k.public_key == pk),
+            _ => false,
+        }
+    };
+    if ctx.o.json {
+        for k in &mut keys {
+            let here = in_directory(k);
+            if let Value::Object(m) = k {
+                m.insert("in_directory".into(), json!(here));
+            }
+        }
+        return Ok(format!(
+            "{}\n",
+            json!({"keys": keys, "escrow_recipients": recipients})
+        ));
+    }
+    let yes_no = |b: Option<bool>| b.map_or("-", |b| if b { "yes" } else { "no" }).to_owned();
+    let day = |v: &Value, k: &str| {
+        text_of(v, k).map_or("-".to_owned(), |t| t.chars().take(10).collect::<String>())
+    };
+    let rows = keys
+        .iter()
+        .map(|k| {
+            vec![
+                text_of(k, "key_id").map_or("-".into(), |id| printable(&workdir::shown_code(&id))),
+                text_of(k, "label").unwrap_or_default(),
+                day(k, "created_at"),
+                yes_no(k.get("in_latest_trust").and_then(Value::as_bool)),
+                yes_no(local.as_ref().map(|_| in_directory(k))),
+                day(k, "last_used_at"),
+            ]
+        })
+        .collect();
+    let mut s = table(
+        &[
+            "KEY CODE",
+            "LABEL",
+            "REGISTERED",
+            "IN LATEST TRUST",
+            "IN THIS DIRECTORY",
+            "LAST USED",
+        ],
+        rows,
+    );
+    s.push('\n');
+    if !recipients.is_empty() {
+        let rows = recipients
+            .iter()
+            .map(|r| {
+                vec![
+                    text_of(r, "bound_key_id")
+                        .map_or("-".into(), |id| printable(&workdir::shown_code(&id))),
+                    text_of(r, "label").unwrap_or_default(),
+                    day(r, "created_at"),
+                    yes_no(r.get("in_latest").and_then(Value::as_bool)),
+                ]
+            })
+            .collect();
+        s.push_str("\nDisk unlocking:\n");
+        s.push_str(&table(
+            &["KEY CODE", "LABEL", "REGISTERED", "IN LATEST TRUST"],
+            rows,
+        ));
+        s.push('\n');
+    }
+    Ok(s)
+}
+
+/// `mastersos key add FILE [--dir DIR]`: only the local manifest.toml changes, after the server
+/// lists the school key.
+async fn key_add(
+    ctx: &KeyCtx<'_>,
+    keys: &[SchoolKey],
+    confirm: &mut dyn std::io::BufRead,
+    out: &mut dyn std::io::Write,
+) -> Result<String, CliError> {
+    let meta = ctx.meta()?.ok_or_else(|| {
+        CliError::usage("this is not a settings directory (no mastersos.toml): pass --dir")
+    })?;
+    let dir = ctx.dir.unwrap_or_else(|| Path::new("."));
+    let w = Workdir::open(dir).map_err(local_file)?;
+    let (server, school) = ctx.server(Some(&meta), confirm, out).await?;
+    ensure_keys_registered(&server, keys, &school).await?;
+    let mut text = w.manifest().map_err(local_file)?;
+    for k in keys {
+        text = workdir::add_trusted_key(&text, &k.kit.trust_key(), &k.kit.escrow_recipient())
+            .map_err(local_file)?;
+    }
+    w.write_manifest(&text).map_err(local_file)?;
+    let path = std::path::absolute(w.root.join("manifest.toml")).map_err(local_file)?;
+    let trusted = trusted_line(&text).map_err(|e| local_file(e.message()))?;
+    if ctx.o.json {
+        let added: Vec<String> = keys.iter().map(SchoolKey::code).collect();
+        return Ok(format!(
+            "{}\n",
+            json!({"added": added, "manifest": path.display().to_string(), "trusted": trusted})
+        ));
+    }
+    let mut s = String::new();
+    for k in keys {
+        s.push_str(&format!(
+            "Added school key {} to {}.\n",
+            k.code(),
+            path.display()
+        ));
+    }
+    s.push_str(&format!("{trusted}\n{PUBLISH_NEXT}\n"));
+    Ok(s)
+}
+
+/// `mastersos key remove CODE --unregister [--key-file PATH]`: `DELETE keys/{key_id}`.
+async fn key_unregister(
+    ctx: &KeyCtx<'_>,
+    code: &str,
+    file: Option<&SchoolKey>,
+    confirm: &mut dyn std::io::BufRead,
+    out: &mut dyn std::io::Write,
+) -> Result<String, CliError> {
+    let want = workdir::normalize_key_code(code).ok_or_else(|| {
+        CliError::usage(&format!(
+            "{} is not a key code (8 letters and digits, like 11d9-03eb)",
+            crate::safe::field(code)
+        ))
+    })?;
+    let key_id = match file {
+        Some(k) if k.code() != want => {
+            return Err(CliError::usage(&format!(
+                "the key file is school key {}, not {want}. Nothing was changed.",
+                k.code()
+            )))
+        }
+        Some(k) => k.kit.key_id(),
+        None => format!("rk-{}", want.replace('-', "")),
+    };
+    let meta = ctx.meta()?;
+    let (server, _) = ctx.server(meta.as_ref(), confirm, out).await?;
+    let route = format!("keys/{}", crate::server::segment(&key_id)?);
+    match server.delete(&route).await {
+        Ok(()) => {}
+        Err(e) if e.code == "key_still_trusted" => {
+            return Err(CliError::new(
+                "key_still_trusted",
+                &format!(
+                    "school key {want} is still trusted by the latest published settings (or one of its disk-unlocking entries is still listed): publish a version without it first"
+                ),
+            ))
+        }
+        Err(e) => return Err(e),
+    }
+    if ctx.o.json {
+        return Ok(format!(
+            "{}\n",
+            json!({"unregistered": key_id, "key_code": want})
+        ));
+    }
+    Ok(format!(
+        "Unregistered school key {want} and its disk unlocking from the server.\n"
+    ))
+}
+
 /// `GET keys`, as far as `init` reads it.
 #[derive(Deserialize)]
 struct RegisteredKey {
@@ -1853,6 +1935,33 @@ struct RegisteredKey {
     public_key: String,
     #[serde(default)]
     fingerprint: String,
+}
+
+/// Every school key must be registered for the school: `GET keys` lists it with the same key id,
+/// public key and fingerprint. Nothing from the answer is written anywhere.
+async fn ensure_keys_registered(
+    server: &Server,
+    keys: &[SchoolKey],
+    school: &str,
+) -> Result<(), CliError> {
+    let registered: Vec<RegisteredKey> = server.get_json("keys").await?;
+    for k in keys {
+        let tk = k.kit.trust_key();
+        let fp = mastersos_bundle::trust_fingerprint(&tk);
+        let ok = registered
+            .iter()
+            .any(|r| r.key_id == tk.id && r.public_key == tk.public_key && r.fingerprint == fp);
+        if !ok {
+            return Err(CliError::new(
+                "key_not_trusted",
+                &format!(
+                    "school key {} is not registered for school {school}. Register it first with `mastersos key register --key-file <file> --label <name>`.",
+                    k.code()
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// `mastersos init DIR --key-file PATH… [--school UUID] [--server URL]`: the trusted keys and the
@@ -1894,23 +2003,7 @@ async fn init_v1(
             ),
         ));
     }
-    let registered: Vec<RegisteredKey> = server.get_json("keys").await?;
-    for k in &keys {
-        let tk = k.kit.trust_key();
-        let fp = mastersos_bundle::trust_fingerprint(&tk);
-        let ok = registered
-            .iter()
-            .any(|r| r.key_id == tk.id && r.public_key == tk.public_key && r.fingerprint == fp);
-        if !ok {
-            return Err(CliError::new(
-                "key_not_trusted",
-                &format!(
-                    "school key {} is not registered for school {school}. Register it first with `mastersos key register --key-file <file> --label <name>`.",
-                    k.code()
-                ),
-            ));
-        }
-    }
+    ensure_keys_registered(&server, &keys, &school).await?;
     let pairs: Vec<(mastersos_bundle::TrustKey, String)> = keys
         .iter()
         .map(|k| (k.kit.trust_key(), k.kit.escrow_recipient()))

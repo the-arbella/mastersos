@@ -1,4 +1,4 @@
-//! Signing with the school key on this computer: register it, verify the published history,
+//! Signing with the school key on this computer: verify the published history,
 //! approve a version, sign the monthly check-in, compare an install file (Ruling 1, 2, 15).
 //!
 //! It is the trust anchor for trust changes, so it **does not trust the server**:
@@ -6,8 +6,7 @@
 //!   does ([`chain`]); differences, digests and trust additions and removals are all computed
 //!   here from verified content. The server's `diff` and `lints` are printed for information only.
 //! - Only bytes built or verified here are signed: the bundle signature's message is recomputed
-//!   from the downloaded content, the registration probe's message is built from the nonce with
-//!   `keyid::keyprobe_message`; the server's `message_b64` is never signed.
+//!   from the downloaded content; the server's `message_b64` is never signed.
 //! - The school key is never printed to the terminal or written to a log.
 //! - Every string from the server is escaped by [`safe`] before it is printed: control sequences
 //!   can neither hide a line nor forge one.
@@ -25,7 +24,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use mastersos_bundle::kit::Kit;
 use mastersos_bundle::recipients_changed;
 use mastersos_bundle::{
-    accept, assemble, check_member_path, content_digest, heartbeat_message, keyid, signed_message,
+    accept, assemble, check_member_path, content_digest, heartbeat_message, signed_message,
     trust_fingerprint, verify_heartbeat, Contents, Ed25519Signer, Heartbeat, HeartbeatStatement,
     KeyAlg, Manifest, Seed, SignatureFile, Signer as _, TrustKey, MAX_HEARTBEAT_DAYS,
 };
@@ -296,77 +295,6 @@ async fn load_signer(api: &Api, kit: &Kit, registering: bool) -> Result<(Ed25519
         kit::ensure_registered(api, &tk).await?;
     }
     Ok((signer, tk))
-}
-
-// —— Registration ——
-
-/// Register the school key as a recovery key with a probe. The probe message is built here from
-/// the nonce (the server's `message_b64` is never signed); the key_id the server answers must equal
-/// the one computed here.
-pub async fn register(api: &Api, kit: &Kit, label: &str) -> Result<String> {
-    let (signer, tk) = load_signer(api, kit, true).await?;
-    #[derive(Deserialize)]
-    struct Probe {
-        nonce_b64: String,
-    }
-    let probe: Probe = api
-        .post_json(
-            &["v1", "admin", "signing-keys", "probe"],
-            None,
-            "get the registration probe",
-        )
-        .await?;
-    let nonce = STANDARD
-        .decode(&probe.nonce_b64)
-        .context("The probe nonce is not valid base64")?;
-    if nonce.len() != 32 {
-        bail!(
-            "The probe nonce should be 32 bytes, the server gave {}",
-            nonce.len()
-        );
-    }
-    let msg = keyid::keyprobe_message(&nonce);
-    let signature = SignatureFile {
-        key_id: tk.id.clone(),
-        alg: KeyAlg::Ed25519,
-        sig: STANDARD.encode(signer.sign(&msg)),
-        authenticator_data: None,
-        client_data_json: None,
-    };
-    #[derive(Deserialize)]
-    struct Registered {
-        key_id: String,
-        fingerprint: String,
-    }
-    let body = json!({
-        "kind": "recovery",
-        "label": label,
-        "trust_key": tk,
-        "nonce_b64": probe.nonce_b64,
-        "signature": signature,
-    });
-    let r: Registered = api
-        .post_json(
-            &["v1", "admin", "signing-keys"],
-            Some(&body),
-            "register the key",
-        )
-        .await?;
-    if r.key_id != tk.id {
-        bail!(
-            "The server registered key_id {}, but the public key gives {} here: they differ",
-            safe::field(&r.key_id),
-            tk.id
-        );
-    }
-    let fp = trust_fingerprint(&tk);
-    if r.fingerprint != fp {
-        bail!(
-            "The server gave fingerprint {}, but this computer computed {fp}: they differ",
-            safe::field(&r.fingerprint)
-        );
-    }
-    Ok(r.key_id)
 }
 
 // —— Printing and confirmation ——
