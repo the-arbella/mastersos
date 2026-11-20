@@ -1,5 +1,5 @@
-//! The main loop: sync settings (`GET /api/device/v1/bundle?after=N`) → verify → store → hand to the
-//! apply task → report; failures back off, a bad bundle is remembered and not taken again.
+//! The main loop: sync settings (`GET /api/device/v1/bundle?after=N`) → verify → store → hand to
+//! the apply task → report; failures back off, a bad bundle is remembered and not taken again.
 //!
 //! No long poll and no fallback polling (MQTT push plan, spec §6.1–6.2). Settings are synced at
 //! startup (retried with the backoff until one sync succeeds), on a doorbell for a version above
@@ -1440,8 +1440,8 @@ impl Agent {
             }
             PushEvent::Status(i) => {
                 // A 401 on the grant is the fetch's 401 (spec §6.2): the sync that follows meets
-                // it on `/api/device/v1/bundle` and switches tokens there (`on_unauthorized`); the MQTT task
-                // shares the fetcher's token.
+                // it on `/api/device/v1/bundle` and switches tokens there (`on_unauthorized`); the
+                // MQTT task shares the fetcher's token.
                 if i.detail.as_deref() == Some(push::TOKEN_UNAUTHORIZED) {
                     self.sync_settings = true;
                 }

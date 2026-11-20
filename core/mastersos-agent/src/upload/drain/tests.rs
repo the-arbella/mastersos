@@ -126,7 +126,8 @@ impl Respond for AckRec {
     }
 }
 
-/// `POST /api/device/v1/diagnostics`: a presigned URL on the same server, signed for the size asked.
+/// `POST /api/device/v1/diagnostics`: a presigned URL on the same server, signed for the size
+/// asked.
 struct Presign {
     base: String,
     asked: Arc<Mutex<Vec<serde_json::Value>>>,
@@ -700,8 +701,8 @@ fn device_batteries_do_not_count() {
     assert!(low_battery(&m.paths().root));
 }
 
-/// A machine that can send: seed (the mock as the server, a fetch token), state with a device id, identity, the lab
-/// image (http allowed), and one `ack` item in the queue.
+/// A machine that can send: seed (the mock as the server, a fetch token), state with a device id,
+/// identity, the lab image (http allowed), and one `ack` item in the queue.
 fn sendable_cfg(m: &Machine, server: &str) -> crate::AgentConfig {
     let seed_dir = m.tmp.path().join("seed");
     let root = m.tmp.path().join("root");
@@ -741,8 +742,8 @@ fn sendable_cfg(m: &Machine, server: &str) -> crate::AgentConfig {
     }
 }
 
-/// Phase 1: the drain entry point sends nothing and leaves the queue as it is. The same machine with help available
-/// does send, so the test fails when the guard is gone.
+/// Phase 1: the drain entry point sends nothing and leaves the queue as it is. The same machine
+/// with help available does send, so the test fails when the guard is gone.
 #[tokio::test]
 async fn drain_main_sends_nothing_in_phase_1() {
     let m = Machine::new();

@@ -154,7 +154,7 @@ impl Seed {
 }
 
 /// 钥匙指纹：`sha256(解码后的公钥字节)` 的前 16 位小写十六进制，每 4 位一组用 `-` 连接
-/// （`xxxx-xxxx-xxxx-xxxx`）。服务端、`mastersos-sign`、网页都显示这一种格式。
+/// （`xxxx-xxxx-xxxx-xxxx`）。服务端、`mastersos seed check`、网页都显示这一种格式。
 /// 公钥不是合法 base64 时改为对原文取摘要：仍是确定的值，且不会与任何真钥匙相同。
 pub fn trust_fingerprint(k: &TrustKey) -> String {
     let digest = match STANDARD.decode(&k.public_key) {

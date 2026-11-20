@@ -214,8 +214,8 @@ fn error(status: u16, code: &str) -> ResponseTemplate {
     ResponseTemplate::new(status).set_body_json(json!({"error": {"code": code, "message": "no"}}))
 }
 
-/// The cloud: `POST /api/device/v1/support` answers `support`, `POST /api/device/v1/diagnostics` answers `step1`
-/// (None: a presigned URL), the PUT `put`.
+/// The cloud: `POST /api/device/v1/support` answers `support`, `POST /api/device/v1/diagnostics`
+/// answers `step1` (None: a presigned URL), the PUT `put`.
 async fn cloud(support: ResponseTemplate, step1: Option<ResponseTemplate>, put: u16) -> Cloud {
     let srv = MockServer::start().await;
     let c = Cloud {

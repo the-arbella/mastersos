@@ -718,13 +718,71 @@ async fn plain_http_to_a_non_loopback_host_is_refused_locally() {
         &seed("http://192.0.2.1:8480", vec![a.trust_key()], None),
         Some(&key),
     );
+    let started = std::time::Instant::now();
     let r = run_check(&s.input, Utc::now()).await;
-    for name in ["status", "escrow"] {
-        let c = step(&r, name);
+    // Nothing goes out, so nothing waits on a connection to the unreachable address.
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(3),
+        "{:?}",
+        started.elapsed()
+    );
+    let steps: Vec<&str> = r.calls.iter().map(|c| c.step.as_str()).collect();
+    assert_eq!(
+        steps,
+        [
+            "seed_import",
+            "bundle",
+            "heartbeat",
+            "status",
+            "escrow",
+            "fetch_token"
+        ]
+    );
+    for c in &r.calls[1..] {
         assert_eq!(c.error_code.as_deref(), Some("local_refused"), "{c:?}");
         assert_eq!((c.route.as_deref(), c.status, c.ok), (None, None, false));
     }
     assert!(!r.ok);
+}
+
+/// A server that echoes the device secret as its error code (a valid code) gets it redacted.
+#[tokio::test]
+async fn a_secret_echoed_as_the_error_code_is_redacted() {
+    let _l = LOCK.lock().await;
+    let a = Kit::generate();
+    let srv = simple_server(&a.signer(), &a, true).await;
+    let s = setup(&seed(&srv.uri(), vec![a.trust_key()], Some(3)), None);
+    assert!(run_check(&s.input, Utc::now()).await.ok);
+    let id = std::fs::read(s.input.dir.join("seed-partition/identity.json")).unwrap();
+    let id: serde_json::Value = serde_json::from_slice(&id).unwrap();
+    let secret = id["escrow_secret"].as_str().unwrap().to_string();
+    assert!(secret.len() >= 32);
+    Mock::given(method("POST"))
+        .and(path("/api/device/v1/status"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+            "error": { "code": secret, "message": "x" }
+        })))
+        .with_priority(1)
+        .mount(&srv)
+        .await;
+    let r = run_check(&s.input, Utc::now()).await;
+    let st = step(&r, "status");
+    assert_eq!(
+        (st.ok, st.status, st.error_code.as_deref()),
+        (false, Some(403), Some("<redacted>")),
+        "{st:?}"
+    );
+    assert!(!serde_json::to_string(&r).unwrap().contains(&secret));
+    for c in &r.calls {
+        for field in [
+            Some(&c.step),
+            c.route.as_ref(),
+            c.error_code.as_ref(),
+            Some(&c.detail),
+        ] {
+            assert!(!field.is_some_and(|f| f.contains(&secret)), "{c:?}");
+        }
+    }
 }
 
 /// Heartbeat 204 and status 204: the steps after the bundle succeed.

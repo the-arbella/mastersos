@@ -1,10 +1,10 @@
 //! The machine's inbox (MQTT push spec §5.1a, §6.3): commands from the server, fetched over
 //! HTTPS with the device credential; MQTT only rings the doorbell.
 //!
-//! [`sync`] takes `GET /api/device/v1/inbox?after=inbox_after` and handles the messages in ascending `seq`,
-//! skipping any at or below `after` (the server hands a message out again until it is acked).
-//! Each message is acked first; only a successful ack advances `inbox_after` (and saves it). A
-//! failed ack ends the sync: the main loop retries it with the backoff.
+//! [`sync`] takes `GET /api/device/v1/inbox?after=inbox_after` and handles the messages in
+//! ascending `seq`, skipping any at or below `after` (the server hands a message out again until it
+//! is acked). Each message is acked first; only a successful ack advances `inbox_after` (and saves
+//! it). A failed ack ends the sync: the main loop retries it with the backoff.
 //!
 //! Per message, by the machine's clock read at that moment: a clock before [`clock_floor`] or a
 //! passed `expires_at` is acked `failed` and nothing runs (a factory reset checks again right
@@ -1175,7 +1175,8 @@ mod tests {
         assert!(m.queue().list().unwrap().is_empty());
     }
 
-    /// Without help in this release: a failed ack, nothing queued, nothing started, the next message goes on.
+    /// Without help in this release: a failed ack, nothing queued, nothing started, the next
+    /// message goes on.
     #[tokio::test]
     async fn collect_is_refused_when_help_is_unavailable() {
         let m = machine(true);

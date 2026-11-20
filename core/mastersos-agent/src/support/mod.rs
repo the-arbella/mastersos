@@ -7,8 +7,9 @@
 //! - [`step`]: the settings step that writes `support.json` (`{"enabled": bool}`, 0644) into the public directory for
 //!   the dialogs and the host (`[config.support] enabled`; no file means off).
 //!
-//! - [`send`]: sending a queued request to the cloud (`POST /api/device/v1/support`, then the attachment), in
-//!   `mastersos-upload.service` (Task 5b): the host queues a `support` item in the upload queue beside the store item.
+//! - [`send`]: sending a queued request to the cloud (`POST /api/device/v1/support`, then the
+//!   attachment), in `mastersos-upload.service` (Task 5b): the host queues a `support` item in the
+//!   upload queue beside the store item.
 
 pub mod host;
 pub mod identity;
@@ -42,8 +43,9 @@ pub const UPLOAD_UNIT: &str = "mastersos-upload.service";
 /// Report item of [`step`].
 pub const ITEM: &str = "support";
 
-/// Protocol v1 phase 1 offers no help requests and no diagnostics (§3.9): "Get help" stays hidden, no help request
-/// is sent and no diagnostics are collected. The release that implements phase 3 sets this to `true`.
+/// Protocol v1 phase 1 offers no help requests and no diagnostics (§3.9): "Get help" stays hidden,
+/// no help request is sent and no diagnostics are collected. The release that implements phase 3
+/// sets this to `true`.
 pub const HELP_AVAILABLE: bool = false;
 
 /// Whether the dialogs show "Get help": the school's setting and what this release offers.

@@ -464,6 +464,7 @@ async fn fetch_token_request_matches_the_wire_table() {
     }
     let reqs = srv.received_requests().await.unwrap();
     let r = one(&reqs, "/api/device/v1/fetch-token");
+    assert_bearer(r, &tok);
     let v: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
     let obj = v.as_object().unwrap();
     let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
@@ -491,6 +492,17 @@ async fn bundle_and_stale_headers_match_the_wire_table() {
             )
     };
     bundle(1, "7").mount(&srv).await;
+    // Only the exact bytes `stale` mark the token: another case is no marker (and clears it).
+    for (after, marker) in [(4, "STALE"), (5, "Stale"), (6, "stale-")] {
+        Mock::given(method("GET"))
+            .and(path("/api/device/v1/bundle"))
+            .and(query_param("after", after.to_string()))
+            .respond_with(
+                ResponseTemplate::new(204).insert_header("x-mastersos-fetch-token", marker),
+            )
+            .mount(&srv)
+            .await;
+    }
     bundle(2, "18446744073709551615").mount(&srv).await;
     Mock::given(method("GET"))
         .and(path("/api/device/v1/bundle"))
@@ -527,6 +539,15 @@ async fn bundle_and_stale_headers_match_the_wire_table() {
         !f.token_is_stale(),
         "an answer without the marker clears it"
     );
+    for after in [4, 5, 6] {
+        f.fetch_now(1).await.unwrap();
+        assert!(f.token_is_stale());
+        assert_eq!(f.fetch_now(after).await.unwrap(), FetchOutcome::NoChange);
+        assert!(
+            !f.token_is_stale(),
+            "only the literal `stale` marks the token"
+        );
+    }
     match f.fetch_now(2).await.unwrap() {
         FetchOutcome::New { version, .. } => assert_eq!(version, u64::MAX),
         other => panic!("{other:?}"),

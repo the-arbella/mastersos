@@ -6,8 +6,8 @@
 //! renewal), both 0700. Re-runs reuse both, so the server sees the same device identity. It holds
 //! no key of its own; the device secret, the recovery key and the fetch token never appear in the
 //! report or in an error text. `http://` is allowed only to `127.0.0.1`, `::1` or `localhost`
-//! (the lab rule, §2); any other `http://` refuses status, escrow and renewal locally, as a
-//! release image does.
+//! (the lab rule, §2); any other `http://` refuses every network step locally and sends nothing:
+//! the bundle and heartbeat steps would carry the fetch token, the others the device secret.
 
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
@@ -211,8 +211,17 @@ pub async fn run_check(input: &CheckInput, now: DateTime<Utc>) -> CheckReport {
     secrets.extend(token);
     secrets.extend(dev.seed.fetch_token.clone());
 
-    let latest = bundles(&f, &dev.seed, &take, &mut calls).await;
-    calls.push(heartbeat(&f, &dev.seed, latest.as_ref(), now, &take).await);
+    // The fetch token travels only where the device secret may (§2: TLS, or http to loopback).
+    let latest = if escrow_transport_ok(f.base(), lab).is_err() {
+        for step in ["bundle", "heartbeat"] {
+            calls.push(Call::new(step).fail("local_refused", LOCAL_TOKEN_TRANSPORT));
+        }
+        None
+    } else {
+        let latest = bundles(&f, &dev.seed, &take, &mut calls).await;
+        calls.push(heartbeat(&f, &dev.seed, latest.as_ref(), now, &take).await);
+        latest
+    };
     calls.push(status(&f, &dev, latest.as_ref(), lab, &take).await);
     calls.push(escrow(&f, input, &dev, latest.as_ref(), lab, &take, &mut secrets).await);
     renewal(&f, &dev, lab, &take, &mut calls, &mut secrets).await;
@@ -230,11 +239,18 @@ fn finish(
     mut calls: Vec<Call>,
     secrets: &[String],
 ) -> CheckReport {
-    for c in &mut calls {
+    // A server may echo a secret back, also as an error code that passes the code check.
+    let redact = |text: &mut String| {
         for s in secrets.iter().filter(|s| !s.is_empty()) {
-            if c.detail.contains(s.as_str()) {
-                c.detail = c.detail.replace(s.as_str(), "<redacted>");
+            if text.contains(s.as_str()) {
+                *text = text.replace(s.as_str(), "<redacted>");
             }
+        }
+    };
+    for c in &mut calls {
+        redact(&mut c.detail);
+        if let Some(code) = &mut c.error_code {
+            redact(code);
         }
     }
     CheckReport {
@@ -634,6 +650,9 @@ async fn status(
 /// The transport refusal of the steps that carry the device secret.
 const LOCAL_TRANSPORT: &str =
     "the device secret is only sent over https (http only to 127.0.0.1, ::1 or localhost)";
+/// The transport refusal of the steps that carry the fetch token.
+const LOCAL_TOKEN_TRANSPORT: &str =
+    "the fetch token is only sent over https (http only to 127.0.0.1, ::1 or localhost)";
 
 /// Step 5: the throwaway recovery key sealed to the latest verified escrow recipients.
 async fn escrow(
@@ -721,14 +740,16 @@ async fn renewal(
     secrets: &mut Vec<String>,
 ) {
     let c = Call::new("fetch_token");
+    // Before the stale check: over a refused transport no bundle went out to mark the token, and
+    // the renewal (with `fetch_token_check` after it) is refused as well.
+    if escrow_transport_ok(f.base(), lab).is_err() {
+        calls.push(c.fail("local_refused", LOCAL_TRANSPORT));
+        return;
+    }
     if !f.token_is_stale() {
         let mut c = c.detail("the token is not stale");
         c.skipped = true;
         calls.push(c);
-        return;
-    }
-    if escrow_transport_ok(f.base(), lab).is_err() {
-        calls.push(c.fail("local_refused", LOCAL_TRANSPORT));
         return;
     }
     let res = f.renew_token(&dev.identity, lab).await;

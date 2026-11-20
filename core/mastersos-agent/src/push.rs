@@ -20,9 +20,9 @@
 //!
 //! Every failure is reported as a [`PushEvent::Status`] with `ok = false` and a detail starting
 //! with `dns:`, `tcp:`, `tls:`, `auth:` or `token:` ([`classify`]), then retried after the
-//! ruling 59 backoff ([`crate::backoff`]). A 403 on `/api/device/v1/push-token` (the server does not accept
-//! the device credential) waits `backoff_max` instead. The broker token and the device secret
-//! never reach a log line, an error or a status detail.
+//! ruling 59 backoff ([`crate::backoff`]). A 403 on `/api/device/v1/push-token` (the server does
+//! not accept the device credential) waits `backoff_max` instead. The broker token and the device
+//! secret never reach a log line, an error or a status detail.
 //!
 //! Events are queued inside the task and handed to the main loop as it takes them, so a main loop
 //! busy applying settings never stalls the MQTT connection (and its keepalive). If the queue grows
@@ -74,9 +74,10 @@ pub const RESET_BACKOFF_AFTER: Duration = KEEPALIVE;
 pub const MIN_RENEW_DELAY: Duration = Duration::from_secs(60);
 /// Events waiting for the main loop, at most, before they collapse into one `Connected`.
 pub const OUTBOX_CAP: usize = 64;
-/// The `push` status detail for a 401 on `/api/device/v1/push-token`: the fetch token was refused. The main
-/// loop answers it as it answers a 401 on `/api/device/v1/bundle` (spec §6.2): it syncs settings, whose 401
-/// switches to another saved token; the switched token is shared with this task's `Fetcher`.
+/// The `push` status detail for a 401 on `/api/device/v1/push-token`: the fetch token was refused.
+/// The main loop answers it as it answers a 401 on `/api/device/v1/bundle` (spec §6.2): it syncs
+/// settings, whose 401 switches to another saved token; the switched token is shared with this
+/// task's `Fetcher`.
 pub const TOKEN_UNAUTHORIZED: &str = "token: the server rejected the fetch token (401)";
 /// The `ok` status detail while the server answers the grant with 404 `not_available`.
 const NOT_OFFERED: &str = "not offered by the server yet";
@@ -108,9 +109,9 @@ pub struct PushTiming {
     pub renew_early_min: Duration,
     /// …and at most this long (60 min), uniformly in between.
     pub renew_early_max: Duration,
-    /// The image is a lab image: `/api/device/v1/push-token` may then go over plain http (the device secret
-    /// otherwise only travels over https; [`crate::fetch::escrow_transport_ok`]). The broker
-    /// connection is TLS either way.
+    /// The image is a lab image: `/api/device/v1/push-token` may then go over plain http (the
+    /// device secret otherwise only travels over https; [`crate::fetch::escrow_transport_ok`]). The
+    /// broker connection is TLS either way.
     pub lab: bool,
 }
 
@@ -245,8 +246,8 @@ fn failure_detail(err: &ConnectionError) -> String {
     format!("{}: {}", classify(err), reason(err))
 }
 
-/// "token: <reason>" for a failed `/api/device/v1/push-token`. `push_token`'s errors never carry the URL,
-/// the request body or the secret.
+/// "token: <reason>" for a failed `/api/device/v1/push-token`. `push_token`'s errors never carry
+/// the URL, the request body or the secret.
 fn token_detail(e: &anyhow::Error) -> String {
     if e.downcast_ref::<CredRejected>().is_some() {
         "token: the server rejected the device credential (403)".into()

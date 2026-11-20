@@ -1169,10 +1169,10 @@ pub async fn seed_check(
     let verified = chain::verify_chain(api, pin_dir, &mut std::io::empty(), out).await?;
     let seed = Seed::parse(seed_text).context("The install file is not valid TOML")?;
     let mut problems: Vec<String> = Vec::new();
-    // The strict Wi-Fi checks parsing leaves out; the message never carries a secret.
+    // The strict checks parsing leaves out (Wi-Fi, server_url); the message never carries a secret.
     if let Err(e) = seed.validate() {
         problems.push(format!(
-            "the seed's Wi-Fi does not pass the checks: {}",
+            "the seed does not pass the checks: {}",
             safe::field(&e.to_string())
         ));
     }

@@ -468,9 +468,9 @@ impl Fetcher {
 
     /// The only place a request to the server goes out (the one exception is the presigned
     /// diagnostics `PUT` of [`Fetcher::diag_put`], which goes to storage, not the server: its query
-    /// string is the upload grant, a credential, so it is never recorded): the builder's own client (redirect
-    /// policy, timeouts) and headers are kept as they are. With a recorder set it appends the
-    /// method, the path and query, and the status (`None` without an answer).
+    /// string is the upload grant, a credential, so it is never recorded): the builder's own client
+    /// (redirect policy, timeouts) and headers are kept as they are. With a recorder set it appends
+    /// the method, the path and query, and the status (`None` without an answer).
     async fn send(&self, rb: reqwest::RequestBuilder) -> reqwest::Result<reqwest::Response> {
         let (client, req) = rb.build_split();
         let req = req?;
@@ -538,7 +538,7 @@ impl Fetcher {
         let stale = resp
             .headers()
             .get(STALE_HEADER)
-            .is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"stale"));
+            .is_some_and(|v| v.as_bytes() == b"stale");
         self.stale.store(stale, Ordering::SeqCst);
     }
 
@@ -778,8 +778,8 @@ impl Fetcher {
         }
     }
 
-    /// `POST /api/device/v1/inbox/{seq}/result`: 2xx is [`ResultAck::Recorded`], 409 (already final there)
-    /// [`ResultAck::Refused`], 404 the error [`InboxSeqUnknown`]; anything else is an error.
+    /// `POST /api/device/v1/inbox/{seq}/result`: 2xx is [`ResultAck::Recorded`], 409 (already final
+    /// there) [`ResultAck::Refused`], 404 the error [`InboxSeqUnknown`]; anything else is an error.
     pub async fn inbox_result(
         &self,
         cred: &DeviceCred,
@@ -1003,11 +1003,11 @@ impl Fetcher {
         Err(e)
     }
 
-    /// `POST /api/device/v1/support` with the device headers (plan 2026-11-05 Task 5): `200` / `201` →
-    /// [`SupportResponse`] (the same `client_id` always gets the same ticket). Any other answer is
-    /// a [`DiagUploadError`] with the [`error_action`] of its status and error code (its detail
-    /// names this step, not an upload). A request the device secret may not travel with (http on
-    /// a release image) is kept and backed off, not dropped: it is the student's request.
+    /// `POST /api/device/v1/support` with the device headers (plan 2026-11-05 Task 5): `200` /
+    /// `201` → [`SupportResponse`] (the same `client_id` always gets the same ticket). Any other
+    /// answer is a [`DiagUploadError`] with the [`error_action`] of its status and error code (its
+    /// detail names this step, not an upload). A request the device secret may not travel with
+    /// (http on a release image) is kept and backed off, not dropped: it is the student's request.
     pub async fn support(
         &self,
         cred: &DeviceCred,
@@ -1326,8 +1326,8 @@ pub struct ErrorBody {
 }
 
 /// Reads an error body. Only the nested JSON shape counts (unknown fields such as `details` are
-/// ignored); an invalid `code`, HTML, text or any other JSON is `None`, so no body text other than a
-/// sanitised `message` ever reaches an error string.
+/// ignored); an invalid `code`, HTML, text or any other JSON is `None`, so no body text other than
+/// a sanitised `message` ever reaches an error string.
 pub fn parse_error_body(body: &[u8]) -> Option<ErrorBody> {
     use serde::Deserialize;
     #[derive(Deserialize)]
@@ -1421,7 +1421,8 @@ async fn refusal(resp: reqwest::Response) -> anyhow::Error {
 }
 
 /// The one reading of a non-success answer on the device routes (push grant, inbox, logos, ...):
-/// 404 `not_available` is [`NotAvailable`], anything else [`ServerRefused`] with the sanitised code.
+/// 404 `not_available` is [`NotAvailable`], anything else [`ServerRefused`] with the sanitised
+/// code.
 fn refused(status: u16, body: Option<ErrorBody>) -> anyhow::Error {
     if is_not_available(status, &body) {
         return anyhow::Error::new(NotAvailable);

@@ -1,5 +1,5 @@
-//! The three-step diagnostics upload (`POST /api/device/v1/diagnostics` → presigned `PUT` → complete)
-//! against a local mock server that plays both the cloud and S3.
+//! The three-step diagnostics upload (`POST /api/device/v1/diagnostics` → presigned `PUT` →
+//! complete) against a local mock server that plays both the cloud and S3.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;

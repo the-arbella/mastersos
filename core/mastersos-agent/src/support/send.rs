@@ -9,8 +9,8 @@
 //!
 //! 1. `queued`: fill the snapshot's `network` (NetworkManager, now) and `status` (the latest
 //!    status report the agent kept, [`crate::report::LAST_REPORT_FILE`]) when missing, keep the
-//!    filled request (a resend is the same request), `POST /api/device/v1/support`, record the ticket,
-//!    state `sent`. Failures by [`ErrorAction`] (Ruling P5), never by status code:
+//!    filled request (a resend is the same request), `POST /api/device/v1/support`, record the
+//!    ticket, state `sent`. Failures by [`ErrorAction`] (Ruling P5), never by status code:
 //!    `too_many` waits for `Retry-After`, other keep-actions back off; `support_disabled` turns
 //!    every queued request `disabled` and drops their items; `invalid` (and any drop or give-up)
 //!    turns this one `failed`. Not held for low battery: it is a small JSON.
@@ -123,7 +123,8 @@ pub async fn step(cx: &DrainCtx<'_>, mut job: QueueItem, now: DateTime<Utc>, low
     attach(cx, &store, job, &item, tries, low).await;
 }
 
-/// `POST /api/device/v1/support`; the item as recorded `sent`, or `None` when nothing more happens now.
+/// `POST /api/device/v1/support`; the item as recorded `sent`, or `None` when nothing more happens
+/// now.
 async fn send(cx: &DrainCtx<'_>, store: &Store, job: &mut QueueItem, item: Item) -> Option<Item> {
     let id = item.request.client_id.clone();
     let request = filled(cx, &item.request).await;
