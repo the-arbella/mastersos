@@ -261,9 +261,17 @@ impl Server {
     fn join(&self, prefix: &str, route: &str) -> Result<Url, CliError> {
         let base = self.origin.as_str().trim_end_matches('/');
         let bad = || CliError::usage("the route is not a valid path below the API prefix");
+        // No dot segment at all, however it is written: a route is below the prefix by itself.
+        let path_part = route.split(['?', '#']).next().unwrap_or_default();
+        if path_part.split('/').any(|seg| {
+            let seg = seg.to_ascii_lowercase().replace("%2e", ".");
+            seg == "." || seg == ".."
+        }) {
+            return Err(bad());
+        }
         let url = Url::parse(&format!("{base}{prefix}{route}")).map_err(|_| bad())?;
-        // A route that climbs out of the prefix (dot segments) is an error, never a request.
-        if url.path().starts_with(prefix) {
+        // The joined path must be strictly below the prefix.
+        if url.path().len() > prefix.len() && url.path().starts_with(prefix) {
             Ok(url)
         } else {
             Err(bad())
@@ -914,6 +922,10 @@ mod tests {
         let s = local(&mock, Credentials::fixed("t"));
         assert_eq!(s.delete("keys/../..").await.unwrap_err().code, "usage");
         assert!(s.school_url("../../x").is_err());
+        for route in ["keys/..", "..", "keys/./x", "a/%2e%2e", "../mastersos"] {
+            assert_eq!(s.delete(route).await.unwrap_err().code, "usage", "{route}");
+            assert!(s.school_url(route).is_err(), "{route}");
+        }
         assert!(mock.received_requests().await.unwrap().is_empty());
     }
 
@@ -976,5 +988,48 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(e.message, "the server refused the request (forbidden)");
+    }
+
+    #[tokio::test]
+    async fn error_body_cap_holds_without_content_length() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = sock.read(&mut buf).await;
+            let _ = sock
+                .write_all(
+                    b"HTTP/1.1 500 Internal Server Error\r\nTransfer-Encoding: chunked\r\n\r\n",
+                )
+                .await;
+            // A valid envelope far larger than the cap, in 16 KiB chunks.
+            let mut first = br#"{"error":{"code":"boom","message":""#.to_vec();
+            first.resize(16 * 1024, b'x');
+            let mut chunks = vec![first];
+            for _ in 0..8 {
+                chunks.push(vec![b'x'; 16 * 1024]);
+            }
+            chunks.push(br#""}}"#.to_vec());
+            for c in chunks {
+                let head = format!("{:x}\r\n", c.len());
+                if sock.write_all(head.as_bytes()).await.is_err()
+                    || sock.write_all(&c).await.is_err()
+                    || sock.write_all(b"\r\n").await.is_err()
+                {
+                    return;
+                }
+            }
+            let _ = sock.write_all(b"0\r\n\r\n").await;
+        });
+        let s = Server::new(
+            &format!("http://{addr}"),
+            Some(SCHOOL),
+            Credentials::fixed("t"),
+        )
+        .unwrap();
+        let e = s.get_json::<Value>("a").await.unwrap_err();
+        assert_eq!((e.code.as_str(), e.status), ("invalid_answer", Some(500)));
     }
 }
