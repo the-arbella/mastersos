@@ -137,6 +137,13 @@ if find "$work/lists" -name '*binary-i386*' | grep -q .; then
 fi
 apt -s install "$T/mastersos-apt-probe.deb" >"$T/sim1" 2>&1 || {
 	cat "$T/sim1"
+	# What apt knew when it refused: the update's output, the lists it holds and the candidate
+	echo "--- apt-get update said:" >&2
+	cat "$T/update.out" >&2
+	echo "--- lists:" >&2
+	ls -l "$work/lists" >&2 || true
+	echo "--- policy:" >&2
+	env -i APT_CONFIG="$work/apt.conf" LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin apt-cache "${apt_opts[@]}" policy x11-utils >&2 || true
 	fail "simulation 1"
 }
 grep -qE '^Inst x11-utils \([^ ]+ .*\[amd64\]\)' "$T/sim1" || {
