@@ -98,12 +98,12 @@ jobs:
       # The command line's tests on this system (the runner's own architecture only), before anything is built for release
       - name: Test
         if: matrix.test
-        run: cargo test --locked -p mastersos-bundle -p mastersos-sign -p mastersos-mcp --no-fail-fast
+        run: cargo test --locked -p mastersos-bundle -p mastersos-sign -p mastersos-cli --no-fail-fast
       - name: Build
         env:
           TARGET: ${{ matrix.target }}
           TOOL: ${{ matrix.tool }}
-        run: $TOOL build --locked --release --target "$TARGET" -p mastersos-mcp -p mastersos-sign
+        run: $TOOL build --locked --release --target "$TARGET" -p mastersos-cli -p mastersos-sign
       - name: Package
         env:
           TARGET: ${{ matrix.target }}

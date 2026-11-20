@@ -6,5 +6,5 @@ use std::process::ExitCode;
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    mastersos_mcp::cli::main().await
+    mastersos_cli::cli::main().await
 }

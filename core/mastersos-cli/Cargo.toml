@@ -1,10 +1,10 @@
 [package]
-name = "mastersos-mcp"
+name = "mastersos-cli"
 version = "0.3.0"
 edition.workspace = true
 license.workspace = true
 
-# The crate keeps its name and directory; the program is `mastersos` (`mastersos mcp` is the MCP server).
+# The package is mastersos-cli; the program it builds is `mastersos`.
 [[bin]]
 name = "mastersos"
 path = "src/main.rs"

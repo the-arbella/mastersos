@@ -1611,20 +1611,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mastersos-installer"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "mastersos-agent",
- "mastersos-bundle",
- "rustix",
- "serde_json",
- "tempfile",
- "toml 0.8.23",
-]
-
-[[package]]
-name = "mastersos-mcp"
+name = "mastersos-cli"
 version = "0.3.0"
 dependencies = [
  "anyhow",
@@ -1648,6 +1635,19 @@ dependencies = [
  "wiremock",
  "yescrypt",
  "zeroize",
+]
+
+[[package]]
+name = "mastersos-installer"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "mastersos-agent",
+ "mastersos-bundle",
+ "rustix",
+ "serde_json",
+ "tempfile",
+ "toml 0.8.23",
 ]
 
 [[package]]
