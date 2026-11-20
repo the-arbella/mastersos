@@ -100,8 +100,9 @@ impl Seed {
 
     /// The strict checks [`Seed::parse`] leaves out on purpose (like [`crate::checks`] stays out
     /// of manifest parsing): the `server_url` is an origin ([`crate::checks::server_origin`]),
-    /// each Wi-Fi entry passes [`crate::checks::wifi`] and no SSID appears twice. The installer (an invalid seed in its menu), the server before serving a seed and
-    /// `mastersos seed check` call it; an installed agent never does, so a later rule change
+    /// each Wi-Fi entry passes [`crate::checks::wifi`] and no SSID appears twice. The installer
+    /// (an invalid seed in its menu), the server before serving a seed and `mastersos seed check`
+    /// call it; an installed agent never does, so a later rule change
     /// cannot stop a machine from starting — its wifi step skips bad entries one at a time.
     /// Messages name the entry and its SSID, never a secret.
     pub fn validate(&self) -> Result<(), BundleError> {

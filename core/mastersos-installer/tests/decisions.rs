@@ -2371,7 +2371,7 @@ fn screen_text_is_ascii_only() {
     // A hand-edited seed may carry anything in these fields; the console has no glyphs for it.
     let text = seed_with(
         Some("\u{5b66}\u{6821} \u{1b}[31mMIS"),
-        "https://eis.example/\u{7ec4}",
+        "https://eis.example",
         &["\u{5496}\u{5561}Wi\u{7684}"],
     );
     let d = stick(&[
@@ -2393,6 +2393,8 @@ fn screen_text_is_ascii_only() {
         "{screen:?}"
     );
     assert!(screen.contains('?'));
+    // The seed must stay valid, or the sanitising of its name and SSID goes untested.
+    assert!(screen.contains("eis.example"), "{screen:?}");
 }
 
 #[test]
