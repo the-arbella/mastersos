@@ -189,10 +189,10 @@ fn pkcs8_file_is_refused_as_key_file() {
 }
 
 /// Spec §5.3: a school key file others can read (a FAT32 or exFAT USB stick) still loads, with a
-/// note; a private file that is not a school key is refused.
+/// note.
 #[cfg(unix)]
 #[test]
-fn loose_key_file_is_refused() {
+fn loose_key_file_loads_with_a_note() {
     use std::os::unix::fs::PermissionsExt;
     let home = tempfile::tempdir().unwrap();
     let kit = home.path().join("school.kit");
@@ -210,7 +210,12 @@ fn loose_key_file_is_refused() {
         "{err}"
     );
     assert!(err.contains("No server address"), "{err}");
-    // Not a school key at all.
+}
+
+/// A private file that is not a school key is refused before anything else.
+#[test]
+fn private_non_kit_file_is_refused() {
+    let home = tempfile::tempdir().unwrap();
     let junk = private_file(home.path(), "junk", "hello\n");
     let out = mastersos_in(
         home.path(),
@@ -220,6 +225,31 @@ fn loose_key_file_is_refused() {
     assert_eq!(out.status.code(), Some(1), "{err}");
     assert!(err.contains("cannot read the school key"), "{err}");
     assert!(!err.contains("No server address"), "{err}");
+}
+
+#[test]
+fn seed_check_reads_its_file_before_the_network() {
+    let home = tempfile::tempdir().unwrap();
+    let token = private_file(home.path(), "token", "t\n");
+    let missing = home.path().join("missing-seed.toml");
+    let out = mastersos_in(
+        home.path(),
+        &[
+            "--server",
+            "http://127.0.0.1:9",
+            "--token-file",
+            token.to_str().unwrap(),
+            "seed",
+            "check",
+            missing.to_str().unwrap(),
+        ],
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    assert!(err.contains(missing.to_str().unwrap()), "{err}");
+    for word in ["whoami", "reach", "connect"] {
+        assert!(!err.contains(word), "{word}: {err}");
+    }
 }
 
 #[test]

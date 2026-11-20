@@ -449,6 +449,14 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         }
         _ => None,
     };
+    // The install file is read before the network too, so a wrong path fails fast.
+    let seed_text = match &cmd {
+        Cmd::Seed(SeedCmd::Check { file }) => Some(
+            std::fs::read_to_string(file)
+                .map_err(|e| OpError::Failed(format!("Could not read {}: {e}", file.display())))?,
+        ),
+        _ => None,
+    };
     let cfg = load_config()?;
     let server = server.or(cfg.server).ok_or_else(|| {
         OpError::Failed(
@@ -534,7 +542,9 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
             )
             .await
         }
-        Cmd::Seed(SeedCmd::Check { file }) => seed_check(&server, &token_file, &file).await,
+        Cmd::Seed(SeedCmd::Check { .. }) => {
+            seed_check(&server, &token_file, &seed_text.unwrap_or_default()).await
+        }
         Cmd::Logo(LogoCmd::Upload { login, icon }) => {
             let body = logo_body(&login, &icon)?;
             let text = api
@@ -673,12 +683,10 @@ async fn recovery_read(
     Ok(ExitCode::SUCCESS)
 }
 
-/// `mastersos seed check <FILE>`.
-async fn seed_check(server: &str, token_file: &Path, file: &Path) -> Result<ExitCode, OpError> {
-    let text = std::fs::read_to_string(file)
-        .map_err(|e| OpError::Failed(format!("Could not read {}: {e}", file.display())))?;
+/// `mastersos seed check <FILE>`, with the file's text (read before the network).
+async fn seed_check(server: &str, token_file: &Path, text: &str) -> Result<ExitCode, OpError> {
     let api = sign_api(server, token_file)?;
-    crate::sign::seed_check(&api, &pin_dir()?, &text, &mut std::io::stdout())
+    crate::sign::seed_check(&api, &pin_dir()?, text, &mut std::io::stdout())
         .await
         .map_err(sign_fail)?;
     Ok(ExitCode::SUCCESS)
