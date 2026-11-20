@@ -1,4 +1,4 @@
-//! The escrow request body: the agent sends it, the server takes it (`POST /v1/escrow`).
+//! The escrow request body: the agent sends it, the server takes it (`POST /api/device/v1/escrow`).
 //!
 //! Escrow is sealed only (plan 6 design §6.2, rulings 11, 27): the machine encrypts its LUKS
 //! recovery key with age to every recipient of `[school].escrow_recipients` ([`seal`]) and sends
@@ -41,7 +41,7 @@ pub const ESCROW_BODY_INVALID: &str =
     "the body is not an escrow request (JSON: device_id, serial, \
     luks_uuid, recovery_key_age, recipients_fp, escrow_secret)";
 
-/// `POST /v1/escrow` 的请求体。
+/// `POST /api/device/v1/escrow` 的请求体。
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
@@ -270,7 +270,7 @@ impl EscrowRequest {
     }
 }
 
-/// `POST /v1/fetch-token` 的请求体（计划 4b Task 2，Ruling 20）：机器凭自己的托管凭据换领当前的
+/// `POST /api/device/v1/fetch-token` 的请求体（计划 4b Task 2，Ruling 20）：机器凭自己的托管凭据换领当前的
 /// `fetch_token`。`escrow_secret` 不进 `Debug`、不进任何错误信息。
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -298,7 +298,7 @@ impl FetchTokenRequest {
     }
 }
 
-/// `POST /v1/fetch-token` 的 200 响应：服务端当前的 `fetch_token`。不进 `Debug`。
+/// `POST /api/device/v1/fetch-token` 的 200 响应：服务端当前的 `fetch_token`。不进 `Debug`。
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct FetchTokenResponse {
