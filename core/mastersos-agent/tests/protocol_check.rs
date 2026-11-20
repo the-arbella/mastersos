@@ -146,6 +146,7 @@ fn setup(s: &Seed, recovery: Option<&str>) -> Setup {
         dir: tmp.path().join("dir"),
         luks_uuid: recovery_key.as_ref().map(|_| LUKS_UUID.to_string()),
         recovery_key,
+        omit_features: Vec::new(),
     };
     Setup {
         _tmp: tmp,
@@ -1100,4 +1101,50 @@ async fn other_writable_state_is_refused() {
     let _l = LOCK.lock().await;
     writable_layout_is_refused([0o755, 0o700, 0o757]).await;
     writable_layout_is_refused([0o700, 0o770, 0o700]).await;
+}
+
+/// `--omit-feature` (repeatable): the status report lists every supported feature but the
+/// omitted ones, in the same order; the rest of the run is unchanged.
+#[tokio::test]
+async fn omitted_features_are_left_out_of_the_status_report() {
+    let _l = LOCK.lock().await;
+    let a = Kit::generate();
+    let srv = simple_server(&a.signer(), &a, true).await;
+    let mut s = setup(&seed(&srv.uri(), vec![a.trust_key()], Some(3)), None);
+    s.input.omit_features = vec!["kiosk".into(), "format_3".into()];
+    let r = run_check(&s.input, Utc::now()).await;
+    assert!(r.ok, "{r:#?}");
+    let reqs = srv.received_requests().await.unwrap();
+    let status = received(&reqs, "/api/device/v1/status");
+    assert_eq!(status.len(), 1);
+    let body: serde_json::Value = serde_json::from_slice(&status[0].body).unwrap();
+    let want: Vec<&str> = SUPPORTED_FEATURES
+        .iter()
+        .copied()
+        .filter(|f| !["kiosk", "format_3"].contains(f))
+        .collect();
+    assert_eq!(want.len(), SUPPORTED_FEATURES.len() - 2);
+    assert_eq!(body["manifest_features"], serde_json::json!(want));
+}
+
+/// A name this agent does not report is refused as `bad_input` on the status step before
+/// anything is written or sent.
+#[tokio::test]
+async fn an_unknown_omitted_feature_is_refused_before_anything_runs() {
+    let _l = LOCK.lock().await;
+    let a = Kit::generate();
+    let srv = simple_server(&a.signer(), &a, true).await;
+    let mut s = setup(&seed(&srv.uri(), vec![a.trust_key()], Some(3)), None);
+    s.input.omit_features = vec!["kiosk".into(), "no_such_feature".into()];
+    let r = run_check(&s.input, Utc::now()).await;
+    assert!(!r.ok);
+    assert_eq!(r.calls.len(), 1, "{r:#?}");
+    let c = &r.calls[0];
+    assert_eq!(c.step, "status");
+    assert_eq!(c.error_code.as_deref(), Some("bad_input"));
+    assert_eq!(c.route, None);
+    assert!(c.detail.contains("no_such_feature"), "{}", c.detail);
+    assert_eq!(r.device_id, None);
+    assert!(srv.received_requests().await.unwrap().is_empty());
+    assert!(!s.input.dir.exists(), "DIR was created");
 }

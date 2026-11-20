@@ -425,6 +425,7 @@ async fn escrow_body_matches_the_wire_table() {
         dir: tmp.path().join("dir"),
         recovery_key: Some(files.join("recovery-key")),
         luks_uuid: Some(LUKS_UUID_UPPER.into()),
+        omit_features: Vec::new(),
     };
     let report = run_check(&input, Utc::now()).await;
     assert!(report.ok, "{report:#?}");

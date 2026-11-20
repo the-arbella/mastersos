@@ -66,6 +66,10 @@ enum Cmd {
         /// The LUKS UUID the recovery key belongs to.
         #[arg(long, requires = "recovery_key")]
         luks_uuid: Option<String>,
+        /// Leaves a feature out of the status report (repeatable; a test tool for the server's
+        /// feature gate). Must be a feature this agent reports.
+        #[arg(long = "omit-feature", value_name = "NAME")]
+        omit_features: Vec<String>,
     },
     /// Remote diagnostics.
     Diag {
@@ -343,6 +347,7 @@ async fn agent_main() -> anyhow::Result<()> {
             json,
             recovery_key,
             luks_uuid,
+            omit_features,
         } => {
             use mastersos_agent::protocol_check::{run_check, CheckInput};
             let input = CheckInput {
@@ -350,6 +355,7 @@ async fn agent_main() -> anyhow::Result<()> {
                 dir: state,
                 recovery_key,
                 luks_uuid,
+                omit_features,
             };
             let report = run_check(&input, chrono::Utc::now()).await;
             if json {
