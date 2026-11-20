@@ -138,8 +138,10 @@ openssl pkey -in "$tmp/rel/db.key" -outform DER -out "$tmp/db.der"
 leak 1 leak_check_finds_copied_key "$tmp/dirty"
 if grep -qF "$tmp/dirty/blob.bin：db.key" <<<"${LEAK_OUT:-}"; then pass "  报出路径与 db.key"; else fail "  没报出 blob.bin：db.key" "${LEAK_OUT:-}"; fi
 rm "$tmp/dirty/blob.bin"
-# 跨 16 MiB 读块边界：只放 DER 的最后 64 字节（结尾那段片段在里面），边界在倒数第 16 字节处
-{ head -c $((16777216 - 48)) /dev/zero; tail -c 64 "$tmp/db.der"; } >"$tmp/dirty/big.bin"
+# Across the 16 MiB read boundary: only the last 128 bytes of the DER, the boundary 16 bytes before the end. 128, not 64:
+# the checker moves its end fragment earlier when the last 32 bytes hold a 0x0a, and with a 64-byte tail a random key
+# put the fragment outside the file about once in 140 runs.
+{ head -c $((16777216 - 112)) /dev/zero; tail -c 128 "$tmp/db.der"; } >"$tmp/dirty/big.bin"
 leak 1 leak_check_finds_key_across_chunk "$tmp/dirty"
 rm "$tmp/dirty/big.bin"
 # PKCS#1 形式的 DER（openssl rsa -traditional）也找得到
