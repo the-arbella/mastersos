@@ -538,7 +538,7 @@ mod tests {
         );
     }
 
-    /// `testdata/escrow-vector.json`: test-only kits (the masters of `kit-vectors.json`), their
+    /// `testdata/escrow-vectors.json`: test-only kits (the masters of `kit-vectors.json`), their
     /// recipients' fingerprint, and one fixed ciphertext each of them opens. age encryption is
     /// randomised, so the ciphertext was produced once and is kept; `MASTERSOS_REGEN_VECTORS=1`
     /// writes a fresh one.
@@ -569,7 +569,7 @@ mod tests {
             .map(|m| Kit::from_master(&unhex(m)))
             .collect();
         let recipients: Vec<String> = kits.iter().map(Kit::escrow_recipient).collect();
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/escrow-vector.json");
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/escrow-vectors.json");
         if std::env::var_os("MASTERSOS_REGEN_VECTORS").is_some_and(|v| v == "1") {
             let v = Vector {
                 note: "TEST-ONLY: the kits are the fixed, public test masters of kit-vectors.json \
