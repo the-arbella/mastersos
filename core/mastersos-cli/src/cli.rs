@@ -411,7 +411,7 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         cmd,
     } = cli;
     let pin_dir = || pin_dir_op(pin_flag.as_deref());
-    let pins_read = || pin_dir_path(pin_flag.as_deref()).map_err(|e| OpError::Failed(e.message));
+    let pins_read = || pins_to_read(pin_flag.as_deref()).map_err(|e| OpError::Failed(e.message));
     // Sign-in commands: before the config file and the old server address are read.
     match &cmd {
         Cmd::Login { no_browser } => {
@@ -634,6 +634,15 @@ fn pin_dir_path(flag: Option<&Path>) -> Result<PathBuf, CliError> {
             .map(|c| c.join("pins"))
             .map_err(|e| CliError::new("local_file", &format!("{e:#}"))),
     }
+}
+
+/// [`pin_dir_path`] for the offline commands, which only read pins: nothing is created, but an
+/// existing directory that is a link or another user's is refused.
+fn pins_to_read(flag: Option<&Path>) -> Result<PathBuf, CliError> {
+    let dir = pin_dir_path(flag)?;
+    crate::platform::private_dir(&dir, false)
+        .map_err(|e| CliError::new("local_file", &format!("{e:#}")))?;
+    Ok(dir)
 }
 
 /// [`pin_dir_path`] for the commands that verify a chain: the settings folder and the pins
@@ -2330,6 +2339,18 @@ mod tests {
         let cli =
             Cli::try_parse_from(["mastersos", "--pin-dir", "/q", "seed", "check", "f"]).unwrap();
         assert_eq!(cli.pin_dir, Some(PathBuf::from("/q")));
+    }
+
+    #[test]
+    fn json_alone_means_no_person_confirms() {
+        let o = V1 {
+            json: true,
+            yes: false,
+            server: None,
+            pin_flag: None,
+            fingerprints: Vec::new(),
+        };
+        assert!(!o.anchors().interactive);
     }
 
     #[test]

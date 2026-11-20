@@ -6,11 +6,14 @@
 //! admin API ([`Source::Old`], until publish, heartbeat and seed move to protocol v1) keeps its
 //! `<host>[_<port>][+<path segment>…].toml`.
 //! - **No pin** (first use): the fingerprint of every key in the latest version's trust is
-//!   printed. The trust is taken only from an anchor ([`Anchors`]): a school key file given to the
-//!   command whose key is in that trust, `--trust-fingerprint` values equal to exactly the
-//!   fingerprints shown, or a person at a terminal who types `yes` after comparing them with the
-//!   keys page. `--yes` alone never pins a chain (`trust_not_confirmed`, nothing written). The
-//!   package is then checked against its own trust and the pin recorded.
+//!   printed, a school key file's own key marked. Without a person (`--yes`, `--json`, or stdin
+//!   not a terminal) the trust is taken only when every key in it is anchored ([`Anchors`]): a
+//!   school key file given to the command with that key, or a `--trust-fingerprint` equal to its
+//!   fingerprint. A key file anchors its own key only, never the rest of the set; a fingerprint
+//!   that is not one of the keys is refused. Otherwise `trust_not_confirmed` names the keys not
+//!   anchored and nothing is written. A person at a terminal confirms the whole set by typing
+//!   `yes` after comparing it with the keys page. The package must then verify under the
+//!   anchored set before the pin is recorded.
 //! - **A pin of the old admin API only** (`<host>[_<port>].toml`, made before protocol v1): the
 //!   chain is verified forward from it exactly as from a pin; one that does not lead to the chain
 //!   the server serves now is refused (`chain_tampered`), `--yes` or not. When it connects the new
@@ -792,7 +795,7 @@ async fn first_use(
                 "trust_not_confirmed",
                 &format!(
                     "the trusted keys of version {latest} were not confirmed: {why}. Compare them \
-                     with the School keys page, then run again at a terminal without --yes, or \
+                     with the School keys page, then run again at a terminal without --yes or --json, or \
                      pass --trust-fingerprint once for each key that is not your school key file"
                 ),
             )
@@ -1336,6 +1339,11 @@ mod tests {
             let e = r.unwrap_err();
             assert_eq!(e.code, "trust_not_confirmed");
             assert_eq!(e.problems, [serde_json::json!(fp2)]);
+            assert!(
+                e.message.contains("without --yes or --json"),
+                "{}",
+                e.message
+            );
             assert!(pin_files(pins.path()).is_empty());
             // A wrong fingerprint next to the key file is refused too.
             let wrong = Anchors {

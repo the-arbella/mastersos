@@ -722,3 +722,21 @@ async fn offline_commands_do_not_create_the_pins_directory() {
         );
     }
 }
+
+/// The pins `check` reads are refused through a symbolic link.
+#[cfg(unix)]
+#[tokio::test]
+async fn offline_commands_refuse_a_linked_pins_directory() {
+    let home = tempfile::tempdir().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join(".config/mastersos")).unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), home.path().join(".config/mastersos/pins"))
+        .unwrap();
+    for cmd in ["check", "diff"] {
+        let o = run(home.path(), Some(dir.path()), &[&cmd]).await;
+        let (_, err) = text(&o);
+        assert!(!o.status.success(), "{cmd}");
+        assert!(err.contains("symbolic link"), "{cmd}: {err}");
+    }
+}
