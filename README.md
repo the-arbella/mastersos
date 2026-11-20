@@ -114,7 +114,7 @@ you; if you have not published for a while, the admin site reminds you. Publish 
 ### 6. Add or remove a school key
 
 ```bash
-cd ./school                               # or add --dir ./school to each key command
+cd ./school                               # or add --dir ./school to key list, key add and key remove (the only commands that take --dir)
 mastersos key list                        # key code, label, registered date, trusted here or not
 mastersos key add <new school key file>   # make it with mastersos key new, register it with mastersos key register first
 mastersos key remove 11d9-03eb            # never the last one
@@ -147,7 +147,7 @@ The server keeps no draft: IT pulls the published version into a local directory
 `manifest.toml` there, checks and diffs it locally, and IT publishes.
 
 ```bash
-mastersos connect https://server.example     # paste the token from the Command line page: not echoed, checked, then saved with the address
+mastersos connect https://server.example/org/<organisation>/devices     # paste the token from the Command line page: not echoed, checked, then saved with the address
 mastersos init ./school --key-file <school key file> [--key-file <second key>]   # a new school; for one that has published, use pull
 mastersos pull ./school          # download the latest published version, verified version by version, unpacked into a directory
 $EDITOR ./school/manifest.toml   # or let an AI assistant do it; a new Wi-Fi password is psk = "secret:<name>", the value goes in secrets.toml

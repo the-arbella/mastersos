@@ -173,7 +173,12 @@ cp "$tmp/x/mastersos" "$bindir/.mastersos.new"
 chmod 755 "$bindir/.mastersos.new"
 mv -f "$bindir/.mastersos.new" "$bindir/mastersos"
 
-# An earlier installer put a second program in this folder; its key commands are part of mastersos now
+installed=$("$bindir/mastersos" --version) || die "installed $bindir/mastersos, but it does not run on this computer"
+say "Installed $bindir/mastersos"
+say "$installed"
+
+# An earlier installer put a second program in this folder; its key commands are part of mastersos now.
+# Removed only after the new program has run, so a broken download never costs the old one.
 if [ -e "$bindir/mastersos-sign" ] || [ -L "$bindir/mastersos-sign" ]; then
   if rm -f "$bindir/mastersos-sign"; then
     say "Removed the old $bindir/mastersos-sign (now part of mastersos)"
@@ -181,10 +186,6 @@ if [ -e "$bindir/mastersos-sign" ] || [ -L "$bindir/mastersos-sign" ]; then
     say "Could not remove the old $bindir/mastersos-sign (now part of mastersos): delete it by hand"
   fi
 fi
-
-installed=$("$bindir/mastersos" --version) || die "installed $bindir/mastersos, but it does not run on this computer"
-say "Installed $bindir/mastersos"
-say "$installed"
 
 case ":${PATH:-}:" in
   *":$bindir:"*) ;;

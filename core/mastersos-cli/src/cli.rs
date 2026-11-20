@@ -30,7 +30,7 @@ const EXIT_CODES: &str = "Exit codes: 0 success; 1 failure (network, token, the 
 )]
 pub struct Cli {
     // The defaults name the settings folder the way this platform writes it (spec 2026-11-04 §4.7)
-    /// Admin server address, for example https://cloud.arbellalabs.com/org/<organisation>/devices
+    /// Admin server address, for example https://server.example/org/<organisation>/devices
     #[cfg_attr(
         not(windows),
         doc = "(default: `server` in ~/.config/mastersos/config.toml)"
@@ -68,7 +68,7 @@ pub struct Cli {
 enum Cmd {
     /// Connect this computer to a school's admin server: paste the token from the Command line page; it is checked, then saved with the server address
     Connect {
-        /// The admin server address, for example https://cloud.arbellalabs.com/org/<organisation>/devices
+        /// The admin server address, for example https://server.example/org/<organisation>/devices
         server_url: String,
     },
     /// Start a local settings directory for a school that has published nothing yet, approved by the school keys given
@@ -460,7 +460,7 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
     let cfg = load_config()?;
     let server = server.or(cfg.server).ok_or_else(|| {
         OpError::Failed(
-            "No server address: run `mastersos connect https://cloud.arbellalabs.com/org/<organisation>/devices` first, or pass --server"
+            "No server address: run `mastersos connect https://server.example/org/<organisation>/devices` first, or pass --server"
                 .into(),
         )
     })?;
@@ -543,7 +543,8 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
             .await
         }
         Cmd::Seed(SeedCmd::Check { .. }) => {
-            seed_check(&server, &token_file, &seed_text.unwrap_or_default()).await
+            let text = seed_text.ok_or_else(|| fail("no install file"))?;
+            seed_check(&server, &token_file, &text).await
         }
         Cmd::Logo(LogoCmd::Upload { login, icon }) => {
             let body = logo_body(&login, &icon)?;

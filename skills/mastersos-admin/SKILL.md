@@ -23,7 +23,7 @@ your own file tools, run `mastersos check` and `mastersos diff`, and hand the re
    PowerShell on Windows. Copy this skill's folder to `~/.claude/skills/mastersos-admin/`.
 2. One token file, made by IT (the folder is `~/.config/mastersos/` on macOS and Linux, `%APPDATA%\mastersos\` on
    Windows): an API token from the admin site's **Command line** page. IT runs
-   `mastersos connect https://server.example/devices` (the school's device server address) and pastes the token;
+   `mastersos connect https://server.example/org/<organisation>/devices` (the school's device server address) and pastes the token;
    `connect` checks it and saves it, readable only by IT, together with the server address. You (the AI) use that
    login only for `mastersos spec` and `mastersos --json devices list|show`; you never read, copy or print the token file, and you have
    no token of your own.

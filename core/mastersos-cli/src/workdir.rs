@@ -1717,6 +1717,21 @@ mod tests {
     }
 
     #[test]
+    fn key_add_and_remove_keep_a_site_bound_entry_byte_for_byte() {
+        let (a, b, c) = (school_key(1), school_key(2), school_key(3));
+        let t = template("11111111-1111-1111-1111-111111111111").unwrap();
+        let text = set_trusted_keys(&t, &[a.clone(), b.clone()]).unwrap();
+        let entry = "[[trust]]\nid = \"site-key\"\nalg = \"webauthn-es256\"\npublic_key = \"BAAA\"\nrp_id = \"school.example\"\n";
+        let text = text.replace("[[group]]", &format!("{entry}\n[[group]]"));
+        assert!(text.contains(entry), "{text}");
+        let added = add_trusted_key(&text, &c.0, &c.1).unwrap();
+        assert!(added.contains(entry), "{added}");
+        let removed = remove_trusted_key(&added, &code_of(2)).unwrap();
+        assert!(removed.contains(entry), "{removed}");
+        assert!(!removed.contains(&b.0.public_key), "{removed}");
+    }
+
+    #[test]
     fn add_and_remove_keep_comments() {
         let (a, b) = (school_key(1), school_key(2));
         let t = template("11111111-1111-1111-1111-111111111111").unwrap();

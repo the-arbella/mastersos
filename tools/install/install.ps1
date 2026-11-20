@@ -143,20 +143,6 @@ function Install-MastersOS([string]$Version) {
             }
             Move-Item -LiteralPath "$path.new" -Destination $path -Force
         }
-
-        # An earlier installer put a second program in this folder; its key commands are part of mastersos now.
-        # Renamed first like a running mastersos.exe, so a locked copy is reported, never fatal.
-        $stale = Join-Path $dir 'mastersos-sign.exe'
-        if (Test-Path -LiteralPath $stale) {
-            try {
-                $gone = "$stale.$([Guid]::NewGuid().ToString('N')).old"
-                Move-Item -LiteralPath $stale -Destination $gone -Force -ErrorAction Stop
-                Remove-Item -LiteralPath $gone -Force -ErrorAction SilentlyContinue
-                Write-Output "Removed the old $stale (now part of mastersos)"
-            } catch {
-                Write-Output "Could not remove the old $stale (now part of mastersos): close it and delete it by hand"
-            }
-        }
     } finally {
         Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -168,6 +154,20 @@ function Install-MastersOS([string]$Version) {
     }
     Write-Output "Installed $exe"
     Write-Output "$installed"
+
+    # An earlier installer put a second program in this folder; its key commands are part of mastersos now.
+    # Renamed first like a running mastersos.exe, so a locked copy is reported, never fatal.
+    $stale = Join-Path $dir 'mastersos-sign.exe'
+    if (Test-Path -LiteralPath $stale) {
+        try {
+            $gone = "$stale.$([Guid]::NewGuid().ToString('N')).old"
+            Move-Item -LiteralPath $stale -Destination $gone -Force -ErrorAction Stop
+            Remove-Item -LiteralPath $gone -Force -ErrorAction SilentlyContinue
+            Write-Output "Removed the old $stale (now part of mastersos)"
+        } catch {
+            Write-Output "Could not remove the old $stale (now part of mastersos): close it and delete it by hand"
+        }
+    }
 
     # The user PATH (never the machine PATH), read and written raw so %VARIABLES% in it stay unexpanded
     $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')

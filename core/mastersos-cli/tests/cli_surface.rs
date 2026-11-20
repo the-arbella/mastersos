@@ -175,6 +175,7 @@ fn pkcs8_file_is_refused_as_key_file() {
         vec!["publish", "--key-file", shown],
         vec!["heartbeat", "--key-file", shown],
         vec!["init", "dir", "--key-file", shown],
+        vec!["key", "add", shown],
     ] {
         let out = mastersos_in(home.path(), &args);
         let err = String::from_utf8_lossy(&out.stderr);
@@ -186,6 +187,37 @@ fn pkcs8_file_is_refused_as_key_file() {
             "{args:?}: {err}"
         );
     }
+}
+
+#[test]
+fn pem_text_on_stdin_is_refused_as_key_file() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let home = tempfile::tempdir().unwrap();
+    let pem = concat!(
+        "-----BEGIN ",
+        "PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIA==\n-----END ",
+        "PRIVATE KEY-----\n"
+    );
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_mastersos"));
+    cmd.env("HOME", home.path())
+        .env("APPDATA", home.path())
+        .current_dir(home.path())
+        .args(["publish", "--key-file", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(pem.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    assert!(err.contains("is a PEM key, not a school key file"), "{err}");
 }
 
 /// Spec §5.3: a school key file others can read (a FAT32 or exFAT USB stick) still loads, with a

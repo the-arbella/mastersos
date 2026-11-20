@@ -382,7 +382,12 @@ pub fn key_line(k: &TrustKey) -> String {
         Some(code) => format!("school key {code}"),
         None => format!("key {}", safe::field(&k.id)),
     };
-    format!("{name}  fingerprint {}", trust_fingerprint(k))
+    // The site is part of what a computer checks, so a change to it must show on the screen.
+    let site = match &k.rp_id {
+        Some(rp) => format!(" (site {})", safe::field(rp)),
+        None => String::new(),
+    };
+    format!("{name}  fingerprint {}{site}", trust_fingerprint(k))
 }
 
 pub(crate) fn print_trust(out: &mut dyn Write, trust: &[TrustKey]) -> Result<()> {
@@ -1231,6 +1236,26 @@ pub async fn seed_check(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn key_line_shows_the_site_of_a_key() {
+        let mk = |rp: Option<&str>| TrustKey {
+            id: "pk-1".into(),
+            alg: mastersos_bundle::KeyAlg::WebauthnEs256,
+            public_key: "AAAA".into(),
+            rp_id: rp.map(str::to_owned),
+        };
+        let (a, b, none) = (
+            key_line(&mk(Some("one.example"))),
+            key_line(&mk(Some("two.example"))),
+            key_line(&mk(None)),
+        );
+        assert_ne!(a, b);
+        assert_ne!(a, none);
+        assert!(a.ends_with(" (site one.example)"), "{a}");
+        assert!(!none.contains("site"), "{none}");
+        assert!(!a.to_lowercase().contains("passkey"), "{a}");
+    }
+
     use super::*;
 
     fn verified(text: &str) -> Verified {
