@@ -1452,10 +1452,8 @@ impl Agent {
         match &sent {
             Ok(()) => self.status_not_sent = None,
             Err(e) => match e.downcast_ref::<StatusNotSent>() {
-                // Logged once per distinct cause; a sent report resets it.
                 Some(cause) => {
-                    if self.status_not_sent != Some(*cause) {
-                        self.status_not_sent = Some(*cause);
+                    if self.note_not_sent(*cause) {
                         log::warn!("{e}");
                     }
                 }
@@ -1463,6 +1461,16 @@ impl Agent {
             },
         }
         sent
+    }
+
+    /// Records why a report was not sent; true when the cause differs from the last one logged,
+    /// i.e. a log line is due (one per distinct cause, not one per attempt).
+    fn note_not_sent(&mut self, cause: StatusNotSent) -> bool {
+        if self.status_not_sent == Some(cause) {
+            return false;
+        }
+        self.status_not_sent = Some(cause);
+        true
     }
 
     /// 这一刻要回报的内容。
@@ -2347,6 +2355,20 @@ mod tests {
             .filter(|r| r.url.path() == "/api/device/v1/status")
             .count();
         assert_eq!(posts, 0);
+    }
+
+    /// One log line per distinct cause, reset by a sent report.
+    #[tokio::test]
+    async fn not_sent_causes_are_logged_once_each() {
+        let (dir, srv) = (tempfile::tempdir().unwrap(), inbox_server().await);
+        let mut agent = inbox_agent(dir.path(), &srv).await;
+        assert!(agent.note_not_sent(StatusNotSent::NoIdentity));
+        assert!(!agent.note_not_sent(StatusNotSent::NoIdentity));
+        assert!(!agent.note_not_sent(StatusNotSent::NoIdentity));
+        assert!(agent.note_not_sent(StatusNotSent::Transport));
+        // A sent report clears the field (what `report` does on Ok).
+        agent.status_not_sent = None;
+        assert!(agent.note_not_sent(StatusNotSent::NoIdentity));
     }
 
     /// Entering the quiet is reported at once (IT sees the exam), not at the next periodic report.
