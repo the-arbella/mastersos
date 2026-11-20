@@ -376,7 +376,7 @@ mod sys {
         FILE_APPEND_DATA, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
         FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
         FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-        FILE_WRITE_DATA, WRITE_DAC, WRITE_OWNER,
+        FILE_WRITE_DATA, READ_CONTROL, WRITE_DAC, WRITE_OWNER,
     };
     use windows_sys::Win32::System::Console::{
         GetConsoleMode, GetStdHandle, SetConsoleMode, CONSOLE_MODE, ENABLE_ECHO_INPUT,
@@ -668,6 +668,16 @@ mod sys {
                 "{} is a link or not a directory; refusing to use it",
                 dir.display()
             );
+        }
+        // The directory itself (not followed), checked like a private file: owned by the current
+        // user or Administrators, and no other account may list or change it.
+        let f = std::fs::OpenOptions::new()
+            .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(dir)
+            .map_err(|e| anyhow::anyhow!("cannot open {}: {e}", dir.display()))?;
+        if let Some(why) = not_private(&f, dir)? {
+            anyhow::bail!("{why}");
         }
         Ok(true)
     }
@@ -1079,5 +1089,60 @@ mod tests {
         assert!(e.contains("link"), "{e}");
         let e = read_private(t.path(), 100).unwrap_err().to_string();
         assert!(e.contains("not a regular file"), "{e}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_private_dir_refuses_links_and_open_directories() {
+        let t = tempfile::tempdir().unwrap();
+        let d = t.path().join("a").join("mastersos");
+        assert!(!private_dir(&d, false).unwrap());
+        assert!(private_dir(&d, true).unwrap());
+        assert!(private_dir(&d, false).unwrap());
+        // A junction as the directory.
+        let target = t.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        let junction = t.path().join("junction");
+        mklink_junction(&junction, &target);
+        for create in [false, true] {
+            let e = private_dir(&junction, create).unwrap_err().to_string();
+            assert!(e.contains("refusing"), "{e}");
+        }
+        // A symbolic link as the directory (needs the right to make one).
+        let link = t.path().join("dirlink");
+        match std::os::windows::fs::symlink_dir(&target, &link) {
+            Ok(()) => {
+                let e = private_dir(&link, false).unwrap_err().to_string();
+                assert!(e.contains("refusing"), "{e}");
+            }
+            Err(e) if e.raw_os_error() == Some(1314) => {
+                eprintln!("skipped: this account cannot create symbolic links");
+            }
+            Err(e) => panic!("cannot create {}: {e}", link.display()),
+        }
+        // A directory every account may write to.
+        let open = t.path().join("open");
+        std::fs::create_dir(&open).unwrap();
+        icacls_grant(&open, "S-1-1-0", "W");
+        let e = private_dir(&open, false).unwrap_err().to_string();
+        assert!(e.contains("other accounts"), "{e}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_read_private_refuses_links_and_broad_files() {
+        let t = tempfile::tempdir().unwrap();
+        let p = t.path().join("credentials.json");
+        assert!(read_private(&p, 100).unwrap().is_none());
+        write_private(&p, b"{}").unwrap();
+        assert_eq!(&**read_private(&p, 100).unwrap().unwrap(), b"{}");
+        let link = t.path().join("link.json");
+        if symlink_file_or_skip(&p, &link) {
+            let e = read_private(&link, 100).unwrap_err().to_string();
+            assert!(e.contains("link"), "{e}");
+        }
+        icacls_grant(&p, "S-1-5-32-545", "R");
+        let e = read_private(&p, 100).unwrap_err().to_string();
+        assert!(e.contains("other accounts"), "{e}");
     }
 }

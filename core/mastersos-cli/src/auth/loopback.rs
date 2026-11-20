@@ -31,8 +31,9 @@ const PER_CONNECTION: Duration = Duration::from_secs(10);
 const MAX_HEAD: usize = 8 * 1024;
 /// The most connections served at once; more are closed.
 const MAX_CONNECTIONS: usize = 32;
-/// The page the browser shows after the sign-in.
-pub const SIGNED_IN_PAGE: &str = "Signed in. You can close this window.";
+/// The page the browser shows for this sign-in's answer: neutral, since the code exchange that
+/// decides the sign-in comes after it.
+pub const RECEIVED_PAGE: &str = "Sign-in received. Return to the command line.";
 /// The page after a refused or foreign answer: nothing from the request is shown.
 const FAILED_PAGE: &str = "Sign-in failed. Return to the command line.";
 
@@ -118,7 +119,18 @@ pub(crate) async fn run(
         }
     }
     opener(&url);
-    let code = match tokio::time::timeout(overall, wait_for_callback(listener, state)).await {
+    let code = match tokio::time::timeout(
+        overall,
+        wait_for_callback(
+            listener,
+            Expected {
+                state,
+                issuer: d.issuer.clone(),
+            },
+        ),
+    )
+    .await
+    {
         Ok(r) => r?,
         Err(_) => {
             return Err(failed(&format!(
@@ -131,8 +143,14 @@ pub(crate) async fn run(
 }
 
 /// Serve connections until one is a `GET /callback`; its verdict ends the wait.
-async fn wait_for_callback(listener: TcpListener, state: String) -> Result<String, CliError> {
-    let state = Arc::new(state);
+/// What the callback must carry.
+struct Expected {
+    state: String,
+    issuer: String,
+}
+
+async fn wait_for_callback(listener: TcpListener, expected: Expected) -> Result<String, CliError> {
+    let state = Arc::new(expected);
     let (tx, mut rx) = mpsc::channel::<Result<String, CliError>>(1);
     let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     loop {
@@ -195,7 +213,7 @@ async fn respond(sock: &mut TcpStream, status: &str, body: &str) {
 }
 
 /// One connection: `None` unless it is a `GET /callback`.
-async fn serve(mut sock: TcpStream, state: &str) -> Option<Result<String, CliError>> {
+async fn serve(mut sock: TcpStream, state: &Expected) -> Option<Result<String, CliError>> {
     let head = match tokio::time::timeout(PER_CONNECTION, read_head(&mut sock)).await {
         Ok(Ok(h)) => h,
         Ok(Err(true)) => {
@@ -223,27 +241,35 @@ async fn serve(mut sock: TcpStream, state: &str) -> Option<Result<String, CliErr
         .map_err(|_| failed("the sign-in answer is not readable"))
         .and_then(|u| judge(&u, state));
     match &verdict {
-        Ok(_) => respond(&mut sock, "200 OK", SIGNED_IN_PAGE).await,
+        Ok(_) => respond(&mut sock, "200 OK", RECEIVED_PAGE).await,
         Err(_) => respond(&mut sock, "400 Bad Request", FAILED_PAGE).await,
     }
     Some(verdict)
 }
 
 /// The code of a callback whose single `state` is ours, with no `error`.
-fn judge(url: &Url, state: &str) -> Result<String, CliError> {
-    let (mut states, mut codes, mut errors) = (Vec::new(), Vec::new(), Vec::new());
+fn judge(url: &Url, expected: &Expected) -> Result<String, CliError> {
+    let (mut states, mut codes, mut errors, mut issuers) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for (k, v) in url.query_pairs() {
         match k.as_ref() {
             "state" => states.push(v),
             "code" => codes.push(v),
             "error" => errors.push(v),
+            "iss" => issuers.push(v),
             _ => {}
         }
     }
-    if states.len() != 1 || !same(states[0].as_bytes(), state.as_bytes()) {
+    if states.len() != 1 || !same(states[0].as_bytes(), expected.state.as_bytes()) {
         // Not this sign-in's answer: nothing it carries is shown.
         return Err(failed(
             "the browser's answer does not belong to this sign-in; nothing was accepted",
+        ));
+    }
+    // RFC 9207: when the answer names its issuer, it must be the one discovered.
+    if !issuers.is_empty() && (issuers.len() != 1 || issuers[0] != expected.issuer) {
+        return Err(failed(
+            "the browser's answer comes from another sign-in service; nothing was accepted",
         ));
     }
     if let Some(e) = errors.first() {
@@ -330,7 +356,7 @@ mod tests {
         let (auth, (status, ct, body)) = driver.await.unwrap();
         assert_eq!(status, 200);
         assert!(ct.starts_with("text/plain"), "{ct}");
-        assert_eq!(body, SIGNED_IN_PAGE);
+        assert_eq!(body, "Sign-in received. Return to the command line.");
 
         assert_eq!(auth.path(), "/authorize");
         let p = |k: &str| param(&auth, k);
@@ -517,11 +543,65 @@ mod tests {
             let auth = rx.recv().await.unwrap();
             let redirect = Url::parse(&param(&auth, "redirect_uri").unwrap()).unwrap();
             let port = redirect.port().unwrap();
-            // The same port on the IPv6 loopback is not this listener.
-            tokio::net::TcpStream::connect(("::1", port)).await.is_err()
+            let reach = |host: &'static str| async move {
+                tokio::net::TcpStream::connect((host, port)).await.is_ok()
+            };
+            // 127.0.0.1 answers; another loopback address (Linux routes all of 127/8 to the
+            // loopback, so a wildcard listener would answer there) and ::1 do not.
+            (
+                reach("127.0.0.1").await,
+                cfg!(target_os = "linux").then_some(reach("127.0.0.2").await),
+                reach("::1").await,
+            )
         });
         let cfg = config(&mock.uri(), "");
         let _ = run(&cfg, &discovery(&mock), &open, Duration::from_millis(500)).await;
-        assert!(driver.await.unwrap());
+        let (v4, other, v6) = driver.await.unwrap();
+        assert!(v4);
+        assert_ne!(other, Some(true));
+        assert!(!v6);
+    }
+
+    #[tokio::test]
+    async fn loopback_page_is_neutral() {
+        let mock = MockServer::start().await;
+        token_endpoint(&mock).await;
+        let (open, mut rx) = browser();
+        let driver = tokio::spawn(async move {
+            let auth = rx.recv().await.unwrap();
+            let state = param(&auth, "state").unwrap();
+            follow(&callback(&auth, &state, "&code=c1")).await
+        });
+        let cfg = config(&mock.uri(), "");
+        run(&cfg, &discovery(&mock), &open, Duration::from_secs(30))
+            .await
+            .unwrap();
+        let (_, _, body) = driver.await.unwrap();
+        assert_eq!(body, "Sign-in received. Return to the command line.");
+    }
+
+    /// RFC 9207: an `iss` on the answer must be the discovered issuer.
+    #[tokio::test]
+    async fn loopback_checks_iss_when_present() {
+        let (e, _) = refused(false, "&code=c1&iss=https%3A%2F%2Fevil.example").await;
+        assert_eq!(e.code, "step_up_failed");
+        assert!(!e.message.contains("evil"), "{e:?}");
+        let (e, _) = refused(false, "&code=c1&iss=a&iss=b").await;
+        assert_eq!(e.code, "step_up_failed");
+
+        let mock = MockServer::start().await;
+        token_endpoint(&mock).await;
+        let (open, mut rx) = browser();
+        let iss = url_encode(&mock.uri());
+        let driver = tokio::spawn(async move {
+            let auth = rx.recv().await.unwrap();
+            let state = param(&auth, "state").unwrap();
+            follow(&callback(&auth, &state, &format!("&code=c1&iss={iss}"))).await
+        });
+        let cfg = config(&mock.uri(), "");
+        run(&cfg, &discovery(&mock), &open, Duration::from_secs(30))
+            .await
+            .unwrap();
+        assert_eq!(driver.await.unwrap().0, 200);
     }
 }

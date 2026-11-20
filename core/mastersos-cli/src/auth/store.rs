@@ -230,6 +230,7 @@ impl Session {
         if let Some(r) = t.refresh_token {
             login.refresh_token = Some(r);
         }
+        // Known race (deferred): two processes refreshing at once may each rotate the refresh token.
         save_to(&self.path, &login)?;
         Ok(login.access_token.clone())
     }

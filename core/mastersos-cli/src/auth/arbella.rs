@@ -18,9 +18,9 @@ use crate::server::CliError;
 
 /// How long `arbella auth token --json` may take.
 pub const TIMEOUT: Duration = Duration::from_secs(60);
-/// How long `arbella auth token --step-up --json` may take: the same 60 seconds (ruling R5), though
-/// the browser sign-in behind it may need longer.
-pub const STEP_UP_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long `arbella auth token --step-up --json` may take: a browser sign-in, perhaps with a
+/// second factor (controller ruling, fix round 1).
+pub const STEP_UP_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// What `arbella auth token --json` prints.
 #[derive(Clone, Deserialize)]
@@ -106,19 +106,36 @@ pub(crate) async fn run(
             Stdio::null()
         })
         .kill_on_drop(true);
-    let child = cmd.spawn().map_err(|_| local("could not be started"))?;
-    // On a timeout the future, and with it the child, is dropped: kill_on_drop kills it.
-    let out = match tokio::time::timeout(limit, child.wait_with_output()).await {
+    let mut child = cmd.spawn().map_err(|_| local("could not be started"))?;
+    let Some(stdout) = child.stdout.take() else {
+        return Err(local("could not be run"));
+    };
+    // The answer is read only up to the cap; on any early return (or the timeout dropping this
+    // future) the child is dropped, and kill_on_drop kills it.
+    let work = async move {
+        use tokio::io::AsyncReadExt as _;
+        let mut answer = Vec::new();
+        stdout
+            .take(MAX_STDOUT as u64 + 1)
+            .read_to_end(&mut answer)
+            .await
+            .map_err(|_| local("could not be run"))?;
+        if answer.len() > MAX_STDOUT {
+            return Err(local("gave an answer that is too large"));
+        }
+        let status = child.wait().await.map_err(|_| local("could not be run"))?;
+        Ok((status, answer))
+    };
+    let (status, stdout) = match tokio::time::timeout(limit, work).await {
         Err(_) => {
             return Err(local(&format!(
                 "did not answer within {} seconds",
                 limit.as_secs()
             )))
         }
-        Ok(Err(_)) => return Err(local("could not be run")),
-        Ok(Ok(o)) => o,
+        Ok(r) => r?,
     };
-    match out.status.code() {
+    match status.code() {
         Some(0) => {}
         Some(3) => {
             return Err(CliError::new(
@@ -142,10 +159,7 @@ pub(crate) async fn run(
         Some(n) => return Err(local(&format!("failed (exit code {n})"))),
         None => return Err(local("was stopped by a signal")),
     }
-    if out.stdout.len() > MAX_STDOUT {
-        return Err(local("gave an answer that is too large"));
-    }
-    let t: ArbellaToken = serde_json::from_slice(&out.stdout)
+    let t: ArbellaToken = serde_json::from_slice(&stdout)
         .map_err(|_| local("gave an answer that is not the expected JSON"))?;
     if t.access_token.is_empty() || !t.access_token.bytes().all(|b| (0x21..=0x7e).contains(&b)) {
         return Err(local("gave an unusable access token"));
@@ -324,5 +338,49 @@ exit 3"#,
         )
         .unwrap();
         assert!(!format!("{tok:?}").contains("SECRET"));
+    }
+
+    #[test]
+    fn step_up_gets_time_for_a_browser_sign_in() {
+        assert_eq!(TIMEOUT, Duration::from_secs(60));
+        assert_eq!(STEP_UP_TIMEOUT, Duration::from_secs(5 * 60));
+    }
+
+    #[tokio::test]
+    async fn arbella_answer_is_bounded_while_read() {
+        let t = tempfile::tempdir().unwrap();
+        // 1 MB, then it stays: only a read that stops at the cap ends early.
+        let exe = fake(
+            t.path(),
+            "head -c 1000000 /dev/zero | tr '\\0' S\nexec sleep 15",
+        );
+        let started = std::time::Instant::now();
+        let e = run(&exe, false, Duration::from_secs(20)).await.unwrap_err();
+        assert_eq!(e.code, "invalid_answer");
+        assert!(e.message.contains("too large"), "{e:?}");
+        assert!(!format!("{e:?}").contains("SECRET"), "{e:?}");
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn arbella_exe_is_found_in_path() {
+        let t = tempfile::tempdir().unwrap();
+        let bin = t.path().join("bin");
+        let empty = t.path().join("empty");
+        std::fs::create_dir(&bin).unwrap();
+        std::fs::create_dir(&empty).unwrap();
+        let exe = bin.join("arbella.exe");
+        std::fs::write(&exe, b"MZ").unwrap();
+        // Without the .exe suffix it is not the program.
+        std::fs::write(empty.join("arbella"), b"x").unwrap();
+        let path = std::env::join_paths([&empty, &bin]).unwrap();
+        assert_eq!(find_in(Some(&path)), Some(exe));
+        assert_eq!(find_in(Some(empty.as_os_str())), None);
+        assert_eq!(find_in(Some(OsStr::new("bin"))), None);
     }
 }

@@ -23,8 +23,9 @@ pub enum Credentials {
         token: String,
         step_up: Option<String>,
     },
-    /// `arbella auth token [--step-up] --json`, run from this path.
-    Arbella(PathBuf),
+    /// `arbella auth token [--step-up] --json`, run from `exe`; its tokens are used only while it
+    /// names the server `origin` it named when resolved.
+    Arbella { exe: PathBuf, origin: String },
     /// The sign-in saved by `mastersos login`.
     Stored(Arc<store::Session>),
 }
@@ -34,7 +35,7 @@ impl std::fmt::Debug for Credentials {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Credentials::Fixed { .. } => f.write_str("Fixed(<redacted>)"),
-            Credentials::Arbella(p) => write!(f, "Arbella({p:?})"),
+            Credentials::Arbella { exe, origin } => write!(f, "Arbella({exe:?}, {origin})"),
             Credentials::Stored(_) => f.write_str("Stored(<redacted>)"),
         }
     }
@@ -61,7 +62,9 @@ impl Credentials {
     pub async fn token(&self) -> Result<String, CliError> {
         match self {
             Credentials::Fixed { token, .. } => Ok(token.clone()),
-            Credentials::Arbella(exe) => Ok(arbella::token(exe, false).await?.access_token),
+            Credentials::Arbella { exe, origin } => {
+                same_server(arbella::token(exe, false).await?, origin)
+            }
             Credentials::Stored(s) => s.token().await,
         }
     }
@@ -75,9 +78,25 @@ impl Credentials {
                     "this call needs a fresh sign-in and no step-up token is available",
                 )
             }),
-            Credentials::Arbella(exe) => Ok(arbella::token(exe, true).await?.access_token),
+            Credentials::Arbella { exe, origin } => {
+                same_server(arbella::token(exe, true).await?, origin)
+            }
             Credentials::Stored(s) => s.step_up().await,
         }
+    }
+}
+
+/// arbella's token, if arbella still names the server it named when resolved: one it signed in to
+/// since must not receive a token meant for another (and the reverse).
+fn same_server(t: arbella::ArbellaToken, origin: &str) -> Result<String, CliError> {
+    match origin_of(&t.server_url) {
+        Ok(o) if o == origin => Ok(t.access_token),
+        _ => Err(CliError::new(
+            "not_logged_in",
+            &format!(
+                "arbella is now signed in to another server than {origin}: sign in to {origin} with arbella again"
+            ),
+        )),
     }
 }
 
@@ -118,7 +137,11 @@ pub(crate) async fn resolve_with(
                 ),
             ));
         }
-        return Ok((Credentials::Arbella(exe), Some(origin)));
+        let creds = Credentials::Arbella {
+            exe,
+            origin: origin.clone(),
+        };
+        return Ok((creds, Some(origin)));
     }
     let Some(login) = store::load_from(creds)? else {
         return Err(CliError::new(
@@ -212,7 +235,10 @@ mod tests {
         };
         let all = [
             Credentials::fixed_with_step_up("SECRET-1", "SECRET-2"),
-            Credentials::Arbella(PathBuf::from("/usr/bin/arbella")),
+            Credentials::Arbella {
+                exe: PathBuf::from("/usr/bin/arbella"),
+                origin: "https://server.example".into(),
+            },
             Credentials::Stored(Arc::new(store::Session::new(PathBuf::from("/x"), l, false))),
         ];
         for c in all {
@@ -251,7 +277,7 @@ mod tests {
             let (c, origin) = resolve_with(Some(exe.clone()), &p, None, false)
                 .await
                 .unwrap();
-            assert!(matches!(&c, Credentials::Arbella(e) if *e == exe));
+            assert!(matches!(&c, Credentials::Arbella { exe: e, .. } if *e == exe));
             assert_eq!(origin.as_deref(), Some("https://server.example"));
             assert_eq!(c.token().await.unwrap(), "t");
             // The same server, written another way, is the same server.
@@ -316,10 +342,54 @@ mod tests {
         async fn arbella_credentials_run_arbella_for_each_kind_of_token() {
             let t = tempfile::tempdir().unwrap();
             let exe = fake(t.path(), GOOD);
-            let c = Credentials::Arbella(exe);
+            let c = Credentials::Arbella {
+                exe,
+                origin: "https://server.example".into(),
+            };
             assert_eq!(c.step_up().await.unwrap(), "t");
             let args = std::fs::read_to_string(t.path().join("args")).unwrap();
             assert!(args.contains("--step-up"), "{args}");
+        }
+
+        /// arbella signed in to another server since `resolve`: its token is refused before
+        /// any request carries it.
+        #[tokio::test]
+        async fn arbella_answering_another_server_later_is_refused() {
+            use wiremock::{Mock, MockServer, ResponseTemplate};
+            let mock = MockServer::start().await;
+            Mock::given(wiremock::matchers::any())
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+                .mount(&mock)
+                .await;
+            let t = tempfile::tempdir().unwrap();
+            let first = format!(
+                r#"{{"fleet_url":"{}","access_token":"first","expires_at":"x"}}"#,
+                mock.uri()
+            );
+            let later = r#"{"fleet_url":"https://other.example","access_token":"SECRET-LATER","expires_at":"x"}"#;
+            let body = format!(
+                "d=$(dirname \"$0\")\nn=$(cat \"$d/n\" 2>/dev/null || echo 0)\n\
+                 echo $((n+1)) > \"$d/n\"\n\
+                 if [ \"$n\" = 0 ]; then echo '{first}'; else echo '{later}'; fi"
+            );
+            let exe = fake(t.path(), &body);
+            let p = t.path().join("m").join(FILE_NAME);
+            let (c, origin) = resolve_with(Some(exe), &p, None, false).await.unwrap();
+            assert_eq!(origin.as_deref(), Some(mock.uri().as_str()));
+            for e in [c.token().await.unwrap_err(), c.step_up().await.unwrap_err()] {
+                assert_eq!(e.code, "not_logged_in");
+                assert!(!format!("{e:?}").contains("SECRET"), "{e:?}");
+                assert!(!e.message.contains("first"), "{e:?}");
+            }
+            let s = crate::server::Server::new(
+                &mock.uri(),
+                Some("0192f3a4-5b6c-7d8e-9f00-112233445566"),
+                c,
+            )
+            .unwrap();
+            let e = s.get_json::<serde_json::Value>("keys").await.unwrap_err();
+            assert_eq!(e.code, "not_logged_in");
+            assert!(mock.received_requests().await.unwrap().is_empty());
         }
     }
 }
