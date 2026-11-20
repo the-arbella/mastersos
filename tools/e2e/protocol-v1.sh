@@ -39,38 +39,40 @@ set -euo pipefail
 umask 077
 export LC_ALL=C
 
-STEP_NAMES=(
-	preflight
-	key_new
-	key_register
-	init
-	publish_v1
-	publish_v2_rotation
-	publish_v3_new_key
-	heartbeat
-	pull
-	verify
-	seed_make
-	seed_check
-	protocol_check
-	fetch_token_rotation
-	recovery_read
-	fail_wrong_key
-	fail_stale_version
-	fail_unregistered_key
-	fail_feature_gate
-	fail_step_up_required
-	fail_signed_out
-	containment
+# The steps in order, each `name:dependency,...`; step NAME runs function s_NAME, and is skipped
+# (ok:false) when a dependency is not ok. --dry-run prints the names.
+STEPS=(
+	preflight:
+	key_new:preflight
+	key_register:key_new
+	init:key_register
+	publish_v1:init
+	publish_v2_rotation:publish_v1
+	publish_v3_new_key:publish_v2_rotation
+	heartbeat:publish_v3_new_key
+	pull:publish_v3_new_key
+	verify:pull
+	seed_make:publish_v3_new_key
+	seed_check:seed_make
+	protocol_check:seed_make
+	fetch_token_rotation:protocol_check
+	recovery_read:protocol_check
+	fail_wrong_key:pull
+	fail_stale_version:pull
+	fail_unregistered_key:publish_v3_new_key
+	fail_feature_gate:publish_v3_new_key
+	fail_step_up_required:preflight
+	fail_signed_out:preflight
+	containment:
 )
 
-# A public Ed25519 key that is registered nowhere: RFC 8032 section 7.1, test 1. The command line
-# cannot show a school key file's public key without registering it (`key add` and `init` refuse
-# an unregistered key before writing), so the unregistered-key case trusts this one.
 # What the script writes directly under the work dir (the containment check looks for these in the
 # caller's directory).
 OUR_NAMES="a b c d e home tmp logs keys seed.toml seed2.toml recovery.key dev1 dev2 pins-a pins-b"
 
+# A public Ed25519 key that is registered nowhere: RFC 8032 section 7.1, test 1. The command line
+# cannot show a school key file's public key without registering it (`key add` and `init` refuse
+# an unregistered key before writing), so the unregistered-key case trusts this one.
 UNREG_PK_HEX=d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a
 UNREG_PK_B64=11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=
 UNREG_KEY_ID=rk-21fe31df
@@ -241,6 +243,8 @@ json_flat() {
 # when PATH is absent.
 fget() {
 	local line
+	REPLY=""
+	FTYPE=""
 	line=$(awk -F'\t' -v p="$2" '$1 == p { print $2 "\t" $3; f = 1; exit } END { exit !f }' "$1") || return 1
 	FTYPE=${line%%$'\t'*}
 	REPLY=${line#*$'\t'}
@@ -319,7 +323,8 @@ run_step() {
 	done
 	log "---- $name"
 	DETAIL=""
-	if "$@"; then
+	# fd 3 is the summary's: closed for the step and everything it runs.
+	if "$@" 3>&-; then
 		record "$name" true "$DETAIL"
 	else
 		record "$name" false "${DETAIL:-failed}"
@@ -427,11 +432,21 @@ expect_refusal() {
 	return 1
 }
 
-# want PATH VALUE WHAT: the last call's JSON has VALUE at PATH.
+# want PATH VALUE WHAT [TYPE]: the last call's JSON has VALUE at PATH (of TYPE: s, n, b or z,
+# as json_flat writes it; default: any).
 want() {
-	if fget "$LOG.flat" "$1" && [[ $REPLY == "$2" ]]; then return 0; fi
-	DETAIL="$3: expected $1 = $2, got ${REPLY:-(absent)} (log ${LOG##*/})"
+	if fget "$LOG.flat" "$1" && [[ $REPLY == "$2" && ( -z ${4:-} || $FTYPE == "$4" ) ]]; then return 0; fi
+	DETAIL="$3: expected $1 = $2${4:+ (type $4)}, got ${REPLY:-(absent)}${FTYPE:+ (type $FTYPE)} (log ${LOG##*/})"
 	REPLY=""
+	return 1
+}
+
+# absent PATH WHAT: the last call's JSON has nothing at PATH or below it (PATH.*).
+absent() {
+	local hit
+	hit=$(AB_P=$1 awk -F'\t' 'index($1 ".", ENVIRON["AB_P"] ".") == 1 { print $1; exit }' "$LOG.flat")
+	if [[ -z $hit ]]; then return 0; fi
+	DETAIL="$2: expected nothing at $1, found $hit (log ${LOG##*/})"
 	return 1
 }
 
@@ -463,13 +478,32 @@ gen_uuid() {
 # A comment line appended to a settings folder's manifest.toml: publishing refuses a folder equal
 # to its base (`unchanged`), and a comment is a byte change that alters nothing else.
 touch_manifest() {
-	printf '# e2e: %s\n' "$2" >>"$1/manifest.toml"
+	if ! printf '# e2e: %s\n' "$2" >>"$1/manifest.toml"; then
+		DETAIL="cannot append to $1/manifest.toml"
+		return 1
+	fi
+}
+
+# redact KEY FILE...: KEY replaced by <redacted> in each FILE. When that fails the file is
+# emptied (or removed), so the key never stays behind, and the status is 1.
+redact() {
+	local key=$1 f rc=0
+	shift
+	for f in "$@"; do
+		[[ -e $f ]] || continue
+		if ! { sed "s/$key/<redacted>/g" "$f" >"$f.tmp" && mv "$f.tmp" "$f"; } 2>/dev/null; then
+			: >"$f" 2>/dev/null || rm -f "$f" 2>/dev/null
+			rm -f "$f.tmp" 2>/dev/null
+			rc=1
+		fi
+	done
+	return $rc
 }
 
 # The listing of a folder outside the work dir, to show it did not change ("absent" when missing).
 listing() {
 	if [[ -e $1 ]]; then
-		find "$1" -exec ls -ld {} + 2>/dev/null | sort | cksum
+		{ find "$1" -exec ls -ld {} + 2>/dev/null || true; } | sort | cksum || true
 	else
 		echo absent
 	fi
@@ -618,7 +652,7 @@ s_publish_v2_rotation() {
 }
 
 s_publish_v3_new_key() {
-	touch_manifest "$W/a" "first version approved by key 2"
+	touch_manifest "$W/a" "first version approved by key 2" || return 1
 	publish_ok publish-v3 "$W/pins-a" "$W/a" "$W/keys/k2.kit" 3 || return 1
 	DETAIL="$DETAIL, signed by k2: the rotation version is signed by k1 only, so a computer or Device starting from it cannot verify it under its own trust"
 }
@@ -653,10 +687,7 @@ s_verify() {
 	want version "$LATEST" "verify" || return 1
 	want latest "$LATEST" "verify" || return 1
 	want trust.0.fingerprint "${KFP[2]}" "verify" || return 1
-	if fget "$LOG.flat" trust.1.key_id; then
-		DETAIL="verify: more than one trusted key"
-		return 1
-	fi
+	absent trust.1 "verify (exactly one trusted key)" || return 1
 	DETAIL="version $LATEST verified in $W/b; trust {k2}"
 }
 
@@ -668,6 +699,7 @@ seed_make() {
 	}
 	want min_version "$LATEST" "seed make" || return 1
 	want trust_fingerprints.0.fingerprint "${KFP[2]}" "seed make" || return 1
+	absent trust_fingerprints.1 "seed make (exactly one trusted key)" || return 1
 	local mode
 	mode=$(mode_of "$2")
 	if [[ $mode != 600 ]]; then
@@ -687,7 +719,7 @@ s_seed_check() {
 		failed_call "seed check"
 		return
 	}
-	want ok true "seed check" || return 1
+	want ok true "seed check" b || return 1
 	DETAIL="the seed matches version $LATEST"
 }
 
@@ -715,7 +747,16 @@ s_protocol_check() {
 		return 1
 	}
 	RKEY=$REPLY
-	printf '%s\n' "$RKEY" >"$W/recovery.key"
+	if ! { (umask 077 && printf '%s\n' "$RKEY" >"$W/recovery.key") && chmod 600 "$W/recovery.key"; }; then
+		DETAIL="cannot write $W/recovery.key"
+		return 1
+	fi
+	local mode
+	mode=$(mode_of "$W/recovery.key")
+	if [[ $mode != 600 ]]; then
+		DETAIL="$W/recovery.key has mode $mode, not 600"
+		return 1
+	fi
 	gen_uuid || {
 		DETAIL="cannot make a LUKS UUID"
 		return 1
@@ -767,10 +808,10 @@ s_recovery_read() {
 	local found=1
 	if [[ $RC -eq 0 ]] && fhas "$LOG.flat" '[0-9]+\.recovery_key' "$RKEY"; then found=0; fi
 	# The throwaway key is compared, then kept out of the logs.
-	local f
-	for f in "$LOG.out" "$LOG.flat"; do
-		sed "s/$RKEY/<redacted>/g" "$f" >"$f.tmp" && mv "$f.tmp" "$f"
-	done
+	if ! redact "$RKEY" "$LOG.out" "$LOG.flat"; then
+		DETAIL="recovery read: removing the recovery key from the logs failed (the logs were emptied)"
+		return 1
+	fi
 	[[ $RC -eq 0 ]] || {
 		failed_call "recovery read"
 		return
@@ -783,7 +824,7 @@ s_recovery_read() {
 }
 
 s_fail_wrong_key() {
-	touch_manifest "$W/b" "publish attempt with key 1"
+	touch_manifest "$W/b" "publish attempt with key 1" || return 1
 	ms publish-b-k1 "$W/pins-b" -- publish "$W/b" --key-file "$W/keys/k1.kit"
 	expect_refusal key_not_trusted || return 1
 	DETAIL="$DETAIL (local: k1 is not in the trust of version $LATEST)"
@@ -796,9 +837,9 @@ s_fail_stale_version() {
 		return
 	}
 	want version "$LATEST" "pull c" || return 1
-	touch_manifest "$W/b" "one more version from b"
+	touch_manifest "$W/b" "one more version from b" || return 1
 	publish_ok publish-b-k2 "$W/pins-b" "$W/b" "$W/keys/k2.kit" $((LATEST + 1)) || return 1
-	touch_manifest "$W/c" "publish attempt on a stale base"
+	touch_manifest "$W/c" "publish attempt on a stale base" || return 1
 	ms publish-c-stale "$W/pins-a" -- publish "$W/c" --key-file "$W/keys/k2.kit"
 	expect_refusal version_conflict || return 1
 	DETAIL="$DETAIL (base $((LATEST - 1)), latest $LATEST; the command line's local precheck refused it, so the server's 409 path was not exercised)"
@@ -810,8 +851,11 @@ s_fail_unregistered_key() {
 		failed_call "pull into $W/d"
 		return
 	}
-	printf '\n[[trust]]\nid = "%s"\nalg = "ed25519"\npublic_key = "%s"\n' \
-		"$UNREG_KEY_ID" "$UNREG_PK_B64" >>"$W/d/manifest.toml"
+	if ! printf '\n[[trust]]\nid = "%s"\nalg = "ed25519"\npublic_key = "%s"\n' \
+		"$UNREG_KEY_ID" "$UNREG_PK_B64" >>"$W/d/manifest.toml"; then
+		DETAIL="cannot append to $W/d/manifest.toml"
+		return 1
+	fi
 	ms publish-d-unregistered "$W/pins-a" -- publish "$W/d" --key-file "$W/keys/k2.kit"
 	expect_refusal trust_key_unregistered || return 1
 	DETAIL="$DETAIL (trust entry $UNREG_KEY_ID, a key registered nowhere, added in the text)"
@@ -840,7 +884,10 @@ s_fail_feature_gate() {
 		DETAIL="no [[group]] in $W/e/manifest.toml to put the kiosk app before"
 		return 1
 	fi
-	mv "$W/e/manifest.toml.new" "$W/e/manifest.toml"
+	if ! mv "$W/e/manifest.toml.new" "$W/e/manifest.toml"; then
+		DETAIL="cannot replace $W/e/manifest.toml"
+		return 1
+	fi
 	ms publish-e-kiosk "$W/pins-a" -- publish "$W/e" --key-file "$W/keys/k2.kit"
 	expect_refusal feature_unsupported || return 1
 	if ! fhas "$LOG.flat" 'error\.problems\.[0-9]+\.device_id' "$dev2"; then
@@ -850,7 +897,17 @@ s_fail_feature_gate() {
 	DETAIL="$DETAIL, listing device $dev2 (reported without kiosk)"
 }
 
+# The token must not reach an xtrace: tracing is off while it is in scope.
 s_fail_step_up_required() {
+	local traced=0 rc=0
+	if [[ $- == *x* ]]; then traced=1; fi
+	set +x
+	step_up_probe || rc=$?
+	if [[ $traced == 1 ]]; then set -x; fi
+	return "$rc"
+}
+
+step_up_probe() {
 	local out tok code
 	next_log step-up
 	# The token stays in this function: never printed, logged or written to a file.
@@ -895,17 +952,21 @@ s_containment() {
 	if [[ $(listing "$ORIG_HOME/.config/mastersos") != "$BEFORE_CONFIG" ]]; then
 		bad+=("$ORIG_HOME/.config/mastersos changed")
 	fi
-	local n
-	for n in $OUR_NAMES; do
-		if [[ -e $ORIG_PWD/$n && " $BEFORE_PWD_NAMES " != *" $n "* ]]; then
-			bad+=("$ORIG_PWD/$n appeared")
-		fi
-	done
+	local n pwd_note="current directory unchanged"
+	if [[ $ORIG_PWD == "$W" ]]; then
+		pwd_note="current directory not checked (it is the work dir)"
+	else
+		for n in $OUR_NAMES; do
+			if [[ -e $ORIG_PWD/$n && " $BEFORE_PWD_NAMES " != *" $n "* ]]; then
+				bad+=("$ORIG_PWD/$n appeared")
+			fi
+		done
+	fi
 	if [[ ${#bad[@]} -gt 0 ]]; then
 		DETAIL="outside the work dir: ${bad[*]}"
 		return 1
 	fi
-	DETAIL="HOME, XDG_* and TMPDIR were under the work dir; the caller's ~/.config/mastersos and current directory unchanged (best effort)"
+	DETAIL="HOME, XDG_* and TMPDIR were under the work dir; the caller's ~/.config/mastersos unchanged; $pwd_note (best effort)"
 }
 
 # ---- Self-test of the helpers ----
@@ -987,6 +1048,53 @@ self_test() {
 	gen_uuid
 	if [[ $REPLY =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then st uuid ok ok 'LUKS UUID shape'; else st uuid "$REPLY" 'uuid' 'LUKS UUID shape'; fi
 
+	# fget clears REPLY, so a failure never shows the value of an earlier lookup.
+	tmp=$(mktemp -d)
+	printf '%s' '{"ok":"true","b":true,"t":[{"f":"x"}]}' | json_flat >"$tmp/c.flat"
+	fget "$tmp/c.flat" b
+	fget "$tmp/c.flat" missing || true
+	st fget-clears "[$REPLY][$FTYPE]" '[][]' 'fget of an absent path clears REPLY and FTYPE'
+	# want with a type: the string "true" is not the boolean true.
+	LOG=$tmp/c
+	if want ok true "t" b; then st want-type string-accepted refused 'want ok true b'; else st want-type refused refused 'want refuses the string "true" as a boolean'; fi
+	if want b true "t" b; then st want-bool ok ok 'want accepts a JSON boolean'; else st want-bool "$DETAIL" ok 'want accepts a JSON boolean'; fi
+	if absent t.1 "t"; then st absent ok ok 'absent: no second entry'; else st absent "$DETAIL" ok 'absent: no second entry'; fi
+	if absent t.0.f "t"; then st absent-leaf ok refused 'absent of a present leaf'; else st absent-leaf refused refused 'absent of a present leaf'; fi
+	if absent t.0.ff "t"; then st absent-prefix ok ok 'absent does not match a longer name'; else st absent-prefix "$DETAIL" ok 'absent does not match a longer name'; fi
+	if absent t.0 "t"; then st absent-present ok refused 'absent of a present entry'; else st absent-present refused refused 'absent of a present entry'; fi
+	# Every step has its function, and depends only on earlier steps.
+	local seen=" " wrong="" stp dep deps
+	for stp in "${STEPS[@]}"; do
+		declare -F "s_${stp%%:*}" >/dev/null || wrong+=" no s_${stp%%:*};"
+		deps=()
+		IFS=, read -r -a deps <<<"${stp#*:}"
+		for dep in ${deps[@]+"${deps[@]}"}; do
+			[[ $seen == *" $dep "* ]] || wrong+=" ${stp%%:*} needs later or unknown $dep;"
+		done
+		seen+="${stp%%:*} "
+	done
+	st step-table "${wrong:-ok}" ok 'every step has a function and depends on earlier steps only'
+	# listing survives an unreadable folder (pipefail and errexit are on here).
+	mkdir -p "$tmp/l/locked" && chmod 000 "$tmp/l/locked"
+	local lst
+	lst=$(listing "$tmp/l")
+	chmod 700 "$tmp/l/locked"
+	st listing "$([[ -n $lst ]] && echo ok)" ok 'listing of a folder with an unreadable subfolder'
+	st listing-absent "$(listing "$tmp/none")" absent 'listing of a missing folder'
+	# redact replaces the key; when it cannot write, the file is emptied and the status is 1.
+	printf 'a cbdefghi-x b\n' >"$tmp/r.out"
+	if redact cbdefghi-x "$tmp/r.out"; then st redact "$(cat "$tmp/r.out")" 'a <redacted> b' 'redact'; else st redact failed ok 'redact'; fi
+	mkdir "$tmp/ro" && printf 'key cbdefghi-x\n' >"$tmp/ro/f" && chmod 500 "$tmp/ro"
+	if redact cbdefghi-x "$tmp/ro/f"; then st redact-fail succeeded failed 'redact in a read-only folder'; else st redact-fail "failed/$(cat "$tmp/ro/f")" 'failed/' 'redact in a read-only folder fails and leaves no key'; fi
+	chmod 700 "$tmp/ro"
+	rm -rf "$tmp"
+	# fd 3 (the summary) is closed for the steps.
+	fd3_closed() {
+		if { : >&3; } 2>/dev/null; then DETAIL="fd 3 is open in a step"; return 1; fi
+		DETAIL="fd 3 is closed in a step"
+	}
+	run_step fd3-closed -- fd3_closed
+
 	if command -v sha256sum >/dev/null && command -v base64 >/dev/null; then
 		local bin="" i id b64
 		for ((i = 0; i < 64; i += 2)); do bin+="\\x${UNREG_PK_HEX:i:2}"; done
@@ -1032,7 +1140,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ $MODE == dry ]]; then
-	printf '%s\n' "${STEP_NAMES[@]}"
+	for st in "${STEPS[@]}"; do printf '%s\n' "${st%%:*}"; done
 	exit 0
 fi
 
@@ -1099,27 +1207,10 @@ exec 3>&1 1>&2
 STARTED=1
 trap on_exit EXIT
 
-run_step preflight -- s_preflight
-run_step key_new preflight -- s_key_new
-run_step key_register key_new -- s_key_register
-run_step init key_register -- s_init
-run_step publish_v1 init -- s_publish_v1
-run_step publish_v2_rotation publish_v1 -- s_publish_v2_rotation
-run_step publish_v3_new_key publish_v2_rotation -- s_publish_v3_new_key
-run_step heartbeat publish_v3_new_key -- s_heartbeat
-run_step pull publish_v3_new_key -- s_pull
-run_step verify pull -- s_verify
-run_step seed_make publish_v3_new_key -- s_seed_make
-run_step seed_check seed_make -- s_seed_check
-run_step protocol_check seed_make -- s_protocol_check
-run_step fetch_token_rotation protocol_check -- s_fetch_token_rotation
-run_step recovery_read protocol_check -- s_recovery_read
-run_step fail_wrong_key pull -- s_fail_wrong_key
-run_step fail_stale_version pull -- s_fail_stale_version
-run_step fail_unregistered_key publish_v3_new_key -- s_fail_unregistered_key
-run_step fail_feature_gate publish_v3_new_key -- s_fail_feature_gate
-run_step fail_step_up_required preflight -- s_fail_step_up_required
-run_step fail_signed_out preflight -- s_fail_signed_out
-run_step containment -- s_containment
+for st in "${STEPS[@]}"; do
+	deps=()
+	IFS=, read -r -a deps <<<"${st#*:}"
+	run_step "${st%%:*}" ${deps[@]+"${deps[@]}"} -- "s_${st%%:*}"
+done
 
 if print_summary; then exit 0; else exit 1; fi
