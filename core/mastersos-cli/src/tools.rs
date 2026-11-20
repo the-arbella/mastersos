@@ -1,4 +1,4 @@
-//! The server requests the command line makes (`devices`, `key list`, `spec`): a name plus JSON
+//! The server requests the command line makes (`key list`, `spec`): a name plus JSON
 //! arguments become one read-only admin API request ([`build`]).
 
 use reqwest::Method;
@@ -54,21 +54,6 @@ struct NoParams {}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ListDevices {
-    group: Option<String>,
-    offline_days: Option<i64>,
-    status: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ShowDevice {
-    /// The device id or the serial number.
-    device: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct ManifestSpec {
     /// One section: an issue code, a table name or top-level; none for the short version.
     section: Option<String>,
@@ -78,29 +63,11 @@ fn args<P: DeserializeOwned>(name: &str, v: Value) -> Result<P, String> {
     serde_json::from_value(v).map_err(|e| format!("Bad parameters for tool {name}: {e}"))
 }
 
-/// Tool name plus arguments -> HTTP request, for the tools that are one API call
-/// (`device_show` lists and picks, see `call`). Bad arguments return text for the model.
+/// Tool name plus arguments -> HTTP request, for the tools that are one API call. Bad arguments
+/// return text for the model.
 pub fn build(name: &str, a: Value) -> Result<Req, String> {
     let admin = |rest: &str| Req::get(&["v1", "admin", rest]);
     Ok(match name {
-        "devices_list" | "device_show" => {
-            let mut r = admin("devices");
-            if name == "devices_list" {
-                let p: ListDevices = args(name, a)?;
-                if let Some(g) = p.group {
-                    r.query.push(("group".into(), g));
-                }
-                if let Some(d) = p.offline_days {
-                    r.query.push(("offline_days".into(), d.to_string()));
-                }
-                if let Some(s) = p.status {
-                    r.query.push(("status".into(), s));
-                }
-            } else {
-                args::<ShowDevice>(name, a)?;
-            }
-            r
-        }
         "keys_list" => {
             args::<NoParams>(name, a)?;
             admin("signing-keys")
@@ -116,11 +83,6 @@ pub fn build(name: &str, a: Value) -> Result<Req, String> {
         }
         other => return Err(format!("No such tool: {other}")),
     })
-}
-
-/// The device id or serial number a `device_show` call asks for.
-pub fn device_wanted(a: Value) -> Result<String, String> {
-    Ok(args::<ShowDevice>("device_show", a)?.device)
 }
 
 /// The check's result, for `mastersos --json check`: `{issues, publishable,

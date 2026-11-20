@@ -299,35 +299,12 @@ impl From<String> for OpError {
 
 /// Run one server operation by name with JSON arguments (see [`tools::build`]). Success is the JSON text of the result (`spec`: the Markdown itself).
 pub async fn call(api: &Api, name: &str, args: Value) -> Result<String, OpError> {
-    let device = (name == "device_show")
-        .then(|| tools::device_wanted(args.clone()))
-        .transpose()?;
     let req = tools::build(name, args).map_err(OpError::Failed)?;
     match name {
         "spec" => {
             let text = api.send(req).await?;
             let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
             Ok(v["text"].as_str().map_or(text, str::to_owned))
-        }
-        "device_show" => {
-            let device = device.unwrap_or_default();
-            let all: Value = serde_json::from_str(&api.send(req).await?).unwrap_or(Value::Null);
-            let want = device.trim().to_lowercase();
-            // The list is the body itself, or under `data` next to `rev`.
-            let data = match all.get("data") {
-                Some(d) if all.get("rev").is_some() => d,
-                _ => &all,
-            };
-            let list = data.as_array().cloned().unwrap_or_default();
-            let found = list.into_iter().find(|d| {
-                d["device_id"].as_str() == Some(device.as_str())
-                    || d["serial"]
-                        .as_str()
-                        .is_some_and(|s| s.trim().to_lowercase() == want)
-            });
-            found
-                .map(|d| d.to_string())
-                .ok_or_else(|| OpError::Failed(format!("No such Device: {device}")))
         }
         _ => Ok(api.send(req).await?),
     }

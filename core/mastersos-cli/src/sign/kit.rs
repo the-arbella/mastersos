@@ -5,24 +5,23 @@
 //! The kit text is the school's master secret: it is written only to a 0600 file that did not
 //! exist, read from such a file or from stdin, and never printed, logged or put in an error.
 //! Before a kit signs or opens anything, the server must list it as a registered recovery key
-//! ([`ensure_registered`]): that catches another school's kit or a spare that was never
-//! registered. It is a guard against mistakes, not against a lying server: what machines accept
+//! (`ensure_keys_registered` in the command line): that catches another school's kit or a spare
+//! that was never registered. It is a guard against mistakes, not against a lying server: what machines accept
 //! is still decided by the locally verified chain.
 
-use std::io::{BufRead, Read as _, Write};
+use std::io::{BufRead, Read as _, Write as _};
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 use mastersos_bundle::kit::Kit;
-use mastersos_bundle::{is_recovery_key, trust_fingerprint, TrustKey};
+use mastersos_bundle::{is_recovery_key, trust_fingerprint};
 use serde::Deserialize;
 use zeroize::Zeroizing;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
-use super::Api;
 use crate::safe;
-use crate::server::{CliError, Server};
+use crate::server::{segment, CliError, Server};
 
 /// Longest kit file or stdin line read; a kit text is 69 characters, 87 when grouped.
 const KIT_INPUT_MAX: u64 = 1024;
@@ -165,27 +164,6 @@ pub fn read_kit(input: &mut dyn BufRead) -> Result<Kit> {
     parse(&line, "stdin")
 }
 
-/// The server must list `tk` as a registered recovery key with the same fingerprint.
-pub async fn ensure_registered(api: &Api, tk: &TrustKey) -> Result<()> {
-    #[derive(Deserialize)]
-    struct Listed {
-        key_id: String,
-        kind: String,
-        fingerprint: String,
-    }
-    let keys: Vec<Listed> = api
-        .get_json(&["v1", "admin", "signing-keys"], "list the signing keys")
-        .await?;
-    let fp = trust_fingerprint(tk);
-    if !keys
-        .iter()
-        .any(|k| k.kind == "recovery" && k.key_id == tk.id && k.fingerprint == fp)
-    {
-        bail!("this school key is not registered with {}", api.host());
-    }
-    Ok(())
-}
-
 /// What `key register` did, for the person and for `--json`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Registered {
@@ -313,7 +291,7 @@ pub fn code_of(kit: &Kit) -> String {
     mastersos_bundle::keyid::key_code(&kit.key_id()).unwrap_or_else(|| kit.key_id())
 }
 
-/// One escrowed row as `GET …/recovery-keys` lists it. Only the sealed form is opened.
+/// One escrowed row as `GET devices/{id}/recovery-keys` lists it. Only the sealed form is opened.
 #[derive(Deserialize)]
 struct Row {
     luks_uuid: String,
@@ -328,79 +306,70 @@ struct Row {
     recovery_key_age: Option<String>,
 }
 
-/// Fetch a machine's escrowed rows and open the sealed ones locally with the kit's escrow
-/// identity; prints one line per row and returns how many were opened. What the token may
-/// read is the server's to decide; every read leaves an audit row on the server.
-pub async fn recovery_read(
-    api: &Api,
+/// One escrowed row after opening: the recovery key when the school key opens it, else why not.
+/// Not `Debug`: the key must not reach a log by accident.
+pub struct RecoveryRow {
+    pub luks_uuid: String,
+    pub received_at: String,
+    pub serial: Option<String>,
+    /// `false` only when the server says an earlier row exists for the partition.
+    pub first_for_luks: bool,
+    pub recovery_key: Option<Zeroizing<String>>,
+    /// What is odd about the row (never the key or the sealed text).
+    pub note: Option<String>,
+}
+
+/// Fetch a machine's escrowed rows (newest first, as the server sends them) and open the sealed
+/// ones locally with the kit's escrow identity. What the token may read is the server's to
+/// decide; every read leaves an audit row on the server. The device id is one path segment.
+pub async fn recovery_rows(
+    server: &Server,
     kit: &Kit,
     device_id: &str,
-    out: &mut dyn Write,
-) -> Result<usize> {
-    ensure_registered(api, &kit.trust_key()).await?;
-    let mut out = safe::SafeWriter::new(out);
-    let out: &mut dyn Write = &mut out;
-    let rows: Vec<Row> = api
-        .get_json(
-            &["v1", "admin", "devices", device_id, "recovery-keys"],
-            "fetch the escrowed recovery keys",
-        )
-        .await?;
-    if rows.is_empty() {
-        writeln!(
-            out,
-            "No recovery keys escrowed for {}.",
-            safe::field(device_id)
-        )?;
-        return Ok(0);
-    }
+) -> Result<Vec<RecoveryRow>, CliError> {
+    let route = format!("devices/{}/recovery-keys", segment(device_id)?);
+    let rows: Vec<Row> = server.get_json(&route).await?;
     let identity = kit.escrow_identity();
-    let mut opened = 0;
-    for r in &rows {
-        let head = format!(
-            "{}  {}  serial={}",
-            safe::field(&r.luks_uuid),
-            safe::field(&r.received_at),
-            r.serial.as_deref().map_or("-".to_owned(), safe::field)
-        );
-        let suspicious = if r.first_for_luks == Some(false) {
-            "  (not the first row for this partition: suspicious)"
-        } else {
-            ""
-        };
-        let Some(sealed) = &r.recovery_key_age else {
-            writeln!(out, "{head}  not sealed: skipped{suspicious}")?;
-            continue;
-        };
-        let fp = r
-            .recipients_fp
-            .as_deref()
-            .map_or("-".to_owned(), safe::field);
-        if sealed.len() > SEALED_MAX {
-            writeln!(out, "{head}  sealed row too large: skipped{suspicious}")?;
-            continue;
+    Ok(rows.into_iter().map(|r| open_row(&identity, r)).collect())
+}
+
+fn open_row(identity: &age::x25519::Identity, r: Row) -> RecoveryRow {
+    let mut notes: Vec<String> = Vec::new();
+    let mut recovery_key = None;
+    match &r.recovery_key_age {
+        None => notes.push("not sealed: skipped".to_owned()),
+        Some(sealed) if sealed.len() > SEALED_MAX => {
+            notes.push("sealed row too large: skipped".to_owned());
         }
-        match age::decrypt(&identity, sealed.as_bytes()) {
+        Some(sealed) => match age::decrypt(identity, sealed.as_bytes()) {
             Ok(plain) => {
                 let plain = Zeroizing::new(plain);
                 match std::str::from_utf8(&plain) {
                     Ok(key) if is_recovery_key(key) => {
-                        writeln!(out, "{head}  {key}{suspicious}")?;
-                        opened += 1;
+                        recovery_key = Some(Zeroizing::new(key.to_owned()));
                     }
-                    _ => writeln!(
-                        out,
-                        "{head}  opened, but it is not a recovery key: skipped{suspicious}"
-                    )?,
+                    _ => notes.push("opened, but it is not a recovery key: skipped".to_owned()),
                 }
             }
-            Err(_) => writeln!(
-                out,
-                "{head}  not sealed to this school key (recipients {fp}){suspicious}"
-            )?,
-        }
+            Err(_) => notes.push(format!(
+                "not sealed to this school key (recipients {})",
+                r.recipients_fp
+                    .as_deref()
+                    .map_or("-".to_owned(), safe::field)
+            )),
+        },
     }
-    Ok(opened)
+    if r.first_for_luks == Some(false) {
+        notes.push("not the first row for this partition: suspicious".to_owned());
+    }
+    RecoveryRow {
+        luks_uuid: r.luks_uuid,
+        received_at: r.received_at,
+        serial: r.serial,
+        first_for_luks: r.first_for_luks != Some(false),
+        recovery_key,
+        note: (!notes.is_empty()).then(|| notes.join("; ")),
+    }
 }
 
 #[cfg(test)]

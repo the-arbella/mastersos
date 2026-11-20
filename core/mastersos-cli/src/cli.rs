@@ -9,7 +9,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
 use mastersos_bundle::{AgeBand, ClassRole, Kind, OrgRole};
 
@@ -317,6 +317,9 @@ enum RecoveryCmd {
         /// The school key file (keep it on a USB stick; only you should be able to read it), or `-` for the first line of stdin
         #[arg(long = "key-file", value_name = "PATH")]
         key_file: PathBuf,
+        /// The school's id (a lowercase UUID; default: `school_id` in ./mastersos.toml, else the only school of this account)
+        #[arg(long, value_name = "UUID")]
+        school: Option<String>,
     },
 }
 
@@ -348,9 +351,18 @@ enum DevicesCmd {
         /// Only Devices in this group
         #[arg(long)]
         group: Option<String>,
+        /// The school's id (a lowercase UUID; default: `school_id` in ./mastersos.toml, else the only school of this account)
+        #[arg(long, value_name = "UUID")]
+        school: Option<String>,
     },
     /// One Device's latest report (by device id or serial number)
-    Show { device: String },
+    Show {
+        /// The device id or its serial number
+        device: String,
+        /// The school's id (a lowercase UUID; default: `school_id` in ./mastersos.toml, else the only school of this account)
+        #[arg(long, value_name = "UUID")]
+        school: Option<String>,
+    },
 }
 
 /// `~/.config/mastersos/config.toml`.
@@ -453,6 +465,8 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
             | Cmd::Verify { .. }
             | Cmd::Publish { .. }
             | Cmd::Heartbeat { .. }
+            | Cmd::Recovery(_)
+            | Cmd::Devices(_)
             | Cmd::Key(
                 KeyCmd::Register { .. }
                     | KeyCmd::List { .. }
@@ -499,12 +513,6 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         }) => return keys_remove(dir.as_deref(), code, key_file.as_deref(), &o).await,
         _ => {}
     }
-    let kit = match &cmd {
-        Cmd::Recovery(RecoveryCmd::Read { key_file, .. }) => {
-            Some(crate::sign::kit::load_key_file(key_file).map_err(fail)?)
-        }
-        _ => None,
-    };
     // The install file is read before the network too, so a wrong path fails fast.
     let seed_text = match &cmd {
         Cmd::Seed(SeedCmd::Check { file }) => Some(
@@ -529,7 +537,6 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         .await
         .map_err(|e| OpError::Failed(e.to_string()))?;
     let out = Out { json };
-    let kit = kit.as_ref();
     match cmd {
         Cmd::Connect { .. }
         | Cmd::Login { .. }
@@ -544,20 +551,12 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         | Cmd::Pull { .. }
         | Cmd::Verify { .. }
         | Cmd::Publish { .. }
-        | Cmd::Heartbeat { .. } => {
+        | Cmd::Heartbeat { .. }
+        | Cmd::Recovery(_)
+        | Cmd::Devices(_) => {
             unreachable!("handled above")
         }
-        Cmd::Devices(c) => devices(&api, &out, c).await,
         Cmd::Spec { section, full } => spec(&api, section, full).await,
-        Cmd::Recovery(RecoveryCmd::Read { device, .. }) => {
-            recovery_read(
-                &server,
-                &token_file,
-                kit.ok_or_else(|| fail("no school key"))?,
-                &device,
-            )
-            .await
-        }
         Cmd::Seed(SeedCmd::Check { .. }) => {
             let text = seed_text.ok_or_else(|| fail("no install file"))?;
             seed_check(&server, &token_file, &pin_dir()?, &text).await
@@ -655,21 +654,6 @@ fn key_new(out: &Path, school: Option<&str>, json: bool) -> Result<String, CliEr
     ))
 }
 
-/// `mastersos recovery read <DEVICE>`.
-async fn recovery_read(
-    server: &str,
-    token_file: &Path,
-    kit: &mastersos_bundle::kit::Kit,
-    device: &str,
-) -> Result<ExitCode, OpError> {
-    let api = sign_api(server, token_file)?;
-    let n = crate::sign::kit::recovery_read(&api, kit, device, &mut std::io::stdout())
-        .await
-        .map_err(sign_fail)?;
-    println!("{n} recovery key(s) opened.");
-    Ok(ExitCode::SUCCESS)
-}
-
 /// `mastersos seed check <FILE>`, with the file's text (read before the network).
 async fn seed_check(
     server: &str,
@@ -750,64 +734,6 @@ fn check_private(path: &Path, again: &str) -> Result<(), OpError> {
 /// How to replace a token file that [`check_private`] refuses.
 const TOKEN_AGAIN: &str = "Or save a new token file: run `mastersos connect <SERVER_URL>` again.";
 
-async fn devices(api: &Api, out: &Out, c: DevicesCmd) -> Result<ExitCode, OpError> {
-    match c {
-        DevicesCmd::List { group } => {
-            let mut args = Map::new();
-            if let Some(g) = group {
-                args.insert("group".into(), Value::String(g));
-            }
-            let text = call(api, "devices_list", Value::Object(args)).await?;
-            out.print(&text, |v| {
-                let rows = items(v)
-                    .iter()
-                    .map(|d| {
-                        let mut state: Vec<&str> = Vec::new();
-                        for (k, label) in [
-                            ("behind", "behind"),
-                            ("has_errors", "errors"),
-                            ("locked", "locked"),
-                            ("stale", "stale"),
-                        ] {
-                            if d[k] == true {
-                                state.push(label);
-                            }
-                        }
-                        vec![
-                            cell(&d["device_id"]),
-                            cell(&d["serial"]),
-                            cell(&d["group"]),
-                            cell(&d["bundle_version"]),
-                            cell(&d["last_seen"]),
-                            if state.is_empty() {
-                                "ok".into()
-                            } else {
-                                state.join(",")
-                            },
-                        ]
-                    })
-                    .collect();
-                table(
-                    &["DEVICE", "SERIAL", "GROUP", "VERSION", "LAST SEEN", "STATE"],
-                    rows,
-                )
-            });
-        }
-        DevicesCmd::Show { device } => {
-            let text = call(api, "device_show", json!({ "device": device })).await?;
-            let found: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-            if out.json {
-                println!("{found}");
-            } else if let Value::Object(m) = &found {
-                for (k, v) in m {
-                    println!("{k}: {}", cell(v));
-                }
-            }
-        }
-    }
-    Ok(ExitCode::SUCCESS)
-}
-
 async fn spec(api: &Api, section: Option<String>, full: bool) -> Result<ExitCode, OpError> {
     let text = if full {
         let body = api.send(Req::get(&["v1", "spec", "manifest"])).await?;
@@ -830,22 +756,6 @@ async fn spec(api: &Api, section: Option<String>, full: bool) -> Result<ExitCode
 /// How results are printed.
 struct Out {
     json: bool,
-}
-
-impl Out {
-    /// The server's JSON with `--json`, else what `human` makes of it.
-    fn print(&self, text: &str, human: impl FnOnce(&Value) -> String) {
-        if self.json {
-            println!("{text}");
-        } else {
-            let v: Value = serde_json::from_str(text).unwrap_or(Value::Null);
-            println!("{}", human(&v));
-        }
-    }
-}
-
-fn items(v: &Value) -> &[Value] {
-    v.as_array().map_or(&[], Vec::as_slice)
 }
 
 /// One value for a table cell or a line.
@@ -1373,6 +1283,7 @@ async fn v1_command(o: &V1, cmd: Cmd) -> Result<String, CliError> {
         | Cmd::Publish {
             key_file: Some(f), ..
         }
+        | Cmd::Recovery(RecoveryCmd::Read { key_file: f, .. })
         | Cmd::Heartbeat { key_file: f, .. } => load_school_keys(std::slice::from_ref(f))
             .map_err(|e| CliError::new("key_file_invalid", e.message()))?,
         _ => Vec::new(),
@@ -1470,6 +1381,27 @@ async fn v1_command(o: &V1, cmd: Cmd) -> Result<String, CliError> {
                 interactive,
             };
             heartbeat_v1(&ctx, kit, days, &mut confirm, out).await
+        }
+        Cmd::Recovery(RecoveryCmd::Read { device, school, .. }) => {
+            let ctx = KeyCtx {
+                o,
+                dir: None,
+                school: school.as_deref(),
+                interactive,
+            };
+            recovery_read_v1(&ctx, &keys, &device, &mut confirm, out).await
+        }
+        Cmd::Devices(c) => {
+            let school = match &c {
+                DevicesCmd::List { school, .. } | DevicesCmd::Show { school, .. } => school.clone(),
+            };
+            let ctx = KeyCtx {
+                o,
+                dir: None,
+                school: school.as_deref(),
+                interactive,
+            };
+            devices_v1(&ctx, c, &mut confirm, out).await
         }
         Cmd::Key(KeyCmd::Remove {
             code,
@@ -1844,6 +1776,208 @@ async fn key_add(
     }
     s.push_str(&format!("{trusted}\n{PUBLISH_NEXT}\n"));
     Ok(s)
+}
+
+/// `mastersos recovery read DEVICE --key-file PATH`: the school key must be registered; the rows
+/// come newest first and are opened here. The keys are printed on stdout and nowhere else.
+async fn recovery_read_v1(
+    ctx: &KeyCtx<'_>,
+    keys: &[SchoolKey],
+    device: &str,
+    confirm: &mut dyn std::io::BufRead,
+    out: &mut dyn std::io::Write,
+) -> Result<String, CliError> {
+    let kit = &keys
+        .first()
+        .ok_or_else(|| CliError::usage("no school key"))?
+        .kit;
+    let meta = ctx.meta()?;
+    let (server, school) = ctx.server(meta.as_ref(), confirm, out).await?;
+    ensure_keys_registered(&server, keys, &school).await?;
+    let rows = crate::sign::kit::recovery_rows(&server, kit, device).await?;
+    let opened = rows.iter().filter(|r| r.recovery_key.is_some()).count();
+    if !rows.is_empty() && opened == 0 {
+        let mut e = CliError::new(
+            "not_opened",
+            &format!(
+                "none of the {} stored recovery key(s) could be opened with this school key",
+                rows.len()
+            ),
+        );
+        e.problems = rows
+            .iter()
+            .map(|r| {
+                Value::String(format!(
+                    "{}: {}",
+                    r.luks_uuid,
+                    r.note.as_deref().unwrap_or("not opened")
+                ))
+            })
+            .collect();
+        return Err(e);
+    }
+    if ctx.o.json {
+        let v: Vec<Value> = rows
+            .iter()
+            .map(|r| {
+                json!({
+                    "luks_uuid": r.luks_uuid,
+                    "received_at": r.received_at,
+                    "serial": r.serial,
+                    "first_for_luks": r.first_for_luks,
+                    "recovery_key": r.recovery_key.as_ref().map(|k| k.as_str()),
+                    "note": r.note,
+                })
+            })
+            .collect();
+        return Ok(format!("{}\n", Value::Array(v)));
+    }
+    if rows.is_empty() {
+        return Ok(format!(
+            "No recovery keys escrowed for {}.\n",
+            crate::safe::field(device)
+        ));
+    }
+    let mut s = String::new();
+    for r in &rows {
+        s.push_str(&format!(
+            "{}  {}  serial={}  ",
+            crate::safe::field(&r.luks_uuid),
+            crate::safe::field(&r.received_at),
+            r.serial
+                .as_deref()
+                .map_or("-".to_owned(), crate::safe::field)
+        ));
+        match (&r.recovery_key, &r.note) {
+            (Some(k), None) => s.push_str(k),
+            (Some(k), Some(n)) => s.push_str(&format!("{}  ({n})", k.as_str())),
+            (None, n) => s.push_str(&format!("({})", n.as_deref().unwrap_or("not opened"))),
+        }
+        s.push('\n');
+    }
+    s.push_str(&format!("{opened} recovery key(s) opened.\n"));
+    Ok(s)
+}
+
+/// One value for a line or a table cell, safe to show.
+fn shown(v: &Value) -> String {
+    crate::safe::field(&cell(v))
+}
+
+/// `mastersos devices list|show`: `GET devices`, and `GET devices/{id}` for one.
+async fn devices_v1(
+    ctx: &KeyCtx<'_>,
+    cmd: DevicesCmd,
+    confirm: &mut dyn std::io::BufRead,
+    out: &mut dyn std::io::Write,
+) -> Result<String, CliError> {
+    let meta = ctx.meta()?;
+    let (server, _) = ctx.server(meta.as_ref(), confirm, out).await?;
+    let invalid = || {
+        CliError::new(
+            "invalid_answer",
+            "the server's answer is not what was expected",
+        )
+    };
+    let listed = |v: Value| -> Result<Vec<Value>, CliError> {
+        match v {
+            Value::Array(a) => Ok(a),
+            _ => Err(invalid()),
+        }
+    };
+    match cmd {
+        DevicesCmd::List { group, .. } => {
+            let mut list = listed(server.get_json("devices").await?)?;
+            if let Some(g) = &group {
+                list.retain(|d| d["group"].as_str() == Some(g.as_str()));
+            }
+            if ctx.o.json {
+                return Ok(format!("{}\n", Value::Array(list)));
+            }
+            let rows = list
+                .iter()
+                .map(|d| {
+                    let state: Vec<&str> = [
+                        ("behind", "behind"),
+                        ("has_errors", "errors"),
+                        ("fetch_token_stale", "stale"),
+                    ]
+                    .iter()
+                    .filter(|(k, _)| d[*k] == true)
+                    .map(|(_, label)| *label)
+                    .collect();
+                    vec![
+                        shown(&d["device_id"]),
+                        shown(&d["serial"]),
+                        shown(&d["group"]),
+                        shown(&d["bundle_version"]),
+                        shown(&d["last_seen"]),
+                        if state.is_empty() {
+                            "ok".into()
+                        } else {
+                            state.join(",")
+                        },
+                    ]
+                })
+                .collect();
+            Ok(format!(
+                "{}\n",
+                table(
+                    &["DEVICE", "SERIAL", "GROUP", "VERSION", "LAST SEEN", "STATE"],
+                    rows
+                )
+            ))
+        }
+        DevicesCmd::Show { device, .. } => {
+            let list = listed(server.get_json("devices").await?)?;
+            // An id wins; else a serial (any case) names the device; else the server is asked
+            // for the id as given.
+            let want = device.trim().to_lowercase();
+            let id = if list
+                .iter()
+                .any(|d| d["device_id"].as_str() == Some(&device))
+            {
+                device.clone()
+            } else {
+                let by_serial: Vec<&str> = list
+                    .iter()
+                    .filter(|d| {
+                        d["serial"]
+                            .as_str()
+                            .is_some_and(|s| s.trim().to_lowercase() == want)
+                    })
+                    .filter_map(|d| d["device_id"].as_str())
+                    .collect();
+                match by_serial.as_slice() {
+                    [] => device.clone(),
+                    [one] => (*one).to_owned(),
+                    many => {
+                        let ids: Vec<String> = many.iter().map(|i| crate::safe::field(i)).collect();
+                        return Err(CliError::usage(&format!(
+                            "{} is the serial number of {} Devices ({}): use the device id",
+                            crate::safe::field(&device),
+                            many.len(),
+                            ids.join(", ")
+                        )));
+                    }
+                }
+            };
+            let found: Value = server
+                .get_json(&format!("devices/{}", crate::server::segment(&id)?))
+                .await?;
+            if ctx.o.json {
+                return Ok(format!("{found}\n"));
+            }
+            let Value::Object(m) = &found else {
+                return Err(invalid());
+            };
+            let mut s = String::new();
+            for (k, v) in m {
+                s.push_str(&format!("{}: {}\n", crate::safe::field(k), shown(v)));
+            }
+            Ok(s)
+        }
+    }
 }
 
 /// `mastersos key remove CODE --unregister [--key-file PATH]`: `DELETE keys/{key_id}`.
