@@ -530,7 +530,7 @@ async fn heartbeat_signs_the_latest_version() {
 fn help_texts_are_in_plain_words() {
     let mut commands: Vec<Vec<&str>> = vec![vec![]];
     for c in [
-        "init", "pull", "check", "diff", "devices", "spec", "publish", "key", "connect",
+        "init", "pull", "check", "diff", "devices", "spec", "publish", "key",
     ] {
         commands.push(vec![c]);
     }
@@ -556,4 +556,133 @@ fn help_texts_are_in_plain_words() {
         );
         plain_words(&help, &[]);
     }
+}
+
+/// A fake `arbella` that gives `TOK-PLAIN` for `uri`.
+#[cfg(unix)]
+fn fake_arbella(bin: &Path, uri: &str) {
+    let exe = bin.join("arbella");
+    let mut sh = Command::new("sh")
+        .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+        .arg(&exe)
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let script = format!(
+        "#!/bin/sh\nprintf '{{\"fleet_url\":\"{uri}\",\"access_token\":\"TOK-PLAIN\",\"expires_at\":\"2099-01-01T00:00:00Z\"}}'\n"
+    );
+    sh.stdin
+        .take()
+        .unwrap()
+        .write_all(script.as_bytes())
+        .unwrap();
+    assert!(sh.wait().unwrap().success());
+}
+
+/// With `--yes` and `--key-file` nothing is read from stdin: it is a pipe nobody ever writes to
+/// or closes, so a read would hang (the test kills the run after a minute and fails).
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn yes_and_key_file_never_read_stdin() {
+    let (s, school) = new_school().await;
+    let bin = tempfile::tempdir().unwrap();
+    fake_arbella(bin.path(), &s.uri());
+    let home = tempfile::tempdir().unwrap();
+    let t = tempfile::tempdir().unwrap();
+    let (key, kit) = school_key(t.path());
+    let dir = folder(t.path(), &s.uri(), &kit);
+    let run_open = |args: Vec<std::ffi::OsString>| {
+        let (home, bin) = (home.path().to_owned(), bin.path().to_owned());
+        tokio::task::spawn_blocking(move || {
+            let mut child = Command::new(env!("CARGO_BIN_EXE_mastersos"))
+                .args(&args)
+                .env("HOME", &home)
+                .env("APPDATA", &home)
+                .env("PATH", &bin)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            // Held open until the child is done.
+            let _stdin = child.stdin.take().unwrap();
+            let start = std::time::Instant::now();
+            loop {
+                if child.try_wait().unwrap().is_some() {
+                    break;
+                }
+                if start.elapsed() > std::time::Duration::from_secs(60) {
+                    child.kill().unwrap();
+                    panic!("mastersos waited for stdin");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            child.wait_with_output().unwrap()
+        })
+    };
+    let os = |v: &[&dyn AsRef<std::ffi::OsStr>]| -> Vec<std::ffi::OsString> {
+        v.iter().map(|a| a.as_ref().to_owned()).collect()
+    };
+    // The two-step publish (pending, commit, check-in), then a check-in of its own.
+    let o = run_open(os(&[&"publish", &dir, &"--key-file", &key, &"--yes"]))
+        .await
+        .unwrap();
+    let (out, err) = text(&o);
+    assert!(o.status.success(), "{out}{err}");
+    let o = run_open(os(&[
+        &"--json",
+        &"--yes",
+        &"heartbeat",
+        &"--key-file",
+        &key,
+        &"--server",
+        &s.uri(),
+        &"--school",
+        &SID,
+    ]))
+    .await
+    .unwrap();
+    let (out, err) = text(&o);
+    assert!(o.status.success(), "{out}{err}");
+    let held = school.held.lock().unwrap();
+    assert_eq!(held.uploads.len(), 1);
+    assert_eq!(held.commits, 1);
+    assert_eq!(held.heartbeats.len(), 2);
+}
+
+/// Two trust entries holding one public key (under two ids) are refused by the local check, and
+/// nothing is uploaded.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_trust_with_one_public_key_twice_is_refused_before_upload() {
+    let (s, school) = new_school().await;
+    let home = signed_in(&s.uri());
+    let t = tempfile::tempdir().unwrap();
+    let (key, kit) = school_key(t.path());
+    let dir = folder(t.path(), &s.uri(), &kit);
+    let tk = kit.trust_key();
+    let mut doc = manifest(&dir);
+    doc.push_str(&format!(
+        "\n[[trust]]\nid = \"{}-again\"\nalg = \"ed25519\"\npublic_key = \"{}\"\n",
+        tk.id, tk.public_key
+    ));
+    std::fs::write(dir.join("manifest.toml"), doc).unwrap();
+    let o = run(
+        home.path(),
+        None,
+        &[&"--json", &"publish", &dir, &"--key-file", &key, &"--yes"],
+    )
+    .await;
+    let (out, err) = text(&o);
+    assert_eq!(o.status.code(), Some(2), "{out}{err}");
+    let v: Value = serde_json::from_str(out.trim()).expect(&out);
+    assert_eq!(v["error"]["code"], "check_failed");
+    assert!(
+        out.contains("trust_duplicate_key"),
+        "the issue is named: {out}"
+    );
+    assert!(school.held.lock().unwrap().uploads.is_empty());
+    // `mastersos check` says the same.
+    let o = run(home.path(), None, &[&"check", &dir]).await;
+    assert_eq!(o.status.code(), Some(2));
+    assert!(text(&o).0.contains("trust_duplicate_key"));
 }

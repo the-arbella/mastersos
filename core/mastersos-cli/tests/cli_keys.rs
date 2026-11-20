@@ -831,7 +831,7 @@ fn key_new_writes_a_private_file_and_prints_no_key() {
 fn key_new_in_a_directory_names_the_file() {
     let home = tempfile::tempdir().unwrap();
     let t = tempfile::tempdir().unwrap();
-    let o = key_new(home.path(), t.path(), &["--school", "alpha", "--json"]);
+    let o = key_new(home.path(), t.path(), &["--school-name", "alpha", "--json"]);
     assert!(o.status.success(), "{:?}", text(&o));
     let v = json_of(&o);
     let file = PathBuf::from(v["path"].as_str().unwrap());

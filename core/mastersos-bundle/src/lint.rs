@@ -129,6 +129,7 @@ fn about(l: Lint, c: &ConfigLayer) -> Lint {
 /// value is inherited, and one `(code, path)` is reported once, naming every Config it concerns.
 pub fn lint_at(m: &Manifest, present: &BTreeSet<String>, today: chrono::NaiveDate) -> Vec<Lint> {
     let mut out = Vec::new();
+    lint_trust_keys(m, &mut out);
     lint_shape(m, &mut out);
     let configs: Vec<(&ConfigLayer, Config)> = m
         .configs
@@ -1208,6 +1209,33 @@ fn lint_kiosk_semantics(m: &Manifest, configs: &[(&ConfigLayer, Config)], out: &
 
 fn err(code: &'static str, message: String, path: String) -> Lint {
     Lint::new(LintLevel::Error, code, message).at(path)
+}
+
+/// Two trust entries holding one public key, whatever their ids: the key would count twice, and
+/// its fingerprint could not name one entry. Not part of `validate` (a Device that already holds
+/// such a trust keeps working); `mastersos check` and `publish` refuse it before an upload.
+fn lint_trust_keys(m: &Manifest, out: &mut Vec<Lint>) {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    let mut seen: BTreeMap<(&'static str, Vec<u8>), &str> = BTreeMap::new();
+    for k in &m.trust {
+        // Compared as bytes, so that spelling differences of one base64 text do not hide a repeat.
+        let raw = STANDARD
+            .decode(k.public_key.trim())
+            .unwrap_or_else(|_| k.public_key.trim().as_bytes().to_vec());
+        if let Some(first) = seen.insert((k.alg.as_str(), raw), k.id.as_str()) {
+            out.push(
+                err(
+                    "trust_duplicate_key",
+                    format!(
+                        "trust: keys {first} and {} hold the same public key; list each key once",
+                        k.id
+                    ),
+                    "trust".into(),
+                )
+                .param("id", k.id.as_str()),
+            );
+        }
+    }
 }
 
 /// The shape checks (config profiles design §3, §5): a legacy text is an error in a Draft; a

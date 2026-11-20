@@ -190,6 +190,7 @@ pub const ISSUE_CODES: &[&str] = &[
     "toml_syntax",
     "trust_changed",
     "trust_duplicate_id",
+    "trust_duplicate_key",
     "trust_empty",
     "trust_key_invalid",
     "trust_rp_id_forbidden",

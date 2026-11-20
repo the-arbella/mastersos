@@ -1906,6 +1906,7 @@ last Version), so only the server's check at `mastersos publish` reports them.
 | `toml_syntax` | error | not valid TOML (parse) |
 | `trust_changed` | warning (server) | trust differs from the last Version |
 | `trust_duplicate_id` | error | two trust keys with one id |
+| `trust_duplicate_key` | error | two trust keys with one public key |
 | `trust_empty` | error | no trust keys |
 | `trust_key_invalid` | error | trust `public_key` |
 | `trust_rp_id_forbidden` | error | `rp_id` on an `ed25519` key |
@@ -4735,6 +4736,41 @@ public_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
 [[trust]]
 id = "recovery-2026"
+alg = "ed25519"
+public_key = "KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio="
+
+[[config]]
+id = "standard"
+name = "Standard"
+
+[[group]]
+id = "default"
+name = "Unassigned"
+config = "standard"
+```
+<!-- /prompt:omit -->
+
+### `trust_duplicate_key`
+
+**Level:** error. **Meaning:** two trust keys hold the same public key under different ids. A key
+that is listed twice would count twice, and its fingerprint could not name one entry.
+
+<!-- prompt:omit -->
+**Why:** `mastersos check` and `publish` refuse it before anything is uploaded; Devices that
+already hold such a list keep working.
+<!-- /prompt:omit -->
+
+**How to fix:** remove one of the two entries.
+
+<!-- prompt:omit -->
+```toml check=trust_duplicate_key
+[[trust]]
+id = "recovery-2026"
+alg = "ed25519"
+public_key = "KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio="
+
+[[trust]]
+id = "recovery-copy"
 alg = "ed25519"
 public_key = "KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio="
 
