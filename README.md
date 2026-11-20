@@ -114,7 +114,7 @@ you; if you have not published for a while, the admin site reminds you. Publish 
 ### 6. Add or remove a school key
 
 ```bash
-cd ./school                               # or add --dir ./school to key list, key add and key remove (the only commands that take --dir)
+cd ./school                               # or give key list, key add and key remove --dir ./school
 mastersos key list                        # key code, label, registered date, trusted here or not
 mastersos key add <new school key file>   # make it with mastersos key new, register it with mastersos key register first
 mastersos key remove 11d9-03eb            # never the last one
