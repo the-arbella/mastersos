@@ -1,7 +1,7 @@
 //! The local settings directory behind `mastersos init|pull|check|diff`.
 //!
 //! ```text
-//! <dir>/mastersos.toml     server, school id and the version the directory was last synced with
+//! <dir>/mastersos.toml     server origin, school id and the version the directory was last synced with
 //! <dir>/manifest.toml      the settings, with secrets as "secret:<name>" references
 //! <dir>/secrets.toml       name = "value" (mode 0600, git-ignored)
 //! <dir>/files/ scripts/    the bundle's members
@@ -12,6 +12,12 @@
 //! included) could change it and so change what `check` and `publish` compare against. Before it
 //! is used it is checked against the pin outside the directory ([`Workdir::verify_base`]): its
 //! content digest must be the one this computer recorded when it verified `base_version`.
+//!
+//! A pulled or initialised directory holds real Wi-Fi keys and the IT password hash (in
+//! `secrets.toml`, and in `manifest.toml` once edited): the directory and its state directories are
+//! created 0700 (an existing one is used only when it is ours and not a link, and is narrowed to
+//! 0700), and the manifest, the secrets, the members and `mastersos.toml` of every copy are
+//! written 0600 ([`crate::platform::write_private`]).
 //!
 //! This module holds all the file logic and works offline; the network parts live in [`crate::cli`].
 
@@ -38,6 +44,7 @@ const TEMPLATE: &str = include_str!("template.toml");
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Meta {
+    /// The server's origin (`https://host[:port]`).
     pub server: String,
     pub school_id: String,
     /// The version `manifest.toml` was pulled from or published as (0: never synced).
@@ -246,19 +253,19 @@ fn write_snapshot(
     // Nothing is written or removed through a link.
     refuse_snapshot_links(dir)?;
     refuse_link(&dir.join(MANIFEST))?;
-    fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
+    crate::platform::private_dir(dir, true)?;
     for d in MEMBER_DIRS {
         remove_if_exists(&dir.join(d))?;
     }
     remove_if_exists(&dir.join(SECRETS))?;
-    fs::write(dir.join(MANIFEST), manifest)?;
+    crate::platform::write_private(&dir.join(MANIFEST), manifest.as_bytes())?;
     crate::platform::write_private(&dir.join(SECRETS), secrets_raw.as_bytes())?;
     for (key, data) in files {
         let path = dir.join(key);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(&path, data).with_context(|| format!("could not write {}", path.display()))?;
+        crate::platform::write_private(&path, data)?;
     }
     Ok(())
 }
@@ -307,8 +314,7 @@ fn ensure_gitignore(root: &Path) -> Result<()> {
 fn write_meta(root: &Path, meta: &Meta) -> Result<()> {
     refuse_irregular(&root.join(META))?;
     let text = toml::to_string(meta).context("could not write mastersos.toml")?;
-    fs::write(root.join(META), text)?;
-    Ok(())
+    crate::platform::write_private(&root.join(META), text.as_bytes())
 }
 
 impl Workdir {
@@ -349,7 +355,7 @@ impl Workdir {
         let digest = digest_of(&base).map_err(|_| {
             anyhow::anyhow!("The base of version {v} refers to secrets it does not hold: {fix}")
         })?;
-        match crate::sign::chain::recorded_digest(pins, &meta.server, v)? {
+        match crate::sign::chain::recorded_digest(pins, &meta.server, &meta.school_id, v)? {
             Some(d) if d.eq_ignore_ascii_case(&digest) => Ok(()),
             Some(_) => bail!(
                 "The base differs from version {v} as this computer verified it: {fix}"
@@ -377,8 +383,7 @@ impl Workdir {
         write_snapshot(&dir, &snap.manifest, &snap.secrets_raw, &snap.files)?;
         let text = toml::to_string(info).context("could not write the upload record")?;
         refuse_irregular(&dir.join(UPLOAD_INFO))?;
-        fs::write(dir.join(UPLOAD_INFO), text)?;
-        Ok(())
+        crate::platform::write_private(&dir.join(UPLOAD_INFO), text.as_bytes())
     }
 
     /// The upload record, when the directory still holds exactly what was uploaded (offline).
@@ -418,7 +423,7 @@ impl Workdir {
     }
 
     /// Replace `manifest.toml` (never through a link) in one step: a new temporary file next to
-    /// it with the old file's permissions, then a rename over it, so an interrupted write never
+    /// it (0600 on Unix, the old file's permissions elsewhere), then a rename over it, so an interrupted write never
     /// leaves half a manifest.
     pub fn write_manifest(&self, text: &str) -> Result<()> {
         use std::io::Write as _;
@@ -436,11 +441,21 @@ impl Workdir {
             std::process::id(),
             SEQ.fetch_add(1, Ordering::Relaxed)
         ));
-        let written = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
+        // On Unix the mode is always 0600, whatever the old file had.
+        #[cfg(unix)]
+        let _ = perms;
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        // The manifest holds the IT password hash and may hold Wi-Fi keys: owner only.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            opts.mode(0o600);
+        }
+        let written = opts
             .open(&tmp)
             .and_then(|mut f| {
+                #[cfg(not(unix))]
                 if let Some(p) = &perms {
                     f.set_permissions(p.clone())?;
                 }
@@ -462,7 +477,8 @@ impl Workdir {
             bail!("{} is not empty", root.display());
         }
         refuse_write_links(root)?;
-        fs::create_dir_all(root)?;
+        crate::platform::private_dir(root, true)?;
+        crate::platform::private_dir(&root.join(STATE), true)?;
         ensure_gitignore(root)?;
         write_snapshot(root, manifest_text, "", &BTreeMap::new())?;
         write_snapshot(&root.join(STATE).join("base"), "", "", &BTreeMap::new())?;
@@ -513,7 +529,8 @@ impl Workdir {
         }
         refuse_write_links(root)?;
         // The ignore file comes before the first secret is written.
-        fs::create_dir_all(root)?;
+        crate::platform::private_dir(root, true)?;
+        crate::platform::private_dir(&root.join(STATE), true)?;
         ensure_gitignore(root)?;
         write_snapshot(root, &manifest, &secrets_raw, &contents.files)?;
         write_snapshot(
@@ -593,7 +610,10 @@ impl Workdir {
         )?;
         if unchanged {
             refuse_link(&self.root.join(MANIFEST))?;
-            fs::write(self.root.join(MANIFEST), published_manifest)?;
+            crate::platform::write_private(
+                &self.root.join(MANIFEST),
+                published_manifest.as_bytes(),
+            )?;
         }
         let mut meta = self.meta()?;
         meta.base_version = version;
@@ -616,6 +636,11 @@ fn refuse_write_links(root: &Path) -> Result<()> {
     }
     refuse_irregular(&root.join(META))?;
     refuse_link(&root.join(GITIGNORE))
+}
+
+/// Whether `root` is missing or empty: where `init` may start a directory.
+pub fn is_free(root: &Path) -> Result<bool> {
+    Ok(!dir_has_entries(root)?)
 }
 
 fn dir_has_entries(root: &Path) -> Result<bool> {
@@ -1152,9 +1177,10 @@ impl Workdir {
         let digest = digest_of(&read_snapshot(&self.base_dir()).unwrap()).unwrap();
         let pins = self.test_pins();
         fs::create_dir_all(&pins).unwrap();
-        let name = crate::sign::pin_name_for(&meta.server).unwrap();
+        let origin = crate::server::check_origin(&meta.server).unwrap();
+        let name = crate::sign::chain::pin_name_v1(&origin, &meta.school_id);
         let pin = Pin {
-            host: name.replace('_', ":"),
+            host: crate::sign::chain::pin_key_v1(&origin, &meta.school_id),
             version: meta.base_version,
             digest_hex: digest.clone(),
             trust: Vec::new(),
@@ -1319,12 +1345,26 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-            for p in ["secrets.toml", ".mastersos/base/secrets.toml"] {
+            for p in [
+                "secrets.toml",
+                ".mastersos/base/secrets.toml",
+                "manifest.toml",
+                ".mastersos/base/manifest.toml",
+                "mastersos.toml",
+                "files/a.txt",
+            ] {
                 let mode = std::fs::metadata(w.root.join(p))
                     .unwrap()
                     .permissions()
                     .mode();
                 assert_eq!(mode & 0o777, 0o600, "{p}");
+            }
+            for d in ["", ".mastersos", ".mastersos/base"] {
+                let mode = std::fs::metadata(w.root.join(d))
+                    .unwrap()
+                    .permissions()
+                    .mode();
+                assert_eq!(mode & 0o777, 0o700, "{d}");
             }
         }
         #[cfg(windows)]
@@ -1553,7 +1593,7 @@ mod tests {
     }
 
     #[test]
-    fn write_manifest_replaces_whole_file_and_keeps_mode() {
+    fn write_manifest_replaces_whole_file_owner_only() {
         let t = tempfile::tempdir().unwrap();
         let w = Workdir::init(&t.path().join("school"), meta(0), SAMPLE).unwrap();
         let path = w.root.join(MANIFEST);
@@ -1567,8 +1607,9 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
+            // The manifest holds the IT password hash: always owner only (R10).
             let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o640);
+            assert_eq!(mode, 0o600);
         }
         // No temporary file is left behind.
         let left: Vec<_> = fs::read_dir(&w.root)

@@ -242,12 +242,26 @@ fn text(o: &Output) -> (String, String) {
     )
 }
 
-/// A folder made by `mastersos init` trusting the school key at `key`.
+/// A folder as `mastersos init` makes it, trusting the school key at `key`, for the school on
+/// `home`'s server (built here: `init` itself is tested in cli_init_pull.rs).
 async fn folder(home: &Path, t: &Path, key: &Path) -> PathBuf {
+    use mastersos_cli::workdir::{set_trusted_keys, template, Meta, Workdir};
+    let cfg: toml::Value =
+        toml::from_str(&std::fs::read_to_string(config_dir(home).join("config.toml")).unwrap())
+            .unwrap();
+    let kit = mastersos_cli::sign::kit::load_kit(key).unwrap();
     let dir = t.join("school");
-    let o = run(home, args(&[&"init", &dir, &"--key-file", &key]), "").await;
-    let (out, err) = text(&o);
-    assert!(o.status.success(), "{out}{err}");
+    let text = set_trusted_keys(
+        &template(SID).unwrap(),
+        &[(kit.trust_key(), kit.escrow_recipient())],
+    )
+    .unwrap();
+    let meta = Meta {
+        server: cfg["server"].as_str().unwrap().to_owned(),
+        school_id: SID.to_owned(),
+        base_version: 0,
+    };
+    Workdir::init(&dir, meta, &text).unwrap();
     dir
 }
 
@@ -278,8 +292,12 @@ fn plain_words(out: &str, manifests: &[String]) {
         })
         .collect();
     let shown = shown.join("\n");
-    // "Trusted keys" is the plain label; any other "trust" is not.
-    let lower = shown.to_lowercase().replace("trusted keys", "");
+    // "Trusted keys" is the plain label, and `--trust-fingerprint` the flag's protocol name; any
+    // other "trust" is not.
+    let lower = shown
+        .to_lowercase()
+        .replace("trusted keys", "")
+        .replace("--trust-fingerprint", "");
     for w in [
         "heartbeat",
         "digest",

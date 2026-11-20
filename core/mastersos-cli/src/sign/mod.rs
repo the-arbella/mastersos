@@ -700,7 +700,7 @@ pub async fn sign_pending_expecting(
     //    verified with its own trust, and that whole trust counts as added, so the human checks
     //    every key's fingerprint and types `trust` before it is signed.
     let genesis = api.latest_version().await? == 0;
-    let pin_file = chain::pin_path(pin_dir, api);
+    let pin_file = chain::pin_path(pin_dir, api.into())?;
     if genesis {
         // A server that says nothing is published while a version was verified here is lying or
         // was replaced: signing a "first version" would hand it a recovery-key signature over a
@@ -729,7 +729,8 @@ pub async fn sign_pending_expecting(
         };
         (base, Vec::new())
     } else {
-        let v = chain::verify_chain(api, pin_dir, confirm, out).await?;
+        let v = chain::verify_chain(api.into(), pin_dir, &chain::Anchors::key(&me), confirm, out)
+            .await?;
         let t = v.trust.clone();
         (v, t)
     };
@@ -894,7 +895,9 @@ pub async fn sign_pending_expecting(
         );
     }
     // The pin on disk is the one this run verified from (none for the first version).
-    let prev = (!genesis).then(|| chain::pin_of(api, &verified));
+    let prev = (!genesis)
+        .then(|| chain::pin_of(api.into(), &verified))
+        .transpose()?;
     let mut history = verified.history.clone();
     chain::record_verified(&mut history, next, &digest);
     chain::save_pin(
@@ -965,7 +968,8 @@ pub async fn sign_heartbeat_at(
     let mut out = safe::SafeWriter::new(out);
     let out: &mut dyn Write = &mut out;
     let (signer, me) = load_signer(api, kit, false).await?;
-    let verified = chain::verify_chain(api, pin_dir, confirm, out).await?;
+    let verified =
+        chain::verify_chain(api.into(), pin_dir, &chain::Anchors::key(&me), confirm, out).await?;
     if !verified.trust.contains(&me) {
         bail!(
             "This key ({}) is not among the trusted keys of version {} verified here: computers would not accept its check-in",
@@ -1160,13 +1164,20 @@ pub async fn seed_check(
 ) -> Result<()> {
     let mut out = safe::SafeWriter::new(out);
     let out: &mut dyn Write = &mut out;
-    if !chain::pin_path(pin_dir, api).exists() {
+    if !chain::pin_path(pin_dir, api.into())?.exists() {
         bail!(
             "There is no pin for {} yet: run mastersos verify first and compare the fingerprints with the School keys page",
             api.host()
         );
     }
-    let verified = chain::verify_chain(api, pin_dir, &mut std::io::empty(), out).await?;
+    let verified = chain::verify_chain(
+        api.into(),
+        pin_dir,
+        &chain::Anchors::default(),
+        &mut std::io::empty(),
+        out,
+    )
+    .await?;
     let seed = Seed::parse(seed_text).context("The install file is not valid TOML")?;
     let mut problems: Vec<String> = Vec::new();
     // The strict checks parsing leaves out (Wi-Fi, server_url); the message never carries a secret.
@@ -1303,6 +1314,7 @@ mod tests {
     #[test]
     fn a_host_only_pin_stays_the_pin_of_the_host_only_server() {
         use super::chain::{load_pin, pin_path, recorded_digest, Pin};
+        const SCHOOL: &str = "0192f3a4-5b6c-7d8e-9f00-112233445566";
         let dir = tempfile::tempdir().unwrap();
         // A pin as written before paths were part of the key: file `<host>.toml`, `host = "<host>"`.
         let old = "host = \"cloud.example\"\nversion = 3\ndigest_hex = \"d3\"\ntrust = []\n";
@@ -1311,22 +1323,24 @@ mod tests {
 
         // The host-only address still finds it, and its recorded key is what the check compares.
         let host_only = Api::new("https://cloud.example", "t".into()).unwrap();
-        assert_eq!(pin_path(dir.path(), &host_only), old_file);
+        assert_eq!(pin_path(dir.path(), (&host_only).into()).unwrap(), old_file);
         let pin: Pin = load_pin(&old_file).unwrap().unwrap();
         assert_eq!(pin.host, host_only.host());
         assert_eq!(
-            recorded_digest(dir.path(), "https://cloud.example/", 3).unwrap(),
+            recorded_digest(dir.path(), "https://cloud.example/", SCHOOL, 3).unwrap(),
             Some("d3".to_owned())
         );
 
         // An organisation under a path on the same host does not pick it up: its own file does not
         // exist yet (first use), its key differs, and the old file is left as it was.
         let org = Api::new("https://cloud.example/org/a/devices", "t".into()).unwrap();
-        assert_ne!(pin_path(dir.path(), &org), old_file);
-        assert!(load_pin(&pin_path(dir.path(), &org)).unwrap().is_none());
+        assert_ne!(pin_path(dir.path(), (&org).into()).unwrap(), old_file);
+        assert!(load_pin(&pin_path(dir.path(), (&org).into()).unwrap())
+            .unwrap()
+            .is_none());
         assert_ne!(pin.host, org.host());
         assert_eq!(
-            recorded_digest(dir.path(), "https://cloud.example/org/a/devices", 3).unwrap(),
+            recorded_digest(dir.path(), "https://cloud.example/org/a/devices", SCHOOL, 3).unwrap(),
             None
         );
         assert_eq!(std::fs::read_to_string(&old_file).unwrap(), old);

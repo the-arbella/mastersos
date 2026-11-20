@@ -1,11 +1,20 @@
 //! Verifying the chain here: from the pinned version to the latest, one version at a time, as the
 //! agent does (Ruling 15).
 //!
-//! The pin is `<pin_dir>/<host>.toml`: the version verified last time, its content digest and its
-//! trust.
-//! - **No pin** (first use, TOFU): the fingerprint of every key in the latest version's trust is
-//!   printed, and the human types `yes` after comparing them with the keys page and the top of
-//!   the install file; the package is then checked against its own trust and the pin recorded.
+//! The pin is `<pin_dir>/<host>[_<port>]+<school>.toml` for a protocol v1 server (one chain per
+//! origin and school): the version verified last time, its content digest and its trust. The old
+//! admin API ([`Source::Old`], until publish, heartbeat and seed move to protocol v1) keeps its
+//! `<host>[_<port>][+<path segment>…].toml`.
+//! - **No pin** (first use): the fingerprint of every key in the latest version's trust is
+//!   printed. The trust is taken only from an anchor ([`Anchors`]): a school key file given to the
+//!   command whose key is in that trust, `--trust-fingerprint` values equal to exactly the
+//!   fingerprints shown, or a person at a terminal who types `yes` after comparing them with the
+//!   keys page. `--yes` alone never pins a chain (`trust_not_confirmed`, nothing written). The
+//!   package is then checked against its own trust and the pin recorded.
+//! - **A pin of the old admin API only** (`<host>[_<port>].toml`, made before protocol v1): the
+//!   chain is verified forward from it exactly as from a pin; one that does not lead to the chain
+//!   the server serves now is refused (`chain_tampered`), `--yes` or not. When it connects the new
+//!   pin is written and the old file is left as it is.
 //! - **A pin**: first the pinned version's content must be unchanged (same digest), then every
 //!   later version goes through `accept(package, current trust, Some(current version))`; any
 //!   version that fails is reported as an earlier version failing verification, and the pin stays.
@@ -27,6 +36,136 @@ use mastersos_bundle::{
 use serde::{Deserialize, Serialize};
 
 use super::{ask, hex, print_trust, Api, TrustDelta};
+use crate::server::{CliError, Server};
+
+/// Where the versions come from.
+#[derive(Clone, Copy)]
+pub enum Source<'a> {
+    /// The old admin API (publish, heartbeat and seed check until they move to protocol v1).
+    Old(&'a Api),
+    /// The protocol v1 CLI API of one school.
+    New(&'a Server),
+}
+
+impl<'a> From<&'a Api> for Source<'a> {
+    fn from(a: &'a Api) -> Self {
+        Source::Old(a)
+    }
+}
+
+impl<'a> From<&'a Server> for Source<'a> {
+    fn from(s: &'a Server) -> Self {
+        Source::New(s)
+    }
+}
+
+/// `<host>[_<port>]+<school>`: the pin file name (without `.toml`) of a protocol v1 school. A
+/// `:` (an IPv6 host) becomes `_` as well, so the name is a file name everywhere.
+pub fn pin_name_v1(origin: &reqwest::Url, school: &str) -> String {
+    let mut name = origin.host_str().unwrap_or_default().replace(':', "_");
+    if let Some(p) = origin.port() {
+        name.push_str(&format!("_{p}"));
+    }
+    format!("{name}+{school}")
+}
+
+/// What a protocol v1 pin records as its chain: `<origin>+<school>`.
+pub fn pin_key_v1(origin: &reqwest::Url, school: &str) -> String {
+    format!("{}+{school}", origin.origin().ascii_serialization())
+}
+
+impl Source<'_> {
+    fn pin_name(&self) -> Result<String, CliError> {
+        match self {
+            Source::Old(a) => Ok(a.pin_name()),
+            Source::New(s) => Ok(pin_name_v1(s.origin(), s.school()?)),
+        }
+    }
+
+    /// What the pin records as its `host`.
+    fn pin_key(&self) -> Result<String, CliError> {
+        match self {
+            Source::Old(a) => Ok(a.host()),
+            Source::New(s) => Ok(pin_key_v1(s.origin(), s.school()?)),
+        }
+    }
+
+    /// For people: what this computer checks.
+    fn describe(&self) -> String {
+        match self {
+            Source::Old(a) => a.host(),
+            Source::New(s) => format!(
+                "school {} on {}",
+                s.school().unwrap_or("?"),
+                s.origin().origin().ascii_serialization()
+            ),
+        }
+    }
+
+    async fn latest_version(&self) -> Result<u64> {
+        match self {
+            Source::Old(a) => a.latest_version().await,
+            Source::New(s) => Ok(s.latest_version().await?),
+        }
+    }
+
+    async fn version_archive(&self, v: u64) -> Result<Vec<u8>> {
+        match self {
+            Source::Old(a) => a.version_archive(v).await,
+            Source::New(s) => Ok(s.version_archive(v).await?),
+        }
+    }
+}
+
+/// The chain does not verify: a version fails its checks, the version went backwards, or the pin
+/// belongs to another chain. Reported as `chain_tampered`.
+#[derive(Debug)]
+pub struct Tampered(pub String);
+
+impl std::fmt::Display for Tampered {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Tampered {}
+
+/// The person did not confirm. Reported as `cancelled`.
+#[derive(Debug)]
+pub struct Cancelled(pub String);
+
+impl std::fmt::Display for Cancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Cancelled {}
+
+fn tamper(msg: String) -> anyhow::Error {
+    anyhow::Error::new(Tampered(msg))
+}
+
+fn cancel(msg: &str) -> anyhow::Error {
+    anyhow::Error::new(Cancelled(msg.to_owned()))
+}
+
+/// A chain error as the command line reports it: a server or transport error keeps its code;
+/// [`Tampered`] is `chain_tampered`, [`Cancelled`] `cancelled`, anything else (the pin files) is
+/// `local_file`. Strings from the server are escaped.
+pub fn to_cli_error(e: anyhow::Error) -> CliError {
+    if let Some(c) = e.downcast_ref::<CliError>() {
+        return c.clone();
+    }
+    let text = crate::safe::text(&format!("{e:#}"));
+    if e.downcast_ref::<Tampered>().is_some() {
+        CliError::new("chain_tampered", &text)
+    } else if e.downcast_ref::<Cancelled>().is_some() {
+        CliError::new("cancelled", &text)
+    } else {
+        CliError::new("local_file", &text)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -130,16 +269,30 @@ pub struct Verified {
     pub history: Vec<VerifiedVersion>,
 }
 
-pub fn pin_path(pin_dir: &Path, api: &Api) -> PathBuf {
-    pin_dir.join(format!("{}.toml", api.pin_name()))
+pub fn pin_path(pin_dir: &Path, src: Source<'_>) -> Result<PathBuf, CliError> {
+    Ok(pin_dir.join(format!("{}.toml", src.pin_name()?)))
 }
 
-/// The content digest (lower-case hex) this computer recorded for `version` of `server` in its
-/// pin under `pin_dir`: `None` when there is no pin or the version was never verified here. Read
-/// offline, so a local copy of a version can be checked against what was verified.
-pub fn recorded_digest(pin_dir: &Path, server: &str, version: u64) -> Result<Option<String>> {
-    let path = pin_dir.join(format!("{}.toml", super::pin_name_for(server)?));
-    Ok(load_pin(&path)?.and_then(|p| {
+/// The content digest (lower-case hex) this computer recorded for `version` of school `school` on
+/// `server` in its pin under `pin_dir`: `None` when there is no pin or the version was never
+/// verified here. Read offline, so a local copy of a version can be checked against what was
+/// verified. The protocol v1 pin (`<host>[_<port>]+<school>`) is read first; until publish moves
+/// to protocol v1 (Task 6) the pin the old admin API wrote for `server` is read when there is none.
+pub fn recorded_digest(
+    pin_dir: &Path,
+    server: &str,
+    school: &str,
+    version: u64,
+) -> Result<Option<String>> {
+    let v1 = crate::server::check_origin(server)
+        .ok()
+        .filter(|_| crate::server::is_school_id(school))
+        .map(|o| pin_dir.join(format!("{}.toml", pin_name_v1(&o, school))));
+    let pin = match v1.map(|p| load_pin(&p)).transpose()?.flatten() {
+        Some(p) => Some(p),
+        None => load_pin(&pin_dir.join(format!("{}.toml", super::pin_name_for(server)?)))?,
+    };
+    Ok(pin.and_then(|p| {
         p.verified
             .into_iter()
             .find(|e| e.version == version)
@@ -170,8 +323,7 @@ pub(crate) fn load_pin(path: &Path) -> Result<Option<Pin>> {
 /// leaves the old pin or the new one, never half of one.
 pub fn save_pin(path: &Path, prev: Option<&Pin>, pin: &Pin) -> Result<()> {
     let dir = path.parent().context("the pin path has no directory")?;
-    std::fs::create_dir_all(dir)
-        .with_context(|| format!("cannot create the directory {}", dir.display()))?;
+    crate::platform::private_dir(dir, true)?;
     let _lock = lock_pin(path)?;
     let prev = prev.cloned().map(Pin::normalized);
     let prev = prev.as_ref();
@@ -180,29 +332,29 @@ pub fn save_pin(path: &Path, prev: Option<&Pin>, pin: &Pin) -> Result<()> {
         (None, None) => {}
         (Some(cur), Some(prev)) if cur == *prev => {
             if pin.host != cur.host {
-                bail!(
+                return Err(tamper(format!(
                     "refusing to replace the pin in {}: it is for {}, the new one for {}",
                     path.display(),
                     cur.host,
                     pin.host
-                );
+                )));
             }
             if pin.version <= cur.version {
-                bail!(
+                return Err(tamper(format!(
                     "refusing to move the pin in {} backwards from version {} to {}: possible rollback",
                     path.display(),
                     cur.version,
                     pin.version
-                );
+                )));
             }
         }
-        (Some(cur), _) => bail!(
+        (Some(cur), _) => return Err(tamper(format!(
             "refusing to replace the pin in {} (version {}): the new pin was not verified forward \
              from it (another chain, or the pin changed meanwhile). Delete that file only if you are \
              sure the server was reset on purpose",
             path.display(),
             cur.version
-        ),
+        ))),
         (None, Some(_)) => bail!(
             "the pin {} disappeared while verifying; run mastersos verify again",
             path.display()
@@ -286,44 +438,146 @@ fn write_replace(dir: &Path, path: &Path, data: &[u8]) -> Result<()> {
 }
 
 fn tampered(v: u64, why: impl std::fmt::Display) -> anyhow::Error {
-    anyhow::anyhow!(
+    tamper(format!(
         "An earlier version fails verification; the server may have been tampered with: version {v} {}",
         crate::safe::field(&why.to_string())
-    )
+    ))
+}
+
+/// What a first use may take the trusted keys from (see the module documentation).
+#[derive(Debug, Clone, Default)]
+pub struct Anchors {
+    /// The keys of the school key files given to the command.
+    pub keys: Vec<TrustKey>,
+    /// `--trust-fingerprint` values (`xxxx-xxxx-xxxx-xxxx`).
+    pub fingerprints: Vec<String>,
+    /// A person at a terminal may confirm (not with `--yes`, not when stdin is not a terminal).
+    pub interactive: bool,
+}
+
+impl Anchors {
+    /// The school key `key` (the command's key file) as the anchor; a person may confirm only
+    /// when stdin is a terminal.
+    pub fn key(key: &TrustKey) -> Anchors {
+        use std::io::IsTerminal as _;
+        Anchors {
+            keys: vec![key.clone()],
+            fingerprints: Vec::new(),
+            interactive: std::io::stdin().is_terminal(),
+        }
+    }
 }
 
 /// Verify from the pin to the server's latest version, update the pin, and return the latest
-/// verified version. See the module documentation.
+/// verified version: the only way a chain is loaded. See the module documentation for the first
+/// use and the old pins.
 pub async fn verify_chain(
-    api: &Api,
+    src: Source<'_>,
     pin_dir: &Path,
+    anchors: &Anchors,
+    confirm: &mut dyn BufRead,
+    out: &mut dyn Write,
+) -> Result<Verified, CliError> {
+    verify_inner(src, pin_dir, anchors, confirm, out)
+        .await
+        .map_err(to_cli_error)
+}
+
+/// The pin the old admin API wrote for a protocol v1 source's host (`<host>[_<port>].toml`), with
+/// the `host` it must record.
+fn legacy_pin_path(src: Source<'_>, pin_dir: &Path) -> Option<(PathBuf, String)> {
+    let Source::New(s) = src else {
+        return None;
+    };
+    let o = s.origin();
+    let host = o.host_str()?.to_owned();
+    let key = match o.port() {
+        Some(p) => format!("{host}:{p}"),
+        None => host,
+    };
+    Some((pin_dir.join(format!("{}.toml", key.replace(':', "_"))), key))
+}
+
+async fn verify_inner(
+    src: Source<'_>,
+    pin_dir: &Path,
+    anchors: &Anchors,
     confirm: &mut dyn BufRead,
     out: &mut dyn Write,
 ) -> Result<Verified> {
     let mut out = crate::safe::SafeWriter::new(out);
     let out: &mut dyn Write = &mut out;
-    let path = pin_path(pin_dir, api);
-    let latest = api.latest_version().await?;
-    let Some(pin) = load_pin(&path)? else {
-        return first_use(api, &path, latest, confirm, out).await;
+    let path = pin_path(pin_dir, src)?;
+    let key = src.pin_key()?;
+    let latest = src.latest_version().await?;
+    let (pin, legacy) = match load_pin(&path)? {
+        Some(pin) => {
+            if pin.host != key {
+                return Err(tamper(format!(
+                    "The pin file {} is for {}, not {key}",
+                    path.display(),
+                    pin.host,
+                )));
+            }
+            (pin, None)
+        }
+        None => match legacy_pin_path(src, pin_dir) {
+            Some((old, host)) if load_pin(&old)?.is_some() => {
+                let pin = load_pin(&old)?.context("the old pin disappeared")?;
+                if pin.host != host {
+                    return Err(tamper(format!(
+                        "The old pin file {} is for {}, not {host}",
+                        old.display(),
+                        pin.host
+                    )));
+                }
+                writeln!(
+                    out,
+                    "Checking {} from the pin this computer recorded for {host} before ({}).",
+                    src.describe(),
+                    old.display()
+                )?;
+                (pin, Some(old))
+            }
+            _ => return first_use(src, &path, latest, anchors, confirm, out).await,
+        },
     };
-    if pin.host != api.host() {
-        bail!(
-            "The pin file {} is for {}, not {}",
-            path.display(),
-            pin.host,
-            api.host()
-        );
+    let cur = forward(src, &pin, latest, confirm, out)
+        .await
+        .map_err(|e| match (&legacy, e.downcast_ref::<Tampered>()) {
+            (Some(old), Some(t)) => tamper(format!(
+                "{t} (checked forward from the old pin {}: it does not lead to the chain the \
+                 server serves now; delete that file only if it belonged to another school on \
+                 this server)",
+                old.display()
+            )),
+            _ => e,
+        })?;
+    if legacy.is_some() {
+        save_pin(&path, None, &pin_of(src, &cur)?)?;
+    } else if cur.version != pin.version {
+        save_pin(&path, Some(&pin), &pin_of(src, &cur)?)?;
     }
+    Ok(cur)
+}
+
+/// Verify every version after `pin` up to `latest`, one by one.
+async fn forward(
+    src: Source<'_>,
+    pin: &Pin,
+    latest: u64,
+    confirm: &mut dyn BufRead,
+    out: &mut dyn Write,
+) -> Result<Verified> {
     if latest < pin.version {
-        bail!(
+        return Err(tamper(format!(
             "The server says the latest is version {latest}, but this computer already verified version {}: the version went backwards, the server may have been tampered with",
             pin.version
-        );
+        )));
     }
 
     // The pinned version: its content must still be what was verified then.
-    let archive = api.version_archive(pin.version).await?;
+    let archive = src.version_archive(pin.version).await?;
     let contents = read_archive(&archive)
         .map_err(|e| tampered(pin.version, e))?
         .contents;
@@ -343,7 +597,7 @@ pub async fn verify_chain(
         history: pin.verified.clone(),
     };
     for v in pin.version + 1..=latest {
-        let archive = api.version_archive(v).await?;
+        let archive = src.version_archive(v).await?;
         let (b, signer) =
             accept_signed(&archive, &cur.trust, Some(cur.version)).map_err(|e| tampered(v, e))?;
         if b.manifest.version != v {
@@ -415,10 +669,10 @@ pub async fn verify_chain(
             // No input (`seed check` and other calls without a dialogue) is no confirmation either.
             .unwrap_or_default();
             if typed != "yes" {
-                bail!(
+                return Err(cancel(&format!(
                     "version {v} changes {changes} without a school key's approval; not \
                      confirmed, cancelled"
-                );
+                )));
             }
             cur.latest = v;
             continue;
@@ -454,66 +708,118 @@ pub async fn verify_chain(
             cur.latest + 1
         )?;
     }
-    if cur.version != pin.version {
-        save_pin(&path, Some(&pin), &pin_of(api, &cur))?;
-    }
     Ok(cur)
 }
 
-pub(crate) fn pin_of(api: &Api, v: &Verified) -> Pin {
-    Pin {
-        host: api.host(),
+pub(crate) fn pin_of(src: Source<'_>, v: &Verified) -> Result<Pin, CliError> {
+    Ok(Pin {
+        host: src.pin_key()?,
         version: v.version,
         digest_hex: v.digest_hex.clone(),
         trust: v.trust.clone(),
         verified: v.history.clone(),
-    }
+    })
 }
 
-/// First use: there is no anchor to verify forward from, so a human confirms the latest version's
-/// trust by comparing fingerprints.
+/// First use: there is no pin to verify forward from, so the latest version's trust is taken only
+/// from an anchor (a key file, `--trust-fingerprint`, or a person at a terminal).
 async fn first_use(
-    api: &Api,
+    src: Source<'_>,
     path: &Path,
     latest: u64,
+    anchors: &Anchors,
     confirm: &mut dyn BufRead,
     out: &mut dyn Write,
 ) -> Result<Verified> {
     if latest == 0 {
-        bail!(
+        return Err(anyhow::Error::new(CliError::new(
+            "no_published_version",
             "the server has not published any version yet: nothing to verify. Approve the first \
-             version with a school key: `mastersos publish --key-file <FILE>`"
-        );
+             version with a school key: `mastersos publish --key-file <FILE>`",
+        )));
     }
-    let archive = api.version_archive(latest).await?;
-    let unpacked = read_archive(&archive).context("The latest package cannot be opened")?;
+    let archive = src.version_archive(latest).await?;
+    let unpacked = read_archive(&archive)
+        .map_err(|e| tamper(format!("The latest package cannot be opened: {e}")))?;
     let m = Manifest::parse(&unpacked.contents.manifest_text)
-        .context("The latest manifest cannot be read")?;
+        .map_err(|e| tamper(format!("The latest manifest cannot be read: {e}")))?;
     writeln!(
         out,
         "This computer has not checked {} before. The server's latest is version {latest}; it names these keys as the ones computers accept:",
-        api.host()
+        src.describe()
     )?;
     print_trust(out, &m.trust)?;
     writeln!(
         out,
         "Compare each one with the School keys page and the comment at the top of the install file. Every later version is verified from here on."
     )?;
-    let typed = ask(
-        confirm,
-        out,
-        "If they match the School keys page and the install file, type yes: ",
-    )?;
-    if typed != "yes" {
-        bail!("The trusted keys were not confirmed; cancelled");
+    let shown: std::collections::BTreeSet<String> = m
+        .trust
+        .iter()
+        .map(mastersos_bundle::trust_fingerprint)
+        .collect();
+    let given: std::collections::BTreeSet<String> = anchors
+        .fingerprints
+        .iter()
+        .map(|f| f.trim().to_ascii_lowercase())
+        .collect();
+    let by_key = m.trust.iter().any(|t| {
+        anchors
+            .keys
+            .iter()
+            .any(|k| k.alg == t.alg && k.public_key == t.public_key)
+    });
+    let not_confirmed = |why: &str| {
+        anyhow::Error::new(CliError::new(
+            "trust_not_confirmed",
+            &format!(
+                "the trusted keys of version {latest} were not confirmed: {why}. Compare them with \
+                 the School keys page, then run again at a terminal without --yes, or pass \
+                 --trust-fingerprint once for each fingerprint shown"
+            ),
+        ))
+    };
+    if by_key {
+        writeln!(
+            out,
+            "Accepted: the school key file given is one of these keys."
+        )?;
+    } else if !given.is_empty() {
+        if given != shown {
+            return Err(not_confirmed(
+                "the --trust-fingerprint values are not exactly the fingerprints shown",
+            ));
+        }
+        writeln!(
+            out,
+            "Accepted: they are exactly the --trust-fingerprint values given."
+        )?;
+    } else if !anchors.interactive {
+        return Err(not_confirmed(
+            "nobody can confirm them here (--yes, or stdin is not a terminal)",
+        ));
+    } else {
+        let typed = ask(
+            confirm,
+            out,
+            "If they match the School keys page and the install file, type yes: ",
+        )
+        .map_err(|_| cancel("No input was read; cancelled"))?;
+        if typed != "yes" {
+            return Err(cancel("The trusted keys were not confirmed; cancelled"));
+        }
     }
-    let b = accept(&archive, &m.trust, None)
-        .context("The latest version does not verify even with its own trusted keys: do not trust this server")?;
+    let b = accept(&archive, &m.trust, None).map_err(|e| {
+        tamper(format!(
+            "The latest version does not verify even with its own trusted keys: do not trust this server ({})",
+            crate::safe::field(&e.to_string())
+        ))
+    })?;
     if b.manifest.version != latest {
-        bail!(
+        return Err(tamper(format!(
             "The server says the latest is version {latest}, but the package says version {}",
             b.manifest.version
-        );
+        )));
     }
     let digest_hex = hex(&content_digest(&b.contents));
     let mut history = Vec::new();
@@ -526,7 +832,7 @@ async fn first_use(
         latest,
         history,
     };
-    save_pin(path, None, &pin_of(api, &v))?;
+    save_pin(path, None, &pin_of(src, &v)?)?;
     writeln!(
         out,
         "Recorded the trusted keys of version {latest} ({}).",
@@ -698,6 +1004,446 @@ mod tests {
                 err.contains("before this computer started verifying"),
                 "{err}"
             );
+        }
+    }
+
+    /// Protocol v1: the versions come from the CLI API of one school.
+    mod v1 {
+        use super::super::*;
+        use crate::auth::Credentials;
+        use mastersos_bundle::{pack, trust_fingerprint, Ed25519Signer};
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        const SCHOOL: &str = "0192f3a4-5b6c-7d8e-9f00-112233445566";
+        const OTHER: &str = "0192f3a4-5b6c-7d8e-9f00-aabbccddeeff";
+
+        fn prefix(school: &str) -> String {
+            format!("/api/cli/v1/schools/{school}/mastersos/")
+        }
+
+        fn signer(seed: u8) -> Ed25519Signer {
+            Ed25519Signer::from_seed("key-1", &[seed; 32])
+        }
+
+        /// Version `v` of `school`, trusting key 1 and signed by the key of `seed`.
+        fn archive(v: u64, school: &str, seed: u8, note: &str) -> Vec<u8> {
+            let t = signer(1).trust_key();
+            let text = format!(
+                "version = {v}\nissued_at = \"2026-11-03T00:00:00Z\"\n\n[[trust]]\nid = \"{}\"\nalg = \"ed25519\"\npublic_key = \"{}\"\n\n[school]\nid = \"{school}\"\n\n[[config]]\nid = \"default\"\nname = \"Default {note}\"\ninterface = \"learning\"\nlogin_methods = [\"local\"]\n\n[[group]]\nid = \"default\"\nname = \"Ungrouped\"\nconfig = \"default\"\n",
+                t.id, t.public_key
+            );
+            pack(
+                &Contents {
+                    manifest_text: text,
+                    files: Default::default(),
+                },
+                &signer(seed),
+            )
+            .unwrap()
+        }
+
+        /// Serve `archives` (version 1, 2, ...) of `school` with their version header.
+        async fn serve(mock: &MockServer, school: &str, archives: &[Vec<u8>]) {
+            let list: Vec<serde_json::Value> = (1..=archives.len())
+                .map(|v| {
+                    serde_json::json!({"version": v, "published_at": "2026-11-03T00:00:00Z",
+                    "published_by": "it", "signed_by": "key-1", "digest_hex": "00"})
+                })
+                .collect();
+            Mock::given(method("GET"))
+                .and(path(format!("{}versions", prefix(school))))
+                .respond_with(ResponseTemplate::new(200).set_body_json(list))
+                .mount(mock)
+                .await;
+            for (i, a) in archives.iter().enumerate() {
+                let v = i + 1;
+                Mock::given(method("GET"))
+                    .and(path(format!("{}versions/{v}/archive", prefix(school))))
+                    .respond_with(
+                        ResponseTemplate::new(200)
+                            .insert_header("X-Mastersos-Version", v.to_string().as_str())
+                            .set_body_bytes(a.clone()),
+                    )
+                    .mount(mock)
+                    .await;
+            }
+        }
+
+        fn server(mock: &MockServer, school: &str) -> Server {
+            Server::new(&mock.uri(), Some(school), Credentials::fixed("t")).unwrap()
+        }
+
+        /// The fingerprint of key 1, which every [`archive`] trusts.
+        fn fp1() -> String {
+            trust_fingerprint(&signer(1).trust_key())
+        }
+
+        /// `yes`: anchored by `--trust-fingerprint` of key 1 (no person); else a person at a
+        /// terminal who types `input`.
+        async fn verify(
+            s: &Server,
+            pins: &Path,
+            yes: bool,
+            input: &str,
+        ) -> (Result<Verified, CliError>, String) {
+            let anchors = if yes {
+                Anchors {
+                    fingerprints: vec![fp1()],
+                    ..Anchors::default()
+                }
+            } else {
+                Anchors {
+                    interactive: true,
+                    ..Anchors::default()
+                }
+            };
+            verify_with(s, pins, &anchors, input).await
+        }
+
+        async fn verify_with(
+            s: &Server,
+            pins: &Path,
+            anchors: &Anchors,
+            input: &str,
+        ) -> (Result<Verified, CliError>, String) {
+            let mut out = Vec::new();
+            let r = verify_chain(s.into(), pins, anchors, &mut input.as_bytes(), &mut out).await;
+            (r, String::from_utf8(out).unwrap())
+        }
+
+        /// The files in the pin directory.
+        fn pin_files(pins: &Path) -> Vec<String> {
+            let mut names: Vec<String> = std::fs::read_dir(pins)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        }
+
+        #[tokio::test]
+        async fn chain_reads_versions_from_the_cli_routes() {
+            let mock = MockServer::start().await;
+            let a1 = archive(1, SCHOOL, 1, "a");
+            serve(&mock, SCHOOL, std::slice::from_ref(&a1)).await;
+            let pins = tempfile::tempdir().unwrap();
+            let s = server(&mock, SCHOOL);
+            let (r, _) = verify(&s, pins.path(), true, "").await;
+            assert_eq!(r.unwrap().version, 1);
+            mock.reset().await;
+            serve(
+                &mock,
+                SCHOOL,
+                &[a1, archive(2, SCHOOL, 1, "b"), archive(3, SCHOOL, 1, "c")],
+            )
+            .await;
+            let (r, _) = verify(&s, pins.path(), false, "").await;
+            let v = r.unwrap();
+            assert_eq!((v.version, v.latest), (3, 3));
+            assert_eq!(
+                v.history.iter().map(|h| h.version).collect::<Vec<_>>(),
+                [1, 2, 3]
+            );
+            let paths: Vec<String> = mock
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .map(|r| r.url.path().to_owned())
+                .collect();
+            let p = prefix(SCHOOL);
+            assert_eq!(
+                paths,
+                [
+                    format!("{p}versions"),
+                    format!("{p}versions/1/archive"),
+                    format!("{p}versions/2/archive"),
+                    format!("{p}versions/3/archive"),
+                ]
+            );
+        }
+
+        #[tokio::test]
+        async fn pins_are_per_origin_and_school() {
+            let mock = MockServer::start().await;
+            serve(&mock, SCHOOL, &[archive(1, SCHOOL, 1, "a")]).await;
+            serve(
+                &mock,
+                OTHER,
+                &[archive(1, OTHER, 1, "a"), archive(2, OTHER, 1, "b")],
+            )
+            .await;
+            let pins = tempfile::tempdir().unwrap();
+            let (a, b) = (server(&mock, SCHOOL), server(&mock, OTHER));
+            assert_eq!(
+                verify(&a, pins.path(), true, "").await.0.unwrap().version,
+                1
+            );
+            assert_eq!(
+                verify(&b, pins.path(), true, "").await.0.unwrap().version,
+                2
+            );
+            let port = reqwest::Url::parse(&mock.uri()).unwrap().port().unwrap();
+            let mut names: Vec<String> = std::fs::read_dir(pins.path())
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|n| n.ends_with(".toml"))
+                .collect();
+            names.sort();
+            assert_eq!(
+                names,
+                [
+                    format!("127.0.0.1_{port}+{SCHOOL}.toml"),
+                    format!("127.0.0.1_{port}+{OTHER}.toml"),
+                ]
+            );
+            let pin = load_pin(&pins.path().join(&names[0])).unwrap().unwrap();
+            assert_eq!(pin.host, format!("{}+{SCHOOL}", mock.uri()));
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                for n in &names {
+                    let mode = std::fs::metadata(pins.path().join(n))
+                        .unwrap()
+                        .permissions()
+                        .mode();
+                    assert_eq!(mode & 0o777, 0o600, "{n}");
+                }
+            }
+            // The same school's pin is found again: no question the second time.
+            assert_eq!(
+                verify(&a, pins.path(), false, "").await.0.unwrap().version,
+                1
+            );
+        }
+
+        #[tokio::test]
+        async fn first_use_with_yes_accepts_and_prints_fingerprints() {
+            let mock = MockServer::start().await;
+            serve(&mock, SCHOOL, &[archive(1, SCHOOL, 1, "a")]).await;
+            let pins = tempfile::tempdir().unwrap();
+            let s = server(&mock, SCHOOL);
+            // A person who types nothing, or no: cancelled, nothing pinned.
+            let (r, _) = verify(&s, pins.path(), false, "").await;
+            assert_eq!(r.unwrap_err().code, "cancelled");
+            let (r, _) = verify(&s, pins.path(), false, "no\n").await;
+            assert_eq!(r.unwrap_err().code, "cancelled");
+            assert!(pin_files(pins.path()).is_empty());
+            // --yes with fingerprints equal to the ones shown (any case): printed and pinned.
+            let anchors = Anchors {
+                fingerprints: vec![fp1().to_uppercase()],
+                ..Anchors::default()
+            };
+            let (r, out) = verify_with(&s, pins.path(), &anchors, "").await;
+            assert_eq!(r.unwrap().version, 1);
+            assert!(out.contains(&fp1()), "{out}");
+            assert!(out.contains("--trust-fingerprint"), "{out}");
+            assert!(out.contains(SCHOOL), "{out}");
+            assert_eq!(pin_files(pins.path()).len(), 2); // the pin and its lock
+        }
+
+        #[tokio::test]
+        async fn first_use_with_yes_and_the_key_file_in_trust_is_pinned() {
+            let mock = MockServer::start().await;
+            serve(&mock, SCHOOL, &[archive(1, SCHOOL, 1, "a")]).await;
+            let pins = tempfile::tempdir().unwrap();
+            let s = server(&mock, SCHOOL);
+            // A key that is not in the trust anchors nothing.
+            let other = Anchors {
+                keys: vec![signer(7).trust_key()],
+                ..Anchors::default()
+            };
+            let (r, _) = verify_with(&s, pins.path(), &other, "").await;
+            assert_eq!(r.unwrap_err().code, "trust_not_confirmed");
+            assert!(pin_files(pins.path()).is_empty());
+            let mine = Anchors {
+                keys: vec![signer(1).trust_key()],
+                ..Anchors::default()
+            };
+            let (r, out) = verify_with(&s, pins.path(), &mine, "").await;
+            assert_eq!(r.unwrap().version, 1, "{out}");
+            assert!(load_pin(&pin_path(pins.path(), (&s).into()).unwrap())
+                .unwrap()
+                .is_some());
+        }
+
+        #[tokio::test]
+        async fn first_use_with_yes_and_no_anchor_is_refused() {
+            let mock = MockServer::start().await;
+            // Version 1 trusts keys 1 and 2.
+            let (t1, t2) = (signer(1).trust_key(), signer(2).trust_key());
+            let text = format!(
+                "version = 1\nissued_at = \"2026-11-03T00:00:00Z\"\n\n[[trust]]\nid = \"{}\"\nalg = \"ed25519\"\npublic_key = \"{}\"\n\n[[trust]]\nid = \"key-2\"\nalg = \"ed25519\"\npublic_key = \"{}\"\n\n[school]\nid = \"{SCHOOL}\"\n\n[[config]]\nid = \"default\"\nname = \"Default\"\ninterface = \"learning\"\nlogin_methods = [\"local\"]\n\n[[group]]\nid = \"default\"\nname = \"Ungrouped\"\nconfig = \"default\"\n",
+                t1.id, t1.public_key, t2.public_key
+            );
+            let a = pack(
+                &Contents {
+                    manifest_text: text,
+                    files: Default::default(),
+                },
+                &signer(1),
+            )
+            .unwrap();
+            serve(&mock, SCHOOL, &[a]).await;
+            let pins = tempfile::tempdir().unwrap();
+            let s = server(&mock, SCHOOL);
+            let fp2 = trust_fingerprint(&t2);
+            for given in [
+                vec![],                                                 // --yes alone
+                vec![fp1()],                                            // partial
+                vec!["0000-0000-0000-0000".to_owned()],                 // wrong
+                vec![fp1(), fp2.clone(), "0000-0000-0000-0000".into()], // more
+            ] {
+                let anchors = Anchors {
+                    fingerprints: given.clone(),
+                    ..Anchors::default()
+                };
+                let (r, _) = verify_with(&s, pins.path(), &anchors, "yes\n").await;
+                assert_eq!(r.unwrap_err().code, "trust_not_confirmed", "{given:?}");
+                assert!(pin_files(pins.path()).is_empty(), "{given:?}");
+            }
+            let all = Anchors {
+                fingerprints: vec![fp2, fp1()],
+                ..Anchors::default()
+            };
+            assert_eq!(
+                verify_with(&s, pins.path(), &all, "")
+                    .await
+                    .0
+                    .unwrap()
+                    .version,
+                1
+            );
+        }
+
+        /// A pin the old admin API wrote for this host (`<host>_<port>.toml`).
+        fn old_pin(mock: &MockServer, pins: &Path, a: &[u8], v: u64) -> PathBuf {
+            let url = reqwest::Url::parse(&mock.uri()).unwrap();
+            let host = format!("127.0.0.1:{}", url.port().unwrap());
+            let path = pins.join(format!("{}.toml", host.replace(':', "_")));
+            let digest = hex(&content_digest(&read_archive(a).unwrap().contents));
+            let pin = Pin {
+                host,
+                version: v,
+                digest_hex: digest,
+                trust: vec![signer(1).trust_key()],
+                verified: Vec::new(),
+            };
+            save_pin(&path, None, &pin).unwrap();
+            path
+        }
+
+        #[tokio::test]
+        async fn old_pin_that_connects_is_carried_over() {
+            let mock = MockServer::start().await;
+            let a1 = archive(1, SCHOOL, 1, "a");
+            serve(&mock, SCHOOL, &[a1.clone(), archive(2, SCHOOL, 1, "b")]).await;
+            let pins = tempfile::tempdir().unwrap();
+            let old = old_pin(&mock, pins.path(), &a1, 1);
+            let before = std::fs::read(&old).unwrap();
+            let s = server(&mock, SCHOOL);
+            // No anchor at all: the old pin is the anchor.
+            let (r, out) = verify_with(&s, pins.path(), &Anchors::default(), "").await;
+            assert_eq!(r.unwrap().version, 2, "{out}");
+            let new = load_pin(&pin_path(pins.path(), (&s).into()).unwrap())
+                .unwrap()
+                .unwrap();
+            assert_eq!(new.version, 2);
+            assert_eq!(new.host, format!("{}+{SCHOOL}", mock.uri()));
+            assert_eq!(std::fs::read(&old).unwrap(), before, "the old pin is left");
+        }
+
+        #[tokio::test]
+        async fn old_pin_that_does_not_connect_is_refused_even_with_yes() {
+            let mock = MockServer::start().await;
+            serve(&mock, SCHOOL, &[archive(1, SCHOOL, 1, "a")]).await;
+            let pins = tempfile::tempdir().unwrap();
+            // The old pin recorded other content for version 1 (another chain).
+            let old = old_pin(&mock, pins.path(), &archive(1, OTHER, 1, "x"), 1);
+            let s = server(&mock, SCHOOL);
+            let (r, _) = verify(&s, pins.path(), true, "yes\n").await;
+            let e = r.unwrap_err();
+            assert_eq!(e.code, "chain_tampered");
+            assert!(
+                e.message.contains(&old.display().to_string()),
+                "{}",
+                e.message
+            );
+            assert!(load_pin(&pin_path(pins.path(), (&s).into()).unwrap())
+                .unwrap()
+                .is_none());
+            // A rollback below the old pin is refused too.
+            mock.reset().await;
+            serve(&mock, SCHOOL, &[]).await;
+            let (r, _) = verify(&s, pins.path(), true, "").await;
+            assert_eq!(r.unwrap_err().code, "chain_tampered");
+        }
+
+        #[tokio::test]
+        async fn tampered_archive_stops_the_chain() {
+            let mock = MockServer::start().await;
+            let a1 = archive(1, SCHOOL, 1, "a");
+            serve(&mock, SCHOOL, std::slice::from_ref(&a1)).await;
+            let pins = tempfile::tempdir().unwrap();
+            let s = server(&mock, SCHOOL);
+            verify(&s, pins.path(), true, "").await.0.unwrap();
+            // Version 2 signed by a key that is not trusted.
+            mock.reset().await;
+            serve(&mock, SCHOOL, &[a1, archive(2, SCHOOL, 9, "b")]).await;
+            let (r, _) = verify(&s, pins.path(), true, "").await;
+            assert_eq!(r.unwrap_err().code, "chain_tampered");
+            // The pinned version swapped for other content.
+            mock.reset().await;
+            serve(&mock, SCHOOL, &[archive(1, SCHOOL, 1, "forged")]).await;
+            let (r, _) = verify(&s, pins.path(), true, "").await;
+            assert_eq!(r.unwrap_err().code, "chain_tampered");
+            // Fewer versions than were verified: rolled back.
+            mock.reset().await;
+            serve(&mock, SCHOOL, &[]).await;
+            let (r, _) = verify(&s, pins.path(), true, "").await;
+            assert_eq!(r.unwrap_err().code, "chain_tampered");
+            let pin = load_pin(&pin_path(pins.path(), (&s).into()).unwrap())
+                .unwrap()
+                .unwrap();
+            assert_eq!(pin.version, 1);
+        }
+
+        #[tokio::test]
+        async fn archive_must_carry_its_version_header() {
+            let mock = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path(format!("{}versions", prefix(SCHOOL))))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!([{"version": 1}])),
+                )
+                .mount(&mock)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("{}versions/1/archive", prefix(SCHOOL))))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .insert_header("X-Mastersos-Version", "2")
+                        .set_body_bytes(archive(1, SCHOOL, 1, "a")),
+                )
+                .mount(&mock)
+                .await;
+            let pins = tempfile::tempdir().unwrap();
+            let s = server(&mock, SCHOOL);
+            let (r, _) = verify(&s, pins.path(), true, "").await;
+            assert_eq!(r.unwrap_err().code, "invalid_answer");
+            assert_eq!(s.latest_version().await.unwrap(), 1);
+        }
+
+        #[tokio::test]
+        async fn nothing_published_is_latest_zero() {
+            let mock = MockServer::start().await;
+            serve(&mock, SCHOOL, &[]).await;
+            let s = server(&mock, SCHOOL);
+            assert_eq!(s.latest_version().await.unwrap(), 0);
+            let pins = tempfile::tempdir().unwrap();
+            let (r, _) = verify(&s, pins.path(), true, "").await;
+            assert_eq!(r.unwrap_err().code, "no_published_version");
         }
     }
 }

@@ -1,4 +1,4 @@
-//! `mastersos init --key-file` and `mastersos key add|remove|list`: the trusted keys and the
+//! `mastersos key add|remove|list`: the trusted keys and the
 //! disk-unlocking recipients come only from school key files; the server is only asked whether
 //! they are registered.
 
@@ -173,107 +173,26 @@ fn plain_words(out: &str) {
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn init_writes_trust_from_school_keys() {
-    let t = tempfile::tempdir().unwrap();
-    let (pa, a) = school_key(t.path(), "a.key");
-    let (pb, b) = school_key(t.path(), "b.key");
-    let s = server(&[&a, &b]).await;
-    let home = connected_home(&s.uri());
-    let dir = t.path().join("school");
-    let o = run(
-        home.path(),
-        args(&[&"init", &dir, &"--key-file", &pa, &"--key-file", &pb]),
-    )
-    .await;
-    let (out, err) = text(&o);
-    assert!(o.status.success(), "{out}{err}");
-    let (trust, recipients) = manifest(&dir);
-    assert_eq!(trust, [a.trust_key(), b.trust_key()]);
-    assert_eq!(recipients, [a.escrow_recipient(), b.escrow_recipient()]);
-    assert!(
-        out.contains(&format!("Trusted keys: {}, {}", code(&a), code(&b))),
-        "{out}"
-    );
-    let abs = std::path::absolute(&dir).unwrap().display().to_string();
-    assert!(out.contains(&abs), "{out}");
-    assert!(
-        out.contains("manifest.toml") && out.contains("secrets.toml"),
-        "{out}"
-    );
-    plain_words(&out.replace(&abs, ""));
-    // The new folder passes its own check.
-    let o = run(home.path(), args(&[&"check", &dir])).await;
-    let (out, err) = text(&o);
-    assert!(o.status.success(), "{out}{err}");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn init_refuses_unregistered_key() {
-    let t = tempfile::tempdir().unwrap();
-    let (pa, _a) = school_key(t.path(), "a.key");
-    let (_, other) = school_key(t.path(), "other.key");
-    let s = server(&[&other]).await;
-    let home = connected_home(&s.uri());
-    let dir = t.path().join("school");
-    let o = run(home.path(), args(&[&"init", &dir, &"--key-file", &pa])).await;
-    let (out, err) = text(&o);
-    assert!(!o.status.success(), "{out}{err}");
-    assert!(
-        err.contains("is not registered for")
-            && err.contains("mastersos key register")
-            && !err.contains("signing page"),
-        "{err}"
-    );
-    assert!(err.contains("Alpha School"), "{err}");
-    assert!(!dir.exists(), "nothing may be written");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn init_refuses_key_registered_with_another_public_key() {
-    // The server lists the key's id, but with a different public key: not registered.
-    let t = tempfile::tempdir().unwrap();
-    let (pa, a) = school_key(t.path(), "a.key");
-    let (_, other) = school_key(t.path(), "other.key");
-    // `a`'s id and recipient are listed, but with `other`'s public key.
-    let tk = other.trust_key();
-    let s = server_with(
-        json!([{
-            "key_id": a.key_id(), "kind": "recovery", "alg": "ed25519", "fingerprint": "x",
-            "public_key": tk.public_key, "label": "a", "in_published_trust": false,
-            "created_at": "2026-11-03T09:00:00Z"
-        }]),
-        &[&a],
-    )
-    .await;
-    let home = connected_home(&s.uri());
-    let dir = t.path().join("school");
-    let o = run(home.path(), args(&[&"init", &dir, &"--key-file", &pa])).await;
-    assert!(!o.status.success());
-    assert!(text(&o).1.contains("is not registered for"));
-    assert!(!dir.exists());
-}
-
-#[test]
-fn init_without_key_points_to_key_new() {
-    let home = tempfile::tempdir().unwrap();
-    let dir = home.path().join("school");
-    let o = mastersos(home.path(), &["init".as_ref(), dir.as_os_str()]);
-    assert!(!o.status.success());
-    let err = String::from_utf8_lossy(&o.stderr);
-    assert!(err.contains("--key-file"), "{err}");
-    assert!(err.contains("mastersos key new"), "{err}");
-    assert!(err.contains("mastersos key register"), "{err}");
-    assert!(!err.contains("signing page"), "{err}");
-    assert!(!dir.exists(), "nothing may be created");
-}
-
-/// A folder made by `init` trusting `a`.
+/// A folder as `init` makes it, trusting the school key at `pa`, for the school on `home`'s
+/// server (built here: `init` itself is tested in cli_init_pull.rs).
 async fn folder_with(home: &Path, t: &Path, pa: &Path) -> PathBuf {
+    use mastersos_cli::workdir::{set_trusted_keys, template, Meta, Workdir};
+    let cfg: toml::Value =
+        toml::from_str(&std::fs::read_to_string(config_dir(home).join("config.toml")).unwrap())
+            .unwrap();
+    let kit = mastersos_cli::sign::kit::load_kit(pa).unwrap();
     let dir = t.join("school");
-    let o = run(home, args(&[&"init", &dir, &"--key-file", &pa])).await;
-    let (out, err) = text(&o);
-    assert!(o.status.success(), "{out}{err}");
+    let text = set_trusted_keys(
+        &template(SID).unwrap(),
+        &[(kit.trust_key(), kit.escrow_recipient())],
+    )
+    .unwrap();
+    let meta = Meta {
+        server: cfg["server"].as_str().unwrap().to_owned(),
+        school_id: SID.to_owned(),
+        base_version: 0,
+    };
+    Workdir::init(&dir, meta, &text).unwrap();
     dir
 }
 
