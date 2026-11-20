@@ -56,8 +56,16 @@ jobs:
           echo "tag=cli-${sha:0:12}" >>"$GITHUB_OUTPUT"
           echo "Building $sha as cli-${sha:0:12}"
 
-  build:
+  # The full regression run on the commit being built, before anything is built
+  regression:
     needs: meta
+    uses: ./.github/workflows/mastersos.yml
+    with:
+      ref: ${{ needs.meta.outputs.sha }}
+    secrets: inherit
+
+  build:
+    needs: [meta, regression]
     strategy:
       fail-fast: false
       matrix:

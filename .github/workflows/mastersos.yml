@@ -1,14 +1,28 @@
 name: mastersos
+# The full regression run. It no longer runs on every push: day-to-day changes are tested on the remote build runner
+# (.labtest.yml). mastersos-image and cli-release call it first, so nothing is built for release from a tree that fails it.
 on:
-  push:
-    # Dependabot branches run through their pull request only
-    branches-ignore: ["dependabot/**"]
-  pull_request:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit to test; empty means the caller's commit
+        required: false
+        type: string
+        default: ""
+    secrets:
+      MASTERSOS_DENYLIST:
+        required: false
   # Advisories land without any commit here
   schedule:
     - cron: "17 2 * * 1"
-  # server-dist by hand (a release build of mastersos-server)
+  # By hand, on any branch
   workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit to test; empty means the branch's head
+        required: false
+        type: string
+        default: ""
 
 jobs:
   # Nothing private may land here: this repository is the only copy of the system source, with no export step before it
@@ -17,6 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.ref }}
           fetch-depth: 0
           persist-credentials: false
       - run: python3 -I tools/check-private.py
@@ -38,6 +53,8 @@ jobs:
         working-directory: core
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
       # The runner's ~14 GB free fills up with a debug workspace build plus the test binaries (2026-10-21: ENOSPC / ld bus error);
       # drop the preinstalled toolchains this job never uses
       - run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
@@ -60,6 +77,8 @@ jobs:
         working-directory: core
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: "1.98"
@@ -71,6 +90,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
       # sbsigntool、systemd-boot-efi、openssl：shim 证书链的两个测试（shim-chain-test 与 publish-test 的证书链闸门，4b Task 22）
       - run: sudo apt-get update && sudo apt-get install -y shellcheck zstd unzip gnupg dosfstools mtools sbsigntool systemd-boot-efi openssl
       - run: >-

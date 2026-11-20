@@ -24,7 +24,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The full regression run on this commit, before anything is built
+  regression:
+    if: github.repository == 'the-arbella/mastersos'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/mastersos.yml
+    secrets: inherit
+
   build:
+    needs: regression
     # The release environment needs the owner's approval and only allows master
     if: github.repository == 'the-arbella/mastersos'
     environment: release
