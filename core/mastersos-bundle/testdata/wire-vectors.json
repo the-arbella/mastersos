@@ -217,6 +217,13 @@
       "rule": "url-nopad: '+' and '/' are not in the URL-safe alphabet"
     },
     {
+      "name": "secret-url-nopad-non-canonical-trailing-bits",
+      "field": "secret",
+      "value": "-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_9",
+      "valid": false,
+      "rule": "url-nopad: the unused trailing bits must be zero"
+    },
+    {
       "name": "secret-31-bytes",
       "field": "secret",
       "value": "-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-w",

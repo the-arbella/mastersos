@@ -541,11 +541,12 @@ mod tests {
     /// `testdata/escrow-vectors.json` ([`crate::vectors::check_escrow_vectors`]): test-only kits
     /// (the masters of `kit-vectors.json`), their recipients' fingerprint, and one fixed
     /// ciphertext each of them opens. age encryption is randomised, so the ciphertext was
-    /// produced once and is kept; `MASTERSOS_REGEN_VECTORS=1` writes a fresh one.
+    /// produced once and is kept; only `MASTERSOS_REGEN_ESCROW=1` writes a fresh one (the server
+    /// team pins the file byte for byte).
     #[test]
     fn escrow_vector_matches() {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/escrow-vectors.json");
-        if crate::vectors::regen() {
+        if crate::vectors::regen_escrow() {
             let text = crate::vectors::file_text(&crate::vectors::fresh_escrow_vector());
             std::fs::write(path, text).unwrap();
             return;

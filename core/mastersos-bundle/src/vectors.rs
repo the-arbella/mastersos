@@ -20,9 +20,19 @@ use crate::{
     TrustKey,
 };
 
-/// `MASTERSOS_REGEN_VECTORS=1` makes the vector tests rewrite their files instead of comparing.
+/// `MASTERSOS_REGEN_VECTORS=1` makes the vector tests rewrite their deterministic files
+/// (`kit-vectors.json`, `wire-vectors.json`) instead of comparing. It never touches
+/// `escrow-vectors.json`: that file holds a random age ciphertext the server team pins byte for
+/// byte, so only its own variable rewrites it ([`regen_escrow`]).
 pub fn regen() -> bool {
     std::env::var_os("MASTERSOS_REGEN_VECTORS").is_some_and(|v| v == "1")
+}
+
+/// `MASTERSOS_REGEN_ESCROW=1` (and only it) makes `escrow::tests::escrow_vector_matches` write a
+/// fresh `escrow-vectors.json`. Every rewrite changes the ciphertext: the server team must copy the
+/// new file again.
+pub fn regen_escrow() -> bool {
+    std::env::var_os("MASTERSOS_REGEN_ESCROW").is_some_and(|v| v == "1")
 }
 
 /// The pretty JSON text of a vector file: 2-space indent, fields in declaration order, trailing
@@ -554,14 +564,16 @@ fn invalid(name: &str, field: &str, value: String, rule: &str) -> InvalidVector 
     }
 }
 
-/// Changes the last data character of std-pad text so the encoded value's trailing bits are not
-/// zero; a lenient decoder still reads the same bytes.
-fn non_canonical(b64: &str) -> String {
+const STD_ALPHABET: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const URL_ALPHABET: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+/// Changes the last data character of base64 text in `alphabet` so the encoded value's trailing
+/// bits are not zero; a lenient decoder still reads the same bytes.
+fn non_canonical(b64: &str, alphabet: &str) -> String {
     let data = b64.trim_end_matches('=');
     let pad = &b64[data.len()..];
     let last = data.chars().last().expect("not empty");
-    let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let i = alphabet.find(last).expect("std alphabet");
+    let i = alphabet.find(last).expect("in the alphabet");
     let bumped = alphabet.as_bytes()[i | 1] as char;
     assert_ne!(bumped, last, "the trailing bits were zero");
     format!("{}{bumped}{pad}", &data[..data.len() - 1])
@@ -596,6 +608,12 @@ fn invalid_vectors(
             "secret",
             STANDARD_NO_PAD.encode(du),
             "url-nopad: '+' and '/' are not in the URL-safe alphabet",
+        ),
+        invalid(
+            "secret-url-nopad-non-canonical-trailing-bits",
+            "secret",
+            non_canonical(&URL_SAFE_NO_PAD.encode(du), URL_ALPHABET),
+            "url-nopad: the unused trailing bits must be zero",
         ),
         invalid(
             "secret-31-bytes",
@@ -636,7 +654,7 @@ fn invalid_vectors(
         invalid(
             "nonce-std-pad-non-canonical-trailing-bits",
             "nonce_b64",
-            non_canonical(&probe.nonce_b64),
+            non_canonical(&probe.nonce_b64, STD_ALPHABET),
             "std-pad: the unused trailing bits must be zero",
         ),
         invalid(
@@ -654,7 +672,7 @@ fn invalid_vectors(
         invalid(
             "sig-std-pad-non-canonical-trailing-bits",
             "sig",
-            non_canonical(&sig),
+            non_canonical(&sig, STD_ALPHABET),
             "std-pad: the unused trailing bits must be zero",
         ),
         invalid(
