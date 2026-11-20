@@ -337,12 +337,7 @@ async fn report_starting(cx: &InboxCtx<'_>, seq: u64) {
             detail: Some(format!("{} (inbox seq {seq})", reset::RESETTING)),
         },
     );
-    match tokio::time::timeout(
-        REPORT_WAIT,
-        cx.fetcher.report(&status, Some(cx.cred), cx.lab),
-    )
-    .await
-    {
+    match tokio::time::timeout(REPORT_WAIT, cx.fetcher.report(&status, cx.cred, cx.lab)).await {
         Ok(Ok(())) => {}
         Ok(Err(e)) => log::warn!("the report before the factory reset failed, going on: {e:#}"),
         Err(_) => log::warn!(
@@ -727,7 +722,7 @@ mod tests {
         assert_eq!(f.base(), format!("{}/api/device/v1/", srv.uri()));
         f.inbox(&cred(), 0, true).await.unwrap();
         f.heartbeat().await.unwrap();
-        f.report(&status(), Some(&cred()), true).await.unwrap();
+        f.report(&status(), &cred(), true).await.unwrap();
         // `.expect(1)` is checked when the server drops.
     }
 

@@ -88,102 +88,79 @@ async fn fetch_aborts_oversized_body() {
     assert!(err.to_string().contains("size limit"), "{err}");
 }
 
+async fn status_mock(srv: &MockServer, status: u16, expect: u64) {
+    Mock::given(method("POST"))
+        .and(path("/api/device/v1/status"))
+        .respond_with(ResponseTemplate::new(status))
+        .expect(expect)
+        .mount(srv)
+        .await;
+}
+
 #[tokio::test]
-async fn report_posts_json_with_token() {
+async fn status_always_carries_the_device_headers() {
     let srv = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/api/device/v1/status"))
         .and(header("authorization", "Bearer tok"))
+        .and(header("x-mastersos-device", "dev-1"))
+        .and(header("x-mastersos-device-secret", "S".repeat(43).as_str()))
         .respond_with(ResponseTemplate::new(204))
         .expect(1)
         .mount(&srv)
         .await;
     let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
-    let r = StatusReport {
-        device_id: "d".into(),
-        serial: None,
-        model: None,
-        os_version: None,
-        agent_version: "0.1.0".into(),
-        bundle_version: Some(1),
-        group: "default".into(),
-        group_source: GroupSource::Default,
-        locked: false,
-        stale: false,
-        last_fetch_ok: None,
-        results: vec![],
-        fresh_until: None,
-        newer_withheld: None,
-        seed_trust_fingerprints: vec![],
-        imported_from_seed_at: None,
-        manifest_features: vec![],
-        os_pending_version: None,
-        quiet_since: None,
-        user_config: None,
-    };
-    f.report(&r, None, false).await.unwrap();
+    f.report(&status_report(), &cred(), true).await.unwrap();
     let body: serde_json::Value =
         serde_json::from_slice(&srv.received_requests().await.unwrap()[0].body).unwrap();
-    assert_eq!(body["device_id"], "d");
+    assert_eq!(body["device_id"], "dev-1");
 }
 
-/// The device headers ride along where the secret may travel (here http, so only on a lab
-/// image); elsewhere the report still goes, without them.
 #[tokio::test]
-async fn report_carries_device_headers_where_the_secret_may_travel() {
+async fn status_over_http_on_a_release_image_is_not_sent() {
     let srv = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/api/device/v1/status"))
-        .respond_with(ResponseTemplate::new(204))
-        .expect(2)
-        .mount(&srv)
-        .await;
+    status_mock(&srv, 204, 0).await;
     let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
-    let cred = mastersos_agent::fetch::DeviceCred {
-        device_id: "d".into(),
-        secret: "s3cret".into(),
+    let e = f
+        .report(&status_report(), &cred(), false)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        e.downcast_ref::<StatusNotSent>(),
+        Some(&StatusNotSent::Transport)
+    );
+    assert!(srv.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn status_over_http_on_a_lab_image_is_sent() {
+    let srv = MockServer::start().await;
+    status_mock(&srv, 204, 1).await;
+    let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
+    f.report(&status_report(), &cred(), true).await.unwrap();
+}
+
+#[tokio::test]
+async fn status_for_another_device_is_not_sent() {
+    let srv = MockServer::start().await;
+    status_mock(&srv, 204, 0).await;
+    let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
+    let other = DeviceCred {
+        device_id: "dev-2".into(),
+        secret: "S".repeat(43),
     };
-    let r = StatusReport {
-        device_id: "d".into(),
-        serial: None,
-        model: None,
-        os_version: None,
-        agent_version: "0.1.0".into(),
-        bundle_version: None,
-        group: "default".into(),
-        group_source: GroupSource::Default,
-        locked: false,
-        stale: false,
-        last_fetch_ok: None,
-        results: vec![],
-        fresh_until: None,
-        newer_withheld: None,
-        seed_trust_fingerprints: vec![],
-        imported_from_seed_at: None,
-        manifest_features: vec![],
-        os_pending_version: None,
-        quiet_since: None,
-        user_config: None,
-    };
-    f.report(&r, Some(&cred), true).await.unwrap();
-    f.report(&r, Some(&cred), false).await.unwrap();
-    let got = srv.received_requests().await.unwrap();
-    let h = |i: usize, n: &str| {
-        got[i]
-            .headers
-            .get(n)
-            .map(|v| v.to_str().unwrap().to_owned())
-    };
-    assert_eq!(h(0, "x-mastersos-device").as_deref(), Some("d"));
-    assert_eq!(h(0, "x-mastersos-device-secret").as_deref(), Some("s3cret"));
-    assert_eq!(h(1, "x-mastersos-device"), None);
-    assert_eq!(h(1, "x-mastersos-device-secret"), None);
+    let e = f.report(&status_report(), &other, true).await.unwrap_err();
+    assert_eq!(
+        e.downcast_ref::<StatusNotSent>(),
+        Some(&StatusNotSent::OtherDevice)
+    );
+    assert!(srv.received_requests().await.unwrap().is_empty());
 }
 
 /// A report carrying the device secret never follows a redirect: the secret stays with the
 /// configured server.
 #[tokio::test]
-async fn report_with_device_headers_does_not_follow_redirects() {
+async fn status_does_not_follow_redirects() {
     let srv = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/api/device/v1/status"))
@@ -197,54 +174,16 @@ async fn report_with_device_headers_does_not_follow_redirects() {
         .mount(&srv)
         .await;
     let f = Fetcher::from_seed(&seed(&srv.uri(), Some("tok")));
-    let cred = mastersos_agent::fetch::DeviceCred {
-        device_id: "d".into(),
-        secret: "s3cret".into(),
-    };
-    let r: StatusReport = serde_json::from_value(serde_json::json!({
-        "device_id": "d",
-        "agent_version": "0.1.0",
-        "group": "default",
-        "group_source": "default",
-        "locked": false,
-        "stale": false,
-        "results": [],
-    }))
-    .unwrap();
-    assert!(f.report(&r, Some(&cred), true).await.is_err());
+    assert!(f.report(&status_report(), &cred(), true).await.is_err());
 }
 
 #[tokio::test]
-async fn report_rejection_is_error() {
+async fn status_rejection_is_error() {
     let srv = MockServer::start().await;
-    Mock::given(method("POST"))
-        .respond_with(ResponseTemplate::new(401))
-        .mount(&srv)
-        .await;
+    status_mock(&srv, 401, 1).await;
     let f = Fetcher::from_seed(&seed(&srv.uri(), None));
-    let r = StatusReport {
-        device_id: "d".into(),
-        serial: None,
-        model: None,
-        os_version: None,
-        agent_version: "0.1.0".into(),
-        bundle_version: None,
-        group: "default".into(),
-        group_source: GroupSource::Default,
-        locked: false,
-        stale: false,
-        last_fetch_ok: None,
-        results: vec![],
-        fresh_until: None,
-        newer_withheld: None,
-        seed_trust_fingerprints: vec![],
-        imported_from_seed_at: None,
-        manifest_features: vec![],
-        os_pending_version: None,
-        quiet_since: None,
-        user_config: None,
-    };
-    assert!(f.report(&r, None, false).await.is_err());
+    let e = f.report(&status_report(), &cred(), true).await.unwrap_err();
+    assert!(e.downcast_ref::<StatusNotSent>().is_none(), "{e:#}");
 }
 
 #[tokio::test]
@@ -677,7 +616,9 @@ async fn stale_header_for_superseded_token_is_ignored() {
 
 // ---------- MQTT push calls ----------
 
-use mastersos_agent::fetch::{CredRejected, DeviceAuthMissing, DeviceCred, Unauthorized};
+use mastersos_agent::fetch::{
+    CredRejected, DeviceAuthMissing, DeviceCred, StatusNotSent, Unauthorized,
+};
 use mastersos_bundle::{InboxResult, InboxResultState};
 
 fn cred() -> DeviceCred {
@@ -1075,7 +1016,7 @@ async fn every_route_is_under_the_device_prefix() {
     // Answers are not the point here (204 is no valid body for some calls); the routes are.
     let _ = f.fetch_now(1).await;
     let _ = f.heartbeat().await;
-    let _ = f.report(&status_report(), Some(&cred()), true).await;
+    let _ = f.report(&status_report(), &cred(), true).await;
     let _ = f.escrow(&escrow_req(), true).await;
     let _ = f.renew_token(&identity(), true).await;
     let _ = f.push_token(&cred(), true).await;

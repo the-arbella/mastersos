@@ -709,25 +709,25 @@ impl Fetcher {
             .header(DEVICE_SECRET_HEADER, &cred.secret))
     }
 
-    /// `POST /api/device/v1/status`. With `cred` the report also carries the device headers, so the server
-    /// can tell it from one sent with the school's token alone; they are left off (the report
-    /// still goes) where the device secret may not travel ([`Fetcher::secret_transport`]). With
-    /// the headers the request goes through [`Fetcher::device_request`], which never follows a
-    /// redirect, so the secret cannot be carried to another address.
-    pub async fn report(
-        &self,
-        r: &StatusReport,
-        cred: Option<&DeviceCred>,
-        lab: bool,
-    ) -> Result<()> {
+    /// `POST /api/device/v1/status`, always with the device credential through
+    /// [`Fetcher::device_request`] (no redirects, both device headers). Refused locally, before
+    /// any request, with [`StatusNotSent::Transport`] where the device secret may not travel
+    /// and with [`StatusNotSent::OtherDevice`] when the report names another device.
+    pub async fn report(&self, r: &StatusReport, cred: &DeviceCred, lab: bool) -> Result<()> {
+        if r.device_id != cred.device_id {
+            return Err(StatusNotSent::OtherDevice.into());
+        }
+        if self.secret_transport(lab).is_err() {
+            return Err(StatusNotSent::Transport.into());
+        }
         let used = self.current_token();
-        let req = match cred.filter(|_| self.secret_transport(lab).is_ok()) {
-            Some(cred) => self
-                .device_request(reqwest::Method::POST, "status", cred, &used, lab)?
-                .json(r),
-            None => self.auth_as(self.client.post(self.url("status")).json(r), &used),
-        };
-        let resp = req.send().await.context("request to status failed")?;
+        let resp = self
+            .device_request(reqwest::Method::POST, "status", cred, &used, lab)?
+            .json(r)
+            .send()
+            .await
+            .map_err(reqwest::Error::without_url)
+            .context("request to status failed")?;
         self.observe(&resp, &used);
         if !resp.status().is_success() {
             return Err(refusal(resp).await);
@@ -735,6 +735,28 @@ impl Fetcher {
         Ok(())
     }
 }
+
+/// Why a status report was not sent at all (nothing went on the wire).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusNotSent {
+    NoIdentity,
+    Transport,
+    OtherDevice,
+}
+
+impl std::fmt::Display for StatusNotSent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NoIdentity => "no status sent: no device identity",
+            Self::Transport => {
+                "no status sent: the device secret may not travel over this transport (https only; http on lab images)"
+            }
+            Self::OtherDevice => "no status sent: the report names another device",
+        })
+    }
+}
+
+impl std::error::Error for StatusNotSent {}
 
 /// The diagnostics upload (spec「接口: 上传」). Every failure is a [`DiagUploadError`] whose
 /// action comes from [`error_action`]; [`crate::diag::upload::upload`] drives the three steps.

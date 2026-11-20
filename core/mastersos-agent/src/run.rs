@@ -67,7 +67,7 @@ use crate::apply::{hex, sha256_hex};
 use crate::apply::{Applier, ApplyContext, Phase};
 use crate::apply_worker::{self, ApplyHandle, ApplyOutcome, ApplyRequest};
 use crate::config::{AgentConfig, FALLBACK_SECS};
-use crate::fetch::{DeviceCred, FetchOutcome, Fetcher};
+use crate::fetch::{DeviceCred, FetchOutcome, Fetcher, StatusNotSent};
 use crate::inbox;
 use crate::jobs::{self, CurrentGroup, Job, JobCtx, SideResults};
 use crate::login_queue::{self, Batch};
@@ -563,6 +563,9 @@ struct Agent {
     identity: Option<seedpart::Identity>,
     /// 为真时 `report()` 什么都不发（第一份回报等托管任务，见 `run_with_wake`）。
     reports_held: bool,
+    /// The cause of the last status report that was not sent at all, logged once; cleared when
+    /// a report is sent.
+    status_not_sent: Option<StatusNotSent>,
     /// 托管任务的第一轮跑完（或等够了）时被通知：放开回报、立即回报一次。
     report_gate: Option<Arc<Notify>>,
     /// 后台任务的结果变了（例如托管从失败变成功）：立即回报，不等定时回报。
@@ -789,6 +792,7 @@ impl Agent {
             job_wake: Arc::new(Notify::new()),
             identity,
             reports_held: hold_reports,
+            status_not_sent: None,
             report_gate: None,
             side_changed: None,
             seed_cache: None,
@@ -1441,10 +1445,22 @@ impl Agent {
         let r = self.status_report();
         report::save_last(&self.cfg.state_dir, &r);
         let lab = crate::luks::image_is_lab(&self.cfg.root);
-        let cred = self.device_cred();
-        let sent = self.fetcher.report(&r, cred.as_ref(), lab).await;
-        if let Err(e) = &sent {
-            log::warn!("failed to report status: {e:#}");
+        let sent = match self.device_cred() {
+            Some(cred) => self.fetcher.report(&r, &cred, lab).await,
+            None => Err(StatusNotSent::NoIdentity.into()),
+        };
+        match &sent {
+            Ok(()) => self.status_not_sent = None,
+            Err(e) => match e.downcast_ref::<StatusNotSent>() {
+                // Logged once per distinct cause; a sent report resets it.
+                Some(cause) => {
+                    if self.status_not_sent != Some(*cause) {
+                        self.status_not_sent = Some(*cause);
+                        log::warn!("{e}");
+                    }
+                }
+                None => log::warn!("failed to report status: {e:#}"),
+            },
         }
         sent
     }
@@ -2303,6 +2319,34 @@ mod tests {
         // Loud again: the retry is armed.
         agent.quiet_tx.as_ref().unwrap().send(None).unwrap();
         assert!(agent.inbox_retry_due().is_some());
+    }
+
+    /// Without a device identity nothing is sent, and the cause is logged once.
+    #[tokio::test]
+    async fn no_status_without_device_identity_logs_once() {
+        let (dir, srv) = (tempfile::tempdir().unwrap(), inbox_server().await);
+        let mut agent = inbox_agent(dir.path(), &srv).await;
+        agent.mode = Mode::Resident;
+        agent.reports_held = false;
+        agent.identity = None;
+        assert!(agent.device_cred().is_none());
+        assert_eq!(agent.status_not_sent, None);
+        for _ in 0..3 {
+            let e = agent.report().await.unwrap_err();
+            assert_eq!(
+                e.downcast_ref::<StatusNotSent>(),
+                Some(&StatusNotSent::NoIdentity)
+            );
+            assert_eq!(agent.status_not_sent, Some(StatusNotSent::NoIdentity));
+        }
+        let posts = srv
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.url.path() == "/api/device/v1/status")
+            .count();
+        assert_eq!(posts, 0);
     }
 
     /// Entering the quiet is reported at once (IT sees the exam), not at the next periodic report.
