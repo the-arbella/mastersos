@@ -601,7 +601,10 @@ impl Fetcher {
                     .ok_or_else(|| anyhow!("the response has no X-Mastersos-Version"))?
                     .to_str()
                     .ok()
-                    .and_then(|v| v.trim().parse::<u64>().ok())
+                    .map(str::trim)
+                    // Decimal digits only: `u64::from_str` would also take a leading `+`.
+                    .filter(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
+                    .and_then(|v| v.parse::<u64>().ok())
                     .ok_or_else(|| anyhow!("X-Mastersos-Version is not an integer"))?;
                 if resp
                     .content_length()
