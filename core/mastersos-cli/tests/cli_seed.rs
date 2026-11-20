@@ -882,3 +882,101 @@ async fn seed_needs_a_latest_version_signed_by_its_own_trust() {
     assert_eq!(json_of(&o)["min_version"], 3);
     assert_eq!(read_seed(&out).trust, vec![k2.trust_key()]);
 }
+
+/// R23: the package `seed make` checks again must be the version verified here. The server
+/// answers version 1's archive with other content the second time: `chain_tampered`, before
+/// `POST seed`, nothing written.
+#[tokio::test(flavor = "multi_thread")]
+async fn seed_refuses_a_package_that_differs_from_the_verified_one() {
+    let k1 = Ed25519Signer::from_seed("key-1", &[1; 32]);
+    let s = MockServer::start().await;
+    let list = json!([{"version": 1, "published_at": "2026-11-03T00:00:00Z", "published_by": "it", "signed_by": "k", "digest_hex": "00"}]);
+    Mock::given(method("GET"))
+        .and(path(format!("{}versions", prefix())))
+        .respond_with(ResponseTemplate::new(200).set_body_json(list))
+        .mount(&s)
+        .await;
+    let archive_route = format!("{}versions/1/archive", prefix());
+    for (a, times) in [
+        (version(1, &[&k1], &k1), Some(1)),
+        (version_with(1, &[&k1], &k1, "another-psk"), None),
+    ] {
+        let m = Mock::given(method("GET"))
+            .and(path(archive_route.as_str()))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("X-Mastersos-Version", "1")
+                    .set_body_bytes(a),
+            );
+        match times {
+            Some(n) => m.up_to_n_times(n).mount(&s).await,
+            None => m.mount(&s).await,
+        }
+    }
+    seed_answer(
+        &s,
+        json!({"server_url": s.uri(), "school_id": SID, "fetch_token": TOKEN}),
+    )
+    .await;
+    let home = signed_in(&s.uri());
+    let t = tempfile::tempdir().unwrap();
+    let out = t.path().join("school.seed");
+    let o = make(home.path(), &s, &t.path().join("pins"), &[&k1], &out, &[]).await;
+    assert_eq!(o.status.code(), Some(1), "{:?}", text(&o));
+    let v = json_of(&o);
+    assert_eq!(v["error"]["code"], "chain_tampered", "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("differs from the one verified here"),
+        "{v}"
+    );
+    assert!(seed_requests(&s).await.is_empty(), "POST seed was sent");
+    assert!(!out.exists());
+}
+
+/// R23: a latest version signed under a key id of its own trust, but whose own entry for that id
+/// is another public key, does not verify under its own trust either: the generic message.
+#[tokio::test(flavor = "multi_thread")]
+async fn seed_refuses_a_version_its_own_trust_does_not_verify() {
+    let k1 = Ed25519Signer::from_seed("key-1", &[1; 32]);
+    // The same key id, another public key.
+    let k1_other = Ed25519Signer::from_seed("key-1", &[3; 32]);
+    let v1 = version(1, &[&k1], &k1);
+    let s = school(std::slice::from_ref(&v1)).await;
+    let home = signed_in(&s.uri());
+    let t = tempfile::tempdir().unwrap();
+    let pins = t.path().join("pins");
+    let o = make(
+        home.path(),
+        &s,
+        &pins,
+        &[&k1],
+        &t.path().join("one.seed"),
+        &[],
+    )
+    .await;
+    assert!(o.status.success(), "{:?}", text(&o));
+
+    s.reset().await;
+    publish(&s, &[v1, version(2, &[&k1_other], &k1)]).await;
+    seed_answer(
+        &s,
+        json!({"server_url": s.uri(), "school_id": SID, "fetch_token": TOKEN}),
+    )
+    .await;
+    let out = t.path().join("two.seed");
+    let o = make(home.path(), &s, &pins, &[], &out, &[]).await;
+    assert_eq!(o.status.code(), Some(1), "{:?}", text(&o));
+    let v = json_of(&o);
+    assert_eq!(v["error"]["code"], "seed_invalid", "{v}");
+    let m = v["error"]["message"].as_str().unwrap();
+    assert!(
+        m.contains("version 2 does not verify with its own trusted keys"),
+        "{m}"
+    );
+    assert!(!m.contains("not among its own trusted keys"), "{m}");
+    assert!(seed_requests(&s).await.is_empty(), "POST seed was sent");
+    assert!(!out.exists());
+}
