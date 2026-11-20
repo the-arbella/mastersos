@@ -18,6 +18,7 @@ ignore = [
     { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile, pulled in by rumqttc" },
     { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2, build-time only, pulled in by i18n-embed-fl" },
     { id = "RUSTSEC-2026-0374", reason = "basic-toml, pulled in by i18n-config" },
+    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained (no known vulnerability) and used across the dependency tree; revisit when a successor is adopted upstream (jiff is recommended in chrono issue 1768)" },
 ]
 
 [licenses]
