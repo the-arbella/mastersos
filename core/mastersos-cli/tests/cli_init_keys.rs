@@ -28,21 +28,21 @@ fn connected_home(uri: &str) -> tempfile::TempDir {
     let dir = config_dir(home.path());
     std::fs::create_dir_all(&dir).unwrap();
     let token = dir.join("token");
-    mastersos_sign::platform::write_private(&token, b"t\n").unwrap();
+    mastersos_cli::platform::write_private(&token, b"t\n").unwrap();
     let cfg = toml::to_string(&json!({
         "server": uri,
         "token_file": token,
     }))
     .unwrap();
-    mastersos_sign::platform::write_private(&dir.join("config.toml"), cfg.as_bytes()).unwrap();
+    mastersos_cli::platform::write_private(&dir.join("config.toml"), cfg.as_bytes()).unwrap();
     home
 }
 
 /// A new school key file in `dir`.
 fn school_key(dir: &Path, name: &str) -> (PathBuf, Kit) {
     let p = dir.join(name);
-    mastersos_sign::kit::kit_new(&p).unwrap();
-    let kit = mastersos_sign::kit::load_kit(&p).unwrap();
+    mastersos_cli::sign::kit::kit_new(&p).unwrap();
+    let kit = mastersos_cli::sign::kit::load_kit(&p).unwrap();
     (p, kit)
 }
 

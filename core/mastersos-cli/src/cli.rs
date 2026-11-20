@@ -259,7 +259,7 @@ struct ConfigFile {
 }
 
 fn config_dir() -> Result<PathBuf, OpError> {
-    mastersos_sign::platform::config_dir("mastersos").map_err(fail)
+    crate::platform::config_dir("mastersos").map_err(fail)
 }
 
 fn load_config() -> Result<ConfigFile, OpError> {
@@ -457,9 +457,8 @@ async fn connect_school(
     token_file: Option<PathBuf>,
 ) -> Result<ExitCode, OpError> {
     let base = check_server(server_url).map_err(|e| OpError::Failed(e.to_string()))?;
-    let token =
-        mastersos_sign::platform::read_hidden_line("Paste the token from the Command line page: ")
-            .map_err(fail)?;
+    let token = crate::platform::read_hidden_line("Paste the token from the Command line page: ")
+        .map_err(fail)?;
     let token = token.trim();
     if token.is_empty() {
         return Err(OpError::Failed("No token was entered".into()));
@@ -498,9 +497,8 @@ async fn connect_school(
             })?;
         }
     }
-    mastersos_sign::platform::write_private(&token_path, format!("{token}\n").as_bytes())
-        .map_err(fail)?;
-    mastersos_sign::platform::write_private(&config_path, text.as_bytes()).map_err(fail)?;
+    crate::platform::write_private(&token_path, format!("{token}\n").as_bytes()).map_err(fail)?;
+    crate::platform::write_private(&config_path, text.as_bytes()).map_err(fail)?;
     println!("Connected to {school}.");
     println!("Token saved in {}", token_path.display());
     println!("Settings saved in {}", config_path.display());
@@ -509,7 +507,7 @@ async fn connect_school(
 
 /// The token file must be readable by its owner only.
 fn check_private(path: &Path, again: &str) -> Result<(), OpError> {
-    mastersos_sign::platform::check_private(path).map_err(|e| {
+    crate::platform::check_private(path).map_err(|e| {
         let why = format!("{e:#}");
         OpError::Failed(format!("{}. {again}", why.trim_end_matches('.')))
     })
@@ -973,8 +971,8 @@ async fn school_info(api: &Api, server: &str) -> Result<(String, String), OpErro
     Ok((id, name))
 }
 
-fn sign_api(server: &str, token_file: &Path) -> Result<mastersos_sign::Api, OpError> {
-    mastersos_sign::Api::from_token_file(server, token_file).map_err(fail)
+fn sign_api(server: &str, token_file: &Path) -> Result<crate::sign::Api, OpError> {
+    crate::sign::Api::from_token_file(server, token_file).map_err(fail)
 }
 
 /// Whether two server addresses name the same server: compared as URLs (scheme, host in lower
@@ -1055,7 +1053,7 @@ impl SchoolKey {
 fn load_school_keys(paths: &[PathBuf]) -> Result<Vec<SchoolKey>, OpError> {
     let mut out: Vec<SchoolKey> = Vec::new();
     for p in paths {
-        let kit = mastersos_sign::kit::load_kit(p).map_err(fail)?;
+        let kit = crate::sign::kit::load_kit(p).map_err(fail)?;
         if !out.iter().any(|k| k.kit.key_id() == kit.key_id()) {
             out.push(SchoolKey { kit });
         }
@@ -1198,7 +1196,7 @@ async fn keys_remove(
 ) -> Result<ExitCode, OpError> {
     let file = match school_key {
         Some(p) => {
-            let kit = mastersos_sign::kit::load_kit(p).map_err(fail)?;
+            let kit = crate::sign::kit::load_kit(p).map_err(fail)?;
             let file_code = workdir::shown_code(&kit.key_id());
             match workdir::normalize_key_code(code) {
                 Some(want) if want == file_code => {}
@@ -1271,7 +1269,7 @@ async fn server_says(
             Some(p) => p,
             None => config_dir().ok()?.join("token"),
         };
-        mastersos_sign::platform::check_private(&token_file).ok()?;
+        crate::platform::check_private(&token_file).ok()?;
         let m = w.meta().ok()?;
         if !same_server(&m.server, &server) {
             return None;
@@ -1391,7 +1389,7 @@ async fn pull_dir(
     }
     let sign = sign_api(server, token_file)?;
     let pins = config_dir()?.join("pins");
-    let verified = mastersos_sign::chain::verify_chain(
+    let verified = crate::sign::chain::verify_chain(
         &sign,
         &pins,
         &mut std::io::stdin().lock(),
@@ -1413,9 +1411,9 @@ async fn pull_dir(
             // Only a version this computer verified before, with the digest it had then: the
             // manifests link to no earlier digest, so history before the first use here cannot
             // be authenticated.
-            mastersos_sign::chain::recorded_version(&verified.history, n).map_err(fail)?;
+            crate::sign::chain::recorded_version(&verified.history, n).map_err(fail)?;
             let archive = sign.version_archive(n).await.map_err(fail)?;
-            let contents = mastersos_sign::chain::recorded_contents(&verified.history, n, &archive)
+            let contents = crate::sign::chain::recorded_contents(&verified.history, n, &archive)
                 .map_err(fail)?;
             (n, contents)
         }
@@ -1528,8 +1526,8 @@ fn prompt_secret(text: &str) -> Result<zeroize::Zeroizing<String>, OpError> {
             "stdin is not a terminal, so a password cannot be read safely".into(),
         ));
     }
-    mastersos_sign::platform::read_hidden_line(text).map_err(|e| {
-        if e.is::<mastersos_sign::platform::CannotHideTyping>() {
+    crate::platform::read_hidden_line(text).map_err(|e| {
+        if e.is::<crate::platform::CannotHideTyping>() {
             OpError::Failed(
                 "Cannot hide typing in this terminal, so a password cannot be read safely. \
                  Run this in PowerShell or Command Prompt (Windows) or another terminal."

@@ -1,19 +1,20 @@
 //! `mastersos publish`: the local directory is checked, its secrets are filled back in, version
 //! and time are stamped, and the result is uploaded as a pending bundle. With the school key
 //! (`--school-key`) or a PKCS#8 key file (`--key`) the bundle is then verified and signed on this
-//! computer ([`mastersos_sign::sign_pending_expecting`]). The key is required: without one the
+//! computer ([`crate::sign::sign_pending_expecting`]). The key is required: without one the
 //! command refuses before anything is uploaded. The content digest is computed here from what
 //! was uploaded and must equal the server's, and only that digest is signed. Its first 8
 //! characters are the check code IT sees.
 //!
 //! After signing here, the monthly check-in (the heartbeat statement) for exactly the version and
-//! digest just published is signed too ([`mastersos_sign::checkin_after_publish`]); IT is told
+//! digest just published is signed too ([`crate::sign::checkin_after_publish`]); IT is told
 //! about it only when it fails, and the version stays published either way.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
+use crate::sign::SigningKey;
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -21,7 +22,6 @@ use mastersos_bundle::kit::Kit;
 use mastersos_bundle::secret_ref;
 use mastersos_bundle::stamp::{school_name_to_write, stamp};
 use mastersos_bundle::{content_digest, has_errors, Contents, Lint, LintLevel, Manifest, TrustKey};
-use mastersos_sign::SigningKey;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -38,16 +38,16 @@ pub enum SignWith {
 }
 
 impl SignWith {
-    /// Read a kit file the way `mastersos-sign --kit` does ([`mastersos_sign::kit::load_kit`]):
+    /// Read a kit file the way `mastersos-sign --kit` does ([`crate::sign::kit::load_kit`]):
     /// it must belong to the current user and be readable by no one else (0600).
     pub fn kit_file(path: &Path) -> Result<SignWith> {
-        Ok(SignWith::Kit(mastersos_sign::kit::load_kit(path)?))
+        Ok(SignWith::Kit(crate::sign::kit::load_kit(path)?))
     }
 
     /// Check a key file now (owner, mode, PKCS#8), so that a bad one stops before the upload; it
     /// is read again when signing.
     pub fn key_file(path: &Path) -> Result<SignWith> {
-        mastersos_sign::load_key(path)?;
+        crate::sign::load_key(path)?;
         Ok(SignWith::KeyFile(path.to_owned()))
     }
 
@@ -61,7 +61,7 @@ impl SignWith {
     fn trust_key(&self) -> Result<TrustKey> {
         Ok(match self {
             SignWith::Kit(k) => k.trust_key(),
-            SignWith::KeyFile(p) => mastersos_sign::load_key(p)?.1,
+            SignWith::KeyFile(p) => crate::sign::load_key(p)?.1,
         })
     }
 }
@@ -281,30 +281,30 @@ fn hex(b: &[u8]) -> String {
 
 /// Before the upload: the signing key must be in the new version's trust (Devices accept no
 /// other signature, and a signer cannot remove itself, R5), and a kit must be a recovery key
-/// registered on the server ([`mastersos_sign::kit::ensure_registered`]). Returns the signing
+/// registered on the server ([`crate::sign::kit::ensure_registered`]). Returns the signing
 /// client.
 async fn precheck_signer(
     s: &SignOpts<'_>,
     server: &str,
     manifest_text: &str,
     root: &Path,
-) -> Result<mastersos_sign::Api> {
+) -> Result<crate::sign::Api> {
     let tk = s.key.trust_key()?;
     // A manifest that does not parse was refused by the check already; signing re-checks anyway.
     if let Ok(m) = Manifest::parse(manifest_text) {
         if !m.trust.contains(&tk) {
             bail!(
                 "Not uploaded: {} is not among the trusted keys in {}. Computers accept only trusted keys, and a school key cannot approve its own removal",
-                mastersos_sign::key_line(&tk),
+                crate::sign::key_line(&tk),
                 std::path::absolute(root.join("manifest.toml"))
                     .unwrap_or_else(|_| root.join("manifest.toml"))
                     .display()
             );
         }
     }
-    let api = mastersos_sign::Api::from_token_file(server, s.token_file)?;
+    let api = crate::sign::Api::from_token_file(server, s.token_file)?;
     if let SignWith::Kit(_) = s.key {
-        mastersos_sign::kit::ensure_registered(&api, &tk)
+        crate::sign::kit::ensure_registered(&api, &tk)
             .await
             .context("Not uploaded: the school key cannot sign for this school")?;
     }
@@ -329,22 +329,15 @@ fn checked_line(local: &[Lint], server: &[Value]) -> String {
 /// The monthly check-in for version `version` with content digest `digest`, whose stamped
 /// manifest is `manifest_text` (its trusted keys are what computers check the check-in with).
 async fn checkin(
-    api: &mastersos_sign::Api,
+    api: &crate::sign::Api,
     key: &SignWith,
     version: u64,
     digest: &[u8; 32],
     manifest_text: &str,
 ) -> Result<DateTime<Utc>> {
     let trust = Manifest::parse(manifest_text)?.trust;
-    mastersos_sign::checkin_after_publish(
-        api,
-        &key.signing(),
-        version,
-        digest,
-        &trust,
-        CHECKIN_DAYS,
-    )
-    .await
+    crate::sign::checkin_after_publish(api, &key.signing(), version, digest, &trust, CHECKIN_DAYS)
+        .await
 }
 
 /// `allow_reroute` holds the secret names IT approved with `--allow-reroute`: every secret a
@@ -514,7 +507,7 @@ pub async fn publish(
     print_server_lints(out, &warnings)?;
     writeln!(out, "{}", checked_line(&lints, &warnings))?;
     writeln!(out, "Check code: {}", check_code(&local_digest))?;
-    let v = mastersos_sign::sign_pending_expecting(
+    let v = crate::sign::sign_pending_expecting(
         &sign_api,
         sign.key.signing(),
         sign.pin_dir,
@@ -562,7 +555,7 @@ mod tests {
         SIGNER.get_or_init(|| {
             let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
             let key = dir.path().join("test.pem");
-            let tk = mastersos_sign::keygen(&key).unwrap().trust_key;
+            let tk = crate::sign::keygen(&key).unwrap().trust_key;
             (key, tk)
         })
     }
@@ -1064,7 +1057,7 @@ mod tests {
             base_version: 4,
         };
         let key = t.path().join("rk.pem");
-        let tk = mastersos_sign::keygen(&key).unwrap().trust_key;
+        let tk = crate::sign::keygen(&key).unwrap().trust_key;
         let c = Contents {
             manifest_text: manifest_trusting(&tk.id, &tk.public_key),
             files,
@@ -1198,7 +1191,7 @@ mod tests {
     /// A kit written the way `mastersos-sign school-key new` writes it (0600).
     fn kit_file(dir: &Path) -> (std::path::PathBuf, Kit) {
         let path = dir.join("school.kit");
-        mastersos_sign::kit::kit_new(&path).unwrap();
+        crate::sign::kit::kit_new(&path).unwrap();
         let SignWith::Kit(kit) = SignWith::kit_file(&path).unwrap() else {
             unreachable!()
         };
@@ -1352,7 +1345,7 @@ mod tests {
         let s = server().await;
         let t = tempfile::tempdir().unwrap();
         let key = t.path().join("rk.pem");
-        let tk = mastersos_sign::keygen(&key).unwrap().trust_key;
+        let tk = crate::sign::keygen(&key).unwrap().trust_key;
         let pending = Pending::default();
         for (m, p) in [
             ("POST", "/v1/admin/publish/pending"),
@@ -1449,7 +1442,7 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let (kit, expected) = kit_file(t.path());
         let key = t.path().join("rk.pem");
-        mastersos_sign::keygen(&key).unwrap();
+        crate::sign::keygen(&key).unwrap();
         for p in [&kit, &key] {
             std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o777)).unwrap();
         }

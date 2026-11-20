@@ -22,7 +22,7 @@ use mastersos_bundle::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{ask, hex, print_trust, Api, TrustDelta};
+use super::{ask, hex, print_trust, Api, TrustDelta};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -133,7 +133,7 @@ pub fn pin_path(pin_dir: &Path, api: &Api) -> PathBuf {
 /// pin under `pin_dir`: `None` when there is no pin or the version was never verified here. Read
 /// offline, so a local copy of a version can be checked against what was verified.
 pub fn recorded_digest(pin_dir: &Path, server: &str, version: u64) -> Result<Option<String>> {
-    let path = pin_dir.join(format!("{}.toml", crate::pin_name_for(server)?));
+    let path = pin_dir.join(format!("{}.toml", super::pin_name_for(server)?));
     Ok(load_pin(&path)?.and_then(|p| {
         p.verified
             .into_iter()

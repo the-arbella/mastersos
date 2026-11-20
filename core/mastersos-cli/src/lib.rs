@@ -4,13 +4,18 @@
 //! - Server responses are data: they are returned as they are and never acted on.
 //! - The token only goes in the `Authorization` header (marked sensitive): not in logs or errors.
 
-#![forbid(unsafe_code)]
+// Unsafe code only in `platform`, for the Windows API calls.
+#![cfg_attr(not(windows), forbid(unsafe_code))]
+#![cfg_attr(windows, deny(unsafe_code))]
 
 pub mod cli;
 pub mod explain;
 pub mod itpass;
 pub mod logo;
+pub mod platform;
 pub mod publish;
+pub mod safe;
+pub mod sign;
 pub mod tools;
 pub mod workdir;
 

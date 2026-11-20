@@ -15,7 +15,6 @@ base64.workspace = true
 chrono.workspace = true
 clap.workspace = true
 mastersos-bundle = { path = "../mastersos-bundle" }
-mastersos-sign = { path = "../mastersos-sign" }
 reqwest.workspace = true
 ring.workspace = true
 serde.workspace = true
@@ -27,8 +26,28 @@ toml.workspace = true
 toml_edit.workspace = true
 # hash-password: the typed password is wiped after use.
 zeroize.workspace = true
+sha2.workspace = true
+# recovery read opens the sealed recovery keys with the school key's age identity.
+age.workspace = true
 # The IT maintenance account's password hash (itpass): yescrypt in crypt(3) form, as libxcrypt reads it.
 yescrypt = { version = "0.1", default-features = false, features = ["password-hash"] }
+
+[target.'cfg(unix)'.dependencies]
+# Key and token files must belong to the current user: getuid.
+# fs: flock around the pin compare-and-write.
+nix = { workspace = true, features = ["user", "fs"] }
+# platform::read_hidden_line: echo off on the terminal.
+rustix.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# platform: owner-only DACLs, reparse points, console echo.
+windows-sys = { version = "0.61", features = [
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 axum.workspace = true

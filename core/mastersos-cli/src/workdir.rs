@@ -151,7 +151,7 @@ fn read_snapshot(dir: &Path) -> Result<Snapshot> {
 /// missing path is fine.
 fn refuse_link(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
-        Ok(m) if mastersos_sign::platform::is_link(path, &m) => {
+        Ok(m) if crate::platform::is_link(path, &m) => {
             bail!("{} is a symbolic link, which is refused", path.display())
         }
         Ok(_) => Ok(()),
@@ -252,7 +252,7 @@ fn write_snapshot(
     }
     remove_if_exists(&dir.join(SECRETS))?;
     fs::write(dir.join(MANIFEST), manifest)?;
-    mastersos_sign::platform::write_private(&dir.join(SECRETS), secrets_raw.as_bytes())?;
+    crate::platform::write_private(&dir.join(SECRETS), secrets_raw.as_bytes())?;
     for (key, data) in files {
         let path = dir.join(key);
         if let Some(parent) = path.parent() {
@@ -349,7 +349,7 @@ impl Workdir {
         let digest = digest_of(&base).map_err(|_| {
             anyhow::anyhow!("The base of version {v} refers to secrets it does not hold: {fix}")
         })?;
-        match mastersos_sign::chain::recorded_digest(pins, &meta.server, v)? {
+        match crate::sign::chain::recorded_digest(pins, &meta.server, v)? {
             Some(d) if d.eq_ignore_ascii_case(&digest) => Ok(()),
             Some(_) => bail!(
                 "The base differs from version {v} as this computer verified it: {fix}"
@@ -1150,12 +1150,12 @@ impl Workdir {
     /// Record the base's digest for `base_version` in [`Workdir::test_pins`] (as a pull that
     /// verified it would) and check the base against it.
     pub(crate) fn pinned(self) -> Workdir {
-        use mastersos_sign::chain::{Pin, VerifiedVersion};
+        use crate::sign::chain::{Pin, VerifiedVersion};
         let meta = self.meta().unwrap();
         let digest = digest_of(&read_snapshot(&self.base_dir()).unwrap()).unwrap();
         let pins = self.test_pins();
         fs::create_dir_all(&pins).unwrap();
-        let name = mastersos_sign::pin_name_for(&meta.server).unwrap();
+        let name = crate::sign::pin_name_for(&meta.server).unwrap();
         let pin = Pin {
             host: name.replace('_', ":"),
             version: meta.base_version,
@@ -1332,7 +1332,7 @@ mod tests {
         }
         #[cfg(windows)]
         for p in ["secrets.toml", ".mastersos/base/secrets.toml"] {
-            mastersos_sign::platform::check_private(&w.root.join(p)).unwrap();
+            crate::platform::check_private(&w.root.join(p)).unwrap();
         }
         assert!(!w.is_dirty().unwrap());
         // The base keeps the split form: no secret value anywhere under .mastersos/.

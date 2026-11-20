@@ -18,7 +18,8 @@ use mastersos_bundle::{is_recovery_key, trust_fingerprint, TrustKey};
 use serde::Deserialize;
 use zeroize::Zeroizing;
 
-use crate::{safe, write_secret, Api};
+use super::{write_secret, Api};
+use crate::safe;
 
 /// Longest kit file or stdin line read; a kit text is 69 characters, 87 when grouped.
 const KIT_INPUT_MAX: u64 = 1024;
@@ -149,9 +150,9 @@ pub async fn ensure_registered(api: &Api, tk: &TrustKey) -> Result<()> {
 }
 
 /// Whether `e` is the server's `key_exists` (the key or recipient is registered already), read
-/// from the structured error ([`crate::ServerError`]), not its text.
+/// from the structured error ([`super::ServerError`]), not its text.
 pub fn is_already_registered(e: &anyhow::Error) -> bool {
-    crate::server_error_code(e) == Some("key_exists")
+    super::server_error_code(e) == Some("key_exists")
 }
 
 /// Register the kit's escrow recipient (`POST /v1/admin/escrow-recipients`, `keys` scope), bound

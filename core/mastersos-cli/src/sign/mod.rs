@@ -7,14 +7,10 @@
 //!   由 nonce 按 `keyid::keyprobe_message` 自己拼，绝不签服务端给的 `message_b64`。
 //! - 私钥文件 0600、不覆盖已有文件，私钥不打印到终端、不进日志。
 //! - 服务端给的字符串一律经 [`safe`] 转义后才打印：控制序列藏不了行、伪造不了行。
-// Unsafe code only in `platform`, for the Windows API calls.
-#![cfg_attr(not(windows), forbid(unsafe_code))]
-#![cfg_attr(windows, deny(unsafe_code))]
-
 pub mod chain;
 pub mod kit;
-pub mod platform;
-pub mod safe;
+
+use crate::{platform, safe};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, Write};
@@ -1503,7 +1499,7 @@ mod tests {
 
     #[test]
     fn a_host_only_pin_stays_the_pin_of_the_host_only_server() {
-        use crate::chain::{load_pin, pin_path, recorded_digest, Pin};
+        use super::chain::{load_pin, pin_path, recorded_digest, Pin};
         let dir = tempfile::tempdir().unwrap();
         // A pin as written before paths were part of the key: file `<host>.toml`, `host = "<host>"`.
         let old = "host = \"cloud.example\"\nversion = 3\ndigest_hex = \"d3\"\ntrust = []\n";
