@@ -143,7 +143,8 @@ fn key_new_prints_an_absolute_path() {
 fn publish_without_key_file_says_so() {
     let home = tempfile::tempdir().unwrap();
     let out = mastersos_in(home.path(), &["publish"]);
-    assert_eq!(out.status.code(), Some(1));
+    // A usage error, before anything else.
+    assert_eq!(out.status.code(), Some(2));
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("--key-file"), "{err}");
 }
@@ -231,7 +232,7 @@ fn loose_key_file_loads_with_a_note() {
     let made = mastersos_in(home.path(), &["key", "new", "--out", kit.to_str().unwrap()]);
     assert!(made.status.success(), "{}", text(&made));
     std::fs::set_permissions(&kit, std::fs::Permissions::from_mode(0o777)).unwrap();
-    // Loaded with the note; then it stops at the missing server address.
+    // Loaded with the note; then it stops because nobody can confirm (stdin is not a terminal).
     let out = mastersos_in(
         home.path(),
         &["heartbeat", "--key-file", kit.to_str().unwrap()],
@@ -241,7 +242,7 @@ fn loose_key_file_loads_with_a_note() {
         err.contains("Make sure no other user can read this school key file"),
         "{err}"
     );
-    assert!(err.contains("No server address"), "{err}");
+    assert!(err.contains("pass --yes"), "{err}");
 }
 
 /// A private file that is not a school key is refused before anything else.

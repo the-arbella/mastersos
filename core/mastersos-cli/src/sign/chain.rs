@@ -3,7 +3,7 @@
 //!
 //! The pin is `<pin_dir>/<host>[_<port>]+<school>.toml` for a protocol v1 server (one chain per
 //! origin and school): the version verified last time, its content digest and its trust. The old
-//! admin API ([`Source::Old`], until publish, heartbeat and seed move to protocol v1) keeps its
+//! admin API ([`Source::Old`], until seed check moves to protocol v1) keeps its
 //! `<host>[_<port>][+<path segment>…].toml`.
 //! - **No pin** (first use): the fingerprint of every key in the latest version's trust is
 //!   printed, a school key file's own key marked. Without a person (`--yes`, `--json`, or stdin
@@ -44,7 +44,7 @@ use crate::server::{CliError, Server};
 /// Where the versions come from.
 #[derive(Clone, Copy)]
 pub enum Source<'a> {
-    /// The old admin API (publish, heartbeat and seed check until they move to protocol v1).
+    /// The old admin API (seed check until it moves to protocol v1).
     Old(&'a Api),
     /// The protocol v1 CLI API of one school.
     New(&'a Server),
@@ -279,23 +279,23 @@ pub fn pin_path(pin_dir: &Path, src: Source<'_>) -> Result<PathBuf, CliError> {
 /// The content digest (lower-case hex) this computer recorded for `version` of school `school` on
 /// `server` in its pin under `pin_dir`: `None` when there is no pin or the version was never
 /// verified here. Read offline, so a local copy of a version can be checked against what was
-/// verified. The protocol v1 pin (`<host>[_<port>]+<school>`) is read first; until publish moves
-/// to protocol v1 (Task 6) the pin the old admin API wrote for `server` is read when there is none.
+/// verified. Only the protocol v1 pin (`<host>[_<port>]+<school>`, one per origin and school) is
+/// read: a pin of the old admin API is taken over only by [`verify_chain`], which verifies forward
+/// from it.
 pub fn recorded_digest(
     pin_dir: &Path,
     server: &str,
     school: &str,
     version: u64,
 ) -> Result<Option<String>> {
-    let v1 = crate::server::check_origin(server)
+    let Some(path) = crate::server::check_origin(server)
         .ok()
         .filter(|_| crate::server::is_school_id(school))
-        .map(|o| pin_dir.join(format!("{}.toml", pin_name_v1(&o, school))));
-    let pin = match v1.map(|p| load_pin(&p)).transpose()?.flatten() {
-        Some(p) => Some(p),
-        None => load_pin(&pin_dir.join(format!("{}.toml", super::pin_name_for(server)?)))?,
+        .map(|o| pin_dir.join(format!("{}.toml", pin_name_v1(&o, school))))
+    else {
+        return Ok(None);
     };
-    Ok(pin.and_then(|p| {
+    Ok(load_pin(&path)?.and_then(|p| {
         p.verified
             .into_iter()
             .find(|e| e.version == version)
@@ -456,19 +456,6 @@ pub struct Anchors {
     pub fingerprints: Vec<String>,
     /// A person at a terminal may confirm (not with `--yes`, not when stdin is not a terminal).
     pub interactive: bool,
-}
-
-impl Anchors {
-    /// The school key `key` (the command's key file) as the anchor; a person may confirm only
-    /// when stdin is a terminal.
-    pub fn key(key: &TrustKey) -> Anchors {
-        use std::io::IsTerminal as _;
-        Anchors {
-            keys: vec![key.clone()],
-            fingerprints: Vec::new(),
-            interactive: std::io::stdin().is_terminal(),
-        }
-    }
 }
 
 /// Verify from the pin to the server's latest version, update the pin, and return the latest

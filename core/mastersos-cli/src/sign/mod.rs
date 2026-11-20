@@ -1,12 +1,13 @@
-//! Signing with the school key on this computer: verify the published history,
-//! approve a version, sign the monthly check-in, compare an install file (Ruling 1, 2, 15).
+//! Signing with the school key on this computer: the bundle signature and the monthly check-in
+//! (built here, never from the server's words), the local diff shown before a publish, and the
+//! install file check (Ruling 1, 2, 15).
 //!
 //! It is the trust anchor for trust changes, so it **does not trust the server**:
-//! - Before signing, every version published after the pin is verified one by one, as the agent
-//!   does ([`chain`]); differences, digests and trust additions and removals are all computed
-//!   here from verified content. The server's `diff` and `lints` are printed for information only.
-//! - Only bytes built or verified here are signed: the bundle signature's message is recomputed
-//!   from the downloaded content; the server's `message_b64` is never signed.
+//! - The chain is verified here one version at a time, as the agent does ([`chain`]);
+//!   differences, digests and trust additions and removals are computed here from verified
+//!   content.
+//! - Only bytes built or verified here are signed: the bundle signature's message is computed from
+//!   the content ([`sign_bundle`]); a message the server sends is never signed.
 //! - The school key is never printed to the terminal or written to a log.
 //! - Every string from the server is escaped by [`safe`] before it is printed: control sequences
 //!   can neither hide a line nor forge one.
@@ -21,16 +22,13 @@ use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use mastersos_bundle::kit::Kit;
-use mastersos_bundle::recipients_changed;
 use mastersos_bundle::{
-    accept, assemble, check_member_path, content_digest, heartbeat_message, signed_message,
-    trust_fingerprint, verify_heartbeat, Contents, Ed25519Signer, Heartbeat, HeartbeatStatement,
-    KeyAlg, Manifest, Seed, SignatureFile, Signer as _, TrustKey, MAX_HEARTBEAT_DAYS,
+    heartbeat_message, signed_message, trust_fingerprint, verify_heartbeat, Contents, Heartbeat,
+    HeartbeatStatement, KeyAlg, Seed, SignatureFile, Signer, TrustKey, MAX_HEARTBEAT_DAYS,
 };
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use chain::Verified;
 
@@ -113,18 +111,6 @@ fn pin_file_name(url: &reqwest::Url) -> String {
     }
     name
 }
-
-/// The pin file name (without `.toml`) for a server address, the same as [`Api::pin_name`]; no
-/// token is needed, so offline commands can find the pin.
-pub fn pin_name_for(server: &str) -> Result<String> {
-    let url = reqwest::Url::parse(server)
-        .with_context(|| format!("the server address is not a valid URL: {server}"))?;
-    if url.host_str().is_none() {
-        bail!("the server address has no host: {server}");
-    }
-    Ok(pin_file_name(&url))
-}
-
 impl Api {
     pub fn new(server: &str, token: String) -> Result<Api> {
         let base = reqwest::Url::parse(server)
@@ -228,22 +214,6 @@ impl Api {
             .with_context(|| format!("{what}: the response is not the expected JSON"))
     }
 
-    async fn post_json<T: DeserializeOwned>(
-        &self,
-        segments: &[&str],
-        body: Option<&Value>,
-        what: &str,
-    ) -> Result<T> {
-        let mut req = self.client.post(self.url(segments));
-        if let Some(b) = body {
-            req = req.json(b);
-        }
-        let res = self.send(req, what).await?;
-        res.json()
-            .await
-            .with_context(|| format!("{what}: the response is not the expected JSON"))
-    }
-
     async fn get_bytes(&self, segments: &[&str], what: &str) -> Result<Vec<u8>> {
         let res = self.send(self.client.get(self.url(segments)), what).await?;
         Ok(res
@@ -251,13 +221,6 @@ impl Api {
             .await
             .with_context(|| format!("{what}: could not read the response"))?
             .to_vec())
-    }
-
-    /// POST a JSON body and expect no response body (204).
-    async fn post_no_content(&self, segments: &[&str], body: &Value, what: &str) -> Result<()> {
-        self.send(self.client.post(self.url(segments)).json(body), what)
-            .await?;
-        Ok(())
     }
 
     /// The latest published version; 0 when nothing is published yet.
@@ -281,20 +244,6 @@ impl Api {
         )
         .await
     }
-}
-
-// —— Signing with the school key ——
-
-/// The signer and its trust key. The school key must first be a recovery key registered on this
-/// server ([`kit::ensure_registered`]), unless `registering`: a wrong one (another school's, a
-/// spare never registered) stops here instead of failing later at the chain or the commit.
-async fn load_signer(api: &Api, kit: &Kit, registering: bool) -> Result<(Ed25519Signer, TrustKey)> {
-    let signer = kit.signer();
-    let tk = signer.trust_key();
-    if !registering {
-        kit::ensure_registered(api, &tk).await?;
-    }
-    Ok((signer, tk))
 }
 
 // —— Printing and confirmation ——
@@ -390,35 +339,16 @@ pub(crate) fn ask(confirm: &mut dyn BufRead, out: &mut dyn Write, prompt: &str) 
     Ok(line.trim().to_owned())
 }
 
-// —— Approving a version ——
+// —— Publishing ——
 
-#[derive(Deserialize)]
-struct PendingFile {
-    path: String,
-}
-
-/// The server's pending bundle. Only the fields signing needs; `diff` and `lints` are printed for
-/// information only.
-#[derive(Deserialize)]
-struct Pending {
-    pending_id: String,
-    version: u64,
-    digest_hex: String,
-    manifest_text: String,
-    files: Vec<PendingFile>,
-    #[serde(default)]
-    lints: Value,
-}
-
-/// The secret values of both sides, longest first, for hiding them in the server's notes; `None`
-/// when a side's secrets could not be separated (then nothing the server says about the manifest
-/// is printed).
+/// The secret values of both sides, longest first; `None` when a side's secrets could not be
+/// separated.
 type SecretValues = Option<Vec<String>>;
 
 /// The local diff. Secret values are never printed: both manifests are split into references
 /// first ([`mastersos_bundle::secret_ref::split`]), the split texts are diffed, and each secret
 /// whose value differs gets one line with its name only.
-fn print_local_diff(
+pub(crate) fn print_local_diff(
     out: &mut dyn Write,
     old: &Verified,
     new_version: u64,
@@ -426,7 +356,7 @@ fn print_local_diff(
 ) -> Result<SecretValues> {
     use mastersos_bundle::secret_ref::split;
     let old_v = format!("v{}", old.version);
-    let new_v = format!("v{new_version} (waiting for approval)");
+    let new_v = format!("v{new_version} (to publish)");
     writeln!(
         out,
         "\n== Differences computed on this computer (version {} -> version {new_version}) ==",
@@ -520,512 +450,48 @@ fn print_local_diff(
     Ok(values)
 }
 
-/// Every secret value in `s` replaced with `<secret>`.
-fn hide_values(s: &str, values: &[String]) -> String {
-    values
-        .iter()
-        .fold(s.to_owned(), |acc, v| acc.replace(v.as_str(), "<secret>"))
-}
+// —— Signing here, without the server ——
 
-fn print_server_notes(out: &mut dyn Write, p: &Pending, secrets: &SecretValues) -> Result<()> {
-    writeln!(
-        out,
-        "\n== The server's notes (for information only; go by the differences computed on this computer above) =="
-    )?;
-    // The server's `manifest_diff` is not printed: it holds the real secret values, and a
-    // multi-line or escaped one cannot be hidden reliably in its text. The local diff above
-    // shows the same change with secrets reported by name only.
-    let hide = |s: &str| secrets.as_deref().map(|v| hide_values(s, v));
-    match p.lints.as_array() {
-        Some(ls) if !ls.is_empty() => {
-            for l in ls {
-                writeln!(
-                    out,
-                    "  [{}] {}: {}",
-                    safe::field(l["level"].as_str().unwrap_or("?")),
-                    safe::field(l["code"].as_str().unwrap_or("?")),
-                    safe::field(
-                        &hide(l["message"].as_str().unwrap_or(""))
-                            .unwrap_or_else(|| "(message hidden)".into())
-                    )
-                )?;
-            }
-        }
-        _ => writeln!(out, "  (no warnings)")?,
-    }
-    Ok(())
-}
-
-/// Fetch the pending bundle (`pending` is the id the upload got), verify the chain here, compute
-/// the differences, print the whole trust, and after the human types the version number (and `yes`
-/// when the trust or disk unlocking changes) sign it with the school key, submit it, and move the
-/// pin to the new version. Returns the new version. When `expect_digest` is given (lower- or
-/// upper-case hex), the pending bundle's content digest computed here from the downloaded content must equal it: the caller
-/// uploaded that content and computed its digest itself, so a server that swapped the pending
-/// bundle is refused before anything is shown or signed.
-pub async fn sign_pending_expecting(
-    api: &Api,
-    kit: &Kit,
-    pin_dir: &Path,
-    pending: &str,
-    expect_digest: Option<&str>,
-    confirm: &mut dyn BufRead,
-    out: &mut dyn Write,
-) -> Result<u64> {
-    let mut out = safe::SafeWriter::new(out);
-    let out: &mut dyn Write = &mut out;
-    let (signer, me) = load_signer(api, kit, false).await?;
-    let p: Pending = api
-        .get_json(
-            &["v1", "admin", "publish", "pending", pending],
-            "fetch the upload",
-        )
-        .await?;
-
-    // 1. Download every file and compute the digest here.
-    let mut files = BTreeMap::new();
-    for f in &p.files {
-        check_member_path(&f.path)
-            .with_context(|| format!("The upload has an unsafe path: {}", safe::field(&f.path)))?;
-        let mut segs = vec!["v1", "admin", "publish", "pending", &p.pending_id, "files"];
-        segs.extend(f.path.split('/'));
-        let bytes = api
-            .get_bytes(
-                &segs,
-                &format!("download upload file {}", safe::field(&f.path)),
-            )
-            .await?;
-        if files.insert(f.path.clone(), bytes).is_some() {
-            bail!("The upload lists {} twice", safe::field(&f.path));
-        }
-    }
-    let contents = Contents {
-        manifest_text: p.manifest_text.clone(),
-        files,
-    };
-    let digest = hex(&content_digest(&contents));
-    if !digest.eq_ignore_ascii_case(p.digest_hex.trim()) {
-        bail!(
-            "Content fingerprint mismatch: the downloaded content gives {digest} here, the server says {}. What the server gave is not what it will submit; not signing",
-            p.digest_hex
-        );
-    }
-    if let Some(want) = expect_digest {
-        if !digest.eq_ignore_ascii_case(want.trim()) {
-            bail!(
-                "The upload's content fingerprint is {digest}, but the content uploaded from this computer has {}: the server holds other content under this upload id; not signing",
-                want.trim()
-            );
-        }
-    }
-    let manifest = Manifest::parse(&contents.manifest_text)?;
-    let present: BTreeSet<String> = contents.files.keys().cloned().collect();
-    manifest
-        .validate(&present)
-        .context("Computers would reject this upload (the manifest check fails); not signing")?;
-
-    // 2. Verify the chain here, version by version. Nothing published yet: there is no chain. The first version (R1g) is
-    //    verified with its own trust, and that whole trust counts as added, so the human checks
-    //    every key's fingerprint and types `trust` before it is signed.
-    let genesis = api.latest_version().await? == 0;
-    let pin_file = chain::pin_path(pin_dir, api.into())?;
-    if genesis {
-        // A server that says nothing is published while a version was verified here is lying or
-        // was replaced: signing a "first version" would hand it a recovery-key signature over a
-        // trust it chose, and reset the local anchor to its chain.
-        if let Some(pin) = chain::load_pin(&pin_file)? {
-            bail!(
-                "the server reports nothing published, but version {} was checked on this computer \
-                 before ({}): the server may have been rolled back, or this is the wrong server; \
-                 nothing was approved. Delete that file only if you are sure the server was reset on purpose",
-                pin.version,
-                pin_file.display()
-            );
-        }
-    }
-    let (verified, base_trust) = if genesis {
-        let base = Verified {
-            version: 0,
-            digest_hex: String::new(),
-            trust: manifest.trust.clone(),
-            contents: Contents {
-                manifest_text: String::new(),
-                files: BTreeMap::new(),
-            },
-            latest: 0,
-            history: Vec::new(),
-        };
-        (base, Vec::new())
-    } else {
-        let v = chain::verify_chain(api.into(), pin_dir, &chain::Anchors::key(&me), confirm, out)
-            .await?;
-        let t = v.trust.clone();
-        (v, t)
-    };
-
-    // 3. The versions follow on, and this key is in the verified trust. `verified.version` is the version machines
-    //    accept (the base for every check below); `verified.latest` the newest on the chain.
-    let next = verified.latest + 1;
-    if manifest.version != next || p.version != next {
-        bail!(
-            "The upload is version {} (the server labels it version {}), but the latest version verified here is {}: it should be version {next}; not signing",
-            manifest.version,
-            p.version,
-            verified.latest
-        );
-    }
-    if !verified.trust.contains(&me) {
-        bail!(
-            "This key ({}) is not among the trusted keys of version {} verified here: computers would not accept its signature",
-            key_line(&me),
-            verified.version
-        );
-    }
-    if !manifest.trust.contains(&me) {
-        bail!(
-            "The new trusted keys do not include this key ({}): a key cannot approve its own removal; approve that with another school key that stays",
-            key_line(&me)
-        );
-    }
-
-    // 4. The differences computed here.
-    let secret_values = print_local_diff(out, &verified, next, &contents)?;
-
-    // 5. The whole trust and what changed in it.
-    writeln!(
-        out,
-        "\n== All trusted keys of version {next} ({} in total; from this version on, computers accept only these keys) ==",
-        manifest.trust.len()
-    )?;
-    print_trust(out, &manifest.trust)?;
-    let delta = TrustDelta::between(&base_trust, &manifest.trust);
-    if genesis {
-        writeln!(
-            out,
-            "This is the first version: computers will accept settings approved only by these keys. Check each key code \
-             and fingerprint against the paper copy of your school key, not against this server's pages."
-        )?;
-    } else if delta.is_empty() {
-        writeln!(
-            out,
-            "The trusted keys are the same as in version {}.",
-            verified.version
-        )?;
-    } else {
-        writeln!(
-            out,
-            "The trusted keys change (compared with version {} verified here):",
-            verified.version
-        )?;
-        delta.print(out)?;
-        writeln!(
-            out,
-            "Compare each fingerprint with the School keys page: an unknown extra key hands every computer to whoever holds it."
-        )?;
-    }
-
-    // Escrow recipients against the same base (machines seal their LUKS recovery keys to them).
-    let base_recipients = if genesis {
-        Vec::new()
-    } else {
-        Manifest::parse(&verified.contents.manifest_text)
-            .context("the verified base version's manifest does not parse")?
-            .school
-            .escrow_recipients
-    };
-    let recipients_change =
-        recipients_changed(&base_recipients, &manifest.school.escrow_recipients);
-    if recipients_change {
-        writeln!(
-            out,
-            "Disk unlocking changes (against version {} that computers run; computers will keep \
-             their disk recovery codes for these school keys):",
-            verified.version
-        )?;
-        for r in &base_recipients {
-            if !manifest.school.escrow_recipients.contains(r) {
-                writeln!(out, "  - {}", safe::field(r))?;
-            }
-        }
-        for r in &manifest.school.escrow_recipients {
-            if !base_recipients.contains(r) {
-                writeln!(out, "  + {}", safe::field(r))?;
-            }
-        }
-        writeln!(
-            out,
-            "Each added line must come from one of your school keys: an unknown one could unlock \
-             the computers' disks."
-        )?;
-    }
-
-    print_server_notes(out, &p, &secret_values)?;
-
-    // 6. The human confirms. The caller that passed `expect_digest` printed the check code already.
-    if expect_digest.is_none() {
-        writeln!(out, "\nContent fingerprint computed here: {digest}")?;
-        writeln!(out, "Check code: {}", &digest[..8])?;
-    }
-    let typed = ask(
-        confirm,
-        out,
-        &format!("Type the version number {next} to approve it: "),
-    )?;
-    if typed != next.to_string() {
-        bail!("The version number you typed ({typed}) does not match version {next}; cancelled, nothing was approved");
-    }
-    if !delta.is_empty() || recipients_change {
-        let typed = ask(
-            confirm,
-            out,
-            "This version changes which school keys computers accept and who can unlock their disks (see the changes above). If that is right, type yes: ",
-        )?;
-        // `trust` was the word asked for before; old scripts still send it.
-        if typed != "yes" && typed != "trust" {
-            bail!("The change of trusted keys or disk unlocking was not confirmed; cancelled, nothing was approved");
-        }
-    }
-
-    // 7. Sign (the message computed from the content here), accept it here as a machine would,
-    //    submit it, move the pin forward.
-    let signature = SignatureFile {
-        key_id: me.id.clone(),
+/// The bundle signature over `contents`, made here: the message is computed from the content on
+/// this computer (`b"mastersos-bundle-v1\n" || content_digest`), never taken from the server.
+pub fn sign_bundle(signer: &dyn Signer, contents: &Contents) -> SignatureFile {
+    SignatureFile {
+        key_id: signer.key_id().to_owned(),
         alg: KeyAlg::Ed25519,
-        sig: STANDARD.encode(signer.sign(&signed_message(&contents))),
+        sig: STANDARD.encode(signer.sign(&signed_message(contents))),
         authenticator_data: None,
         client_data_json: None,
-    };
-    let archive = assemble(&contents, &signature)?;
-    accept(
-        &archive,
-        &verified.trust,
-        (!genesis).then_some(verified.version),
-    )
-    .context(
-        "The signed package fails the local self-check: computers would reject it; not submitting",
-    )?;
-    #[derive(Deserialize)]
-    struct Committed {
-        version: u64,
-    }
-    let body = json!({ "confirm_digest": digest, "signature": signature });
-    let c: Committed = api
-        .post_json(
-            &["v1", "admin", "publish", "pending", &p.pending_id, "commit"],
-            Some(&body),
-            "submit the signature",
-        )
-        .await?;
-    if c.version != next {
-        bail!(
-            "The server says version {} was published, but version {next} was approved here: run `mastersos verify` to check the server again",
-            c.version
-        );
-    }
-    // The pin on disk is the one this run verified from (none for the first version).
-    let prev = (!genesis)
-        .then(|| chain::pin_of(api.into(), &verified))
-        .transpose()?;
-    let mut history = verified.history.clone();
-    chain::record_verified(&mut history, next, &digest);
-    chain::save_pin(
-        &pin_file,
-        prev.as_ref(),
-        &chain::Pin {
-            host: api.host(),
-            version: next,
-            digest_hex: digest,
-            trust: manifest.trust.clone(),
-            verified: history,
-        },
-    )?;
-    Ok(next)
-}
-
-// —— The monthly check-in ——
-
-/// Unix seconds as local time and UTC; just the seconds when out of range.
-fn both_zones(secs: i64) -> String {
-    match chrono::DateTime::from_timestamp(secs, 0) {
-        Some(t) => format!(
-            "{} (local) / {}",
-            t.with_timezone(&chrono::Local)
-                .format("%Y-%m-%d %H:%M:%S %:z"),
-            t.format("%Y-%m-%d %H:%M:%S UTC")
-        ),
-        None => format!("Unix {secs}"),
     }
 }
 
-/// Sign the monthly check-in with the school key (Ruling 11, C3): [`sign_heartbeat_at`] at this
-/// computer's current time.
-pub async fn sign_heartbeat(
-    api: &Api,
-    kit: &Kit,
-    pin_dir: &Path,
-    days: i64,
-    confirm: &mut dyn BufRead,
-    out: &mut dyn Write,
-) -> Result<()> {
-    sign_heartbeat_at(api, kit, pin_dir, days, chrono::Utc::now(), confirm, out).await
-}
-
-/// Sign the monthly check-in with `issued_at = now`:
-///
-/// 1. `days` outside 1..=31 is an error.
-/// 2. Verify the chain here ([`chain::verify_chain`]); the signing key must be in the latest
-///    verified trust.
-/// 3. **Build** the statement here: version and digest from the latest version verified here
-///    (digest computed here), `issued_at = now`, `not_after = now + days days`. The server's
-///    `heartbeat/prepare` is not used.
-/// 4. Print the version, the digest, `issued_at` and `not_after` (local time and UTC), sign after
-///    the version number is typed, check it here as a machine would, then submit
-///    `heartbeat/commit`.
-pub async fn sign_heartbeat_at(
-    api: &Api,
-    kit: &Kit,
-    pin_dir: &Path,
-    days: i64,
-    now: chrono::DateTime<chrono::Utc>,
-    confirm: &mut dyn BufRead,
-    out: &mut dyn Write,
-) -> Result<()> {
-    if !(1..=MAX_HEARTBEAT_DAYS).contains(&days) {
-        bail!("--days must be between 1 and {MAX_HEARTBEAT_DAYS} (a monthly check-in lasts at most {MAX_HEARTBEAT_DAYS} days)");
-    }
-    let mut out = safe::SafeWriter::new(out);
-    let out: &mut dyn Write = &mut out;
-    let (signer, me) = load_signer(api, kit, false).await?;
-    let verified =
-        chain::verify_chain(api.into(), pin_dir, &chain::Anchors::key(&me), confirm, out).await?;
-    if !verified.trust.contains(&me) {
-        bail!(
-            "This key ({}) is not among the trusted keys of version {} verified here: computers would not accept its check-in",
-            key_line(&me),
-            verified.version
-        );
-    }
-    let issued_at = now.timestamp();
-    let statement = HeartbeatStatement {
-        version: verified.version,
-        digest_hex: verified.digest_hex.clone(),
-        issued_at,
-        not_after: issued_at + days * 86_400,
-    };
-    statement.check()?;
-
-    writeln!(
-        out,
-        "\n== Monthly check-in (computed on this computer from the verified version) =="
-    )?;
-    writeln!(
-        out,
-        "Version:     {} (the latest verified here)",
-        statement.version
-    )?;
-    writeln!(out, "Content fingerprint: {}", statement.digest_hex)?;
-    writeln!(out, "Check code: {}", &statement.digest_hex[..8])?;
-    writeln!(out, "issued_at:   {}", both_zones(statement.issued_at))?;
-    writeln!(
-        out,
-        "not_after:  {} ({days} days)",
-        both_zones(statement.not_after)
-    )?;
-    writeln!(
-        out,
-        "Until it expires, computers treat version {} as the latest settings; if the server holds back a newer version meanwhile, computers cannot tell.",
-        statement.version
-    )?;
-    let typed = ask(
-        confirm,
-        out,
-        &format!("Type the version number {} to sign: ", statement.version),
-    )?;
-    if typed != statement.version.to_string() {
-        bail!(
-            "The version number you typed ({typed}) does not match version {}; cancelled, nothing was signed",
-            statement.version
-        );
-    }
-
-    let signature = SignatureFile {
-        key_id: me.id.clone(),
-        alg: KeyAlg::Ed25519,
-        sig: STANDARD.encode(signer.sign(&heartbeat_message(&statement))),
-        authenticator_data: None,
-        client_data_json: None,
-    };
-    let text = Heartbeat {
-        statement: statement.clone(),
-        signature: signature.clone(),
-    }
-    .to_toml();
-    verify_heartbeat(&text, &verified.trust).context(
-        "The signed check-in fails the local self-check: computers would reject it; not submitting",
-    )?;
-    api.post_no_content(
-        &["v1", "admin", "heartbeat", "commit"],
-        &json!({ "statement": statement, "signature": signature }),
-        "submit the check-in",
-    )
-    .await?;
-    writeln!(
-        out,
-        "Monthly check-in signed for version {}, valid until {}.",
-        statement.version,
-        both_zones(statement.not_after)
-    )?;
-    Ok(())
-}
-
-/// The monthly check-in for the version `mastersos publish` has just approved, signed without a
-/// prompt: `version` and `digest` are what the caller verified, signed and saw committed, and
-/// `trust` is that version's trusted keys (what computers verify the check-in with). Nothing is
-/// fetched to decide what to sign. The statement lasts `days` days from now; it is checked here the
-/// way a computer checks it, then sent to `heartbeat/commit` (the server's `heartbeat/prepare` is
-/// not used, as in [`sign_heartbeat_at`]). Prints nothing; returns the end of the check-in.
-pub async fn checkin_after_publish(
-    api: &Api,
-    kit: &Kit,
+/// The monthly check-in for `version` with content digest `digest_hex` (from what was verified or
+/// signed here), issued at `issued_at` (Unix seconds) and lasting `days` days, signed here and read
+/// back the way a Device reads it with `trust`. Returns the TOML text `POST heartbeat` carries and
+/// the statement. Nothing is fetched to decide what is signed.
+pub fn sign_heartbeat(
+    signer: &dyn Signer,
     version: u64,
-    digest: &[u8; 32],
-    trust: &[TrustKey],
+    digest_hex: &str,
+    issued_at: i64,
     days: i64,
-) -> Result<chrono::DateTime<chrono::Utc>> {
-    checkin_after_publish_at(api, kit, version, digest, trust, days, chrono::Utc::now()).await
-}
-
-/// [`checkin_after_publish`] with `issued_at = now`.
-pub async fn checkin_after_publish_at(
-    api: &Api,
-    kit: &Kit,
-    version: u64,
-    digest: &[u8; 32],
     trust: &[TrustKey],
-    days: i64,
-    now: chrono::DateTime<chrono::Utc>,
-) -> Result<chrono::DateTime<chrono::Utc>> {
+) -> Result<(String, HeartbeatStatement)> {
     if !(1..=MAX_HEARTBEAT_DAYS).contains(&days) {
         bail!("a monthly check-in lasts 1 to {MAX_HEARTBEAT_DAYS} days, not {days}");
     }
-    // The caller checked the key against the server when it published; no second round trip.
-    let (signer, me) = load_signer(api, kit, true).await?;
-    if !trust.contains(&me) {
-        bail!(
-            "This key ({}) is not among the trusted keys of version {version}",
-            key_line(&me)
-        );
-    }
-    let issued_at = now.timestamp();
+    let not_after = days
+        .checked_mul(86_400)
+        .and_then(|s| issued_at.checked_add(s))
+        .context("the check-in's end is out of range")?;
     let statement = HeartbeatStatement {
         version,
-        digest_hex: hex(digest),
+        digest_hex: digest_hex.to_owned(),
         issued_at,
-        not_after: issued_at + days * 86_400,
+        not_after,
     };
     statement.check()?;
     let signature = SignatureFile {
-        key_id: me.id.clone(),
+        key_id: signer.key_id().to_owned(),
         alg: KeyAlg::Ed25519,
         sig: STANDARD.encode(signer.sign(&heartbeat_message(&statement))),
         authenticator_data: None,
@@ -1033,7 +499,7 @@ pub async fn checkin_after_publish_at(
     };
     let text = Heartbeat {
         statement: statement.clone(),
-        signature: signature.clone(),
+        signature,
     }
     .to_toml();
     let checked = verify_heartbeat(&text, trust).context(
@@ -1042,14 +508,7 @@ pub async fn checkin_after_publish_at(
     if checked != statement {
         bail!("The check-in read back differs from the one signed; not submitting");
     }
-    api.post_no_content(
-        &["v1", "admin", "heartbeat", "commit"],
-        &json!({ "statement": statement, "signature": signature }),
-        "submit the monthly check-in",
-    )
-    .await?;
-    chrono::DateTime::from_timestamp(statement.not_after, 0)
-        .context("the check-in's end is out of range")
+    Ok((text, statement))
 }
 
 // —— Install file check ——
@@ -1212,19 +671,6 @@ mod tests {
     }
 
     #[test]
-    fn pin_name_for_matches_the_api() {
-        for server in [
-            "https://School.Example/",
-            "https://school.example:8443/x",
-            "http://127.0.0.1:9000",
-        ] {
-            let api = Api::new(server, "tok".into()).unwrap();
-            assert_eq!(pin_name_for(server).unwrap(), api.pin_name(), "{server}");
-        }
-        assert!(pin_name_for("not a url").is_err());
-    }
-
-    #[test]
     fn api_paths_are_joined_under_a_server_url_with_a_path() {
         for server in [
             "https://cloud.example/org/example/devices",
@@ -1254,9 +700,11 @@ mod tests {
         assert_eq!(pin_path(dir.path(), (&host_only).into()).unwrap(), old_file);
         let pin: Pin = load_pin(&old_file).unwrap().unwrap();
         assert_eq!(pin.host, host_only.host());
+        // Offline, only a protocol v1 pin (origin and school) records a digest: the old host-only
+        // pin is not read (the chain loader alone migrates it, by verifying forward from it).
         assert_eq!(
-            recorded_digest(dir.path(), "https://cloud.example/", SCHOOL, 3).unwrap(),
-            Some("d3".to_owned())
+            recorded_digest(dir.path(), "https://cloud.example", SCHOOL, 3).unwrap(),
+            None
         );
 
         // An organisation under a path on the same host does not pick it up: its own file does not
@@ -1300,10 +748,6 @@ mod tests {
             .pin_name()
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || "._-+%".contains(c)));
-        assert_eq!(
-            pin_name_for("https://cloud.example/org/a/devices").unwrap(),
-            a.pin_name()
-        );
     }
 
     #[test]
@@ -1317,6 +761,7 @@ mod tests {
         };
         let mut out = Vec::new();
         let values = print_local_diff(&mut out, &old, 2, &new).unwrap();
+        assert!(values.is_some());
         let text = String::from_utf8(out).unwrap();
         for v in ["oldpass-111", "newpass-222", "labpass-333", "guestpass-444"] {
             assert!(!text.contains(v), "{text}");
@@ -1328,33 +773,6 @@ mod tests {
         assert!(text.contains("secret defaults-guest-psk: added"), "{text}");
         assert!(text.contains("secret defaults-lab-psk: removed"), "{text}");
         assert!(text.contains("+version = 2"), "{text}");
-
-        // The server's notes are cleaned with the same values.
-        // The server's answer carries its manifest diff, with real values (an escaped one and a
-        // multi-line PEM among them): it is never printed.
-        let p: Pending = serde_json::from_value(json!({
-            "pending_id": "p",
-            "version": 2,
-            "digest_hex": "",
-            "manifest_text": "",
-            "files": [],
-            "diff": { "manifest_diff": "-psk = \"oldpass-111\"\n+psk = \"newpass-222\"\n+psk = \"esc\\\"aped-555\"\n+client_key = \"\"\"\n+MIIEvQIBADANBgkqhkiG9w0BAQEF\n+\"\"\"\n" },
-            "lints": [{ "level": "warning", "code": "x", "message": "psk newpass-222 is weak" }],
-        }))
-        .unwrap();
-        let mut out = Vec::new();
-        print_server_notes(&mut out, &p, &values).unwrap();
-        let notes = String::from_utf8(out).unwrap();
-        assert!(
-            !notes.contains("oldpass-111") && !notes.contains("newpass-222"),
-            "{notes}"
-        );
-        for v in ["aped-555", "MIIEvQIBADANBgkqhkiG9w0BAQEF", "psk ="] {
-            assert!(
-                !notes.contains(v),
-                "the server's diff is not printed: {notes}"
-            );
-        }
 
         // A side whose secrets cannot be separated: no text diff at all.
         let bad = Contents {
@@ -1372,13 +790,6 @@ mod tests {
         assert!(
             !text.contains("oldpass-111") && !text.contains("newpass-222"),
             "{text}"
-        );
-        let mut out = Vec::new();
-        print_server_notes(&mut out, &p, &values).unwrap();
-        let notes = String::from_utf8(out).unwrap();
-        assert!(
-            !notes.contains("oldpass-111") && !notes.contains("newpass-222"),
-            "{notes}"
         );
     }
 

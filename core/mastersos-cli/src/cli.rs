@@ -14,7 +14,6 @@ use serde_json::{json, Map, Value};
 use mastersos_bundle::{AgeBand, ClassRole, Kind, OrgRole};
 
 use crate::explain::{self as explain_mod, UserQuery};
-use crate::publish::SignWith;
 use crate::server::{CliError, SchoolEntry, Server};
 use crate::workdir::{self, Meta, Workdir};
 use crate::{call, check_server, connect, Api, OpError, Req};
@@ -165,6 +164,9 @@ enum Cmd {
         /// How many days the check-in lasts, 1 to 31
         #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(i64).range(1..=31))]
         days: i64,
+        /// The school's id (a lowercase UUID; default: `school_id` in ./mastersos.toml, else the only school of this account)
+        #[arg(long, value_name = "UUID")]
+        school: Option<String>,
     },
     /// A computer's disk recovery keys
     #[command(subcommand)]
@@ -449,6 +451,8 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         Cmd::Init { .. }
             | Cmd::Pull { .. }
             | Cmd::Verify { .. }
+            | Cmd::Publish { .. }
+            | Cmd::Heartbeat { .. }
             | Cmd::Key(
                 KeyCmd::Register { .. }
                     | KeyCmd::List { .. }
@@ -493,22 +497,10 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
             dir,
             ..
         }) => return keys_remove(dir.as_deref(), code, key_file.as_deref(), &o).await,
-        // Settings are approved on this computer with the school key; nothing is uploaded without it.
-        Cmd::Publish { key_file: None, .. } => {
-            return Err(OpError::Failed(
-                "Publishing needs the school key file: mastersos publish --key-file <PATH>".into(),
-            ))
-        }
         _ => {}
     }
-    let sign_with = match &cmd {
-        Cmd::Publish {
-            key_file: Some(p), ..
-        } => Some(SignWith::key_file(p).map_err(fail)?),
-        _ => None,
-    };
     let kit = match &cmd {
-        Cmd::Heartbeat { key_file, .. } | Cmd::Recovery(RecoveryCmd::Read { key_file, .. }) => {
+        Cmd::Recovery(RecoveryCmd::Read { key_file, .. }) => {
             Some(crate::sign::kit::load_key_file(key_file).map_err(fail)?)
         }
         _ => None,
@@ -550,36 +542,13 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
         | Cmd::Key(_)
         | Cmd::Init { .. }
         | Cmd::Pull { .. }
-        | Cmd::Verify { .. } => {
+        | Cmd::Verify { .. }
+        | Cmd::Publish { .. }
+        | Cmd::Heartbeat { .. } => {
             unreachable!("handled above")
         }
         Cmd::Devices(c) => devices(&api, &out, c).await,
         Cmd::Spec { section, full } => spec(&api, section, full).await,
-        Cmd::Publish {
-            dir, allow_reroute, ..
-        } => {
-            publish_dir(
-                &api,
-                &server,
-                &token_file,
-                dir.as_deref(),
-                &pin_dir()?,
-                sign_with.ok_or_else(|| fail("no school key"))?,
-                &allow_reroute,
-                json,
-            )
-            .await
-        }
-        Cmd::Heartbeat { days, .. } => {
-            heartbeat(
-                &server,
-                &token_file,
-                &pin_dir()?,
-                kit.ok_or_else(|| fail("no school key"))?,
-                days,
-            )
-            .await
-        }
         Cmd::Recovery(RecoveryCmd::Read { device, .. }) => {
             recovery_read(
                 &server,
@@ -684,28 +653,6 @@ fn key_new(out: &Path, school: Option<&str>, json: bool) -> Result<String, CliEr
         k.fingerprint,
         shown.display()
     ))
-}
-
-/// `mastersos heartbeat`.
-async fn heartbeat(
-    server: &str,
-    token_file: &Path,
-    pins: &Path,
-    kit: &mastersos_bundle::kit::Kit,
-    days: i64,
-) -> Result<ExitCode, OpError> {
-    let api = sign_api(server, token_file)?;
-    crate::sign::sign_heartbeat(
-        &api,
-        kit,
-        pins,
-        days,
-        &mut std::io::stdin().lock(),
-        &mut std::io::stdout(),
-    )
-    .await
-    .map_err(sign_fail)?;
-    Ok(ExitCode::SUCCESS)
 }
 
 /// `mastersos recovery read <DEVICE>`.
@@ -1230,24 +1177,6 @@ fn sign_api(server: &str, token_file: &Path) -> Result<crate::sign::Api, OpError
     crate::sign::Api::from_token_file(server, token_file).map_err(fail)
 }
 
-/// Whether two server addresses name the same server: compared as URLs (scheme, host in lower
-/// case, port, path without a trailing `/`), not as text.
-fn same_server(a: &str, b: &str) -> bool {
-    fn norm(s: &str) -> Option<(String, String, Option<u16>, String)> {
-        let u = reqwest::Url::parse(s.trim()).ok()?;
-        Some((
-            u.scheme().to_owned(),
-            u.host_str()?.to_ascii_lowercase(),
-            u.port_or_known_default(),
-            u.path().trim_end_matches('/').to_owned(),
-        ))
-    }
-    match (norm(a), norm(b)) {
-        (Some(x), Some(y)) => x == y,
-        _ => a == b,
-    }
-}
-
 /// A school key file read for `init` or `key add`.
 struct SchoolKey {
     kit: mastersos_bundle::kit::Kit,
@@ -1417,7 +1346,7 @@ impl V1 {
     }
 }
 
-/// Run `init`, `pull`, `verify` or a `key` command that talks to the server: what to print on stdout, or the error. With `--json` the
+/// Run `init`, `pull`, `verify`, `publish`, `heartbeat` or a `key` command that talks to the server: what to print on stdout, or the error. With `--json` the
 /// dialogue (fingerprints, chain notes) goes to stderr and stdout holds one JSON value.
 async fn v1_command(o: &V1, cmd: Cmd) -> Result<String, CliError> {
     use std::io::IsTerminal as _;
@@ -1430,16 +1359,34 @@ async fn v1_command(o: &V1, cmd: Cmd) -> Result<String, CliError> {
         }
         Cmd::Init { key_file, .. } => load_school_keys(key_file)
             .map_err(|e| CliError::new("key_file_invalid", e.message()))?,
+        // Settings are approved on this computer with the school key; nothing is uploaded without it.
+        Cmd::Publish { key_file: None, .. } => {
+            return Err(CliError::usage(
+                "Publishing needs the school key file: mastersos publish --key-file <PATH>",
+            ))
+        }
         Cmd::Key(KeyCmd::Register { key_file: f, .. })
         | Cmd::Key(KeyCmd::Add { file: f, .. })
         | Cmd::Key(KeyCmd::Remove {
             key_file: Some(f), ..
-        }) => load_school_keys(std::slice::from_ref(f))
+        })
+        | Cmd::Publish {
+            key_file: Some(f), ..
+        }
+        | Cmd::Heartbeat { key_file: f, .. } => load_school_keys(std::slice::from_ref(f))
             .map_err(|e| CliError::new("key_file_invalid", e.message()))?,
         _ => Vec::new(),
     };
     let stdin = std::io::stdin();
     let interactive = !o.yes && !o.json && stdin.is_terminal();
+    // Publishing and the check-in ask the person to confirm; without one (`--json`, or stdin not
+    // a terminal) only `--yes` goes on. Refused before the network: nothing is read from stdin
+    // and nothing is uploaded.
+    if matches!(cmd, Cmd::Publish { .. } | Cmd::Heartbeat { .. }) && !o.yes && !interactive {
+        return Err(CliError::usage(
+            "nobody can confirm here (--json, or stdin is not a terminal): pass --yes to go on without the confirmation",
+        ));
+    }
     let mut confirm = stdin.lock();
     let (mut stdout, mut stderr) = (std::io::stdout(), std::io::stderr());
     let out: &mut dyn std::io::Write = if o.json { &mut stderr } else { &mut stdout };
@@ -1501,6 +1448,28 @@ async fn v1_command(o: &V1, cmd: Cmd) -> Result<String, CliError> {
                 interactive,
             };
             key_add(&ctx, &keys, &mut confirm, out).await
+        }
+        Cmd::Publish {
+            dir, allow_reroute, ..
+        } => {
+            let kit = &keys
+                .first()
+                .ok_or_else(|| CliError::usage("no school key"))?
+                .kit;
+            publish_v1(o, dir.as_deref(), kit, &allow_reroute, &mut confirm, out).await
+        }
+        Cmd::Heartbeat { days, school, .. } => {
+            let kit = &keys
+                .first()
+                .ok_or_else(|| CliError::usage("no school key"))?
+                .kit;
+            let ctx = KeyCtx {
+                o,
+                dir: None,
+                school: school.as_deref(),
+                interactive,
+            };
+            heartbeat_v1(&ctx, kit, days, &mut confirm, out).await
         }
         Cmd::Key(KeyCmd::Remove {
             code,
@@ -2167,6 +2136,108 @@ async fn verify_v1(
     Ok(s)
 }
 
+/// `mastersos publish [DIR] --key-file PATH [--allow-reroute NAME]…`: the directory's server and
+/// school; the chain verified here with the school key file as the anchor.
+async fn publish_v1(
+    o: &V1,
+    dir: Option<&Path>,
+    kit: &mastersos_bundle::kit::Kit,
+    allow_reroute: &[String],
+    confirm: &mut dyn std::io::BufRead,
+    out: &mut dyn std::io::Write,
+) -> Result<String, CliError> {
+    use crate::publish::{CheckIn, PublishOpts, PublishOutcome, CHECKIN_FAILED_TEXT};
+    let dir = dir.unwrap_or_else(|| Path::new("."));
+    let meta = dir_meta(dir)?.ok_or_else(|| {
+        CliError::usage(&format!(
+            "{} is not a settings directory (no mastersos.toml): run `mastersos init` or `mastersos pull` first",
+            dir.display()
+        ))
+    })?;
+    let (creds, origin) = resolve_v1(o, Some(&meta)).await?;
+    let server = Server::new(&origin, Some(&meta.school_id), creds)?;
+    let pins = resolve_pin_dir(o.pin_flag.as_deref())?;
+    let w = Workdir::open(dir).map_err(local_file)?.with_pins(&pins);
+    let PublishOutcome::Published {
+        version,
+        digest_hex,
+        checkin,
+        trust_change,
+        warnings,
+    } = crate::publish::publish(
+        &server,
+        &w,
+        kit,
+        PublishOpts {
+            allow_reroute,
+            yes: o.yes,
+            pin_dir: &pins,
+            fingerprints: &o.fingerprints,
+        },
+        chrono::Utc::now(),
+        confirm,
+        out,
+    )
+    .await?;
+    // The version stays published; people get one sentence, not the cryptography.
+    if let CheckIn::Failed(_) = checkin {
+        eprintln!("{CHECKIN_FAILED_TEXT}");
+    }
+    if o.json {
+        let until = match &checkin {
+            CheckIn::Until(t) => json!(t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+            CheckIn::Failed(_) => Value::Null,
+        };
+        return Ok(format!(
+            "{}\n",
+            json!({"version": version, "digest_hex": digest_hex, "heartbeat_not_after": until,
+                "trust_change": trust_change, "warnings": warnings})
+        ));
+    }
+    Ok(format!("Published version {version}\n"))
+}
+
+/// `mastersos heartbeat --key-file PATH [--days N] [--school UUID]`: the check-in for the latest
+/// version verified here.
+async fn heartbeat_v1(
+    ctx: &KeyCtx<'_>,
+    kit: &mastersos_bundle::kit::Kit,
+    days: i64,
+    confirm: &mut dyn std::io::BufRead,
+    out: &mut dyn std::io::Write,
+) -> Result<String, CliError> {
+    let meta = ctx.meta()?;
+    let (server, _) = ctx.server(meta.as_ref(), confirm, out).await?;
+    let pins = resolve_pin_dir(ctx.o.pin_flag.as_deref())?;
+    let c = crate::publish::heartbeat(
+        &server,
+        kit,
+        crate::publish::HeartbeatOpts {
+            days,
+            yes: ctx.o.yes,
+            pin_dir: &pins,
+            fingerprints: &ctx.o.fingerprints,
+        },
+        chrono::Utc::now(),
+        confirm,
+        out,
+    )
+    .await?;
+    let until = c
+        .not_after
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    if ctx.o.json {
+        return Ok(format!(
+            "{}\n",
+            json!({"version": c.version, "digest_hex": c.digest_hex, "not_after": until})
+        ));
+    }
+    Ok(format!(
+        "Monthly check-in signed for version {}, valid until {until}.\n",
+        c.version
+    ))
+}
+
 /// Issues for people: one per line (level, code, where, message), then a count.
 fn print_issues(issues: &[Value]) {
     print!("{}", issues_text(issues));
@@ -2252,133 +2323,6 @@ fn prompt_secret(text: &str) -> Result<zeroize::Zeroizing<String>, OpError> {
     })
 }
 
-/// `mastersos publish`.
-#[allow(clippy::too_many_arguments)] // until publish moves to protocol v1 (Task 6)
-async fn publish_dir(
-    api: &Api,
-    server: &str,
-    token_file: &Path,
-    dir: Option<&Path>,
-    pins: &Path,
-    key: SignWith,
-    allow_reroute: &[String],
-    json: bool,
-) -> Result<ExitCode, OpError> {
-    let w = open_dir(dir, pins)?;
-    publish_to(
-        api,
-        server,
-        &PublishArgs {
-            w: &w,
-            token_file,
-            pins,
-            key: &key,
-            allow_reroute,
-            json,
-        },
-        &mut std::io::stdin().lock(),
-        &mut std::io::stdout(),
-        &mut std::io::stderr(),
-    )
-    .await
-}
-
-/// What [`publish_to`] works on.
-pub(crate) struct PublishArgs<'a> {
-    pub w: &'a Workdir,
-    pub token_file: &'a Path,
-    pub pins: &'a Path,
-    pub key: &'a SignWith,
-    pub allow_reroute: &'a [String],
-    /// `--json`: `stdout` gets exactly one JSON document (the result; a refusal is printed by
-    /// [`main`]), and everything else (local and server warnings, the signing dialogue) goes to
-    /// `stderr`.
-    pub json: bool,
-}
-
-/// [`publish_dir`] with its streams given.
-pub(crate) async fn publish_to(
-    api: &Api,
-    server: &str,
-    a: &PublishArgs<'_>,
-    confirm: &mut dyn std::io::BufRead,
-    stdout: &mut dyn std::io::Write,
-    stderr: &mut dyn std::io::Write,
-) -> Result<ExitCode, OpError> {
-    use crate::publish::{
-        publish, CheckFailed, CheckIn, PublishOutcome, RerouteRefused, ServerRefused, SignOpts,
-        CHECKIN_FAILED_TEXT,
-    };
-    use chrono::SecondsFormat;
-    let w = a.w;
-    let m = w.meta().map_err(fail)?;
-    if !same_server(&m.server, server) {
-        return Err(OpError::Failed(format!(
-            "{} belongs to {}, not to {server}",
-            w.root.display(),
-            m.server
-        )));
-    }
-    let sign = SignOpts {
-        key: a.key,
-        token_file: a.token_file,
-        pin_dir: a.pins,
-    };
-    let r = {
-        let out: &mut dyn std::io::Write = if a.json { stderr } else { &mut *stdout };
-        publish(
-            api,
-            w,
-            sign,
-            a.allow_reroute,
-            chrono::Utc::now(),
-            confirm,
-            out,
-        )
-        .await
-    };
-    let print = |stdout: &mut dyn std::io::Write, v: Value, text: String| {
-        let line = if a.json { v.to_string() } else { text };
-        writeln!(stdout, "{line}").map_err(fail)
-    };
-    match r {
-        Ok(PublishOutcome::Published { version, checkin }) => {
-            let mut v = json!({ "published": true, "version": version });
-            match &checkin {
-                CheckIn::Until(t) => {
-                    v["checkin_until"] = json!(t.to_rfc3339_opts(SecondsFormat::Secs, true))
-                }
-                CheckIn::Failed(e) => v["checkin_error"] = json!(e),
-            }
-            print(stdout, v, format!("Published version {version}"))?;
-            // The version stays published; people get one sentence, not the cryptography.
-            if let CheckIn::Failed(_) = checkin {
-                writeln!(stderr, "{CHECKIN_FAILED_TEXT}").map_err(fail)?;
-            }
-            Ok(ExitCode::SUCCESS)
-        }
-        Err(e) => match e.downcast::<CheckFailed>() {
-            Ok(c) => Err(OpError::Refused {
-                message: c.to_string(),
-                issues: Some(lint_values(&c.0)),
-            }),
-            Err(e) => match e.downcast::<RerouteRefused>() {
-                Ok(r) => Err(OpError::Refused {
-                    message: r.to_string(),
-                    issues: Some(lint_values(&r.lints)),
-                }),
-                Err(e) => match e.downcast::<ServerRefused>() {
-                    Ok(r) => Err(OpError::Refused {
-                        message: r.message,
-                        issues: Some(r.issues),
-                    }),
-                    Err(e) => Err(fail(e)),
-                },
-            },
-        },
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2421,7 +2365,6 @@ mod tests {
         };
         assert_eq!(key_file, Some(PathBuf::from("school.kit")));
         assert_eq!(allow_reroute, ["x-psk", "y-psk"]);
-        assert!(SignWith::key_file(Path::new("/nonexistent/school.kit")).is_err());
     }
 
     #[test]
@@ -2531,29 +2474,5 @@ mod tests {
         )
         .unwrap();
         assert_eq!(one.name, "Alpha");
-    }
-
-    #[test]
-    fn server_addresses_compare_as_urls() {
-        assert!(same_server(
-            "https://School.Example/",
-            "https://school.example"
-        ));
-        assert!(same_server(
-            "https://school.example:443",
-            "https://school.example/"
-        ));
-        assert!(!same_server(
-            "https://school.example",
-            "https://other.example"
-        ));
-        assert!(!same_server(
-            "http://localhost:8080",
-            "http://localhost:8081"
-        ));
-        assert!(!same_server(
-            "https://school.example/a",
-            "https://school.example/b"
-        ));
     }
 }

@@ -79,6 +79,40 @@ pub fn render_error(e: &CliError, json: bool) -> (String, String) {
         return (format!("{v}\n"), String::new());
     }
     let mut err = format!("mastersos: {}\n", safe::field(&e.message));
+    // Devices (a feature gate refusal): one row each, in columns.
+    if !e.problems.is_empty() && e.problems.iter().all(|p| p.get("device_id").is_some()) {
+        const COLUMNS: [(&str, &str); 4] = [
+            ("DEVICE ID", "device_id"),
+            ("SERIAL", "serial"),
+            ("OS VERSION", "os_version"),
+            ("LAST SEEN", "last_seen"),
+        ];
+        let mut rows: Vec<Vec<String>> = vec![COLUMNS.iter().map(|c| c.0.to_owned()).collect()];
+        for p in &e.problems {
+            rows.push(
+                COLUMNS
+                    .iter()
+                    .map(|c| {
+                        p.get(c.1)
+                            .and_then(Value::as_str)
+                            .map_or("-".to_owned(), safe::field)
+                    })
+                    .collect(),
+            );
+        }
+        let widths: Vec<usize> = (0..COLUMNS.len())
+            .map(|i| rows.iter().map(|r| r[i].chars().count()).max().unwrap_or(0))
+            .collect();
+        for r in &rows {
+            let line: Vec<String> = r
+                .iter()
+                .zip(&widths)
+                .map(|(c, w)| format!("{c:<w$}"))
+                .collect();
+            err.push_str(&format!("  {}\n", line.join("  ").trim_end()));
+        }
+        return (String::new(), err);
+    }
     for p in &e.problems {
         let line = match p {
             Value::String(s) => s.clone(),
