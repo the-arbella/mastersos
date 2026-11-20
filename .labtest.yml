@@ -44,7 +44,7 @@ suites:
     setup: >-
       rustup toolchain install 1.98 --profile minimal && d=$HOME/.cache/mastersos-e2e-awk && rm -rf $d && mkdir -p $d && cd $d &&
       for p in mawk gawk libmpfr6 libsigsegv2 libgmp10 libreadline8t64; do apt-get download $p || echo "note: no $p"; done;
-      for f in *.deb; do dpkg-deb -x $f root || exit 1; done
+      for f in *.deb; do [ -e "$f" ] || continue; dpkg-deb -x "$f" root || exit 1; done
     setup_key: [.labtest.yml, core/rust-toolchain.toml]
     # the runner sets CARGO_TARGET_DIR outside the tree: the binaries' folder is resolved while still in core/
     run: >-
@@ -53,7 +53,7 @@ suites:
     mem: 4G
     cpus: 8
     timeout: 30m
-    paths: [core/**, tools/e2e/**]
+    paths: [core/**, tools/e2e/**, .labtest.yml]
 builds:
   linux-bins:
     setup: rustup toolchain install 1.98 --profile minimal

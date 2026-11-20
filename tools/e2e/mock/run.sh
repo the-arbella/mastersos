@@ -13,8 +13,9 @@
 #
 # Checks: the mock's own self-test against the shared vectors; protocol-v1.sh --self-test under
 # the default awk (and mawk and gawk when found); then the full run: exit 0, stdout one JSON value
-# with "ok":true and every step of --dry-run present and ok; and containment: the fake HOME and
-# the starting folder (both read-only) are unchanged. The mock is stopped on every exit.
+# with "ok":true and every step of --dry-run present and ok; and containment, best effort: the
+# fake HOME and the starting folder (both read-only) are unchanged. Writes elsewhere (/tmp, other
+# folders the user may write) are not seen. The mock is stopped on every exit.
 # Exit 0 when all pass, 1 otherwise, 2 on a usage error.
 set -euo pipefail
 umask 077
@@ -161,7 +162,7 @@ else
 	fail "summary not ok (see above)"
 fi
 if [[ $before == "$after" ]]; then
-	pass "containment: fake HOME and starting folder unchanged"
+	pass "containment (best effort: the fake HOME and the starting folder only): unchanged"
 else
 	fail "containment: written outside the work dir: $(diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") | head -20 | tr '\n' ' ')"
 fi

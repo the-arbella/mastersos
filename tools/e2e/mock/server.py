@@ -84,6 +84,8 @@ HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 KEY_ID_RE = re.compile(r"^rk-[0-9a-f]{8}$")
 BUNDLE_PREFIX = b"mastersos-bundle-v1\n"
 PROBE_PREFIX = b"mastersos-keyprobe-v1\n"
+HEARTBEAT_PREFIX = b"mastersos-heartbeat-v1\n"
+RECIPIENT_PREFIX = b"mastersos-escrow-recipient-v1\n"
 RECIPIENTS_FP_PREFIX = b"mastersos-escrow-recipients-v1\n"
 RESERVED = [
     ("POST", re.compile(r"^push-token$")),
@@ -349,6 +351,25 @@ def check_signature_table(sig, what):
     except Refuse as e:
         raise Refuse(422, "invalid", e.message) from None
     return sig["key_id"]
+
+
+def frame_differences(frame, manifest):
+    """The frame fields that differ from the signed manifest.toml (version, school id, trust,
+    escrow recipients). A test-only check: the real server never parses the settings text
+    (protocol 1.1), so a command line whose frame disagrees with what it signs would pass it."""
+    try:
+        m = tomllib.loads(manifest.decode("utf-8"))
+    except (UnicodeError, tomllib.TOMLDecodeError):
+        return ["manifest.toml (not TOML)"]
+    school = m.get("school") if isinstance(m.get("school"), dict) else {}
+    trust = m.get("trust") if isinstance(m.get("trust"), list) else []
+    want = {
+        "version": m.get("version"),
+        "school_id": school.get("id"),
+        "trust": [{"id": t.get("id"), "alg": t.get("alg"), "public_key": t.get("public_key")} for t in trust if isinstance(t, dict)],
+        "escrow_recipients": school.get("escrow_recipients", []),
+    }
+    return [k for k, v in want.items() if frame.get(k) != v]
 
 
 # ---- Age armor ----
@@ -794,7 +815,8 @@ class Handler(BaseHTTPRequestHandler):
         return answer_json(201, {"recipient": recipient, "bound_key_id": body["bound_key_id"]})
 
     # -- publish --
-    def check_frame(self, frame):
+    @staticmethod
+    def check_frame(frame):
         strict(frame, ["format", "version", "issued_at", "school_id", "trust", "escrow_recipients", "features_used"], what="frame")
         if not isinstance(frame["format"], int) or isinstance(frame["format"], bool) or frame["format"] < 1:
             raise invalid("frame.format is not a positive integer")
@@ -906,6 +928,11 @@ class Handler(BaseHTTPRequestHandler):
         manifest, files, sig = read_archive(data)
         if content_digest(manifest, files).hex() != p["digest_hex"]:
             raise Refuse(422, "digest_mismatch", "the archive's content digest is not the uploaded one")
+        diff = frame_differences(p["frame"], manifest)
+        if diff:
+            # Not a protocol refusal: a bug in the command line. run.sh fails on this log line.
+            sys.stderr.write(f"[mock] INTERNAL ERROR frame differs from the signed manifest.toml: {', '.join(diff)}\n")
+            raise Refuse(500, "internal", "the frame differs from the signed manifest.toml (mock check)")
         frame = p["frame"]
         if st.latest_no() != frame["version"] - 1:
             raise Refuse(409, "version_conflict", "another version was published meanwhile", details={"latest_version": st.latest_no()})
@@ -1197,6 +1224,46 @@ def self_test(vector_dir):
     for v in w["recipient_bindings"]:
         check(f"recipient {v['name']}", is_age_recipient(v["recipient"]))
         check(f"recipient checksum {v['name']}", not is_age_recipient(v["recipient"][:-1] + ("q" if v["recipient"][-1] != "q" else "p")))
+    for v in w["recipient_bindings"]:
+        nonce = std_pad(v["nonce_b64"], "nonce", 32)
+        check(f"binding message {v['name']}", b64(RECIPIENT_PREFIX + v["recipient"].encode() + b"\n" + nonce) == v["message_b64"])
+        check(f"binding key id {v['name']}", key_id_of(std_pad(v["public_key"], "pk", 32)) == v["key_id"])
+    for v in w["heartbeats"]:
+        stt = v["statement"]
+        msg = (
+            HEARTBEAT_PREFIX
+            + stt["version"].to_bytes(8, "big")
+            + bytes.fromhex(stt["digest_hex"])
+            + stt["issued_at"].to_bytes(8, "big", signed=True)
+            + stt["not_after"].to_bytes(8, "big", signed=True)
+        )
+        check(f"heartbeat message {v['name']}", b64(msg) == v["message_b64"])
+        doc = tomllib.loads(v["heartbeat_toml"])
+        check(f"heartbeat toml statement {v['name']}", doc.get("statement") == stt)
+        try:
+            signer = check_signature_table(doc.get("signature"), "heartbeat signature")
+        except Refuse:
+            signer = None
+        check(f"heartbeat signer {v['name']}", signer == key_id_of(std_pad(v["public_key"], "pk", 32)))
+    for v in w["publish"]:
+        frame = v["frame"]
+        try:
+            Handler.check_frame(frame)
+            shape = True
+        except Refuse:
+            shape = False
+        check(f"publish frame shape {v['name']}", shape)
+        manifest = v["manifest_text"].encode()
+        check(f"publish frame equals manifest {v['name']}", frame_differences(frame, manifest) == [])
+        check(f"publish digest {v['name']}", content_digest(manifest, {}).hex() == v["digest_hex"])
+        check(f"publish message {v['name']}", b64(BUNDLE_PREFIX + bytes.fromhex(v["digest_hex"])) == v["message_b64"])
+        try:
+            signer = check_signature_table(tomllib.loads(v["signature_toml"]), "signature")
+        except Refuse:
+            signer = None
+        check(f"publish signer {v['name']}", signer in {t["id"] for t in frame["trust"]})
+        bad = dict(frame, version=frame["version"] + 1)
+        check(f"publish frame mismatch caught {v['name']}", frame_differences(bad, manifest) == ["version"])
     for v in w["bundle_signatures"]:
         check(f"bundle message {v['name']}", b64(BUNDLE_PREFIX + bytes.fromhex(v["digest_hex"])) == v["message_b64"])
     for v in w["seed_trust_fingerprints"]:
