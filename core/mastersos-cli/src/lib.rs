@@ -9,6 +9,7 @@
 #![cfg_attr(not(windows), forbid(unsafe_code))]
 #![cfg_attr(windows, deny(unsafe_code))]
 
+pub mod auth;
 pub mod cli;
 pub mod explain;
 pub mod itpass;
@@ -16,6 +17,7 @@ pub mod logo;
 pub mod platform;
 pub mod publish;
 pub mod safe;
+pub mod server;
 pub mod sign;
 pub mod tools;
 pub mod workdir;
