@@ -44,10 +44,13 @@ lab_env_check() {
 		echo "accept: LAB_ARBELLA_STUB and LAB_BIN_DIR must be absolute paths on the build VM" >&2
 		return 1
 	}
-	[ -r "${LAB_KEY_FILE:-$cfg/mastersos-lab-school.kit}" ] || {
-		echo "accept: the lab school key file ${LAB_KEY_FILE:-$cfg/mastersos-lab-school.kit} is not readable (LAB_KEY_FILE)" >&2
+	local kf=${LAB_KEY_FILE:-$cfg/mastersos-lab-school.kit} mode
+	[ -r "$kf" ] || {
+		echo "accept: the lab school key file $kf is not readable (LAB_KEY_FILE)" >&2
 		return 1
 	}
+	mode=$(stat -c %a "$kf" 2>/dev/null || stat -f %Lp "$kf")
+	case "$mode" in 600 | 400) ;; *) echo "accept: warning: the lab school key file $kf has mode $mode, expected 600 (chmod 600 it)" >&2 ;; esac
 }
 
 # The environment the command line runs in on the build VM: the stub arbella first on PATH, the control endpoint for it.
@@ -113,7 +116,7 @@ if ! out=$(run init wd --key-file school.kit); then
 fi
 fmt=$(sed -n "/^\\[/q;/^format[[:space:]]*=/p" wd/manifest.toml | head -1)
 if grep -q "^format[[:space:]]*=" in/manifest.toml; then fmt=""; fi
-schoolpart=$(awk "/^\\[/{s=(\$0==\"[school]\")} s&&/^(id|escrow_recipients)[[:space:]]*=/{print}" wd/manifest.toml)
+schoolpart=$(awk "/^\\[/{if(!d)s=(\$0==\"[school]\")} s&&!d&&/^(id|escrow_recipients)[[:space:]]*=/{print;d=gsub(/\\[/,\"[\")-gsub(/\\]/,\"]\");next} d>0{print;d+=gsub(/\\[/,\"[\")-gsub(/\\]/,\"]\")}" wd/manifest.toml)
 trust=$(awk "/^\\[\\[trust\\]\\]/{p=1;print;next} /^\\[/{p=0} p" wd/manifest.toml)
 inserted=0
 {

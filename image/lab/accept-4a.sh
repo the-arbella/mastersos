@@ -724,5 +724,5 @@ for c in "${checks[@]}"; do
 	log "== $c"
 	"c_$c" || fail "$c" "check 自己出错退出（脚本问题）"
 done
-log "完成：${#checks[@]} 个 check，$fails 个失败"
+log "完成：${#checks[@]} 个 check，$fails 个失败，$skips 个跳过"
 exit "$fails"

@@ -1597,10 +1597,17 @@ c_fetch_token_rotation() {
 # A small reverse proxy on VM 161 in front of the lab server, for tamper_replay. It passes everything through and stores every
 # bundle archive it sees (arch/<version>); the file `mode` ("pass", or "<kind> <stored version> <announced version>") makes it
 # answer GET /api/device/v1/bundle with a stored archive instead (kind flip: one byte changed), announced as a newer version.
+# It binds only the build VM's LAN address (the one the Device VM reaches; not 0.0.0.0, not loopback), runs with umask 077, keeps
+# its directory 0700 (created fresh), removes it on exit or SIGTERM, and stops itself after an hour.
 TAMPER_PROXY='
-import http.client, http.server, os, sys, urllib.parse
-up = urllib.parse.urlsplit(sys.argv[1]); port = int(sys.argv[2]); d = sys.argv[3]
-os.makedirs(d + "/arch", exist_ok=True)
+import atexit, http.client, http.server, os, shutil, signal, sys, urllib.parse
+os.umask(0o077)
+up = urllib.parse.urlsplit(sys.argv[1]); bind = sys.argv[2]; port = int(sys.argv[3]); d = sys.argv[4]
+shutil.rmtree(d, ignore_errors=True)
+os.makedirs(d + "/arch", mode=0o700)
+atexit.register(shutil.rmtree, d, True)
+signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
+signal.alarm(3600)
 BUNDLE = "/api/device/v1/bundle"
 HOP = {"connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "proxy-authorization", "proxy-authenticate", "host", "content-length"}
 def mode():
@@ -1639,7 +1646,7 @@ class H(http.server.BaseHTTPRequestHandler):
             open("%s/arch/%s" % (d, r.getheader("X-Mastersos-Version")), "wb").write(data)
         self.answer(r.status, [(k, v) for k, v in r.getheaders() if k.lower() not in HOP], data)
     do_GET = do_POST = do_PUT = do_DELETE = handle_any
-http.server.ThreadingHTTPServer(("0.0.0.0", port), H).serve_forever()
+http.server.ThreadingHTTPServer((bind, port), H).serve_forever()
 '
 
 # §6.9 item 6: a bundle with one byte changed, a bundle signed by another key and an old bundle, each delivered as a new
@@ -1657,8 +1664,8 @@ c_tamper_replay() {
 		fail "$name" "cannot read the server address from the machine's seed"
 		return
 	}
-	printf '%s\n' "$TAMPER_PROXY" | b161 "pkill -f '^python3 t20-proxy/proxy\.py ' || true; rm -rf t20-proxy; mkdir -p t20-proxy && cat > t20-proxy/proxy.py"
-	b161 "(setsid nohup python3 t20-proxy/proxy.py $(lab_q "$LAB_SERVER_URL") $pp t20-proxy >t20-proxy/log 2>&1 </dev/null &); sleep 2; curl -s -o /dev/null -w 'proxy %{http_code}\n' http://127.0.0.1:$pp/"
+	printf '%s\n' "$TAMPER_PROXY" | b161 "pkill -f '^python3 t20-proxy/proxy\.py ' || true; rm -rf t20-proxy; (umask 077; mkdir -p t20-proxy && cat > t20-proxy/proxy.py)"
+	b161 "umask 077; (setsid nohup python3 t20-proxy/proxy.py $(lab_q "$LAB_SERVER_URL") ${bhost#*@} $pp t20-proxy/data >t20-proxy/log 2>&1 </dev/null &); sleep 2; curl -s -o /dev/null -w 'proxy %{http_code}\n' http://${bhost#*@}:$pp/"
 	gx "nft add table ip t20tamper; nft 'add chain ip t20tamper out { type nat hook output priority -100 ; }'; nft add rule ip t20tamper out ip daddr $ip tcp dport $sp dnat to ${bhost#*@}:$pp" || bad="${bad}cannot redirect the machine to the proxy; "
 	# two normal versions through the proxy: the proxy stores both archives
 	v=$(B_GROUP=teacher B_TEACHER_SED='/^flatpak = /d' pub tamper-0) || bad="${bad}cannot publish; "
@@ -1667,13 +1674,13 @@ c_tamper_replay() {
 	v1=$(B_GROUP=teacher B_TEACHER_SED='/^flatpak = /d; /^\[\[config\]\]/,$ s/^name = "Teacher laptops"/name = "Teacher laptops tamper-1"/' pub tamper-1) || bad="${bad}cannot publish the second version; "
 	kick
 	wait_bundle "$v1" 60 >/dev/null || bad="${bad}the second version did not arrive through the proxy; "
-	log "archives the proxy stored: $(b161 'ls t20-proxy/arch' | tr '\n' ' ')"
+	log "archives the proxy stored: $(b161 'ls t20-proxy/data/arch' | tr '\n' ' ')"
 	for kind in flip replay; do
 		case "$kind" in
 		flip) src=$v1 ;;
 		replay) src=$v ;;
 		esac
-		printf '%s %s %s\n' "$kind" "$src" "$((v1 + 1))" | b161 'cat > t20-proxy/mode'
+		printf '%s %s %s\n' "$kind" "$src" "$((v1 + 1))" | b161 'cat > t20-proxy/data/mode'
 		kick
 		sleep 25
 		o=$(report_item bundle)
@@ -1681,7 +1688,7 @@ c_tamper_replay() {
 		[ "$(state_version)" = "$v1" ] || bad="${bad}the $kind bundle was accepted; "
 		[ "$(jq -r .ok <<<"$o" 2>/dev/null)" = false ] && grep -q "v$((v1 + 1))" <<<"$o" || bad="${bad}no rejection report for $kind; "
 		gx 'journalctl -u mastersos-agent --since -1min -o cat --no-pager | grep -E "拒|reject|refused" | tail -1' | sed 's/^/  agent: /'
-		echo pass | b161 'cat > t20-proxy/mode'
+		echo pass | b161 'cat > t20-proxy/data/mode'
 	done
 	skip "$name/otherkey" "a bundle signed by a key outside the school's trust needs a signing path the command line does not have; the server team's harness would have to serve one"
 	gx 'nft delete table ip t20tamper' || true
@@ -1961,5 +1968,5 @@ for c in "${checks[@]}"; do
 	log "== $c"
 	"c_$c" || fail "$c" "the check itself exited with an error (script problem)"
 done
-log "done: ${#checks[@]} checks, $fails failed"
+log "done: ${#checks[@]} checks, $fails failed, $skips skipped"
 exit "$fails"

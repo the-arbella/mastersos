@@ -156,7 +156,11 @@ serial_since() { pve "tail -n +$(($1 + 1)) $lab/serial-$vmid.log | tr -d '\r' | 
 # shellcheck source-path=SCRIPTDIR source=accept-cli.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/accept-cli.sh"
 # A section the lab cannot run yet: "SKIP <name>: <reason>"; not a failure
-skip() { echo "SKIP $1: $2"; }
+skips=0
+skip() {
+	echo "SKIP $1: $2"
+	skips=$((skips + 1))
+}
 manifest() { # manifest <channel> [with-script] → 本机的文件路径
 	local f=$state/manifest-$1${2:+-script}.toml
 	{
