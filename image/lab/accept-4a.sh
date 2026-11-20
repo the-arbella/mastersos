@@ -9,16 +9,18 @@
 #   （factory_reset 只对 4a 的镜像：4b 的镜像用 accept-4b.sh 的 reset_local。
 #    4a 在 VM 166 上验的「没有 TPM 装成空口令」已去掉：4b 起 TPM 2.0 是前提，没有 TPM 的机器安装器拒装，
 #    这条验收换成 4b Task 20 的 no_tpm_refused。）
-# 命令全经 gx.sh、shot.sh、keys.sh、serial.sh 与 lab 服务端的管理 API。令牌只从 Mac 的
-# ~/.config/testlab/mastersos/mastersos-lab-{ops,recovery}.token 读、经 stdin 交给构建机上的 curl，不进命令行、不进记录；
-# 恢复密钥同样只经 stdin（qm guest exec --pass-stdin、串口）。种子（含 fetch_token）只在 PVE 上临时放、做完 U 盘即删。
+# Commands go through gx.sh, shot.sh, keys.sh, serial.sh and the protocol v1 `mastersos` command line on VM 161 (accept-cli.sh).
+# Required environment: LAB_SERVER_URL, LAB_SCHOOL_ID, LAB_CONTROL_URL, LAB_ARBELLA_STUB (the server team's lab harness).
+# The school key file reaches the build VM over stdin only (0600) and never appears on a command line or in a log; recovery
+# keys also go over stdin only (qm guest exec --pass-stdin, the serial console). The seed (it holds the fetch_token) is only
+# put on PVE for a moment and deleted once the USB stick is made.
 #
 # 构建与发布（在 VM 161 上，MASTERSOS_SNAPSHOT 固定为 A4_SNAPSHOT）：check 需要的版本没构建过就先构建；只发 lab 根的
 # beta（坏版本也只进 beta，不进 stable）；发布之后删掉构建产物，只留装机的那一版。版本号（都可用环境变量改）：
 #   A4_V_BASE   U 盘装的版本          A4_V_BETA1  channel_beta      A4_V_BETA2  update_interrupted
 #   A4_V_BROKEN_USER / A4_V_BROKEN_INITRD  rollback      A4_V_GOOD  bad_bundle_no_rollback   A4_V_TAMPER  tamper
 #   A4_V_OLD    取旧 systemd-boot 的构建（bootloader_update；默认 lab stable 的 20261013.12）
-# 环境变量：A4_DATE（结果目录的日期，默认今天）、A4_SNAPSHOT、A4_BUILD_HOST、A4_SERVER。
+# 环境变量：A4_DATE（结果目录的日期，默认今天）、A4_SNAPSHOT、A4_BUILD_HOST。
 # shellcheck disable=SC2029,SC2329,SC2016,SC2015,SC2001,SC2034 # 本机展开是有意的（参数先校验再拼进远端命令）；check 经 "c_$c" 间接调用；远端命令有意用单引号；pass 不会失败；accept-common.sh 用到的变量在这里设
 set -euo pipefail
 
@@ -45,7 +47,6 @@ export SHOT_DIR=$out
 
 snapshot=${A4_SNAPSHOT:-20261013T000000Z}
 bhost=${A4_BUILD_HOST:-mastersos@192.0.2.99}
-server=${A4_SERVER:-http://192.0.2.99:8480}
 upd=http://192.0.2.99/mastersos
 root161=/var/www/html/mastersos
 lab=/var/lib/vz/mastersos-lab
@@ -204,7 +205,7 @@ c_luks_sealed() {
 	gx 'test ! -e /var/lib/mastersos-system/escrow-pending.json' || bad="${bad}还有 escrow-pending.json；"
 	id=$(device_id)
 	luks=$(gx 'cryptsetup luksUUID /dev/gpt-auto-root-luks' | tr -d '\n')
-	o=$(api recovery GET "/v1/admin/devices/$id/recovery-keys")
+	o=$(recovery_read "$id")
 	log "服务端恢复密钥：$(jq -c --arg u "$luks" '[.[] | select(.luks_uuid == $u)] | length' <<<"$o") 行属于 ${luks}（共 $(jq length <<<"$o") 行）"
 	key=$(jq -r --arg u "$luks" '[.[] | select(.luks_uuid == $u)][0].recovery_key // empty' <<<"$o")
 	if [ -z "$key" ]; then
@@ -714,6 +715,7 @@ for c in "$@"; do
 done
 log "accept-4a.sh $vmid ${checks[*]}（结果 $out/$vmid.txt）"
 [ -z "${A4_LIB:-}" ] || return 0
+lab_env_check || exit 2
 for c in "${checks[@]}"; do
 	if ! declare -F "c_$c" >/dev/null; then
 		fail "$c" "没有这个 check"

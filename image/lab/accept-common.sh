@@ -1,9 +1,10 @@
 #!/bin/bash
 # accept-4a.sh 与 accept-4b.sh 共用的函数（由它们 source，不单独跑）。调用方先设好：
-#   here vmid out state snapshot bhost server upd root161 lab cfg V_BASE，以及 rollback 用的 V_BROKEN_USER V_BROKEN_INITRD；
+#   here vmid out state snapshot bhost upd root161 lab cfg V_BASE，以及 rollback 用的 V_BROKEN_USER V_BROKEN_INITRD；
 #   ACC_SHOT（截图名前缀，4a-t12 / 4b-t20）。
 # 每个 check 打印「PASS <名字>」或「FAIL <名字>：<原因>」，fails 是失败个数。
-# 令牌只从 Mac 的 ~/.config/testlab/mastersos/mastersos-lab-{ops,recovery}.token 读、经 stdin 交给构建机上的 curl；恢复密钥同样只经 stdin。
+# Settings, devices, recovery keys and seeds go through the protocol v1 `mastersos` command line on the build VM (accept-cli.sh; LAB_* environment).
+# The school key file reaches the VM over stdin only; recovery keys only over stdin and the serial console.
 # shellcheck shell=bash disable=SC2029,SC2016,SC2015,SC2154,SC2001 # 本机展开是有意的；远端命令有意用单引号；pass 不会失败；变量由调用方设；sed 加前缀比参数展开好读
 set -euo pipefail
 fails=0
@@ -151,34 +152,11 @@ serial_mark() {
 }
 serial_since() { pve "tail -n +$(($1 + 1)) $lab/serial-$vmid.log | tr -d '\r' | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g'"; }
 
-# --- lab 服务端的管理 API（令牌经 stdin 给 VM 161 上的 curl）--------------------------------
-api() { # api <ops|recovery> <METHOD> <path> [本机的请求体文件]
-	local tok body_remote="" ct=""
-	case "$3" in */draft/files/*) ct=application/octet-stream ;; */draft/manifest) ct=text/plain ;; */commit-server | */commit | */group | */lock | */reset) ct=application/json ;; esac
-	tok=$(tr -d '\n' <"$cfg/mastersos-lab-$1.token")
-	if [ -n "${4:-}" ]; then
-		body_remote=t12-server/tmp/body.$$
-		b161 "mkdir -p -m 700 t12-server/tmp && cat > $body_remote" <"$4"
-	fi
-	printf 'Authorization: Bearer %s\n' "$tok" |
-		b161 "curl -sS --fail-with-body -X $2 -H @- ${ct:+-H 'content-type: $ct'} ${body_remote:+--data-binary @$body_remote} '$server$3'; rc=\$?; ${body_remote:+rm -f $body_remote;} exit \$rc"
-}
-# 发布一份清单（server 钥匙两步发布）；之后的文件参数 <包内路径>=<本机文件> 先写进草稿
-publish_manifest() {
-	local m=$1 p pend dig
-	shift
-	for f in "$@"; do api ops PUT "/v1/admin/draft/files/${f%%=*}" "${f#*=}" >/dev/null; done
-	api ops PUT /v1/admin/draft/manifest "$m" >/dev/null
-	p=$(api ops POST /v1/admin/publish/prepare) || {
-		log "发布前检查没过（$(basename "$m")）：$(jq -c '[.error.details.lints[]? | select(.level == "error") | .code]' <<<"$p" 2>/dev/null || echo "$p")"
-		return 1
-	}
-	pend=$(jq -r .pending_id <<<"$p")
-	dig=$(jq -c .digest_hex <<<"$p")
-	printf '{"confirm_digest": %s}' "$dig" >"$state/commit.json"
-	api ops POST "/v1/admin/publish/pending/$pend/commit-server" "$state/commit.json" >/dev/null
-	log "发布设置包 v$(jq -r .version <<<"$p")（$(basename "$m")；lint $(jq -c '[.lints[]?.code]' <<<"$p")）"
-}
+# --- lab server: the protocol v1 command line on the build VM (accept-cli.sh) -----------------
+# shellcheck source-path=SCRIPTDIR source=accept-cli.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/accept-cli.sh"
+# A section the lab cannot run yet: "SKIP <name>: <reason>"; not a failure
+skip() { echo "SKIP $1: $2"; }
 manifest() { # manifest <channel> [with-script] → 本机的文件路径
 	local f=$state/manifest-$1${2:+-script}.toml
 	{
@@ -189,9 +167,7 @@ manifest() { # manifest <channel> [with-script] → 本机的文件路径
 	} >"$f"
 	echo "$f"
 }
-device_json() { api ops GET /v1/admin/devices | jq -c --arg id "$1" '.[] | select(.device_id == $id)'; }
 device_id() { gx 'jq -r .device_id /var/lib/mastersos-seed/identity.json' | tr -d '\n'; }
-recovery_rows() { api recovery GET "/v1/admin/devices/$1/recovery-keys" | jq 'length'; }
 
 # --- 构建、发布、U 盘 ----------------------------------------------------------
 pool() { pve 'lvs --noheadings -o data_percent pve/data' | tr -d ' \n'; }
@@ -236,12 +212,15 @@ publish() { # publish <v> beta；发完删掉构建产物（装机版本除外�
 	in_channel "$1" "$2" || return 1
 	[ "$1" = "$V_BASE" ] || b161 "rm -rf mastersos-image/mkosi.output/$1 && sudo fstrim / >/dev/null"
 }
-# 服务端还没有发布过设置包时先发一份（stable 通道）：带种子的机器第一次开机要有包可拉
+# Publish a first settings version (stable channel) when the lab school has none: a seeded machine's first boot needs a bundle to fetch
 ensure_bundle() {
-	[ "$(api ops GET /v1/admin/summary | jq -r .latest_version)" != 0 ] || publish_manifest "$(manifest stable)"
+	local rc=0
+	lab_has_bundle || rc=$?
+	case "$rc" in 0) return 0 ;; 1) publish_manifest "$(manifest stable)" ;; *) return 1 ;; esac
 }
-# 做 U 盘：<lab>/a4-<v>-<seeded|plain>.img（带种子的从服务端 GET /v1/admin/seed 拿学校层面的种子，不带分组——新机器进
-# default，要别的分组在设备页改；sha256 记进 state/seed.sha256，种子文件即删）
+# Make the USB stick: <lab>/a4-<v>-<seeded|plain>.img. A seeded one gets the school-level seed from `mastersos seed make` (no
+# group: new machines start in default; another group is a [[device]] entry in the settings); its sha256 goes to
+# state/seed.sha256 and the seed file is deleted at once
 make_stick() { # make_stick <seeded|plain>
 	local kind=$1 img
 	img=$lab/a4-$V_BASE-$1.img
@@ -253,7 +232,8 @@ make_stick() { # make_stick <seeded|plain>
 	pve "mkdir -p $lab && cd $lab && scp -q $bhost:mastersos-image/mkosi.output/$V_BASE/MastersOS-installer_${V_BASE}_x86-64.img.zst a4-tmp.img.zst && zstd -qdf --rm a4-tmp.img.zst -o $img.part && mv $img.part $img"
 	if [ "$kind" = seeded ]; then
 		ensure_bundle >&2
-		api ops GET /v1/admin/seed >"$state/seed.toml.tmp"
+		cli seed make --out seed.tmp >/dev/null
+		lab_run "cat $(lab_dir)/seed.tmp; rc=\$?; rm -f $(lab_dir)/seed.tmp; exit \$rc" >"$state/seed.toml.tmp"
 		shasum -a 256 "$state/seed.toml.tmp" | awk '{print $1}' >"$state/seed.sha256"
 		pve "off=\$(sfdisk -d $img | sed -n '/mastersos-usb-seed/s/.*start= *\([0-9]*\),.*/\1/p'); umask 077; cat > /run/a4-seed.toml && mcopy -o -i $img@@\$((off*512)) /run/a4-seed.toml ::seed.toml; rc=\$?; rm -f /run/a4-seed.toml; exit \$rc" <"$state/seed.toml.tmp"
 		rm -f "$state/seed.toml.tmp"
@@ -383,11 +363,11 @@ c_rollback() {
 	[ -z "$bad" ] && pass "$name" || fail "$name" "$bad"
 }
 
-# 从服务端取当前 LUKS 的恢复密钥，敲进串口（不落盘、不打印）
+# Read the current LUKS recovery key with the school key (mastersos recovery read), type it on the serial console（不落盘、不打印）
 type_recovery_key() {
 	local id luks key
 	id=$1 luks=$2
-	key=$(api recovery GET "/v1/admin/devices/$id/recovery-keys" | jq -r --arg u "$luks" '[.[] | select(.luks_uuid == $u)][0].recovery_key // empty')
+	key=$(recovery_key "$id" "$luks")
 	[ -n "$key" ] || return 1
 	printf '%s\n' "$key" | serial_answer 'Please enter recovery key' 240
 	unset key

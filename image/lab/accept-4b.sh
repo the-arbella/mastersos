@@ -13,17 +13,19 @@
 #             lab_keys_untrusted tpm_userspace_refused
 #   166 all = no_tpm_refused mok_lab_only_stick      167 all = groups mok_lab_only
 #   168 all = no_tpm_refused reset_unmanaged hw_precheck groups mok_lab_only
-#   fetch_token_rotation needs 167 installed first (groups; it plays the lost machine); hw_precheck uses the warnings
+#   apply_within_10s, fallback_15min and reset_remote print SKIP (push is phase 2, no held connection in v1, the bundle reset is gone).
+#   hw_precheck uses the warnings
 #   recorded when no_tpm_refused installed the same VM.
 # Maps to spec §6.9 items 1–10 plus the plan's ship-blocker checks (the table in the Task 20 brief). Helpers shared with
 # accept-4a.sh are in accept-common.sh.
 #
-# Prerequisites (not done by the script): the lab server on VM 161 (~/t12-server, http://192.0.2.99:8480) is running;
+# Prerequisites (not done by the script): the server team's lab harness on VM 161 is running and LAB_SERVER_URL, LAB_SCHOOL_ID,
+# LAB_CONTROL_URL, LAB_ARBELLA_STUB are set (image/lab/accept-cli.sh; `mastersos` on VM 161 publishes, reads devices and recovery keys, makes seeds);
 # Zitadel (~/idp) and Dex (~/dex, lab/idp/dex/) are running on VM 163; lab beta/stable carry A4B_V (default 20261017.18);
 # VM 165 has the snapshot base-4b.
-# Secrets: tokens and IdP passwords are read only from ~/.config/testlab/mastersos/ on the Mac; local passwords are random and
+# Secrets: the lab school key file and the IdP passwords are read only from ~/.config/testlab/mastersos/ on the Mac (the key file goes to VM 161 over stdin); local passwords are random and
 # kept in the state directory (outside the repo, 0700); passwords typed into a VM go through qm monitor's stdin (never a
-# command line); recovery keys only go through stdin and the serial console; tokens are compared by sha256 only.
+# command line); recovery keys only go through stdin and the serial console; fetch tokens are compared by sha256 only.
 # Environment: A4B_DATE (date of the results directory, default today), A4B_V (version under test), A4B_SNAPSHOT, A4B_STATE.
 # shellcheck disable=SC2029,SC2329,SC2016,SC2015,SC2001,SC2034,SC2119 # local expansion is intended (arguments are validated first); checks are called as "c_$c"; remote commands are single-quoted on purpose; pass cannot fail; accept-common.sh uses variables set here; reboot_wait's argument is optional (0.9 false positive)
 set -euo pipefail
@@ -51,7 +53,6 @@ ACC_SHOT=4b-t20
 
 snapshot=${A4B_SNAPSHOT:-20261013T000000Z}
 bhost=${A4_BUILD_HOST:-mastersos@192.0.2.99}
-server=${A4_SERVER:-http://192.0.2.99:8480}
 upd=http://192.0.2.99/mastersos
 root161=/var/www/html/mastersos
 lab=/var/lib/vz/mastersos-lab
@@ -252,7 +253,6 @@ wait_bundle() {
 	echo $((SECONDS - t0))
 	return 1
 }
-latest_version() { api ops GET /v1/admin/summary | jq -r .latest_version; }
 # assemble a manifest: [school] (B_IDP=zitadel|dex|none, B_CHANNEL, B_DOMAINS, B_ADMINS, B_TZ, B_LOCALE) + default +
 # teacher + cart (the two fixture groups with their configs, rewritable with B_TEACHER_SED / B_CART_SED, B_TEACHER_EXTRA appended to
 # the teacher config) + [[device]] (B_DEVICES as raw TOML; by default this VM is put into B_GROUP)
@@ -310,24 +310,17 @@ my_id() { device_id; }
 report_item() { device_json "$(my_id)" | jq -c --arg i "$1" '[.results[]? | select(.item == $i)][0] // empty'; }
 # make the machine fetch now (the agent fetches immediately on SIGUSR1)
 kick() { gx 'systemctl kill -s USR1 mastersos-agent' >/dev/null 2>&1 || true; }
-# when the draft was changed in place (the panel's group / lock / remote-reset endpoints edit the draft): two-step publish
-publish_draft() {
-	local p pend dig
-	p=$(api ops POST /v1/admin/publish/prepare) || {
-		log "pre-publish lint failed: $(jq -c '[.error.details.lints[]? | select(.level == "error") | .code]' <<<"$p" 2>/dev/null || echo "$p")"
-		return 1
-	}
-	pend=$(jq -r .pending_id <<<"$p")
-	dig=$(jq -c .digest_hex <<<"$p")
-	printf '{"confirm_digest": %s}' "$dig" >"$state/commit.json"
-	api ops POST "/v1/admin/publish/pending/$pend/commit-server" "$state/commit.json" >/dev/null || return 1
-	log "published the draft as v$(jq -r .version <<<"$p")"
-	jq -r .version <<<"$p"
-}
-# the panel's endpoints: PUT /v1/admin/devices/<id>/<group|lock|reset> with a JSON body
-panel_put() { # panel_put <device_id> <group|lock|reset> <JSON>
-	printf '%s' "$3" >"$state/panel.json"
-	api ops PUT "/v1/admin/devices/$1/$2" "$state/panel.json"
+# the server the seed names, as "<port> <ipv4>" (what the machine's agent talks to)
+seed_server() {
+	local u h p ip
+	u=$(gx 'sed -n "s/^server_url *= *\"\(.*\)\"/\1/p" /var/lib/mastersos-seed/seed.toml' | tr -d '\n')
+	[[ $u =~ ^(https?)://([^:/]+)(:([0-9]+))? ]] || return 1
+	h=${BASH_REMATCH[2]}
+	p=${BASH_REMATCH[4]}
+	[ -n "$p" ] || { [ "${BASH_REMATCH[1]}" = https ] && p=443 || p=80; }
+	if [[ $h =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then ip=$h; else ip=$(gx "getent ahostsv4 '$h' | awk 'NR==1{print \$1}'" | tr -d '\n'); fi
+	[ -n "$ip" ] || return 1
+	echo "$p $ip"
 }
 
 # --- pseudo-terminal that never answers terminal queries -----------------------------------------
@@ -931,63 +924,13 @@ c_print() {
 	[ -z "$bad" ] && pass "$name" || fail "$name" "$bad"
 }
 
-# §6.9 item 4: state.json's version changes within 10 s of the server publishing (timed by the script from the moment the
-# commit returns; the time from the start of the publish, which includes several SSH round trips from the Mac through two
-# jump hosts, is logged too)
-c_apply_within_10s() {
-	local name=apply_within_10s bad="" v t i
-	start_wait || {
-		fail "$name" "does not boot"
-		return
-	}
-	for i in 1 2 3; do
-		local t0=$SECONDS t1
-		v=$(B_GROUP=teacher B_TEACHER_SED="/^flatpak = /d; /^\[\[config\]\]/,\$ s/^name = \"Teacher laptops\"/name = \"Teacher laptops $i\"/" pub "apply-$i") || {
-			bad="${bad}cannot publish; "
-			continue
-		}
-		t1=$SECONDS
-		wait_bundle "$v" 30 >/dev/null || true
-		t=$((SECONDS - t1))
-		log "run $i: state.json at v$v $t s after the publish returned ($((SECONDS - t0)) s from the start of the publish)"
-		[ "$t" -le 10 ] || bad="${bad}run $i took $t s after the publish (must be ≤10); "
-	done
-	[ -z "$bad" ] && pass "$name" || fail "$name" "$bad"
-}
+# §6.9 item 4: state.json's version changes within 10 s of the server publishing. Protocol v1 has no push yet (phase 2), so a
+# machine only learns of a version when it polls.
+c_apply_within_10s() { skip apply_within_10s "a version within 10 s of publishing needs the server's push (protocol phase 2); v1 devices poll"; }
 
-# §6.9 item 4: with a proxy in front that does not support held connections (VM 161's nginx cuts /v1/bundle after 5 s),
-# a publish still takes effect within 15 min. The server temporarily listens on 127.0.0.1:8481 behind nginx on
-# 192.0.2.99:8480; everything is restored afterwards
-c_fallback_15min() {
-	local name=fallback_15min bad="" o v t0
-	start_wait || {
-		fail "$name" "does not boot"
-		return
-	}
-	b161 'set -e; cd ~/t12-server
-sed "s/^listen = .*/listen = \"127.0.0.1:8481\"/" server.toml > ~/t20-fb.toml
-pkill -f "^\./mastersos-server\.bin --config server\.toml$" || true; sleep 1
-(setsid nohup ./mastersos-server.bin --config ~/t20-fb.toml >>server.log 2>&1 </dev/null &)
-sudo tee /etc/nginx/sites-enabled/t20-fallback >/dev/null <<NG
-# Task 20 fallback_15min: a proxy that cannot hold long-poll connections (removed afterwards)
-server {
-  listen 192.0.2.99:8480;
-  location = /v1/bundle { proxy_pass http://127.0.0.1:8481; proxy_read_timeout 5s; }
-  location / { proxy_pass http://127.0.0.1:8481; proxy_read_timeout 120s; client_max_body_size 64m; }
-}
-NG
-sudo nginx -t 2>/dev/null && sudo systemctl reload nginx; sleep 2; curl -s -o /dev/null -w "proxy %{http_code}\n" http://192.0.2.99:8480/v1/bundle'
-	sleep 70
-	o=$(b161 'sudo tail -n 400 /var/log/nginx/access.log | grep -c " 504 "')
-	log "long polls cut by nginx (504): $o"
-	t0=$SECONDS
-	v=$(B_GROUP=teacher B_TEACHER_SED='/^flatpak = /d; /^\[\[config\]\]/,$ s/^name = "Teacher laptops"/name = "Teacher laptops fallback"/' pub "$name") || bad="${bad}cannot publish; "
-	o=$(wait_bundle "$v" 960) || bad="${bad}not applied within 15 min; "
-	log "through the proxy: state.json at v$v $o s after the publish"
-	gx 'journalctl -u mastersos-agent --since -20min --no-pager -o cat | grep -E "长连接|long|504|拉取|已接受设置包" | tail -6' | sed 's/^/  agent: /'
-	b161 'sudo rm -f /etc/nginx/sites-enabled/t20-fallback; sudo systemctl reload nginx; pkill -f "^\./mastersos-server\.bin --config /home/mastersos/t20-fb\.toml$" || true; sleep 1; cd ~/t12-server && (setsid nohup ./mastersos-server.bin --config server.toml >>server.log 2>&1 </dev/null &); rm -f ~/t20-fb.toml; sleep 2; curl -s -o /dev/null -w "server restored %{http_code}\n" http://192.0.2.99:8480/v1/bundle' | sed 's/^/  VM 161: /'
-	[ -z "$bad" ] && pass "$name" || fail "$name" "$bad"
-}
+# §6.9 item 4: with a proxy that cannot hold connections a publish still takes effect within 15 min. Protocol v1 removed the
+# held connection (long poll), so there is no fallback to check.
+c_fallback_15min() { skip fallback_15min "protocol v1 has no held connection (long poll), so there is no fallback path"; }
 
 # §6.9 item 9: an apply script runs once, runs again when its content changes, and a timed-out one is killed and reported;
 # login scripts as in Task 18 Step 5 (~/login-ran has one line after two logins, the timed-out script is reported failed
@@ -995,7 +938,7 @@ sudo nginx -t 2>/dev/null && sudo systemctl reload nginx; sleep 2; curl -s -o /d
 # stale-settings notice). Also the Task 18 carries: login-queue directory root:root, SIGUSR1 handler installed early.
 # The clock is moved last and undone by rolling back to t20-up
 c_scripts() {
-	local name=scripts bad="" o v pwf run a1 a2 l1 l2 ip
+	local name=scripts bad="" o v pwf run a1 a2 l1 l2 ip sp
 	start_wait && lab_prep || {
 		fail "$name" "does not boot"
 		return
@@ -1042,15 +985,16 @@ echo $$ > /run/t20-sleeper.pid; sleep 600' S_LOGIN=$l1 B_GROUP=teacher B_TEACHER
 	o=$(gx 'stat -c "%U:%G %a %n" /run/mastersos/login-queue 2>/dev/null; grep -E "^SigCgt" /proc/$(systemctl show -p MainPID --value mastersos-agent)/status')
 	log "login queue directory and SIGUSR1: ${o//$'\n'/ | }"
 	grep -q '^root:root 700 /run/mastersos/login-queue' <<<"$o" || bad="${bad}login queue directory is not root:root 700; "
-	# the fetch a login triggers: GET /v1/bundle from this VM, captured on VM 161, against the agent's "a session logged in"
+	# the fetch a login triggers: GET /api/device/v1/bundle from this VM, captured on VM 161, against the agent's "a session logged in"
+	sp=$(seed_server | cut -d' ' -f1) || sp=80
 	ip=$(gx "ip -4 -o addr show scope global | awk '{print \$4}' | cut -d/ -f1 | head -1" | tr -d '\n')
-	b161 "rm -f ~/t20-cap.txt; (setsid sudo timeout 400 tcpdump -l -n -tttt -A -i any 'tcp dst port 8480 and src host $ip' 2>/dev/null </dev/null | awk '/^20[0-9][0-9]-/ {ts=\$2} /GET \/v1\/bundle/ {print ts; fflush()}' > ~/t20-cap.txt 2>/dev/null &) ; sleep 1"
+	b161 "rm -f ~/t20-cap.txt; (setsid sudo timeout 400 tcpdump -l -n -tttt -A -i any 'tcp dst port $sp and src host $ip' 2>/dev/null </dev/null | awk '/^20[0-9][0-9]-/ {ts=\$2} /GET \/api\/device\/v1\/bundle/ {print ts; fflush()}' > ~/t20-cap.txt 2>/dev/null &) ; sleep 1"
 	pw_login t20local "$pwf" || bad="${bad}t20local cannot log in; "
 	sleep 15
 	o=$(gx "journalctl -u mastersos-agent --since -2min -o short-iso-precise --no-pager | grep -m1 '会话登录' | awk '{print \$1}'")
 	local caps
 	caps=$(b161 'sudo pkill -x tcpdump; sleep 1; cat ~/t20-cap.txt; rm -f ~/t20-cap.txt')
-	log "login seen by the agent at ${o:-?}; GET /v1/bundle from the VM at: ${caps//$'\n'/ }"
+	log "login seen by the agent at ${o:-?}; GET /api/device/v1/bundle from the VM at: ${caps//$'\n'/ }"
 	o=$(python3 -c '
 import sys, datetime
 t = sys.argv[1].strip()
@@ -1450,9 +1394,6 @@ print(\"\\n\".join([l for l in txt.splitlines() if \"mastersos-factory-reset\" i
 	serial_logger
 	return "$rc"
 }
-recovery_key() { # recovery_key <device_id> <luks_uuid>: stdout only, piped straight into serial_answers
-	api recovery GET "/v1/admin/devices/$1/recovery-keys" | jq -r --arg u "$2" '[.[] | select(.luks_uuid == $u)][0].recovery_key // empty'
-}
 reset_entry() { gx '. /usr/lib/os-release; bootctl set-oneshot "MastersOS_${IMAGE_VERSION}_x86-64.efi@factory-reset" && echo "MastersOS_${IMAGE_VERSION}_x86-64.efi@factory-reset"' | tr -d '\n'; }
 luks_uuid() { gx 'cryptsetup luksUUID /dev/gpt-auto-root-luks' | tr -d '\n'; }
 
@@ -1534,74 +1475,10 @@ c_reset_unmanaged() {
 	[ -z "$bad" ] && pass "$name" || fail "$name" "$bad"
 }
 
-# §6.9 item 7 (Task 5 Step 6): a remote factory reset from the panel runs once and does not loop (reset-done records the
-# id; two more fetches and a reboot do not run it again), shows no prompt, and afterwards login methods, mode and web apps
-# come back from the school's settings; after a reinstall with the same seed the reset still in the draft does not run;
-# the reset is withdrawn. Rolls back to t20-up afterwards
-c_reset_remote() {
-	local name=reset_remote bad="" o id luks luks2 m v b0 rid t0 st
-	start_wait || {
-		fail "$name" "does not boot"
-		return
-	}
-	v=$(B_GROUP=cart pub reset-remote-0) || bad="${bad}cannot publish; "
-	wait_bundle "$v" 30 >/dev/null || true
-	id=$(my_id)
-	luks=$(luks_uuid)
-	b0=$(boot_id)
-	panel_put "$id" reset true >/dev/null || bad="${bad}PUT reset failed; "
-	rid=$(api ops GET /v1/admin/draft/manifest | grep -A4 "\"$id\"" | sed -n 's/.*reset = { id = "\([^"]*\)".*/\1/p' | head -1)
-	m=$(serial_mark)
-	v=$(publish_draft | tail -1) || bad="${bad}publish failed; "
-	log "remote factory reset: reset id in the draft ${rid:-(not read)}, published v$v"
-	t0=$SECONDS
-	st=""
-	until [ -n "$st" ] || [ $((SECONDS - t0)) -gt 90 ]; do
-		st=$(device_json "$id" | jq -c '[.results[]? | select(.item == "reset")][0] // empty')
-		sleep 3
-	done
-	log "report reset within $((SECONDS - t0)) s: ${st:-none}"
-	t0=$SECONDS
-	until [ "$(boot_id 2>/dev/null)" != "$b0" ] && qga_up || [ $((SECONDS - t0)) -gt 600 ]; do sleep 5; done
-	wait_up 400 || bad="${bad}does not boot after the reset; "
-	# case-sensitive: the boot menu's entry title also says "…asks to type ERASE"
-	serial_since "$m" | grep -qE 'enter its recovery key|Type ERASE' && bad="${bad}the remote reset showed a prompt; "
-	luks2=$(luks_uuid)
-	o=$(gx 'cat /var/lib/mastersos-seed/reset-done 2>/dev/null')
-	log "LUKS $luks → $luks2; reset-done: ${o//$'\n'/ }"
-	[ "$luks2" != "$luks" ] || bad="${bad}no factory reset (LUKS not replaced); "
-	[ -n "$rid" ] && { grep -q "$rid" <<<"$o" || bad="${bad}this reset id is not in reset-done; "; }
-	wait_bundle "$v" 120 >/dev/null || bad="${bad}v$v not received after the reset; "
-	sleep 20
-	o=$(gx 'cat /var/lib/mastersos-system/exec-block-mode; jq -c .methods /var/lib/mastersos-system/login/policy.json; ls /var/lib/mastersos-public/xdg/applications/ | grep -c mastersos-web')
-	log "after the reset: ${o//$'\n'/ | }"
-	# the mode file keeps the old words (browser = learning, desktop = full) so a rollback to a pre-config image still blocks
-	grep -qx 'browser' <<<"$(head -1 <<<"$o")" || bad="${bad}not in the learning mode after the reset; "
-	grep -q '"guest"' <<<"$o" || bad="${bad}wrong login methods after the reset; "
-	[ "$(tail -1 <<<"$o")" = 2 ] || bad="${bad}not two web apps after the reset; "
-	kick
-	sleep 30
-	kick
-	sleep 30
-	reboot_wait || bad="${bad}does not boot again; "
-	[ "$(luks_uuid)" = "$luks2" ] || bad="${bad}reset ran a second time (loop); "
-	# reinstall with the same seed: the reset is still in the draft and does not run
-	install_from seeded reset-remote-reinstall up || bad="${bad}reinstall did not finish; "
-	pve "qm start $vmid" >/dev/null
-	wait_up 400 || bad="${bad}does not boot after the reinstall; "
-	luks=$(luks_uuid)
-	sleep 60
-	kick
-	sleep 30
-	o=$(gx 'cat /var/lib/mastersos-seed/reset-done 2>/dev/null; jq -r .version /var/lib/mastersos/state.json')
-	log "after the reinstall: reset-done ${o//$'\n'/ | }; LUKS $luks → $(luks_uuid)"
-	[ "$(luks_uuid)" = "$luks" ] || bad="${bad}the old reset ran after the reinstall; "
-	panel_put "$id" reset null >/dev/null || bad="${bad}withdrawing the reset failed; "
-	publish_draft >/dev/null || bad="${bad}publish after withdrawing the reset failed; "
-	stop_vm
-	rollback t20-up
-	[ -z "$bad" ] && pass "$name" || fail "$name" "$bad"
-}
+# §6.9 item 7 (Task 5 Step 6): a remote factory reset. The settings-file path (`[[device]] reset`, `reset-done`) is gone from the
+# agent: a Factory reset is now a command in the device's Inbox, sent from the Devices page, which the phase 1 command line
+# does not offer.
+c_reset_remote() { skip reset_remote "the remote Factory reset is an Inbox command; [[device]] reset is ignored by Devices and the command line cannot send one"; }
 
 # Task 22 Step 7: VM 165 updates to the bad-shim version (the same shim re-signed by a test CA, lab beta only); after a
 # good boot bootloader-update refuses to install it, the three ESP files stay, the panel's system:shim-ca fails with
@@ -1672,151 +1549,145 @@ c_tpm_userspace_refused() {
 	[ -z "$bad" ] && pass "$name" || fail "$name" "$bad"
 }
 
-# restart the lab server on VM 161 (optionally with another config file). pkill patterns are anchored to the server's
-# exact command line: an unanchored pattern also matches the remote shell running this very command and kills it
-# shellcheck disable=SC2120 # the argument is optional
-srv_restart() { # srv_restart [config file, default server.toml]
-	b161 "cd ~/t12-server && pkill -f '^\./mastersos-server\.bin --config ' ; sleep 1; (setsid nohup ./mastersos-server.bin --config ${1:-server.toml} >>server.log 2>&1 </dev/null &); sleep 3; curl -s -o /dev/null -w 'server %{http_code}\n' http://192.0.2.99:8480/v1/bundle"
-}
-
-# Task 2 Step 5 (renewal rerun on a built image, Task 2 carry): the lost machine (LOST_VM, default 167, installed by
-# groups) has its escrow credential reset first, then fetch_token is rotated (old sha256 into [[retired_fetch_token]]);
-# 165 renews within minutes, both token files are 600 root and hold the new token (compared by sha256), the panel no longer
-# marks 165 stale but still marks the lost machine and its fetch-token item fails; after removing the retired token 165
-# keeps working and the lost machine gets 401. Afterwards the server config is restored (machines whose seed has the old
-# token keep working) and 165 rolls back to t20-up
+# Task 2 Step 5 (renewal rerun on a built image, Task 2 carry): the harness rotates the fetch token (`POST /fetch-token/rotate` on
+# its control endpoint: the old token stays valid as a retired one); 165 renews within minutes, both token files are 600 root,
+# hold the same new token (compared by sha256) and differ from the old one, and the Devices page no longer marks 165 stale;
+# after `drop-retired` 165 keeps working (no 401). Afterwards 165 rolls back to t20-up
 c_fetch_token_rotation() {
-	local name=fetch_token_rotation bad="" o id lost lostid newsha t0 st
-	lost=${LOST_VM:-167}
+	local name=fetch_token_rotation bad="" o id old new t0 st
 	start_wait || {
 		fail "$name" "does not boot"
 		return
 	}
 	id=$(my_id)
-	lostid=$("$here/gx.sh" "$lost" 'jq -r .device_id /var/lib/mastersos-seed/identity.json' 2>/dev/null | tr -d '\n')
-	[ -n "$lostid" ] || {
-		fail "$name" "VM $lost is not running or has no seed (run 167 groups first)"
-		return
-	}
-	api recovery DELETE "/v1/admin/devices/$lostid/escrow-secret" >/dev/null && log "escrow credential of VM $lost ($lostid) reset (lost machine, before the rotation)" || bad="${bad}resetting the lost machine's escrow credential failed; "
-	newsha=$(b161 'set -e; cd ~/t12-server; cp -p server.toml server.toml.pre-t20-rot
-old=$(sed -n "s/^fetch_token = \"\(.*\)\"$/\1/p" server.toml | ./mastersos-server.bin hash-token)
-new=$(./mastersos-server.bin new-token | sed -n "s/^token = //p")
-python3 - "$new" "$old" "$(date -u +%FT%TZ)" <<"PY"
-import re, sys
-new, old, at = sys.argv[1:4]
-s = open("server.toml").read()
-s = re.sub(r"(?m)^fetch_token = \".*\"$", "fetch_token = \"%s\"" % new, s)
-s = s.replace("[[api_token]]", "fetch_token_rotated_at = \"%s\"\n\n[[retired_fetch_token]]\nsha256 = \"%s\"\nnote = \"T20 rotation\"\n\n[[api_token]]" % (at, old), 1)
-open("server.toml", "w").write(s)
-PY
-printf "%s" "$new" | sha256sum | cut -c1-16')
-	log "rotation: new token sha256 ${newsha}… (token not recorded)"
-	srv_restart | sed 's/^/  /'
+	old=$(gx 'tr -d "\n" </var/lib/mastersos/fetch-token | sha256sum | cut -c1-16')
+	log "165's token sha256 ${old}... before the rotation (token not recorded)"
+	lab_operator rotate || bad="${bad}the rotate command failed; "
 	gx 'systemctl restart mastersos-agent'
-	"$here/gx.sh" "$lost" 'systemctl restart mastersos-agent' || true
 	t0=$SECONDS
 	st=""
-	until [ "$(jq -r .ok <<<"$st" 2>/dev/null)" = true ] || [ $((SECONDS - t0)) -gt 300 ]; do
+	new=$old
+	until { [ "$(jq -r .ok <<<"$st" 2>/dev/null)" = true ] && [ "$new" != "$old" ]; } || [ $((SECONDS - t0)) -gt 300 ]; do
 		sleep 10
 		st=$(report_item fetch-token)
+		new=$(gx 'tr -d "\n" </var/lib/mastersos/fetch-token | sha256sum | cut -c1-16')
 	done
-	log "$((SECONDS - t0)) s: 165 reports fetch-token $st"
+	log "$((SECONDS - t0)) s: 165 reports fetch-token $st; token sha256 ${new}..."
 	[ "$(jq -r .ok <<<"$st" 2>/dev/null)" = true ] || bad="${bad}165 did not renew; "
+	[ "$new" != "$old" ] || bad="${bad}165's token did not change; "
 	o=$(gx 'for f in /var/lib/mastersos/fetch-token /var/lib/mastersos-seed/fetch-token; do echo "$f $(stat -c "%a %U" $f) $(tr -d "\n" < $f | sha256sum | cut -c1-16)"; done')
 	log "165's token files: ${o//$'\n'/ | }"
-	[ "$(grep -c "600 root $newsha" <<<"$o")" = 2 ] || bad="${bad}165's two token files are not 600 root with the new token; "
+	[ "$(grep -c "600 root $new" <<<"$o")" = 2 ] || bad="${bad}165's two token files are not 600 root with the same new token; "
 	sleep 30
-	o=$(api ops GET /v1/admin/devices | jq -c --arg a "$id" --arg b "$lostid" '[.[] | select(.device_id == $a or .device_id == $b) | {device_id: .device_id[0:8], fetch_token_stale, ft: ([.results[]? | select(.item == "fetch-token")][0])}]')
-	log "panel: $o"
-	[ "$(jq -r --arg a "${id:0:8}" '.[] | select(.device_id == $a) | .fetch_token_stale' <<<"$o")" = false ] || bad="${bad}panel still marks 165 stale; "
-	[ "$(jq -r --arg b "${lostid:0:8}" '.[] | select(.device_id == $b) | .fetch_token_stale' <<<"$o")" = true ] || bad="${bad}panel does not mark the lost machine stale; "
-	[ "$(jq -r --arg b "${lostid:0:8}" '.[] | select(.device_id == $b) | .ft.ok' <<<"$o")" = false ] || bad="${bad}the lost machine's fetch-token is not failed; "
-	# remove the retired token
-	b161 'cd ~/t12-server && python3 - <<"PY"
-import re
-s = open("server.toml").read()
-s = re.sub(r"(?ms)^fetch_token_rotated_at = .*?\n\n\[\[retired_fetch_token\]\]\nsha256 = \"[0-9a-f]+\"\nnote = \"T20 rotation\"\n\n", "", s)
-open("server.toml", "w").write(s)
-PY
-grep -c retired_fetch_token server.toml || true' | sed 's/^/  retired-token lines: /'
-	srv_restart | sed 's/^/  /'
+	o=$(device_json "$id" | jq -c '{fetch_token_stale, ft: ([.results[]? | select(.item == "fetch-token")][0])}')
+	log "Devices page: $o"
+	[ "$(jq -r .fetch_token_stale <<<"$o")" = false ] || bad="${bad}the Devices page still marks 165 stale; "
+	skip "$name/lost_machine" "the lost machine's stale marker and 401 need its escrow credential reset (DELETE devices/<id>/escrow-secret), which the command line does not offer"
+	lab_operator drop-retired || bad="${bad}the drop-retired command failed; "
 	kick
-	"$here/gx.sh" "$lost" 'systemctl kill -s USR1 mastersos-agent' || true
 	sleep 30
 	o=$(gx 'journalctl -u mastersos-agent --since -1min -o cat --no-pager | grep -c "401"')
-	log "165's 401s after removing the retired token: $o"
-	[ "$o" = 0 ] || bad="${bad}165 gets 401 after removing the retired token; "
-	o=$("$here/gx.sh" "$lost" 'journalctl -u mastersos-agent --since -1min -o cat --no-pager | grep -m1 "401"')
-	log "lost machine: $o"
-	grep -q 401 <<<"$o" || bad="${bad}the lost machine does not get 401; "
-	b161 'cd ~/t12-server && cp -p server.toml.pre-t20-rot server.toml && rm -f server.toml.pre-t20-rot'
-	srv_restart | sed 's/^/  original token restored: /'
+	log "165's 401s after dropping the retired token: $o"
+	[ "$o" = 0 ] || bad="${bad}165 gets 401 after dropping the retired token; "
 	stop_vm
 	rollback t20-up
 	[ -z "$bad" ] && pass "$name" || fail "$name" "$bad"
 }
 
+# A small reverse proxy on VM 161 in front of the lab server, for tamper_replay. It passes everything through and stores every
+# bundle archive it sees (arch/<version>); the file `mode` ("pass", or "<kind> <stored version> <announced version>") makes it
+# answer GET /api/device/v1/bundle with a stored archive instead (kind flip: one byte changed), announced as a newer version.
+TAMPER_PROXY='
+import http.client, http.server, os, sys, urllib.parse
+up = urllib.parse.urlsplit(sys.argv[1]); port = int(sys.argv[2]); d = sys.argv[3]
+os.makedirs(d + "/arch", exist_ok=True)
+BUNDLE = "/api/device/v1/bundle"
+HOP = {"connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "proxy-authorization", "proxy-authenticate", "host", "content-length"}
+def mode():
+    try:
+        return open(d + "/mode").read().split()
+    except OSError:
+        return ["pass"]
+class H(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.0"
+    def log_message(self, *a):
+        pass
+    def answer(self, code, headers, body):
+        self.send_response(code)
+        for k, v in headers:
+            self.send_header(k, v)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def handle_any(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(n) if n else None
+        path = urllib.parse.urlsplit(self.path).path
+        m = mode()
+        if self.command == "GET" and path == BUNDLE and m[0] != "pass":
+            a = bytearray(open("%s/arch/%s" % (d, m[1]), "rb").read())
+            if m[0] == "flip":
+                a[len(a) // 2] ^= 1
+            self.answer(200, [("Content-Type", "application/gzip"), ("X-Mastersos-Version", m[2])], bytes(a))
+            return
+        c = (http.client.HTTPSConnection if up.scheme == "https" else http.client.HTTPConnection)(up.netloc, timeout=60)
+        h = {k: v for k, v in self.headers.items() if k.lower() not in HOP}
+        c.request(self.command, self.path, body, h)
+        r = c.getresponse()
+        data = r.read()
+        if self.command == "GET" and path == BUNDLE and r.status == 200 and r.getheader("X-Mastersos-Version", "").isdigit():
+            open("%s/arch/%s" % (d, r.getheader("X-Mastersos-Version")), "wb").write(data)
+        self.answer(r.status, [(k, v) for k, v in r.getheaders() if k.lower() not in HOP], data)
+    do_GET = do_POST = do_PUT = do_DELETE = handle_any
+http.server.ThreadingHTTPServer(("0.0.0.0", port), H).serve_forever()
+'
+
 # §6.9 item 6: a bundle with one byte changed, a bundle signed by another key and an old bundle, each delivered as a new
-# version by "replacing the stored file" on the lab server (stop the server, edit the versions table in SQLite, start it)
-# → all rejected, the report carries the reason, state.json's version does not change. The other key comes from a
-# temporary second server (fresh key, 127.0.0.1 only)
+# version through the proxy above (the machine's traffic to the server is redirected to it with a temporary nft rule in the
+# guest) -> all rejected, the report carries the reason, state.json's version does not change. The bundle signed by another
+# key needs a way to sign outside the school's trust, which the command line does not have: SKIP
 c_tamper_replay() {
-	local name=tamper_replay bad="" o v kind server0 sf
+	local name=tamper_replay bad="" o v v1 kind src sp ip pp=${A4_PROXY_PORT:-8483}
 	start_wait || {
 		fail "$name" "does not boot"
 		return
 	}
+	read -r sp ip <<<"$(seed_server)" || true
+	[ -n "${sp:-}" ] && [ -n "${ip:-}" ] || {
+		fail "$name" "cannot read the server address from the machine's seed"
+		return
+	}
+	printf '%s\n' "$TAMPER_PROXY" | b161 "pkill -f '^python3 t20-proxy/proxy\.py ' || true; rm -rf t20-proxy; mkdir -p t20-proxy && cat > t20-proxy/proxy.py"
+	b161 "(setsid nohup python3 t20-proxy/proxy.py $(lab_q "$LAB_SERVER_URL") $pp t20-proxy >t20-proxy/log 2>&1 </dev/null &); sleep 2; curl -s -o /dev/null -w 'proxy %{http_code}\n' http://127.0.0.1:$pp/"
+	gx "nft add table ip t20tamper; nft 'add chain ip t20tamper out { type nat hook output priority -100 ; }'; nft add rule ip t20tamper out ip daddr $ip tcp dport $sp dnat to ${bhost#*@}:$pp" || bad="${bad}cannot redirect the machine to the proxy; "
+	# two normal versions through the proxy: the proxy stores both archives
 	v=$(B_GROUP=teacher B_TEACHER_SED='/^flatpak = /d' pub tamper-0) || bad="${bad}cannot publish; "
-	wait_bundle "$v" 30 >/dev/null || true
-	# v+1 signed by another key: a temporary server (new data dir, generates its key on first start) publishes once, its
-	# row is renumbered to v, and the next publish is v+1
-	o=$(b161 "set -e; d=~/t20-other; rm -rf \$d; mkdir -p \$d/data; cd ~/t12-server
-sed -e 's#^listen = .*#listen = \"127.0.0.1:8482\"#' -e \"s#^data_dir = .*#data_data = \\\"\$d/data\\\"#\" -e 's#^data_data#data_dir#' -e 's#^public_url = .*#public_url = \"http://127.0.0.1:8482\"#' server.toml > \$d/server.toml
-(setsid nohup ./mastersos-server.bin --config \$d/server.toml > \$d/log 2>&1 </dev/null &); sleep 3; echo started")
-	log "temporary server: $o"
-	server0=$server
-	read -r -a sf <<<"$(script_files)"
-	server=http://127.0.0.1:8482
-	publish_manifest "$state/bundle-tamper-0.toml" "${sf[@]}" >/dev/null 2>&1 || bad="${bad}temporary server cannot publish; "
-	b161 "pkill -f '^\./mastersos-server\.bin --config /home/mastersos/t20-other/server\.toml$'; sleep 1; python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute(\"update versions set version=? where version=1\", (int(sys.argv[2]),)); c.commit()' ~/t20-other/data/mastersos.db $v; cd ~/t12-server; (setsid nohup ./mastersos-server.bin --config ~/t20-other/server.toml >> ~/t20-other/log 2>&1 </dev/null &); sleep 3"
-	publish_manifest "$state/bundle-tamper-0.toml" "${sf[@]}" >/dev/null 2>&1 || bad="${bad}temporary server cannot publish a second time; "
-	server=$server0
-	b161 "pkill -f '^\./mastersos-server\.bin --config /home/mastersos/t20-other/server\.toml$'; true"
-	for kind in flip otherkey replay; do
-		o=$(b161 "set -e; cd ~/t12-server; pkill -f '^\./mastersos-server\.bin --config server\.toml$'; sleep 1; cp -p data/mastersos.db data/mastersos.db.t20-tamper
-python3 - data/mastersos.db $v $kind /home/mastersos/t20-other/data/mastersos.db <<'PY'
-import sqlite3, sys
-db, v, kind, other = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
-c = sqlite3.connect(db)
-cols = [r[1] for r in c.execute('pragma table_info(versions)')]
-row = dict(zip(cols, c.execute('select * from versions where version=?', (v,)).fetchone()))
-if kind == 'flip':
-    a = bytearray(row['archive']); a[len(a) // 2] ^= 0x01; row['archive'] = bytes(a)
-elif kind == 'otherkey':
-    o = sqlite3.connect(other).execute('select archive, manifest_text from versions where version=?', (v + 1,)).fetchone()
-    row['archive'], row['manifest_text'] = o
-else:
-    old = dict(zip(cols, c.execute('select * from versions where version=?', (v - 3,)).fetchone()))
-    row['archive'], row['manifest_text'] = old['archive'], old['manifest_text']
-row['version'] = v + 1
-c.execute('insert into versions (%s) values (%s)' % (','.join(cols), ','.join('?' * len(cols))), [row[k] for k in cols])
-c.commit(); print('stored v%d in versions (%s, %d bytes)' % (v + 1, kind, len(row['archive'])))
-PY
-(setsid nohup ./mastersos-server.bin --config server.toml >>server.log 2>&1 </dev/null &); sleep 3")
-		log "$kind: $o"
+	kick
+	wait_bundle "$v" 60 >/dev/null || true
+	v1=$(B_GROUP=teacher B_TEACHER_SED='/^flatpak = /d; /^\[\[config\]\]/,$ s/^name = "Teacher laptops"/name = "Teacher laptops tamper-1"/' pub tamper-1) || bad="${bad}cannot publish the second version; "
+	kick
+	wait_bundle "$v1" 60 >/dev/null || bad="${bad}the second version did not arrive through the proxy; "
+	log "archives the proxy stored: $(b161 'ls t20-proxy/arch' | tr '\n' ' ')"
+	for kind in flip replay; do
+		case "$kind" in
+		flip) src=$v1 ;;
+		replay) src=$v ;;
+		esac
+		printf '%s %s %s\n' "$kind" "$src" "$((v1 + 1))" | b161 'cat > t20-proxy/mode'
 		kick
 		sleep 25
 		o=$(report_item bundle)
 		log "$kind: state.json v$(state_version); report bundle $o"
-		[ "$(state_version)" = "$v" ] || bad="${bad}the $kind bundle was accepted; "
-		[ "$(jq -r .ok <<<"$o" 2>/dev/null)" = false ] && grep -q "v$((v + 1))" <<<"$o" || bad="${bad}no rejection report for $kind; "
+		[ "$(state_version)" = "$v1" ] || bad="${bad}the $kind bundle was accepted; "
+		[ "$(jq -r .ok <<<"$o" 2>/dev/null)" = false ] && grep -q "v$((v1 + 1))" <<<"$o" || bad="${bad}no rejection report for $kind; "
 		gx 'journalctl -u mastersos-agent --since -1min -o cat --no-pager | grep -E "拒|reject|refused" | tail -1' | sed 's/^/  agent: /'
-		b161 "cd ~/t12-server; pkill -f '^\./mastersos-server\.bin --config server\.toml$'; sleep 1; cp -p data/mastersos.db.t20-tamper data/mastersos.db; rm -f data/mastersos.db.t20-tamper data/mastersos.db-wal data/mastersos.db-shm; (setsid nohup ./mastersos-server.bin --config server.toml >>server.log 2>&1 </dev/null &); sleep 3"
+		echo pass | b161 'cat > t20-proxy/mode'
 	done
-	b161 'rm -rf ~/t20-other'
-	# a normal bundle afterwards is accepted. After three rejections the agent is in its retry backoff (it does not long-poll
-	# again until the backoff ends), so it is kicked with SIGUSR1 as an operator would
+	skip "$name/otherkey" "a bundle signed by a key outside the school's trust needs a signing path the command line does not have; the server team's harness would have to serve one"
+	gx 'nft delete table ip t20tamper' || true
+	b161 "pkill -f '^python3 t20-proxy/proxy\.py ' || true; rm -rf t20-proxy"
+	# a normal bundle afterwards is accepted. After the rejections the agent is in its retry backoff, so it is kicked with
+	# SIGUSR1 as an operator would
 	v=$(B_GROUP=teacher B_TEACHER_SED='/^flatpak = /d; /^\[\[config\]\]/,$ s/^name = "Teacher laptops"/name = "Teacher laptops after tamper"/' pub tamper-after) || true
 	kick
 	wait_bundle "$v" 60 >/dev/null || bad="${bad}the normal bundle v$v after the tampering was not accepted; "
@@ -1824,8 +1695,8 @@ PY
 }
 
 # §6.9 item 10 (config profiles design §6: the seed is school-level and carries no group): 167 and 168 are installed from
-# the school's seed → the panel shows 未分组 (default); dragging 167 into teacher on the panel and publishing → 167 switches
-# to the full mode; dragging 168 into cart → the learning mode
+# the school's seed → the Devices page shows default; a [[device]] entry that puts 167 into teacher, published → 167 switches
+# to the full mode; one that puts 168 into cart → the learning mode
 c_groups() {
 	local name=groups bad="" o id g v
 	g=teacher
@@ -1844,8 +1715,7 @@ c_groups() {
 	[ "$(jq -r .group <<<"$o")" = default ] || bad="${bad}the school's seed does not give default; "
 	o=$(gx 'cat /var/lib/mastersos-system/exec-block-mode')
 	log "$vmid (default): $o"
-	panel_put "$id" group "{\"group\": \"$g\"}" >/dev/null || bad="${bad}moving it into $g failed; "
-	v=$(publish_draft | tail -1)
+	v=$(B_GROUP=$g pub groups-move) || bad="${bad}moving it into $g failed; "
 	wait_bundle "$v" 60 >/dev/null || bad="${bad}v$v not received; "
 	sleep 5
 	o=$(device_json "$id" | jq -c '{group, group_source}')
@@ -2082,6 +1952,7 @@ for c in "$@"; do
 done
 log "accept-4b.sh $vmid ${checks[*]} (results $out/t20-$vmid.txt; version $V_BASE)"
 [ -z "${A4_LIB:-}" ] || return 0
+lab_env_check || exit 2
 for c in "${checks[@]}"; do
 	if ! declare -F "c_$c" >/dev/null; then
 		fail "$c" "no such check"
