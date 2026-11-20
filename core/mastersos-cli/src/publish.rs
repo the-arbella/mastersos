@@ -25,7 +25,7 @@ use mastersos_bundle::secret_ref;
 use mastersos_bundle::stamp::{school_name_to_write, stamp};
 use mastersos_bundle::{
     accept, assemble, content_digest, frame_of, has_errors, recipients_changed, signed_message,
-    Contents, Lint, LintLevel, Manifest, Signer, TrustKey, MAX_HEARTBEAT_DAYS,
+    Contents, Frame, Lint, LintLevel, Manifest, Signer, TrustKey, MAX_HEARTBEAT_DAYS,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -309,6 +309,31 @@ struct PendingAnswer {
     warnings: Vec<Value>,
 }
 
+/// The frame of the stamped text names this directory's school and the version stamped.
+fn frame_matches(frame: &Frame, school_id: &str, version: u64) -> Result<(), CliError> {
+    // The stamp wrote `version`: another one here is a fault of this program, not of the text.
+    if frame.version != version {
+        return Err(CliError::new(
+            "self_check_failed",
+            &format!(
+                "Not published: the stamped settings say version {}, but version {version} was stamped (an internal error); nothing was uploaded",
+                frame.version
+            ),
+        ));
+    }
+    if frame.school_id != school_id {
+        return Err(CliError::new(
+            "school_mismatch",
+            &format!(
+                "Not published: manifest.toml names school {}, but this directory belongs to school {}",
+                safe::field(&frame.school_id),
+                school_id
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Before the first version: nothing may be published yet, and this computer must not have
 /// verified a version of this school (a server that forgot its chain would get a signature over a
 /// trust it chose).
@@ -317,8 +342,14 @@ async fn first_version(server: &Server, pin_dir: &Path) -> Result<(), CliError> 
     if latest != 0 {
         return Err(newer(latest, 0));
     }
+    // The protocol v1 pin of this school, or the old admin API's pin of this host (taken over by
+    // the first verify): either means a version was verified here.
     let path = chain::pin_path(pin_dir, server.into())?;
-    if let Some(pin) = chain::load_pin(&path).map_err(local)? {
+    let legacy = chain::legacy_pin_path(server.into(), pin_dir).map(|(p, _)| p);
+    for path in std::iter::once(path).chain(legacy) {
+        let Some(pin) = chain::load_pin(&path).map_err(local)? else {
+            continue;
+        };
         return Err(CliError::new(
             "chain_tampered",
             &format!(
@@ -557,13 +588,17 @@ fn approve_and_sign(
     Ok(archive)
 }
 
+/// The clock: read when the text is stamped and again when the check-in is signed (after the
+/// person confirms), so each carries the time it is made.
+pub type Clock<'a> = &'a dyn Fn() -> DateTime<Utc>;
+
 /// Publish the directory `w` with the school key `kit` (see the module documentation).
 pub async fn publish(
     server: &Server,
     w: &Workdir,
     kit: &Kit,
     opts: PublishOpts<'_>,
-    now: DateTime<Utc>,
+    clock: Clock<'_>,
     confirm: &mut dyn BufRead,
     out: &mut dyn Write,
 ) -> Result<PublishOutcome, CliError> {
@@ -574,7 +609,7 @@ pub async fn publish(
         &signer,
         &kit.trust_key(),
         opts,
-        now,
+        clock,
         confirm,
         out,
     )
@@ -589,7 +624,7 @@ async fn publish_with(
     signer: &dyn Signer,
     me: &TrustKey,
     opts: PublishOpts<'_>,
-    now: DateTime<Utc>,
+    clock: Clock<'_>,
     confirm: &mut dyn BufRead,
     out: &mut dyn Write,
 ) -> Result<PublishOutcome, CliError> {
@@ -673,9 +708,36 @@ async fn publish_with(
         };
         Some(v)
     };
-    let latest = base.as_ref().map_or(0, |v| v.latest);
-    if latest != meta.base_version {
+    // `accepted`: the version computers run (the base must be it); `latest`: the server's newest,
+    // which is newer only when versions after `accepted` were refused here.
+    let (accepted, latest) = base.as_ref().map_or((0, 0), |v| (v.version, v.latest));
+    if latest < meta.base_version {
         return Err(newer(latest, meta.base_version));
+    }
+    if accepted > meta.base_version {
+        return Err(newer(accepted, meta.base_version));
+    }
+    if accepted != meta.base_version {
+        return Err(CliError::new(
+            "version_conflict",
+            &format!(
+                "Computers run version {accepted}, not this directory's base version {}: save your changes elsewhere, then run `mastersos pull --force` and redo them",
+                meta.base_version
+            ),
+        ));
+    }
+    if accepted < latest {
+        writeln!(
+            out,
+            "Warning: version {} on the server was refused on this computer (computers stay on version {accepted}). This version builds on version {accepted} and is published after them as version {}.",
+            if accepted + 1 == latest {
+                latest.to_string()
+            } else {
+                format!("{}-{latest}", accepted + 1)
+            },
+            latest + 1
+        )
+        .map_err(local)?;
     }
     if let Some(v) = &base {
         if !v.trust.contains(me) {
@@ -690,8 +752,8 @@ async fn publish_with(
     }
 
     // 3. The stamp: version, time, and the organisation's name from the server's list.
-    let version = meta.base_version + 1;
-    let issued_at = now.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let version = latest + 1;
+    let issued_at = clock().to_rfc3339_opts(SecondsFormat::Secs, true);
     let schools = server.schools().await?;
     let entry = schools
         .iter()
@@ -742,16 +804,7 @@ async fn publish_with(
             &format!("Not published: {}", safe::field(&e.to_string())),
         )
     })?;
-    if frame.school_id != meta.school_id || frame.version != version {
-        return Err(CliError::new(
-            "school_mismatch",
-            &format!(
-                "Not published: manifest.toml names school {}, but this directory belongs to school {}",
-                safe::field(&frame.school_id),
-                meta.school_id
-            ),
-        ));
-    }
+    frame_matches(&frame, &meta.school_id, version)?;
 
     // 5. The upload, and the server's echo of it.
     let answer: Value = server
@@ -857,7 +910,7 @@ async fn publish_with(
         signer,
         version,
         &digest_hex,
-        now,
+        clock(),
         CHECKIN_DAYS,
         &manifest.trust,
     )
@@ -923,12 +976,12 @@ pub async fn heartbeat(
     server: &Server,
     kit: &Kit,
     opts: HeartbeatOpts<'_>,
-    now: DateTime<Utc>,
+    clock: Clock<'_>,
     confirm: &mut dyn BufRead,
     out: &mut dyn Write,
 ) -> Result<CheckedIn, CliError> {
     let signer = kit.signer();
-    heartbeat_with(server, &signer, &kit.trust_key(), opts, now, confirm, out).await
+    heartbeat_with(server, &signer, &kit.trust_key(), opts, clock, confirm, out).await
 }
 
 async fn heartbeat_with(
@@ -936,7 +989,7 @@ async fn heartbeat_with(
     signer: &dyn Signer,
     me: &TrustKey,
     opts: HeartbeatOpts<'_>,
-    now: DateTime<Utc>,
+    clock: Clock<'_>,
     confirm: &mut dyn BufRead,
     out: &mut dyn Write,
 ) -> Result<CheckedIn, CliError> {
@@ -983,7 +1036,8 @@ async fn heartbeat_with(
             ),
         ));
     }
-    let until = now + chrono::Duration::days(opts.days);
+    // Shown before the person confirms; the statement reads the clock again when it is signed.
+    let until = clock() + chrono::Duration::days(opts.days);
     writeln!(
         out,
         "Monthly check-in for version {} (check code {}), valid for {} days, until {}.",
@@ -1027,7 +1081,7 @@ async fn heartbeat_with(
         signer,
         v.version,
         &v.digest_hex,
-        now,
+        clock(),
         opts.days,
         &v.trust,
     )
@@ -1287,13 +1341,27 @@ mod tests {
     /// Version 1 trusting `trusted`, signed by `trusted`, published on `school`, and a directory
     /// pulled from it on this computer (its pin holds version 1 and its trust), then edited.
     fn published_dir(t: &Path, s: &MockServer, school: &School, trusted: &Kit) -> Workdir {
-        let text = stamp(
+        published_text(
+            t,
+            s,
+            school,
             &manifest_trusting(trusted),
-            1,
-            "2026-11-20T00:00:00Z",
-            Some("Demo School"),
+            trusted,
+            vec![trusted.trust_key()],
         )
-        .unwrap();
+    }
+
+    /// [`published_dir`] for version 1 made of `text`, signed by `by`, its pin holding `trust`.
+    fn published_text(
+        t: &Path,
+        s: &MockServer,
+        school: &School,
+        text: &str,
+        by: &Kit,
+        trust: Vec<TrustKey>,
+    ) -> Workdir {
+        let name = school_name_to_write(text, "Demo School");
+        let text = stamp(text, 1, "2026-11-20T00:00:00Z", name).unwrap();
         let mut files = BTreeMap::new();
         files.insert("files/a.txt".to_string(), b"hello".to_vec());
         let contents = Contents {
@@ -1305,7 +1373,7 @@ mod tests {
             .lock()
             .unwrap()
             .archives
-            .push(pack(&contents, &trusted.signer()).unwrap());
+            .push(pack(&contents, &by.signer()).unwrap());
         let meta = Meta {
             server: s.uri(),
             school_id: SID.into(),
@@ -1321,7 +1389,7 @@ mod tests {
             .join(format!("{}.toml", chain::pin_name_v1(&origin, SID)));
         let mut pin = chain::load_pin(&pin_file).unwrap().unwrap();
         assert_eq!(pin.digest_hex, hex(&content_digest(&contents)));
-        pin.trust = vec![trusted.trust_key()];
+        pin.trust = trust;
         std::fs::write(&pin_file, toml::to_string(&pin).unwrap()).unwrap();
         edit(&w);
         w
@@ -1343,6 +1411,18 @@ mod tests {
         yes: bool,
         confirm: &str,
     ) -> (Result<PublishOutcome, CliError>, String) {
+        run_at(s, w, signer, yes, confirm, &now).await
+    }
+
+    /// [`run`] with the clock given.
+    async fn run_at(
+        s: &MockServer,
+        w: &Workdir,
+        signer: &Counting,
+        yes: bool,
+        confirm: &str,
+        clock: Clock<'_>,
+    ) -> (Result<PublishOutcome, CliError>, String) {
         let server = server(s);
         let pins = w.test_pins();
         let mut out = Vec::new();
@@ -1357,12 +1437,22 @@ mod tests {
                 pin_dir: &pins,
                 fingerprints: &[],
             },
-            now(),
+            clock,
             &mut confirm.as_bytes(),
             &mut out,
         )
         .await;
         (r, String::from_utf8(out).unwrap())
+    }
+
+    /// A clock that moves on 10 minutes each time it is read, starting at [`now`].
+    fn stepping() -> impl Fn() -> DateTime<Utc> {
+        let reads = std::cell::Cell::new(0);
+        move || {
+            let n = reads.get();
+            reads.set(n + 1);
+            now() + chrono::Duration::minutes(10 * n)
+        }
     }
 
     fn uploaded_record(w: &Workdir) -> bool {
@@ -1463,6 +1553,19 @@ mod tests {
             archive.contents.manifest_text
         );
         assert!(w.manifest().unwrap().contains("name = \"Demo School\""));
+
+        // Format 3 takes the name too (format 1 never: the name does not raise a format).
+        let (s, school) = new_school().await;
+        let t = tempfile::tempdir().unwrap();
+        let w = first_dir(t.path(), &s, &k);
+        let text = mastersos_bundle::migrate::to_format3(&w.manifest().unwrap()).unwrap();
+        std::fs::write(w.root.join("manifest.toml"), text).unwrap();
+        let (r, out) = run(&s, &w, &signer, true, "").await;
+        r.unwrap_or_else(|e| panic!("{e:?}\n{out}"));
+        let archive = read_archive(&school.held.lock().unwrap().archives[0]).unwrap();
+        let text = &archive.contents.manifest_text;
+        assert!(text.contains("format = 3"), "{text}");
+        assert!(text.contains("name = \"Demo School\""), "{text}");
 
         // A school the server does not list for this account: nothing is uploaded.
         let (s, school) = school_listing(json!([
@@ -1845,7 +1948,7 @@ mod tests {
                         pin_dir: &pins,
                         fingerprints: &[],
                     },
-                    now(),
+                    &now,
                     &mut confirm.as_bytes(),
                     &mut out,
                 )
@@ -1890,13 +1993,209 @@ mod tests {
                 pin_dir: &pins,
                 fingerprints: &[],
             },
-            now(),
+            &now,
             &mut std::io::empty(),
             &mut Vec::new(),
         )
         .await;
         assert_eq!(r.unwrap_err().code, "key_not_trusted");
         assert_eq!(stranger.signed(), 0);
+    }
+
+    #[tokio::test]
+    async fn each_signature_reads_the_clock_when_it_is_made() {
+        // The text is stamped after the chain is checked; the check-in is signed after the person
+        // confirms, with the clock read again then.
+        let (s, school) = new_school().await;
+        let t = tempfile::tempdir().unwrap();
+        let k = kit();
+        let w = published_dir(t.path(), &s, &school, &k);
+        let clock = stepping();
+        let (r, out) = run_at(&s, &w, &Counting::of(&k), false, "2\n", &clock).await;
+        let PublishOutcome::Published { checkin, .. } =
+            r.unwrap_or_else(|e| panic!("{e:?}\n{out}"));
+        let (archive, hb) = {
+            let held = school.held.lock().unwrap();
+            (
+                read_archive(held.archives.last().unwrap()).unwrap(),
+                Heartbeat::parse(&held.heartbeats[0]).unwrap(),
+            )
+        };
+        let stamped = Manifest::parse(&archive.contents.manifest_text).unwrap();
+        let stamped_at: DateTime<Utc> = stamped.issued_at.unwrap().parse().unwrap();
+        assert!(stamped_at >= now(), "{stamped_at}");
+        assert!(
+            hb.statement.issued_at > stamped_at.timestamp(),
+            "{} {stamped_at}",
+            hb.statement.issued_at
+        );
+        assert_eq!(
+            checkin,
+            CheckIn::Until(
+                DateTime::from_timestamp(hb.statement.issued_at, 0).unwrap()
+                    + chrono::Duration::days(30)
+            )
+        );
+
+        // `heartbeat`: the statement's time is read after the person typed the number.
+        let clock = stepping();
+        let server = server(&s);
+        let pins = w.test_pins();
+        let r = heartbeat_with(
+            &server,
+            &Counting::of(&k),
+            &k.trust_key(),
+            HeartbeatOpts {
+                days: 7,
+                yes: false,
+                pin_dir: &pins,
+                fingerprints: &[],
+            },
+            &clock,
+            &mut "2\n".as_bytes(),
+            &mut Vec::new(),
+        )
+        .await;
+        let c = r.unwrap();
+        let text = school
+            .held
+            .lock()
+            .unwrap()
+            .heartbeats
+            .last()
+            .unwrap()
+            .clone();
+        let st = Heartbeat::parse(&text).unwrap().statement;
+        assert!(st.issued_at > now().timestamp(), "{}", st.issued_at);
+        assert_eq!(c.not_after.timestamp(), st.not_after);
+    }
+
+    #[test]
+    fn a_frame_of_another_version_is_an_internal_error() {
+        let text = stamp(&manifest_trusting(&kit()), 4, "2026-11-21T05:00:00Z", None).unwrap();
+        let frame = frame_of(&text).unwrap();
+        frame_matches(&frame, SID, 4).unwrap();
+        let e = frame_matches(&frame, SID, 5).unwrap_err();
+        assert_eq!(e.code, "self_check_failed");
+        assert!(
+            e.message.contains("version 4") && e.message.contains("version 5"),
+            "{}",
+            e.message
+        );
+        let e = frame_matches(&frame, "0192f3a4-5b6c-7d8e-9f00-aabbccddeeff", 4).unwrap_err();
+        assert_eq!(e.code, "school_mismatch");
+    }
+
+    #[tokio::test]
+    async fn first_version_refuses_an_old_pin_of_the_host() {
+        // The server reports nothing published, but the old admin API's pin for this host shows
+        // a version was verified here: no first-version signature.
+        let (s, school) = new_school().await;
+        let t = tempfile::tempdir().unwrap();
+        let k = kit();
+        let w = first_dir(t.path(), &s, &k);
+        let pins = w.test_pins();
+        std::fs::create_dir_all(&pins).unwrap();
+        let origin = crate::server::check_origin(&s.uri()).unwrap();
+        let host = format!("{}:{}", origin.host_str().unwrap(), origin.port().unwrap());
+        let old = chain::Pin {
+            host: host.clone(),
+            version: 3,
+            digest_hex: "ab".repeat(32),
+            trust: vec![k.trust_key()],
+            verified: Vec::new(),
+        };
+        std::fs::write(
+            pins.join(format!("{}.toml", host.replace(':', "_"))),
+            toml::to_string(&old).unwrap(),
+        )
+        .unwrap();
+        let signer = Counting::of(&k);
+        let (r, out) = run(&s, &w, &signer, true, "").await;
+        let e = r.unwrap_err();
+        assert_eq!(e.code, "chain_tampered", "{e:?}\n{out}");
+        assert!(e.message.contains("version 3"), "{}", e.message);
+        assert!(school.held.lock().unwrap().uploads.is_empty());
+        assert_eq!(signer.signed(), 0);
+    }
+
+    #[tokio::test]
+    async fn publishing_over_a_refused_version_says_so() {
+        use mastersos_bundle::testutil::FakePasskey;
+        // Version 1 (format 1) trusts the school key and a passkey; version 2 adds a key,
+        // approved only by the passkey: computers refuse it and stay on version 1. A person who
+        // checked it goes on from version 1 (dropping the passkey, which protocol v1 does not
+        // carry), and the next version is 3.
+        let (s, school) = new_school().await;
+        let t = tempfile::tempdir().unwrap();
+        let k = kit();
+        let kt = k.trust_key();
+        let phone =
+            FakePasskey::new("server.example", "https://server.example").with_key_id("phone");
+        let pk = phone.trust_key("phone");
+        let ed = |t: &TrustKey| {
+            format!(
+                "\n[[trust]]\nid = \"{}\"\nalg = \"ed25519\"\npublic_key = \"{}\"\n",
+                t.id, t.public_key
+            )
+        };
+        let passkey = format!(
+            "\n[[trust]]\nid = \"{}\"\nalg = \"webauthn-es256\"\npublic_key = \"{}\"\nrp_id = \"{}\"\n",
+            pk.id,
+            pk.public_key,
+            pk.rp_id.clone().unwrap()
+        );
+        let body = format!(
+            "\n[school]\nid = \"{SID}\"\n\n[[config]]\nid = \"default\"\nname = \"Default\"\ninterface = \"learning\"\nlogin_methods = [\"local\"]\n\n[[group]]\nid = \"default\"\nname = \"Ungrouped\"\nconfig = \"default\"\n"
+        );
+        let v1_text = format!("{}{passkey}{body}", ed(&kt));
+        let w = published_text(
+            t.path(),
+            &s,
+            &school,
+            &v1_text,
+            &k,
+            vec![kt.clone(), pk.clone()],
+        );
+        let added = other_kit().trust_key();
+        let v2 = Contents {
+            manifest_text: stamp(
+                &format!("{}{passkey}{}{body}", ed(&kt), ed(&added)),
+                2,
+                "2026-11-20T01:00:00Z",
+                None,
+            )
+            .unwrap(),
+            files: BTreeMap::new(),
+        };
+        let forged = assemble(&v2, &phone.sign(&signed_message(&v2), 0x05)).unwrap();
+        school.held.lock().unwrap().archives.push(forged);
+        std::fs::write(
+            w.root.join("manifest.toml"),
+            format!("{}{body}", ed(&kt)).replace("name = \"Ungrouped\"", "name = \"Everyone\""),
+        )
+        .unwrap();
+        let signer = Counting::of(&k);
+        // Go on from version 2's change check, the version number, the trusted keys' change.
+        let (r, out) = run(&s, &w, &signer, false, "yes\n3\nyes\n").await;
+        let PublishOutcome::Published { version, .. } =
+            r.unwrap_or_else(|e| panic!("{e:?}\n{out}"));
+        assert_eq!(version, 3);
+        let warn = out
+            .find("Warning: version 2 on the server was refused on this computer")
+            .expect(&out);
+        let ask = out.find("Type the version number 3").expect(&out);
+        assert!(warn < ask, "{out}");
+        assert!(out.contains("builds on version 1"), "{out}");
+        let archive = {
+            let held = school.held.lock().unwrap();
+            read_archive(held.archives.last().unwrap()).unwrap()
+        };
+        let m = Manifest::parse(&archive.contents.manifest_text).unwrap();
+        assert_eq!(m.version, 3);
+        assert_eq!(m.trust, [kt], "built on version 1's keys");
+        assert_eq!(w.meta().unwrap().base_version, 3);
+        w.verify_base().unwrap();
     }
 
     #[test]

@@ -296,7 +296,7 @@ async fn publish_twice_moves_the_base_and_checks_in() {
     assert!(!out.contains(&digest), "only the check code: {out}");
     plain_words(&out, &[manifest(&dir)]);
     plain_words(&err, &[]);
-    // The template is format 1: no `[school] name` is stamped into it (only format 2 texts).
+    // The template is format 1: no `[school] name` is stamped into it (only format 2 and later).
     assert!(manifest(&dir).contains("version = 1"));
 
     // Version 2, verified from the pin version 1 left on this computer.

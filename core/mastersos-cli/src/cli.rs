@@ -2174,7 +2174,7 @@ async fn publish_v1(
             pin_dir: &pins,
             fingerprints: &o.fingerprints,
         },
-        chrono::Utc::now(),
+        &chrono::Utc::now,
         confirm,
         out,
     )
@@ -2218,7 +2218,7 @@ async fn heartbeat_v1(
             pin_dir: &pins,
             fingerprints: &ctx.o.fingerprints,
         },
-        chrono::Utc::now(),
+        &chrono::Utc::now,
         confirm,
         out,
     )

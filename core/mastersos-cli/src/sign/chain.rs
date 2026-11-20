@@ -475,7 +475,7 @@ pub async fn verify_chain(
 
 /// The pin the old admin API wrote for a protocol v1 source's host (`<host>[_<port>].toml`), with
 /// the `host` it must record.
-fn legacy_pin_path(src: Source<'_>, pin_dir: &Path) -> Option<(PathBuf, String)> {
+pub(crate) fn legacy_pin_path(src: Source<'_>, pin_dir: &Path) -> Option<(PathBuf, String)> {
     let Source::New(s) = src else {
         return None;
     };
