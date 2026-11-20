@@ -514,7 +514,7 @@ keyset_check_uki "$out/MastersOS_${version}_x86-64.efi" "$keyset" || {
 
 # --- authd 的 OIDC broker（4b Task 8）：mkosi.build 写进镜像的构建来源 ---------------------------
 authd_oidc_info=$(sudo systemd-dissect --copy-from "$out/MastersOS_${version}_x86-64.raw" /usr/lib/mastersos/authd-oidc.build-info -)
-for k in authd_oidc_tag authd_oidc_commit authd_oidc_patches authd_oidc_go authd_oidc_go_sha256 authd_oidc_sha256; do
+for k in authd_oidc_tag authd_oidc_commit authd_oidc_patches authd_oidc_test_netns authd_oidc_go authd_oidc_go_sha256 authd_oidc_sha256; do
 	grep -q "^$k=." <<<"$authd_oidc_info" || {
 		echo "build.sh: 镜像里 /usr/lib/mastersos/authd-oidc.build-info 缺 ${k}（mkosi.build 没跑完？）" >&2
 		exit 1
@@ -533,6 +533,9 @@ got_patches=$(sed -n 's/^authd_oidc_patches=//p' <<<"$authd_oidc_info")
 	echo "build.sh: the broker in the image carries patches '$got_patches', patches/authd-oidc/ has '$want_patches'" >&2
 	exit 1
 }
+# Whether mkosi.build could run the patch tests in a network namespace of their own (no: they ran in the build's, see
+# its WARNING); shown, not enforced
+echo "build.sh: authd_oidc_test_netns=$(sed -n 's/^authd_oidc_test_netns=//p' <<<"$authd_oidc_info") (authd-oidc patch tests in their own network namespace)"
 
 # --- 只认公网信任的证书（Ruling 3）：正式镜像里 /usr/local/share/ca-certificates 必须是空的 ------------------
 # （试验 CA 只由 lab profile 的附加树放进来；check-tree 第 16 条管源码树，这里管真正构建出来的镜像）
