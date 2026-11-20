@@ -1,5 +1,5 @@
 diff --git a/authd-oidc-brokers/internal/broker/mastersos_authcode.go b/authd-oidc-brokers/internal/broker/mastersos_authcode.go
-index 1ed7a13..f45f0f3 100644
+index 1ed7a13..68b0682 100644
 --- a/authd-oidc-brokers/internal/broker/mastersos_authcode.go
 +++ b/authd-oidc-brokers/internal/broker/mastersos_authcode.go
 @@ -116,10 +116,23 @@ func (f *authCodeFlow) handleCallback(w http.ResponseWriter, r *http.Request) {
@@ -11,29 +11,29 @@ index 1ed7a13..f45f0f3 100644
 +const authCodeCloseGrace = 2 * time.Second
 +
 +// close frees the port at once: server.Close alone misses a listener that Serve has not picked up yet. MastersOS (0008):
-+// the server then shuts down gracefully instead of with server.Close, which drops active connections. The waiting flow
++// the server is then shut down gracefully, not with server.Close alone, which drops active connections. The waiting flow
 +// closes it as soon as handleCallback hands over the code, before handleCallback has written the "Signed in" page, so
-+// server.Close could cut the browser off and leave it on a connection error. A response under way gets
-+// authCodeCloseGrace; after that the server is closed anyway.
++// server.Close could cut the browser off and leave it on a connection error. Shutdown lets a response under way finish
++// for up to authCodeCloseGrace; the server.Close after it ends whatever is still open then (after a graceful shutdown
++// it has nothing left to close). Shutdown's error is not a signal: it can report the listener closed above.
  func (f *authCodeFlow) close() {
 -	_ = f.server.Close()
  	_ = f.listener.Close()
 +	go func() {
 +		ctx, cancel := context.WithTimeout(context.Background(), authCodeCloseGrace)
 +		defer cancel()
-+		if f.server.Shutdown(ctx) != nil {
-+			_ = f.server.Close()
-+		}
++		_ = f.server.Shutdown(ctx)
++		_ = f.server.Close()
 +	}()
  }
  
  // handOver passes the wait on f to next, the flow the same session started when it selected its auth mode again. An
 diff --git a/authd-oidc-brokers/internal/broker/mastersos_closegrace_test.go b/authd-oidc-brokers/internal/broker/mastersos_closegrace_test.go
 new file mode 100644
-index 0000000..45aa61e
+index 0000000..12197a0
 --- /dev/null
 +++ b/authd-oidc-brokers/internal/broker/mastersos_closegrace_test.go
-@@ -0,0 +1,53 @@
+@@ -0,0 +1,58 @@
 +package broker
 +
 +// MastersOS carried patch (image/patches/authd-oidc/0008-callback-page-and-refused-port.patch).
@@ -42,6 +42,7 @@ index 0000000..45aa61e
 +	"io"
 +	"net"
 +	"net/http"
++	"sync"
 +	"testing"
 +
 +	"github.com/stretchr/testify/require"
@@ -54,6 +55,8 @@ index 0000000..45aa61e
 +	require.NoError(t, err)
 +	addr := l.Addr().String()
 +	entered, proceed := make(chan struct{}), make(chan struct{})
++	release := sync.OnceFunc(func() { close(proceed) })
++	t.Cleanup(release) // a failed assertion below must not leave the handler blocked
 +	f := &authCodeFlow{listener: l, server: &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 +		close(entered)
 +		<-proceed
@@ -79,9 +82,11 @@ index 0000000..45aa61e
 +
 +	<-entered
 +	f.close()
-+	_, err = net.Dial("tcp", addr)
-+	require.Error(t, err, "the port must be free as soon as the flow is closed")
-+	close(proceed)
++	if c, err := net.Dial("tcp", addr); err == nil {
++		_ = c.Close()
++		t.Fatal("the port must be free as soon as the flow is closed")
++	}
++	release()
 +
 +	r := <-done
 +	require.NoError(t, r.err, "a response under way when the flow closes must still reach the browser")

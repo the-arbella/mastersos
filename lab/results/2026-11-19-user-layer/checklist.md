@@ -359,6 +359,8 @@ Image built from master with a test school, `school.oidc.mastersos_claims = true
 
 ## C3. A real image build
 
-`image/build.sh` succeeds: `mkosi.build` runs the broker's `TestMastersOS` tests as root in the chroot with the expected pass count, and the patch list check accepts 0001-0007.
+`image/build.sh` succeeds: `mkosi.build` runs the broker's `TestMastersOS` tests as root in the chroot with the expected pass count, and the patch list check accepts 0001-0008.
+
+- The build reports `authd_oidc_test_netns=yes` (build.sh's line and `build-info.txt`): the patch tests ran in a network namespace of their own. `no` means the mkosi build sandbox could not make one (see the WARNING from `mkosi.build`); record it.
 
 Screenshots for every item: new numbers, never overwritten; list their paths in the results.

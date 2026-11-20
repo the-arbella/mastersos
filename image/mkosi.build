@@ -81,14 +81,18 @@ go mod verify
 # They listen on fixed loopback ports (31391-31397, 48123-48130; the second range lies inside the kernel's ephemeral port
 # range), so they run in a network namespace of their own with only loopback up and ephemeral ports from 49152: nothing
 # else on the build host, and none of their own outgoing connections, can hold one of those ports. Where the build
-# sandbox cannot make that namespace they still run, in the build's network namespace, and say so.
+# sandbox cannot make that namespace they still run, in the build's network namespace, and say so; the build-info records
+# which (authd_oidc_test_netns=yes|no, none without patches) and build.sh prints it.
+test_netns=none
 if [ "$patches" != none ]; then
 	mkdir -p "$work/tmp"
 	netns=(unshare -n bash -c 'ip link set lo up && echo "49152 65535" >/proc/sys/net/ipv4/ip_local_port_range && exec "$@"' bash)
+	test_netns=yes
 	if ! "${netns[@]}" true 2>"$work/netns-probe.log"; then
 		cat "$work/netns-probe.log" >&2
 		echo "mkosi.build: WARNING: no network namespace of their own for the authd-oidc patch tests (unshare -n, loopback, ephemeral port range); running them in the build's network namespace, where a fixed loopback port in use makes them fail" >&2
 		netns=()
+		test_netns=no
 	fi
 	TMPDIR=$work/tmp "${netns[@]}" go test -count=1 -v -run '^TestMastersOS' ./internal/broker/ >"$work/patch-tests.log" || {
 		cat "$work/patch-tests.log" >&2
@@ -146,6 +150,7 @@ install -d "$DESTDIR/usr/lib/mastersos"
 	echo "authd_oidc_tag=$TAG"
 	echo "authd_oidc_commit=$got"
 	echo "authd_oidc_patches=$patches"
+	echo "authd_oidc_test_netns=$test_netns"
 	echo "authd_oidc_go=$(go version)"
 	echo "authd_oidc_go_sha256=$GO_SHA256"
 	echo "authd_oidc_sha256=$(sha256sum "$DESTDIR/usr/libexec/authd-oidc" | cut -d' ' -f1)"
