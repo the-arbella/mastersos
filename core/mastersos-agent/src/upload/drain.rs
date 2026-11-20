@@ -579,7 +579,13 @@ pub fn low_battery(root: &Path) -> bool {
 /// the seed partition's `identity.json` (never created here), the fetch token as the agent
 /// keeps it. Without a credential nothing can be sent: the queue stays for later.
 pub async fn drain_main(cfg: &crate::AgentConfig) -> Result<()> {
-    if !crate::support::HELP_AVAILABLE {
+    drain_main_with(cfg, crate::support::HELP_AVAILABLE).await
+}
+
+/// [`drain_main`] with what this release offers given: without help requests and diagnostics (protocol v1 phase 1)
+/// nothing is sent and the queue stays.
+async fn drain_main_with(cfg: &crate::AgentConfig, help_available: bool) -> Result<()> {
+    if !help_available {
         log::info!("upload queue: help requests and diagnostics are not available in this release, nothing sent");
         return Ok(());
     }

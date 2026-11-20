@@ -700,22 +700,61 @@ fn device_batteries_do_not_count() {
     assert!(low_battery(&m.paths().root));
 }
 
-/// Phase 1: the drain entry point sends nothing and leaves the queue as it is.
+/// A machine that can send: seed (the mock as the server, a fetch token), state with a device id, identity, the lab
+/// image (http allowed), and one `ack` item in the queue.
+fn sendable_cfg(m: &Machine, server: &str) -> crate::AgentConfig {
+    let seed_dir = m.tmp.path().join("seed");
+    let root = m.tmp.path().join("root");
+    std::fs::create_dir_all(&seed_dir).unwrap();
+    std::fs::create_dir_all(root.join("usr/lib/mastersos")).unwrap();
+    std::fs::write(root.join("usr/lib/mastersos/profile"), "lab\n").unwrap();
+    std::fs::write(
+        m.tmp.path().join("seed.toml"),
+        format!(
+            "server_url = \"{server}\"\nfetch_token = \"ft\"\n\n[[trust]]\nid = \"k\"\nalg = \"ed25519\"\npublic_key = \"{}\"\n",
+            "A".repeat(43) + "="
+        ),
+    )
+    .unwrap();
+    std::fs::write(m.tmp.path().join("state.json"), r#"{"device_id":"dev-1"}"#).unwrap();
+    std::fs::write(
+        seed_dir.join("identity.json"),
+        r#"{"device_id":"dev-1","escrow_secret":"s3cret-device"}"#,
+    )
+    .unwrap();
+    m.queue
+        .enqueue(&Item::new(
+            Job::Ack {
+                seq: 9,
+                state: InboxResultState::Done,
+                detail: "diag:abc123".into(),
+            },
+            Utc::now(),
+        ))
+        .unwrap();
+    crate::AgentConfig {
+        state_dir: m.tmp.path().to_path_buf(),
+        seed_dir,
+        seed_requires_mount: false,
+        root,
+        ..crate::AgentConfig::default()
+    }
+}
+
+/// Phase 1: the drain entry point sends nothing and leaves the queue as it is. The same machine with help available
+/// does send, so the test fails when the guard is gone.
 #[tokio::test]
 async fn drain_main_sends_nothing_in_phase_1() {
     let m = Machine::new();
-    m.queue
-        .enqueue_support("0192f3a4-5b6c-7d8e-9f00-112233445566", t(T0))
-        .unwrap();
     let c = cloud(None, 200, 204).await;
-    let cfg = crate::AgentConfig {
-        state_dir: m.tmp.path().to_path_buf(),
-        seed_dir: m.tmp.path().join("seed"),
-        seed_requires_mount: false,
-        root: m.tmp.path().join("root"),
-        ..crate::AgentConfig::default()
-    };
-    drain_main(&cfg).await.unwrap();
-    assert!(acks(&c).is_empty() && c.asked.lock().unwrap().is_empty());
+    let cfg = sendable_cfg(&m, &c.srv.uri());
+    drain_main_with(&cfg, false).await.unwrap();
+    assert!(c.srv.received_requests().await.unwrap().is_empty());
     assert_eq!(m.queue.list().unwrap().len(), 1, "the item stays");
+    drain_main_with(&cfg, true).await.unwrap();
+    assert_eq!(
+        acks(&c),
+        [(9, InboxResultState::Done, "diag:abc123".to_string())]
+    );
+    assert!(m.queue.is_empty());
 }
