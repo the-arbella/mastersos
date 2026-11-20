@@ -44,6 +44,8 @@ These close B1 and B2: the parts marked BLOCKED are implemented as follows.
 - **Device routes** check the fetch token first: without a valid token every route answers 401 `unauthorized`, the reserved ones included.
 - **End to end (Tasks 10 and 11).** The server team provides one script that starts a throwaway database, the server and a test issuer on loopback http, creates a school with an admin, enables MastersOS, and prints the server URL and the school id; plus a stub `arbella` on PATH that mints tokens without a browser. Fetch-token rotation is the server's operator command, exposed by that script. Our runner job and the lab call the script; we do not start the server ourselves.
 
+- **Confirmed by the server team:** the non-interactive mode of Task 9 (`--key-file`, `--yes`, `--json`, `--server`, `--school`, exits 0/1/2, error shape `{"error":{"code","message","problems"}}`) and plan A's `protocol-check` JSON. `arbella` without credentials exits 3 and prints `{"error":{"code":"not_signed_in","message":…,"problems":[]}}` on stdout; our own `not_logged_in` code stays ours.
+
 ## Global Constraints
 
 - Files, comments, errors and script output in English; end-user (Device) text only through gettext (`image/system-i18n/*.po`, every catalogue). CLI output is English (school IT tool, not localised).
