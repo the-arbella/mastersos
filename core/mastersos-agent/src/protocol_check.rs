@@ -247,12 +247,36 @@ fn finish(
     }
 }
 
-/// A directory owned by `uid` is used only by a process whose effective uid is `uid`.
-fn owned_by_us(uid: u32, euid: u32, what: &str) -> Result<()> {
+/// An existing directory of the run is used only when it belongs to the process's effective uid
+/// and no group or other user can write to it: files another user could have planted there
+/// (an `identity.json`, a `fetch-token`) would be trusted. Read bits are fine (tightened to 0700).
+fn private_enough(uid: u32, mode: u32, euid: u32, what: &str) -> Result<()> {
     if uid != euid {
         anyhow::bail!("{what} is owned by another user (uid {uid}); use a directory of your own");
     }
+    if mode & 0o022 != 0 {
+        anyhow::bail!(
+            "{what} is writable by group or others (mode {:o}): files in it may come from another user; use a new DIR",
+            mode & 0o7777
+        );
+    }
     Ok(())
+}
+
+/// [`private_enough`] for an open directory.
+fn check_private(fd: &OwnedFd, what: &str) -> Result<()> {
+    let st = rustix::fs::fstat(fd).map_err(|e| anyhow::anyhow!("checking {what} failed: {e}"))?;
+    private_enough(
+        st.st_uid,
+        st.st_mode,
+        rustix::process::geteuid().as_raw(),
+        what,
+    )
+}
+
+fn set_private(fd: &OwnedFd, what: &str) -> Result<()> {
+    rustix::fs::fchmod(fd, rustix::fs::Mode::from_raw_mode(0o700))
+        .map_err(|e| anyhow::anyhow!("setting the mode of {what} failed: {e}"))
 }
 
 /// The path of an open directory through its fd (Linux): opening it resolves to that very
@@ -263,8 +287,9 @@ fn fd_path(fd: &OwnedFd) -> PathBuf {
 
 /// Opens DIR exactly once (`O_DIRECTORY|O_NOFOLLOW`: a symlink is refused); a missing DIR is
 /// created 0700 first (its parent must exist). It must be ours and hold nothing but an earlier
-/// run's `seed-partition/` and `state/` directories; anything else is refused untouched. Only then
-/// is it tightened to 0700 through the fd (an own 0755 DIR becomes 0700).
+/// run's `seed-partition/` and `state/` directories, and no group or other may write to it
+/// ([`private_enough`]); anything else is refused untouched. It is not tightened here: the
+/// caller checks the existing subdirectories first, so a refusal changes no mode.
 fn open_run_dir(dir: &Path) -> Result<OwnedFd> {
     use rustix::fs::{Mode, OFlags};
     let (Some(parent), Some(name)) = (dir.parent(), dir.file_name()) else {
@@ -286,8 +311,7 @@ fn open_run_dir(dir: &Path) -> Result<OwnedFd> {
         }
         Err(e) => return Err(e.context("opening DIR")),
     };
-    let st = rustix::fs::fstat(&fd).map_err(|e| anyhow::anyhow!("checking DIR failed: {e}"))?;
-    owned_by_us(st.st_uid, rustix::process::geteuid().as_raw(), "DIR")?;
+    check_private(&fd, "DIR")?;
     for entry in std::fs::read_dir(fd_path(&fd))? {
         let entry = entry?;
         let name = entry.file_name();
@@ -298,20 +322,37 @@ fn open_run_dir(dir: &Path) -> Result<OwnedFd> {
             );
         }
     }
-    rustix::fs::fchmod(&fd, Mode::from_raw_mode(0o700))
-        .map_err(|e| anyhow::anyhow!("setting the mode of DIR failed: {e}"))?;
     Ok(fd)
 }
 
-/// `DIR/<name>`, opened or created relative to the DIR fd with `O_NOFOLLOW` (a symlink is
-/// refused), ours, and tightened to 0700.
-fn open_private_sub(dir: &OwnedFd, name: &str) -> Result<OwnedFd> {
-    let fd = safefs::open_dir_at(dir, Path::new(name), true)?;
-    let st = rustix::fs::fstat(&fd).map_err(|e| anyhow::anyhow!("checking {name} failed: {e}"))?;
-    owned_by_us(st.st_uid, rustix::process::geteuid().as_raw(), name)?;
-    rustix::fs::fchmod(&fd, rustix::fs::Mode::from_raw_mode(0o700))
-        .map_err(|e| anyhow::anyhow!("setting the mode of {name} failed: {e}"))?;
-    Ok(fd)
+/// Opens DIR and its two directories, checks all that exist ([`private_enough`]) before any
+/// change, then tightens DIR to 0700 and opens or creates `seed-partition/` and `state/` relative
+/// to the DIR fd with `O_NOFOLLOW` (a symlink is refused), 0700. Returns DIR, seed-partition and
+/// state.
+fn open_run_dirs(dir: &Path) -> Result<(OwnedFd, OwnedFd, OwnedFd)> {
+    let dir_fd = open_run_dir(dir)?;
+    let mut existing = Vec::new();
+    for name in [SEED_PART, STATE] {
+        let fd = safefs::open_child_dir(&dir_fd, name)?;
+        if let Some(fd) = &fd {
+            check_private(fd, name)?;
+        }
+        existing.push(fd);
+    }
+    set_private(&dir_fd, "DIR")?;
+    let mut opened = Vec::new();
+    for (name, fd) in [SEED_PART, STATE].into_iter().zip(existing) {
+        let fd = match fd {
+            Some(fd) => fd,
+            // Created now inside our DIR: tightened below.
+            None => safefs::open_dir_at(&dir_fd, Path::new(name), true)?,
+        };
+        set_private(&fd, name)?;
+        opened.push(fd);
+    }
+    let state = opened.pop().expect("two directories");
+    let part = opened.pop().expect("two directories");
+    Ok((dir_fd, part, state))
 }
 
 /// Step 1.
@@ -340,9 +381,7 @@ fn seed_import(input: &CheckInput) -> std::result::Result<(Device, String), (Str
     // 0700, so no one else can rename or swap its entries.
     let set_up = || -> Result<(OwnedFd, PathBuf, PathBuf, Imported, Identity)> {
         let dir = std::path::absolute(&input.dir)?;
-        let dir_fd = open_run_dir(&dir)?;
-        let part_fd = open_private_sub(&dir_fd, SEED_PART)?;
-        let state_fd = open_private_sub(&dir_fd, STATE)?;
+        let (dir_fd, part_fd, state_fd) = open_run_dirs(&dir)?;
         for (fd, what) in [(&part_fd, SEED_PART), (&state_fd, STATE)] {
             if safefs::read_at(fd, SEED_FILE)?.is_some_and(|h| h != bytes) {
                 anyhow::bail!(
@@ -742,13 +781,23 @@ mod tests {
     use super::*;
 
     /// A DIR owned by someone else is refused whoever runs the check (the integration test that
-    /// chowns a DIR needs root).
+    /// chowns a DIR needs root); so is one group or others may write to. Read bits are fine.
     #[test]
-    fn only_a_directory_of_our_own_is_used() {
-        assert!(owned_by_us(1000, 1000, "DIR").is_ok());
-        assert!(owned_by_us(0, 0, "DIR").is_ok());
-        let e = owned_by_us(65534, 1000, "DIR").unwrap_err().to_string();
+    fn only_a_private_directory_of_our_own_is_used() {
+        for m in [0o700, 0o755, 0o750, 0o40755] {
+            assert!(private_enough(1000, m, 1000, "DIR").is_ok(), "{m:o}");
+        }
+        assert!(private_enough(0, 0o700, 0, "DIR").is_ok());
+        let e = private_enough(65534, 0o700, 1000, "DIR")
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("another user"), "{e}");
-        assert!(owned_by_us(1000, 0, "state").is_err());
+        assert!(private_enough(1000, 0o700, 0, "state").is_err());
+        for m in [0o720, 0o702, 0o775, 0o757, 0o777, 0o41777] {
+            let e = private_enough(1000, m, 1000, "state")
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains("writable"), "{m:o}: {e}");
+        }
     }
 }

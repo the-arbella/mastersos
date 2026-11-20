@@ -1000,3 +1000,46 @@ async fn a_dir_of_another_user_is_refused() {
     assert_eq!(mode(dir), 0o755);
     assert!(entries(dir).is_empty());
 }
+
+/// An earlier run's layout in `dir`, with the given modes for DIR, seed-partition/ and state/.
+async fn earlier_run(s: &Setup, modes: [u32; 3]) {
+    let r = run_check(&s.input, Utc::now()).await;
+    assert!(r.ok, "{r:#?}");
+    let dir = &s.input.dir;
+    for (d, m) in ["", "seed-partition", "state"].iter().zip(modes) {
+        std::fs::set_permissions(dir.join(d), std::fs::Permissions::from_mode(m)).unwrap();
+    }
+}
+
+/// DIR (or one of its directories) writable by group or others may hold files planted by
+/// another user: refused, every mode left as found.
+async fn writable_layout_is_refused(modes: [u32; 3]) {
+    let a = Kit::generate();
+    let srv = simple_server(&a.signer(), &a, true).await;
+    let s = setup(&seed(&srv.uri(), vec![a.trust_key()], Some(3)), None);
+    earlier_run(&s, modes).await;
+    let dir = &s.input.dir;
+    let before = |d: &str| entries(&dir.join(d));
+    let (part, state) = (before("seed-partition"), before("state"));
+    let r = run_check(&s.input, Utc::now()).await;
+    refused_seed_import(&r);
+    assert!(r.calls[0].detail.contains("writable"), "{:?}", r.calls[0]);
+    for (d, m) in ["", "seed-partition", "state"].iter().zip(modes) {
+        assert_eq!(mode(&dir.join(d)), m, "{d}");
+    }
+    assert_eq!((before("seed-partition"), before("state")), (part, state));
+}
+
+#[tokio::test]
+async fn group_writable_dir_is_refused() {
+    let _l = LOCK.lock().await;
+    writable_layout_is_refused([0o775, 0o700, 0o700]).await;
+    writable_layout_is_refused([0o777, 0o700, 0o700]).await;
+}
+
+#[tokio::test]
+async fn other_writable_state_is_refused() {
+    let _l = LOCK.lock().await;
+    writable_layout_is_refused([0o755, 0o700, 0o757]).await;
+    writable_layout_is_refused([0o700, 0o770, 0o700]).await;
+}
