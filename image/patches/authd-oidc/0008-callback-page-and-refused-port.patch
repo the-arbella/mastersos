@@ -1,0 +1,120 @@
+diff --git a/authd-oidc-brokers/internal/broker/mastersos_authcode.go b/authd-oidc-brokers/internal/broker/mastersos_authcode.go
+index 1ed7a13..f45f0f3 100644
+--- a/authd-oidc-brokers/internal/broker/mastersos_authcode.go
++++ b/authd-oidc-brokers/internal/broker/mastersos_authcode.go
+@@ -116,10 +116,23 @@ func (f *authCodeFlow) handleCallback(w http.ResponseWriter, r *http.Request) {
+ 	_, _ = w.Write([]byte(authCodeDonePage))
+ }
+ 
+-// close frees the port at once: server.Close alone misses a listener that Serve has not picked up yet.
++// authCodeCloseGrace is how long a closed flow's server still lets a response go out (MastersOS, 0008).
++const authCodeCloseGrace = 2 * time.Second
++
++// close frees the port at once: server.Close alone misses a listener that Serve has not picked up yet. MastersOS (0008):
++// the server then shuts down gracefully instead of with server.Close, which drops active connections. The waiting flow
++// closes it as soon as handleCallback hands over the code, before handleCallback has written the "Signed in" page, so
++// server.Close could cut the browser off and leave it on a connection error. A response under way gets
++// authCodeCloseGrace; after that the server is closed anyway.
+ func (f *authCodeFlow) close() {
+-	_ = f.server.Close()
+ 	_ = f.listener.Close()
++	go func() {
++		ctx, cancel := context.WithTimeout(context.Background(), authCodeCloseGrace)
++		defer cancel()
++		if f.server.Shutdown(ctx) != nil {
++			_ = f.server.Close()
++		}
++	}()
+ }
+ 
+ // handOver passes the wait on f to next, the flow the same session started when it selected its auth mode again. An
+diff --git a/authd-oidc-brokers/internal/broker/mastersos_closegrace_test.go b/authd-oidc-brokers/internal/broker/mastersos_closegrace_test.go
+new file mode 100644
+index 0000000..45aa61e
+--- /dev/null
++++ b/authd-oidc-brokers/internal/broker/mastersos_closegrace_test.go
+@@ -0,0 +1,53 @@
++package broker
++
++// MastersOS carried patch (image/patches/authd-oidc/0008-callback-page-and-refused-port.patch).
++
++import (
++	"io"
++	"net"
++	"net/http"
++	"testing"
++
++	"github.com/stretchr/testify/require"
++)
++
++// The waiting flow closes the sign-in as soon as handleCallback hands over the code, which can be before handleCallback
++// has written its page: close must free the port at once but still let a response under way reach the browser.
++func TestMastersOSAuthCodeCloseFinishesResponseUnderWay(t *testing.T) {
++	l, err := net.Listen("tcp", "127.0.0.1:0")
++	require.NoError(t, err)
++	addr := l.Addr().String()
++	entered, proceed := make(chan struct{}), make(chan struct{})
++	f := &authCodeFlow{listener: l, server: &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++		close(entered)
++		<-proceed
++		_, _ = w.Write([]byte(authCodeDonePage))
++	})}}
++	go func() { _ = f.server.Serve(l) }()
++
++	type reply struct {
++		body string
++		err  error
++	}
++	done := make(chan reply, 1)
++	go func() {
++		res, err := http.Get("http://" + addr + "/callback")
++		if err != nil {
++			done <- reply{err: err}
++			return
++		}
++		defer res.Body.Close()
++		b, err := io.ReadAll(res.Body)
++		done <- reply{body: string(b), err: err}
++	}()
++
++	<-entered
++	f.close()
++	_, err = net.Dial("tcp", addr)
++	require.Error(t, err, "the port must be free as soon as the flow is closed")
++	close(proceed)
++
++	r := <-done
++	require.NoError(t, r.err, "a response under way when the flow closes must still reach the browser")
++	require.Equal(t, authCodeDonePage, r.body)
++}
+diff --git a/authd-oidc-brokers/internal/broker/mastersos_reauth_test.go b/authd-oidc-brokers/internal/broker/mastersos_reauth_test.go
+index f7cd8c7..484b8a8 100644
+--- a/authd-oidc-brokers/internal/broker/mastersos_reauth_test.go
++++ b/authd-oidc-brokers/internal/broker/mastersos_reauth_test.go
+@@ -8,7 +8,6 @@ import (
+ 	"bytes"
+ 	"encoding/json"
+ 	"fmt"
+-	"net"
+ 	"net/http"
+ 	"os"
+ 	"strings"
+@@ -22,14 +21,12 @@ import (
+ 	"github.com/stretchr/testify/require"
+ )
+ 
+-// closedPortURL returns a URL on 127.0.0.1 where nothing listens (connection refused).
++// closedPortURL returns a URL on 127.0.0.1 where nothing listens (connection refused). MastersOS (0008): port 1, which
++// no listener here takes and the kernel never hands out on its own; a port freed after Listen(":0") could be taken at
++// once by a parallel subtest's server, whose answer then reads as a refusal instead of an unreachable provider.
+ func closedPortURL(t *testing.T) string {
+ 	t.Helper()
+-	l, err := net.Listen("tcp", "127.0.0.1:0")
+-	require.NoError(t, err, "Setup: Listen should not have returned an error")
+-	addr := l.Addr().String()
+-	require.NoError(t, l.Close(), "Setup: Close should not have returned an error")
+-	return "http://" + addr
++	return "http://127.0.0.1:1"
+ }
+ 
+ // discoveryWithTokenEndpoint serves the default discovery document of issuer, but with tokenEndpoint.
