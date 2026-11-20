@@ -4,7 +4,8 @@
 # --check first), fetch the pinned Go toolchain and check its sha256, then run `go test -run '^TestMastersOS'` in
 # internal/broker/ and require every top-level TestMastersOS function of the patched tree to have passed.
 #
-# Run it as an ordinary user. mkosi.build runs the same tests as root in its chroot, so they run twice here: as this user,
+# Run it as an ordinary user. mkosi.build runs the same tests as root in its chroot (in a network namespace of its own
+# set up like the one here), so they run twice here: as this user,
 # then as root in a user namespace (unshare -r), with the same pass count required both times; a runner without user
 # namespaces fails instead of skipping the root run. Each run has a network namespace of its own with only loopback up:
 # the tests listen on fixed loopback ports (31391-31397, and 48123-48130, which lie inside the kernel's ephemeral port
@@ -113,6 +114,7 @@ isolated() {
 	if [ "$as" = root ]; then
 		unshare -rn bash -c "$setup"' && exec "$@"' bash "$@"
 	else
+		# shellcheck disable=SC2016 # expanded by the inner bash
 		unshare -rn bash -c "$setup"' && exec unshare --map-user="$1" --map-group="$2" -- "${@:3}"' bash \
 			"$(id -u)" "$(id -g)" "$@"
 	fi
@@ -121,6 +123,7 @@ isolated() {
 	echo "authd-oidc-patch-test: the root run does not run as uid 0" >&2
 	exit 1
 }
+# shellcheck disable=SC2016 # awk's own $2
 [ "$(isolated user id -u)" = "$(id -u)" ] && [ "$(isolated user awk '/^CapEff/ {print $2}' /proc/self/status)" = 0000000000000000 ] || {
 	echo "authd-oidc-patch-test: the user run is not this uid without capabilities" >&2
 	exit 1

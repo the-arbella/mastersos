@@ -77,10 +77,20 @@ go mod download
 go mod verify
 # The patches carry their own tests (TestMastersOS*): run them, so a patch that still applies after a tag bump but no longer
 # does what it says fails the build here and not on a laptop. Only those: this runs as root in the chroot, and some
-# upstream tests (read-only data dir cases in TestIsAuthenticated) only pass as an ordinary user
+# upstream tests (read-only data dir cases in TestIsAuthenticated) only pass as an ordinary user.
+# They listen on fixed loopback ports (31391-31397, 48123-48130; the second range lies inside the kernel's ephemeral port
+# range), so they run in a network namespace of their own with only loopback up and ephemeral ports from 49152: nothing
+# else on the build host, and none of their own outgoing connections, can hold one of those ports. Where the build
+# sandbox cannot make that namespace they still run, in the build's network namespace, and say so.
 if [ "$patches" != none ]; then
 	mkdir -p "$work/tmp"
-	TMPDIR=$work/tmp go test -count=1 -v -run '^TestMastersOS' ./internal/broker/ >"$work/patch-tests.log" || {
+	netns=(unshare -n bash -c 'ip link set lo up && echo "49152 65535" >/proc/sys/net/ipv4/ip_local_port_range && exec "$@"' bash)
+	if ! "${netns[@]}" true 2>"$work/netns-probe.log"; then
+		cat "$work/netns-probe.log" >&2
+		echo "mkosi.build: WARNING: no network namespace of their own for the authd-oidc patch tests (unshare -n, loopback, ephemeral port range); running them in the build's network namespace, where a fixed loopback port in use makes them fail" >&2
+		netns=()
+	fi
+	TMPDIR=$work/tmp "${netns[@]}" go test -count=1 -v -run '^TestMastersOS' ./internal/broker/ >"$work/patch-tests.log" || {
 		cat "$work/patch-tests.log" >&2
 		echo "authd-oidc patch tests failed" >&2
 		exit 1
