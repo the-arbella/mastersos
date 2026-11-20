@@ -26,6 +26,8 @@ pub mod status;
 #[cfg(any(test, feature = "test-util"))]
 pub mod testutil;
 pub mod user_layer;
+#[cfg(any(test, feature = "test-util"))]
+pub mod vectors;
 pub mod webauthn;
 
 /// 长轮询最多挂住的秒数；server 与 agent 共用。

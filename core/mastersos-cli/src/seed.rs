@@ -620,4 +620,40 @@ mod tests {
             .collect();
         assert_eq!(header, want);
     }
+
+    /// The fetch tokens of the shared wire vectors (`mastersos-bundle/testdata/wire-vectors.json`):
+    /// every valid one passes [`fetch_token_shape_ok`], every invalid one is refused.
+    #[test]
+    fn wire_vector_fetch_tokens() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../mastersos-bundle/testdata/wire-vectors.json"
+        );
+        let w: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let valid = w["fetch_tokens"].as_array().unwrap();
+        assert!(!valid.is_empty());
+        for t in valid {
+            assert!(
+                fetch_token_shape_ok(t["token"].as_str().unwrap()),
+                "{}",
+                t["name"]
+            );
+        }
+        let invalid: Vec<&serde_json::Value> = w["invalid"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|v| v["field"] == "fetch_token")
+            .collect();
+        assert_eq!(invalid.len(), 3);
+        for v in invalid {
+            assert_eq!(v["valid"], false);
+            assert!(
+                !fetch_token_shape_ok(v["value"].as_str().unwrap()),
+                "{}",
+                v["name"]
+            );
+        }
+    }
 }

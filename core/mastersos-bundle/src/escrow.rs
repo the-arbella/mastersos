@@ -538,65 +538,19 @@ mod tests {
         );
     }
 
-    /// `testdata/escrow-vectors.json`: test-only kits (the masters of `kit-vectors.json`), their
-    /// recipients' fingerprint, and one fixed ciphertext each of them opens. age encryption is
-    /// randomised, so the ciphertext was produced once and is kept; `MASTERSOS_REGEN_VECTORS=1`
-    /// writes a fresh one.
+    /// `testdata/escrow-vectors.json` ([`crate::vectors::check_escrow_vectors`]): test-only kits
+    /// (the masters of `kit-vectors.json`), their recipients' fingerprint, and one fixed
+    /// ciphertext each of them opens. age encryption is randomised, so the ciphertext was
+    /// produced once and is kept; `MASTERSOS_REGEN_VECTORS=1` writes a fresh one.
     #[test]
     fn escrow_vector_matches() {
-        #[derive(Debug, PartialEq, Serialize, Deserialize)]
-        struct Vector {
-            note: String,
-            kit_masters_hex: Vec<String>,
-            recipients: Vec<String>,
-            recipients_fp: String,
-            recovery_key: String,
-            recovery_key_age: String,
-        }
-        fn unhex(s: &str) -> [u8; 32] {
-            let v: Vec<u8> = (0..s.len())
-                .step_by(2)
-                .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
-                .collect();
-            v.try_into().unwrap()
-        }
-        let masters = [
-            "0000000000000000000000000000000000000000000000000000000000000000",
-            "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-        ];
-        let kits: Vec<Kit> = masters
-            .iter()
-            .map(|m| Kit::from_master(&unhex(m)))
-            .collect();
-        let recipients: Vec<String> = kits.iter().map(Kit::escrow_recipient).collect();
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/escrow-vectors.json");
-        if std::env::var_os("MASTERSOS_REGEN_VECTORS").is_some_and(|v| v == "1") {
-            let v = Vector {
-                note: "TEST-ONLY: the kits are the fixed, public test masters of kit-vectors.json \
-                       and the recovery key is made up. Never use them for a school."
-                    .into(),
-                kit_masters_hex: masters.iter().map(|m| (*m).to_owned()).collect(),
-                recipients_fp: recipients_fp(&recipients),
-                recovery_key_age: seal(KEY, &recipients).unwrap(),
-                recipients: recipients.clone(),
-                recovery_key: KEY.into(),
-            };
-            std::fs::write(path, serde_json::to_string_pretty(&v).unwrap() + "\n").unwrap();
+        if crate::vectors::regen() {
+            let text = crate::vectors::file_text(&crate::vectors::fresh_escrow_vector());
+            std::fs::write(path, text).unwrap();
             return;
         }
-        let v: Vector = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-        assert!(v.note.starts_with("TEST-ONLY"));
-        assert_eq!(v.kit_masters_hex, masters);
-        assert_eq!(v.recipients, recipients);
-        assert_eq!(v.recipients_fp, recipients_fp(&recipients));
-        let mut reversed = recipients.clone();
-        reversed.reverse();
-        assert_eq!(v.recipients_fp, recipients_fp(&reversed));
-        assert!(is_sealed(&v.recovery_key_age));
-        for k in &kits {
-            let opened = age::decrypt(&k.escrow_identity(), v.recovery_key_age.as_bytes()).unwrap();
-            assert_eq!(opened, v.recovery_key.as_bytes());
-        }
+        crate::vectors::check_escrow_vectors(&std::fs::read_to_string(path).unwrap());
     }
 
     #[test]

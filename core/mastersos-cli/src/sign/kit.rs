@@ -199,18 +199,25 @@ async fn probe(server: &Server) -> Result<(String, Vec<u8>), CliError> {
         message_b64: String,
     }
     let p: Probe = server.post_empty("keys/probe").await?;
+    let nonce = probe_nonce(&p.nonce_b64, &p.message_b64)?;
+    Ok((p.nonce_b64, nonce))
+}
+
+/// The nonce of a probe answer: `nonce_b64` strict std-pad of 32 bytes, and `message_b64`
+/// exactly the std-pad of `"mastersos-keyprobe-v1\n" || nonce` computed here.
+fn probe_nonce(nonce_b64: &str, message_b64: &str) -> Result<Vec<u8>, CliError> {
     let nonce = STANDARD
-        .decode(&p.nonce_b64)
+        .decode(nonce_b64)
         .map_err(|_| invalid_answer("the probe nonce is not standard base64"))?;
     if nonce.len() != 32 {
         return Err(invalid_answer("the probe nonce is not 32 bytes"));
     }
-    if STANDARD.encode(mastersos_bundle::keyid::keyprobe_message(&nonce)) != p.message_b64 {
+    if STANDARD.encode(mastersos_bundle::keyid::keyprobe_message(&nonce)) != message_b64 {
         return Err(invalid_answer(
             "the probe message is not the one this computer expects; nothing was signed",
         ));
     }
-    Ok((p.nonce_b64, nonce))
+    Ok(nonce)
 }
 
 /// `key register`: the school key (`POST keys/probe`, `POST keys`), then the escrow recipient
@@ -438,6 +445,50 @@ mod name_tests {
                     "{i} {form}"
                 );
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod probe_tests {
+    use super::*;
+
+    fn wire_vectors() -> serde_json::Value {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../mastersos-bundle/testdata/wire-vectors.json"
+        );
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    /// The key probes of the shared wire vectors are read back to their nonce; every invalid
+    /// `nonce_b64` (no padding, non-canonical trailing bits, a line break) is refused, with the
+    /// valid message of the first probe beside it.
+    #[test]
+    fn wire_vector_probes() {
+        let w = wire_vectors();
+        let probes = w["key_probes"].as_array().unwrap();
+        assert!(!probes.is_empty());
+        for p in probes {
+            let nonce = probe_nonce(
+                p["nonce_b64"].as_str().unwrap(),
+                p["message_b64"].as_str().unwrap(),
+            )
+            .unwrap();
+            let hex: String = nonce.iter().map(|b| format!("{b:02x}")).collect();
+            assert_eq!(hex, p["nonce_hex"].as_str().unwrap(), "{}", p["name"]);
+        }
+        let message = probes[0]["message_b64"].as_str().unwrap();
+        let invalid: Vec<&serde_json::Value> = w["invalid"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|v| v["field"] == "nonce_b64")
+            .collect();
+        assert_eq!(invalid.len(), 3);
+        for v in invalid {
+            let e = probe_nonce(v["value"].as_str().unwrap(), message).unwrap_err();
+            assert_eq!(e.code, "invalid_answer", "{}", v["name"]);
         }
     }
 }

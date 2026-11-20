@@ -309,6 +309,16 @@ struct PendingAnswer {
     warnings: Vec<Value>,
 }
 
+/// The pending answer echoes what was uploaded: a UUID, the version, and exactly the digest
+/// (lowercase hex) and `message_b64` (std-pad) computed here. Text equality: no other spelling of
+/// the same bytes is taken.
+fn echoes(p: &PendingAnswer, version: u64, digest_hex: &str, message_b64: &str) -> bool {
+    is_uuid(&p.pending_id)
+        && p.version == version
+        && p.digest_hex == digest_hex
+        && p.message_b64 == message_b64
+}
+
 /// The frame of the stamped text names this directory's school and the version stamped.
 fn frame_matches(frame: &Frame, school_id: &str, version: u64) -> Result<(), CliError> {
     // The stamp wrote `version`: another one here is a fault of this program, not of the text.
@@ -816,12 +826,7 @@ async fn publish_with(
         .map_err(|e| refusal(e, meta.base_version, &snap.secrets))?;
     let echoed = serde_json::from_value::<PendingAnswer>(answer.clone())
         .ok()
-        .filter(|p| {
-            is_uuid(&p.pending_id)
-                && p.version == version
-                && p.digest_hex == digest_hex
-                && p.message_b64 == message_b64
-        });
+        .filter(|p| echoes(p, version, &digest_hex, &message_b64));
     let Some(pending) = echoed else {
         if let Some(id) = answer.get("pending_id").and_then(Value::as_str) {
             discard(server, id).await;
@@ -2242,6 +2247,62 @@ mod tests {
             &PID.replace('-', "_"),
         ] {
             assert!(!is_uuid(bad), "{bad}");
+        }
+    }
+
+    /// The publish vector of the shared wire vectors: its digest and `message_b64` are what
+    /// this computer computes for its text, the echo of exactly those is taken, and the invalid
+    /// `digest_hex` (the same digest in capitals) is refused.
+    #[test]
+    fn wire_vector_publish_echo() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../mastersos-bundle/testdata/wire-vectors.json"
+        );
+        let w: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let v = &w["publish"][0];
+        let text = v["manifest_text"].as_str().unwrap();
+        let contents = Contents {
+            manifest_text: text.to_owned(),
+            files: Default::default(),
+        };
+        let digest_hex = hex(&content_digest(&contents));
+        let message_b64 = STANDARD.encode(signed_message(&contents));
+        assert_eq!(digest_hex, v["digest_hex"].as_str().unwrap());
+        assert_eq!(message_b64, v["message_b64"].as_str().unwrap());
+        assert_eq!(
+            serde_json::to_value(frame_of(text).unwrap()).unwrap(),
+            v["frame"]
+        );
+        let version = v["frame"]["version"].as_u64().unwrap();
+        let answer = |digest: &str| PendingAnswer {
+            pending_id: PID.into(),
+            version,
+            digest_hex: digest.into(),
+            message_b64: message_b64.clone(),
+            warnings: Vec::new(),
+        };
+        assert!(echoes(
+            &answer(&digest_hex),
+            version,
+            &digest_hex,
+            &message_b64
+        ));
+        let invalid: Vec<&Value> = w["invalid"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|i| i["field"] == "digest_hex")
+            .collect();
+        assert_eq!(invalid.len(), 1);
+        for i in invalid {
+            let bad = i["value"].as_str().unwrap();
+            assert!(bad.eq_ignore_ascii_case(&digest_hex));
+            assert!(
+                !echoes(&answer(bad), version, &digest_hex, &message_b64),
+                "{}",
+                i["name"]
+            );
         }
     }
 }
