@@ -46,6 +46,12 @@ These close B1 and B2: the parts marked BLOCKED are implemented as follows.
 
 - **Confirmed by the server team:** the non-interactive mode of Task 9 (`--key-file`, `--yes`, `--json`, `--server`, `--school`, exits 0/1/2, error shape `{"error":{"code","message","problems"}}`) and plan A's `protocol-check` JSON. `arbella` without credentials exits 3 and prints `{"error":{"code":"not_signed_in","message":…,"problems":[]}}` on stdout; our own `not_logged_in` code stays ours.
 
+- **The end-to-end harness (Tasks 10 and 11), as built by the server team.** One binary, `fleet-e2e-server`, with no Docker and no browser: it starts its own throwaway database, a test issuer and the real server on loopback http, with one school, an admin and MastersOS enabled. When ready it prints one JSON line on stdout (also `--ready-file PATH`): `{"server_url","issuer","school_id","admin_sub","admin_email","control_url","arbella_stub","pid"}`. SIGINT or SIGTERM stops it and removes everything.
+  - The stub: put the `arbella_stub` directory first on `PATH` and set `FLEET_E2E_CONTROL=<control_url>`. `arbella auth token --json` and `--step-up --json` then print the real object; `FLEET_E2E_SIGNED_OUT=1` gives exit 3 with the `not_signed_in` JSON. A normal token has an old `auth_time`, so step-up routes answer `401 step_up_required` until `--step-up` is used.
+  - Control endpoint (loopback): `POST /token` (`step_up=true`), `POST /fetch-token/rotate` (optional `compromised_at`), `POST /fetch-token/drop-retired`, `GET /healthz`.
+  - There is no clock control. Time-based behaviour (heartbeat validity, the feature gate's window) is covered by unit tests, and the end to end uses real time only.
+  - Both binaries are Linux x86_64 build artifacts of the server team's own runner build. Task 10 takes their paths from two environment variables and fails with a clear message when they are missing; it never builds the server.
+
 ## Global Constraints
 
 - Files, comments, errors and script output in English; end-user (Device) text only through gettext (`image/system-i18n/*.po`, every catalogue). CLI output is English (school IT tool, not localised).
