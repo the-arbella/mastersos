@@ -1,4 +1,5 @@
-# Reviewed false positives: public test vectors, PEM header strings in code and docs, measured hashes, Flathub's public key.
+# Reviewed false positives: public test vectors, PEM header strings in code and docs, measured hashes, Flathub's public key,
+# and one step name of the end-to-end script (a step:dependency pair that looks like key:value).
 [extend]
 useDefault = true
 
@@ -10,4 +11,8 @@ paths = [
   '''image/tests/fixtures/uki-v1-measured\.json''',
   '''image/mkosi\.extra/usr/share/mastersos/flathub\.flatpakrepo''',
   '''gitleaks.*''',
+]
+regexTarget = "line"
+regexes = [
+  '''publish_v3_new_key:publish_v2_rotation''',
 ]
