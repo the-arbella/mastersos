@@ -51,13 +51,6 @@ pub fn create_private(path: &Path) -> Result<File> {
     })
 }
 
-/// Refuse a directory that belongs to another account (Unix; Windows judges the owner by the
-/// file's own DACL). The directory may be reached through a link: it is the directory that counts.
-/// For the folder a new school key is written into.
-pub fn check_dir_owner(dir: &Path) -> Result<()> {
-    sys::check_dir_owner(dir)
-}
-
 /// Create or replace `path` with `bytes`, readable by the current user only: a new temporary
 /// file next to it ([`create_private`]), then a rename over it.
 pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -94,7 +87,7 @@ pub fn check_out_file(path: &Path, replace: bool) -> Result<bool> {
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    check_out_dir(parent)?;
+    check_out_dir(parent, "the seed")?;
     let Some(f) = sys::open_no_follow(path)? else {
         return Ok(false);
     };
@@ -134,12 +127,15 @@ pub fn write_out_file(path: &Path, bytes: &[u8], replace: bool) -> Result<()> {
     Ok(())
 }
 
-/// The folder a file for another computer goes into (Unix): it must belong to the current user
-/// or root, and other users must not be able to write to it unless it is sticky (like /tmp,
-/// where nobody can replace another's file). A link to a folder counts as that folder. Elsewhere
-/// nothing is checked here: on Windows the file's own owner-only DACL protects it.
+/// The folder a secret file goes into, `what` naming the file (`the seed`, `the school key`)
+/// for the refusal (Unix): it must belong to the current user or root, and other users must not
+/// be able to write to it unless it is sticky (like /tmp, where nobody can replace another's
+/// file; the file itself is always created new, never through a link). A folder of root that
+/// others cannot write to, such as a USB stick mounted by the system, is accepted. A link to a
+/// folder counts as that folder. Elsewhere nothing is checked here: on Windows the file's own
+/// owner-only DACL protects it.
 #[cfg(unix)]
-fn check_out_dir(dir: &Path) -> Result<()> {
+pub fn check_out_dir(dir: &Path, what: &str) -> Result<()> {
     use std::os::unix::fs::MetadataExt as _;
     let f = File::open(dir).with_context(|| format!("cannot open {}", dir.display()))?;
     let meta = f
@@ -148,28 +144,41 @@ fn check_out_dir(dir: &Path) -> Result<()> {
     if !meta.is_dir() {
         bail!("{} is not a directory", dir.display());
     }
-    let me = nix::unistd::getuid().as_raw();
-    if meta.uid() != me && meta.uid() != 0 {
-        bail!(
-            "{} belongs to uid {}, not to the current user (uid {me}): that account could replace the file; write it into a folder of your own",
-            dir.display(),
-            meta.uid()
-        );
+    match out_dir_problem(
+        meta.uid(),
+        nix::unistd::getuid().as_raw(),
+        meta.mode(),
+        what,
+    ) {
+        Some(why) => bail!("{}{why}", dir.display()),
+        None => Ok(()),
     }
-    let mode = meta.mode();
-    if mode & 0o022 != 0 && mode & 0o1000 == 0 {
-        bail!(
-            "other users can write to {} (mode {:o}) and could replace the file; write it into a folder only you can change",
-            dir.display(),
-            mode & 0o7777
-        );
-    }
-    Ok(())
 }
 
 #[cfg(not(unix))]
-fn check_out_dir(_dir: &Path) -> Result<()> {
+pub fn check_out_dir(_dir: &Path, _what: &str) -> Result<()> {
     Ok(())
+}
+
+/// Why a folder of owner `uid` and `mode` must not hold a secret file of user `me`: the text
+/// after the folder's name, or `None` when it may.
+#[cfg(unix)]
+fn out_dir_problem(uid: u32, me: u32, mode: u32, what: &str) -> Option<String> {
+    let instead = format!(
+        "write {what} into a folder only you can change, then copy {what} to the USB stick"
+    );
+    if uid != me && uid != 0 {
+        return Some(format!(
+            " belongs to uid {uid}, not to the current user (uid {me}): that account could replace the file; {instead}"
+        ));
+    }
+    if mode & 0o022 != 0 && mode & 0o1000 == 0 {
+        return Some(format!(
+            ": other users can write to it (mode {:o}) and could replace the file; {instead}",
+            mode & 0o7777
+        ));
+    }
+    None
 }
 
 /// Refuse a file other accounts can read or change. Unix: another owner, or any group/other mode
@@ -336,15 +345,6 @@ mod sys {
             );
         }
         Ok(())
-    }
-
-    /// The directory must belong to the current user: another account could swap what is in it.
-    pub fn check_dir_owner(dir: &Path) -> Result<()> {
-        let f = File::open(dir).with_context(|| format!("cannot open {}", dir.display()))?;
-        if !meta(&f, dir)?.is_dir() {
-            bail!("{} is not a directory", dir.display());
-        }
-        check_owner(&f, dir)
     }
 
     pub const CANNOT_HIDE_TYPING: &str =
@@ -629,11 +629,6 @@ mod sys {
         Ok(())
     }
 
-    /// The key file is created with a DACL for the current user only, wherever it is.
-    pub fn check_dir_owner(_dir: &Path) -> Result<()> {
-        Ok(())
-    }
-
     fn well_known(kind: WELL_KNOWN_SID_TYPE) -> std::io::Result<[u32; 17]> {
         const _: () = assert!(SECURITY_MAX_SID_SIZE as usize == 17 * 4);
         let mut sid = [0u32; 17];
@@ -876,6 +871,49 @@ mod tests {
             vars.iter()
                 .find(|(n, _)| *n == k)
                 .map(|(_, v)| OsString::from(v))
+        }
+    }
+
+    /// The folder of a secret file: root's (a USB stick the system mounted) or ours is fine
+    /// unless others can write to it without the sticky bit; another account's is refused. Each
+    /// refusal says what to do instead.
+    #[cfg(unix)]
+    #[test]
+    fn out_dir_accepts_root_and_own_folders_others_cannot_write() {
+        let me = 1000;
+        for (uid, mode) in [
+            (0, 0o40755),
+            (0, 0o41777),
+            (me, 0o40700),
+            (me, 0o40755),
+            (me, 0o41777),
+        ] {
+            assert_eq!(
+                out_dir_problem(uid, me, mode, "the seed"),
+                None,
+                "{uid} {mode:o}"
+            );
+        }
+        for (uid, mode, why) in [
+            (0, 0o40777, "other users can write"),
+            (0, 0o40775, "other users can write"),
+            (me, 0o40757, "other users can write"),
+            (1001, 0o40700, "belongs to uid 1001"),
+        ] {
+            let p = out_dir_problem(uid, me, mode, "the school key file").unwrap();
+            assert!(p.contains(why), "{p}");
+            assert!(
+                p.ends_with(
+                    "write the school key file into a folder only you can change, then copy the school key file to the USB stick"
+                ),
+                "{p}"
+            );
+        }
+        // The real check on a folder of root that others cannot write to.
+        let root = std::fs::metadata("/").unwrap();
+        use std::os::unix::fs::MetadataExt as _;
+        if root.uid() == 0 && root.mode() & 0o022 == 0 {
+            check_out_dir(Path::new("/"), "the seed").unwrap();
         }
     }
 

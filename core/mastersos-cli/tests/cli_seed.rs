@@ -504,7 +504,15 @@ async fn seed_file_is_owner_only_with_header() {
         std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).unwrap();
         let o = make(home.path(), &s, &pins, &[&k1], &open.join("x.seed"), &[]).await;
         assert_eq!(o.status.code(), Some(1), "{:?}", text(&o));
-        assert_eq!(json_of(&o)["error"]["code"], "local_file");
+        let v = json_of(&o);
+        assert_eq!(v["error"]["code"], "local_file");
+        // What to do instead: a private folder first, then the stick.
+        let message = v["error"]["message"].as_str().unwrap();
+        assert!(
+            message.contains("folder only you can change")
+                && message.contains("then copy the seed to the USB stick"),
+            "{message}"
+        );
         assert!(!open.join("x.seed").exists());
     }
 }

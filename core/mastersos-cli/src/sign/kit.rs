@@ -91,14 +91,18 @@ pub fn kit_new_in(out: &Path, school: Option<&str>) -> Result<(KitSummary, std::
     } else {
         out.to_path_buf()
     };
-    // The folder must be ours (another account could swap files in it); the file itself is made
-    // by create_private: new, owner-only, and never through a link.
+    // No other account may write to the folder (it could swap the file); a USB stick mounted by
+    // the system (root's, not writable by others) is fine. The file itself is made by
+    // create_private: new, owner-only, and never through a link.
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    crate::platform::check_dir_owner(parent)?;
-    let mut text = kit.to_display();
+    crate::platform::check_out_dir(parent, "the school key file")?;
+    // Sized for the newline too, so the key text is never copied to a buffer left unwiped.
+    let shown = kit.to_display();
+    let mut text = Zeroizing::new(String::with_capacity(shown.len() + 1));
+    text.push_str(&shown);
     text.push('\n');
     write_new_private(&path, text.as_bytes())?;
     Ok((KitSummary::of(&kit), path))

@@ -898,6 +898,32 @@ fn key_new_refuses_an_existing_path() {
     );
 }
 
+/// The folder the key file goes into: one other users can write to (and not sticky) is refused,
+/// with what to do instead; one only its owner can write to is accepted.
+#[cfg(unix)]
+#[test]
+fn key_new_refuses_a_folder_others_can_write() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let home = tempfile::tempdir().unwrap();
+    let t = tempfile::tempdir().unwrap();
+    let open = t.path().join("open");
+    std::fs::create_dir(&open).unwrap();
+    std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).unwrap();
+    let o = key_new(home.path(), &open.join("school.kit"), &["--json"]);
+    assert_eq!(o.status.code(), Some(1), "{:?}", text(&o));
+    let v = json_of(&o);
+    assert_eq!(v["error"]["code"], "local_file", "{v}");
+    let message = v["error"]["message"].as_str().unwrap();
+    assert!(message.contains("other users can write"), "{message}");
+    assert!(message.contains("USB stick"), "{message}");
+    assert!(!message.contains("seed"), "{message}");
+    assert!(!open.join("school.kit").exists());
+    // Group-writable but sticky: nobody else can replace the file.
+    std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o1777)).unwrap();
+    let o = key_new(home.path(), &open.join("school.kit"), &[]);
+    assert!(o.status.success(), "{:?}", text(&o));
+}
+
 #[cfg(unix)]
 #[test]
 fn key_new_refuses_a_symlink_at_the_path() {
