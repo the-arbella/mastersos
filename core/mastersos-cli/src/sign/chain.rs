@@ -39,19 +39,6 @@ use serde::{Deserialize, Serialize};
 use super::{ask, hex, key_line, TrustDelta};
 use crate::server::{CliError, Server};
 
-/// Where the versions come from.
-#[derive(Clone, Copy)]
-pub enum Source<'a> {
-    /// The protocol v1 CLI API of one school.
-    New(&'a Server),
-}
-
-impl<'a> From<&'a Server> for Source<'a> {
-    fn from(s: &'a Server) -> Self {
-        Source::New(s)
-    }
-}
-
 /// `<host>[_<port>]+<school>`: the pin file name (without `.toml`) of a protocol v1 school. A
 /// `:` (an IPv6 host) becomes `_` as well, so the name is a file name everywhere.
 pub fn pin_name_v1(origin: &reqwest::Url, school: &str) -> String {
@@ -67,37 +54,23 @@ pub fn pin_key_v1(origin: &reqwest::Url, school: &str) -> String {
     format!("{}+{school}", origin.origin().ascii_serialization())
 }
 
-impl Source<'_> {
-    fn pin_name(&self) -> Result<String, CliError> {
-        let Source::New(s) = self;
-        Ok(pin_name_v1(s.origin(), s.school()?))
-    }
+/// The pin file name (without `.toml`) of the school `s` speaks for.
+fn pin_name(s: &Server) -> Result<String, CliError> {
+    Ok(pin_name_v1(s.origin(), s.school()?))
+}
 
-    /// What the pin records as its `host`.
-    fn pin_key(&self) -> Result<String, CliError> {
-        let Source::New(s) = self;
-        Ok(pin_key_v1(s.origin(), s.school()?))
-    }
+/// What the pin records as its `host`.
+fn pin_key(s: &Server) -> Result<String, CliError> {
+    Ok(pin_key_v1(s.origin(), s.school()?))
+}
 
-    /// For people: what this computer checks.
-    fn describe(&self) -> String {
-        let Source::New(s) = self;
-        format!(
-            "school {} on {}",
-            s.school().unwrap_or("?"),
-            s.origin().origin().ascii_serialization()
-        )
-    }
-
-    async fn latest_version(&self) -> Result<u64> {
-        let Source::New(s) = self;
-        Ok(s.latest_version().await?)
-    }
-
-    async fn version_archive(&self, v: u64) -> Result<Vec<u8>> {
-        let Source::New(s) = self;
-        Ok(s.version_archive(v).await?)
-    }
+/// For people: what this computer checks.
+fn describe(s: &Server) -> String {
+    format!(
+        "school {} on {}",
+        s.school().unwrap_or("?"),
+        s.origin().origin().ascii_serialization()
+    )
 }
 
 /// The chain does not verify: a version fails its checks, the version went backwards, or the pin
@@ -153,7 +126,7 @@ pub fn to_cli_error(e: anyhow::Error) -> CliError {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Pin {
-    /// `host[:port][/path]`.
+    /// The chain this pin is for: `<origin>+<school>` ([`pin_key_v1`]).
     pub host: String,
     pub version: u64,
     /// This version's `content_digest` (lower-case hex): checked next time, so the server cannot
@@ -239,7 +212,7 @@ pub fn recorded_version(verified: &[VerifiedVersion], want: u64) -> Result<&Veri
 /// version that violates R7/R8 (machines refuse it and stay on the version before it; Task 24c
 /// fix round 1, I2): the next version is `latest + 1`, but its trust and recipient changes are
 /// still shown against what machines actually run.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Verified {
     pub version: u64,
     pub digest_hex: String,
@@ -252,8 +225,30 @@ pub struct Verified {
     pub history: Vec<VerifiedVersion>,
 }
 
-pub fn pin_path(pin_dir: &Path, src: Source<'_>) -> Result<PathBuf, CliError> {
-    Ok(pin_dir.join(format!("{}.toml", src.pin_name()?)))
+/// The contents hold the filled manifest (Wi-Fi keys, the IT password hash): Debug shows only
+/// their size.
+impl std::fmt::Debug for Verified {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Verified")
+            .field("version", &self.version)
+            .field("digest_hex", &self.digest_hex)
+            .field("trust", &self.trust)
+            .field(
+                "contents",
+                &format_args!(
+                    "<redacted: manifest {} bytes, {} files>",
+                    self.contents.manifest_text.len(),
+                    self.contents.files.len()
+                ),
+            )
+            .field("latest", &self.latest)
+            .field("history", &self.history)
+            .finish()
+    }
+}
+
+pub fn pin_path(pin_dir: &Path, src: &Server) -> Result<PathBuf, CliError> {
+    Ok(pin_dir.join(format!("{}.toml", pin_name(src)?)))
 }
 
 /// The content digest (lower-case hex) this computer recorded for `version` of school `school` on
@@ -442,7 +437,7 @@ pub struct Anchors {
 /// verified version: the only way a chain is loaded. See the module documentation for the first
 /// use and the old pins.
 pub async fn verify_chain(
-    src: Source<'_>,
+    src: &Server,
     pin_dir: &Path,
     anchors: &Anchors,
     confirm: &mut dyn BufRead,
@@ -455,8 +450,7 @@ pub async fn verify_chain(
 
 /// The pin the old admin API wrote for a protocol v1 source's host (`<host>[_<port>].toml`), with
 /// the `host` it must record.
-pub(crate) fn legacy_pin_path(src: Source<'_>, pin_dir: &Path) -> Option<(PathBuf, String)> {
-    let Source::New(s) = src;
+pub(crate) fn legacy_pin_path(s: &Server, pin_dir: &Path) -> Option<(PathBuf, String)> {
     let o = s.origin();
     let host = o.host_str()?.to_owned();
     let key = match o.port() {
@@ -467,7 +461,7 @@ pub(crate) fn legacy_pin_path(src: Source<'_>, pin_dir: &Path) -> Option<(PathBu
 }
 
 async fn verify_inner(
-    src: Source<'_>,
+    src: &Server,
     pin_dir: &Path,
     anchors: &Anchors,
     confirm: &mut dyn BufRead,
@@ -476,7 +470,7 @@ async fn verify_inner(
     let mut out = crate::safe::SafeWriter::new(out);
     let out: &mut dyn Write = &mut out;
     let path = pin_path(pin_dir, src)?;
-    let key = src.pin_key()?;
+    let key = pin_key(src)?;
     let latest = src.latest_version().await?;
     let (pin, legacy) = match load_pin(&path)? {
         Some(pin) => {
@@ -502,7 +496,7 @@ async fn verify_inner(
                 writeln!(
                     out,
                     "Checking {} from the pin this computer recorded for {host} before ({}).",
-                    src.describe(),
+                    describe(src),
                     old.display()
                 )?;
                 (pin, Some(old))
@@ -531,7 +525,7 @@ async fn verify_inner(
 
 /// Verify every version after `pin` up to `latest`, one by one.
 async fn forward(
-    src: Source<'_>,
+    src: &Server,
     pin: &Pin,
     latest: u64,
     interactive: bool,
@@ -688,9 +682,9 @@ async fn forward(
     Ok(cur)
 }
 
-pub(crate) fn pin_of(src: Source<'_>, v: &Verified) -> Result<Pin, CliError> {
+pub(crate) fn pin_of(src: &Server, v: &Verified) -> Result<Pin, CliError> {
     Ok(Pin {
-        host: src.pin_key()?,
+        host: pin_key(src)?,
         version: v.version,
         digest_hex: v.digest_hex.clone(),
         trust: v.trust.clone(),
@@ -709,7 +703,7 @@ pub(crate) fn signer_outside_own_trust(signature_toml: &str, trust: &[TrustKey])
 /// First use: there is no pin to verify forward from, so the latest version's trust is taken only
 /// from an anchor (a key file, `--trust-fingerprint`, or a person at a terminal).
 async fn first_use(
-    src: Source<'_>,
+    src: &Server,
     path: &Path,
     latest: u64,
     anchors: &Anchors,
@@ -731,7 +725,7 @@ async fn first_use(
     writeln!(
         out,
         "This computer has not checked {} before. The server's latest is version {latest}; it names these keys as the ones computers accept:",
-        src.describe()
+        describe(src)
     )?;
     let own = |t: &TrustKey| {
         anchors
@@ -892,6 +886,28 @@ mod tests {
             verified: Vec::new(),
         }
         .normalized()
+    }
+
+    /// The verified contents hold the filled manifest (Wi-Fi keys, the IT password hash): Debug
+    /// never shows them.
+    #[test]
+    fn verified_debug_hides_the_contents() {
+        let mut files = std::collections::BTreeMap::new();
+        files.insert("files/a.txt".to_owned(), b"SECRET-FILE".to_vec());
+        let v = Verified {
+            version: 3,
+            digest_hex: "ab".repeat(32),
+            trust: Vec::new(),
+            contents: Contents {
+                manifest_text: "psk = \"SECRET-PSK\"\n".to_owned(),
+                files,
+            },
+            latest: 3,
+            history: Vec::new(),
+        };
+        let d = format!("{v:?} {v:#?}");
+        assert!(!d.contains("SECRET"), "{d}");
+        assert!(d.contains("version: 3") || d.contains("version: 3,"), "{d}");
     }
 
     #[test]
@@ -1146,7 +1162,7 @@ mod tests {
             input: &str,
         ) -> (Result<Verified, CliError>, String) {
             let mut out = Vec::new();
-            let r = verify_chain(s.into(), pins, anchors, &mut input.as_bytes(), &mut out).await;
+            let r = verify_chain(s, pins, anchors, &mut input.as_bytes(), &mut out).await;
             (r, String::from_utf8(out).unwrap())
         }
 
@@ -1329,7 +1345,7 @@ mod tests {
             };
             let (r, out) = verify_with(&s, pins.path(), &mine, "").await;
             assert_eq!(r.unwrap().version, 1, "{out}");
-            assert!(load_pin(&pin_path(pins.path(), (&s).into()).unwrap())
+            assert!(load_pin(&pin_path(pins.path(), &s).unwrap())
                 .unwrap()
                 .is_some());
         }
@@ -1633,7 +1649,7 @@ mod tests {
             // No anchor at all: the old pin is the anchor.
             let (r, out) = verify_with(&s, pins.path(), &Anchors::default(), "").await;
             assert_eq!(r.unwrap().version, 2, "{out}");
-            let new = load_pin(&pin_path(pins.path(), (&s).into()).unwrap())
+            let new = load_pin(&pin_path(pins.path(), &s).unwrap())
                 .unwrap()
                 .unwrap();
             assert_eq!(new.version, 2);
@@ -1657,7 +1673,7 @@ mod tests {
                 "{}",
                 e.message
             );
-            assert!(load_pin(&pin_path(pins.path(), (&s).into()).unwrap())
+            assert!(load_pin(&pin_path(pins.path(), &s).unwrap())
                 .unwrap()
                 .is_none());
             // A rollback below the old pin is refused too.
@@ -1690,7 +1706,7 @@ mod tests {
             serve(&mock, SCHOOL, &[]).await;
             let (r, _) = verify(&s, pins.path(), true, "").await;
             assert_eq!(r.unwrap_err().code, "chain_tampered");
-            let pin = load_pin(&pin_path(pins.path(), (&s).into()).unwrap())
+            let pin = load_pin(&pin_path(pins.path(), &s).unwrap())
                 .unwrap()
                 .unwrap();
             assert_eq!(pin.version, 1);

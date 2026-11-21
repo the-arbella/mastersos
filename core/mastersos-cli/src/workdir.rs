@@ -95,8 +95,7 @@ impl Snapshot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UploadInfo {
     pub version: u64,
-    /// The server's content digest of the pending bundle (hex); `digest` in older records.
-    #[serde(alias = "digest")]
+    /// The server's content digest of the pending bundle (hex).
     pub digest_hex: String,
 }
 
@@ -1988,10 +1987,10 @@ mod tests {
         assert!(!w.equals_base(&w.freeze().unwrap()).unwrap());
     }
 
+    /// Only `digest_hex`: no older record names are read (no compatibility burden).
     #[test]
-    fn upload_record_reads_old_digest_field() {
-        let i: UploadInfo = toml::from_str("version = 3\ndigest = \"ab\"\n").unwrap();
-        assert_eq!(i.digest_hex, "ab");
+    fn upload_record_reads_digest_hex_only() {
+        assert!(toml::from_str::<UploadInfo>("version = 3\ndigest = \"ab\"\n").is_err());
         let i: UploadInfo = toml::from_str("version = 3\ndigest_hex = \"cd\"\n").unwrap();
         assert_eq!(i.digest_hex, "cd");
     }

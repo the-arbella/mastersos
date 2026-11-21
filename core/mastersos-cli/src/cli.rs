@@ -2039,8 +2039,7 @@ async fn pull_v1(
     let server = Server::new(&origin, Some(&school), creds)?;
     let pins = resolve_pin_dir(o.pin_flag.as_deref())?;
     let verified =
-        crate::sign::chain::verify_chain((&server).into(), &pins, &o.anchors(), confirm, out)
-            .await?;
+        crate::sign::chain::verify_chain(&server, &pins, &o.anchors(), confirm, out).await?;
     let (n, contents) = match version {
         None => (verified.version, verified.contents),
         Some(n) if n == verified.version => (n, verified.contents),
@@ -2120,8 +2119,7 @@ async fn verify_v1(
     let (creds, origin) = resolve_v1(o, meta.as_ref()).await?;
     let server = Server::new(&origin, Some(&school), creds)?;
     let pins = resolve_pin_dir(o.pin_flag.as_deref())?;
-    let v = crate::sign::chain::verify_chain((&server).into(), &pins, &o.anchors(), confirm, out)
-        .await?;
+    let v = crate::sign::chain::verify_chain(&server, &pins, &o.anchors(), confirm, out).await?;
     if o.json {
         let trust: Vec<serde_json::Value> = v
             .trust
@@ -2224,10 +2222,9 @@ async fn seed_make_v1(
     let (server, school) = ctx.server(meta.as_ref(), confirm, out).await?;
     let origin = server.origin().origin().ascii_serialization();
     let pins = resolve_pin_dir(ctx.o.pin_flag.as_deref())?;
-    let verified =
-        crate::sign::chain::verify_chain((&server).into(), &pins, &ctx.o.anchors(), confirm, out)
-            .await
-            .map_err(crate::seed::nothing_published)?;
+    let verified = crate::sign::chain::verify_chain(&server, &pins, &ctx.o.anchors(), confirm, out)
+        .await
+        .map_err(crate::seed::nothing_published)?;
     let seed =
         crate::seed::make(&server, &origin, &school, &verified, group, path, ctx.o.yes).await?;
     let shown = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
@@ -2284,8 +2281,7 @@ async fn seed_check_v1(
     let origin = server.origin().origin().ascii_serialization();
     let pins = resolve_pin_dir(o.pin_flag.as_deref())?;
     let verified =
-        crate::sign::chain::verify_chain((&server).into(), &pins, &o.anchors(), confirm, out)
-            .await?;
+        crate::sign::chain::verify_chain(&server, &pins, &o.anchors(), confirm, out).await?;
     let r = crate::seed::check(&server, &origin, &school, &verified, &text).await?;
     let ok = r.ok();
     if o.json {

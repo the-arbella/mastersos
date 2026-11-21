@@ -354,8 +354,8 @@ async fn first_version(server: &Server, pin_dir: &Path) -> Result<(), CliError> 
     }
     // The protocol v1 pin of this school, or the old admin API's pin of this host (taken over by
     // the first verify): either means a version was verified here.
-    let path = chain::pin_path(pin_dir, server.into())?;
-    let legacy = chain::legacy_pin_path(server.into(), pin_dir).map(|(p, _)| p);
+    let path = chain::pin_path(pin_dir, server)?;
+    let legacy = chain::legacy_pin_path(server, pin_dir).map(|(p, _)| p);
     for path in std::iter::once(path).chain(legacy) {
         let Some(pin) = chain::load_pin(&path).map_err(local)? else {
             continue;
@@ -382,8 +382,8 @@ fn record_published(
     digest_hex: &str,
     trust: &[TrustKey],
 ) -> anyhow::Result<()> {
-    let path = chain::pin_path(pin_dir, server.into())?;
-    let prev = base.map(|v| chain::pin_of(server.into(), v)).transpose()?;
+    let path = chain::pin_path(pin_dir, server)?;
+    let prev = base.map(|v| chain::pin_of(server, v)).transpose()?;
     let mut history = base.map(|v| v.history.clone()).unwrap_or_default();
     chain::record_verified(&mut history, version, digest_hex);
     chain::save_pin(
@@ -705,16 +705,9 @@ async fn publish_with(
             interactive: !opts.yes,
         };
         let v = if opts.yes {
-            chain::verify_chain(
-                server.into(),
-                opts.pin_dir,
-                &anchors,
-                &mut std::io::empty(),
-                out,
-            )
-            .await?
+            chain::verify_chain(server, opts.pin_dir, &anchors, &mut std::io::empty(), out).await?
         } else {
-            chain::verify_chain(server.into(), opts.pin_dir, &anchors, confirm, out).await?
+            chain::verify_chain(server, opts.pin_dir, &anchors, confirm, out).await?
         };
         Some(v)
     };
@@ -1011,16 +1004,9 @@ async fn heartbeat_with(
         interactive: !opts.yes,
     };
     let v = if opts.yes {
-        chain::verify_chain(
-            server.into(),
-            opts.pin_dir,
-            &anchors,
-            &mut std::io::empty(),
-            out,
-        )
-        .await?
+        chain::verify_chain(server, opts.pin_dir, &anchors, &mut std::io::empty(), out).await?
     } else {
-        chain::verify_chain(server.into(), opts.pin_dir, &anchors, confirm, out).await?
+        chain::verify_chain(server, opts.pin_dir, &anchors, confirm, out).await?
     };
     if !v.trust.contains(me) {
         return Err(CliError::new(
