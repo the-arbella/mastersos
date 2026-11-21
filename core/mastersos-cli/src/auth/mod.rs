@@ -24,10 +24,22 @@ pub enum Credentials {
         step_up: Option<String>,
     },
     /// `arbella auth token [--step-up] --json`, run from `exe`; its tokens are used only while it
-    /// names the server `origin` it named when resolved.
-    Arbella { exe: PathBuf, origin: String },
+    /// names the server `origin` it named when resolved. The ordinary token is kept for the rest
+    /// of the process (shared by clones) until shortly before it ends; a step-up token is never
+    /// kept here.
+    Arbella {
+        exe: PathBuf,
+        origin: String,
+        cache: Arc<std::sync::Mutex<Option<Cached>>>,
+    },
     /// The sign-in saved by `mastersos login`.
     Stored(Arc<store::Session>),
+}
+
+/// An ordinary arbella token and when it ends (RFC 3339), for the same process.
+pub struct Cached {
+    token: zeroize::Zeroizing<String>,
+    expires_at: String,
 }
 
 /// The tokens never show in Debug output.
@@ -35,7 +47,7 @@ impl std::fmt::Debug for Credentials {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Credentials::Fixed { .. } => f.write_str("Fixed(<redacted>)"),
-            Credentials::Arbella { exe, origin } => write!(f, "Arbella({exe:?}, {origin})"),
+            Credentials::Arbella { exe, origin, .. } => write!(f, "Arbella({exe:?}, {origin})"),
             Credentials::Stored(_) => f.write_str("Stored(<redacted>)"),
         }
     }
@@ -58,12 +70,38 @@ impl Credentials {
         }
     }
 
-    /// The token for an ordinary call.
+    /// Tokens from arbella at `exe`, for the server `origin` (nothing kept yet).
+    pub fn arbella(exe: PathBuf, origin: String) -> Credentials {
+        Credentials::Arbella {
+            exe,
+            origin,
+            cache: Arc::default(),
+        }
+    }
+
+    /// The token for an ordinary call. arbella runs once per process while its token lasts
+    /// (until 60 seconds before it ends); a token with an unreadable end is not kept.
     pub async fn token(&self) -> Result<String, CliError> {
         match self {
             Credentials::Fixed { token, .. } => Ok(token.clone()),
-            Credentials::Arbella { exe, origin } => {
-                same_server(arbella::token(exe, false).await?, origin)
+            Credentials::Arbella { exe, origin, cache } => {
+                let kept = {
+                    let held = cache.lock().unwrap_or_else(|p| p.into_inner());
+                    held.as_ref()
+                        .filter(|c| !store::expires_soon(&c.expires_at, chrono::Utc::now()))
+                        .map(|c| c.token.to_string())
+                };
+                if let Some(t) = kept {
+                    return Ok(t);
+                }
+                let t = arbella::token(exe, false).await?;
+                let expires_at = t.expires_at.clone();
+                let token = same_server(t, origin)?;
+                *cache.lock().unwrap_or_else(|p| p.into_inner()) = Some(Cached {
+                    token: zeroize::Zeroizing::new(token.clone()),
+                    expires_at,
+                });
+                Ok(token)
             }
             Credentials::Stored(s) => s.token().await,
         }
@@ -78,7 +116,7 @@ impl Credentials {
                     "this call needs a fresh sign-in and no step-up token is available",
                 )
             }),
-            Credentials::Arbella { exe, origin } => {
+            Credentials::Arbella { exe, origin, .. } => {
                 same_server(arbella::token(exe, true).await?, origin)
             }
             Credentials::Stored(s) => s.step_up().await,
@@ -137,10 +175,7 @@ pub(crate) async fn resolve_with(
                 ),
             ));
         }
-        let creds = Credentials::Arbella {
-            exe,
-            origin: origin.clone(),
-        };
+        let creds = Credentials::arbella(exe, origin.clone());
         return Ok((creds, Some(origin)));
     }
     let Some(login) = store::load_from(creds)? else {
@@ -235,10 +270,10 @@ mod tests {
         };
         let all = [
             Credentials::fixed_with_step_up("SECRET-1", "SECRET-2"),
-            Credentials::Arbella {
-                exe: PathBuf::from("/usr/bin/arbella"),
-                origin: "https://server.example".into(),
-            },
+            Credentials::arbella(
+                PathBuf::from("/usr/bin/arbella"),
+                "https://server.example".into(),
+            ),
             Credentials::Stored(Arc::new(store::Session::new(PathBuf::from("/x"), l, false))),
         ];
         for c in all {
@@ -342,13 +377,71 @@ mod tests {
         async fn arbella_credentials_run_arbella_for_each_kind_of_token() {
             let t = tempfile::tempdir().unwrap();
             let exe = fake(t.path(), GOOD);
-            let c = Credentials::Arbella {
-                exe,
-                origin: "https://server.example".into(),
-            };
+            let c = Credentials::arbella(exe, "https://server.example".into());
             assert_eq!(c.step_up().await.unwrap(), "t");
             let args = std::fs::read_to_string(t.path().join("args")).unwrap();
             assert!(args.contains("--step-up"), "{args}");
+        }
+
+        /// A fake arbella that counts its runs in `dir/n` and answers a token for
+        /// https://server.example ending at `expires_at`.
+        fn counting(dir: &Path, expires_at: &str) -> PathBuf {
+            let answer = format!(
+                r#"{{"fleet_url":"https://server.example","access_token":"t","expires_at":"{expires_at}"}}"#
+            );
+            fake(
+                dir,
+                &format!(
+                    "d=$(dirname \"$0\")\nn=$(cat \"$d/n\" 2>/dev/null || echo 0)\n\
+                     echo $((n+1)) > \"$d/n\"\necho '{answer}'"
+                ),
+            )
+        }
+
+        fn runs(dir: &Path) -> u32 {
+            std::fs::read_to_string(dir.join("n")).map_or(0, |n| n.trim().parse().unwrap())
+        }
+
+        /// One arbella run per process for ordinary calls while the token lasts; a step-up
+        /// token is always fresh.
+        #[tokio::test]
+        async fn arbella_token_is_cached_until_shortly_before_it_ends() {
+            let t = tempfile::tempdir().unwrap();
+            let exe = counting(t.path(), "2099-01-01T00:00:00Z");
+            let p = t.path().join("m").join(FILE_NAME);
+            let (c, _) = resolve_with(Some(exe), &p, None, false).await.unwrap();
+            let after_resolve = runs(t.path());
+            for _ in 0..3 {
+                assert_eq!(c.token().await.unwrap(), "t");
+            }
+            // A clone (as each Server holds) shares the cache.
+            assert_eq!(c.clone().token().await.unwrap(), "t");
+            assert_eq!(runs(t.path()), after_resolve + 1);
+            for _ in 0..2 {
+                assert_eq!(c.step_up().await.unwrap(), "t");
+            }
+            assert_eq!(runs(t.path()), after_resolve + 3);
+            let args = std::fs::read_to_string(t.path().join("args")).unwrap();
+            assert!(args.contains("--step-up"), "{args}");
+            // The ordinary token is still the cached one.
+            assert_eq!(c.token().await.unwrap(), "t");
+            assert_eq!(runs(t.path()), after_resolve + 3);
+        }
+
+        /// A token that ends within a minute (or has an unreadable end) is never reused.
+        #[tokio::test]
+        async fn arbella_token_ending_soon_is_not_cached() {
+            for expires_at in ["2000-01-01T00:00:00Z", "not a time"] {
+                let t = tempfile::tempdir().unwrap();
+                let exe = counting(t.path(), expires_at);
+                let p = t.path().join("m").join(FILE_NAME);
+                let (c, _) = resolve_with(Some(exe), &p, None, false).await.unwrap();
+                let after_resolve = runs(t.path());
+                for _ in 0..2 {
+                    c.token().await.unwrap();
+                }
+                assert_eq!(runs(t.path()), after_resolve + 2, "{expires_at}");
+            }
         }
 
         /// arbella signed in to another server since `resolve`: its token is refused before
