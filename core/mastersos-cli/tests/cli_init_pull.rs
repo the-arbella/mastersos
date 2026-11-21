@@ -538,7 +538,34 @@ async fn pull_writes_meta_with_origin_and_school() {
         ],
     )
     .await;
-    assert_eq!(json_of(&o)["error"]["code"], "school_mismatch");
+    // Another server than the directory's: its own code, naming both servers.
+    let v = json_of(&o);
+    assert_eq!(v["error"]["code"], "server_mismatch", "{v}");
+    let message = v["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("https://server.example") && message.contains(&s.uri()),
+        "{message}"
+    );
+
+    // `diff --json`: one JSON value whose `text` is what the terminal shows.
+    let manifest = dir.join("manifest.toml");
+    let edited = std::fs::read_to_string(&manifest).unwrap() + "# a local note\n";
+    std::fs::write(&manifest, edited).unwrap();
+    let o = run(
+        home.path(),
+        None,
+        &[&"--json", &"--pin-dir", &pins, &"diff", &dir],
+    )
+    .await;
+    assert!(o.status.success(), "{:?}", text(&o));
+    let v = json_of(&o);
+    assert_eq!(v.as_object().unwrap().len(), 1, "{v}");
+    assert!(
+        v["text"].as_str().unwrap().contains("+# a local note"),
+        "{v}"
+    );
+    let o = run(home.path(), None, &[&"--pin-dir", &pins, &"diff", &dir]).await;
+    assert!(text(&o).0.contains("+# a local note"), "{:?}", text(&o));
 }
 
 #[tokio::test(flavor = "multi_thread")]

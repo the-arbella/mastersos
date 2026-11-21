@@ -650,12 +650,17 @@ s_publish_v2_rotation() {
 }
 
 s_publish_v3_new_key() {
-	# Local only; prints text even with --json, so only the exit code is checked.
+	# Local only: the manifest changes, and --json prints what was removed.
 	ms key-remove-k1 "$W/pins-a" -- key remove "${KCODE[1]}" --key-file "$W/keys/k1.kit" --dir "$W/a"
 	[[ $RC -eq 0 ]] || {
-		DETAIL="key remove k1: exit $RC (log ${LOG##*/})"
-		return 1
+		failed_call "key remove k1"
+		return
 	}
+	want removed "${KCODE[1]}" "key remove k1" || return 1
+	want trusted.0 "${KCODE[2]}" "key remove k1 (k2 left)" || return 1
+	absent trusted.1 "key remove k1 (only k2 left)" || return 1
+	want recipient_removed true "key remove k1 (its disk unlocking too)" b || return 1
+	absent unmarked.0 "key remove k1 (nothing left unmatched)" || return 1
 	if grep -q "${KID[1]}" "$W/a/manifest.toml" || ! grep -q "${KID[2]}" "$W/a/manifest.toml"; then
 		DETAIL="after key remove, manifest.toml should trust k2 and not k1"
 		return 1

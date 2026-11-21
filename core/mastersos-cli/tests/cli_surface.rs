@@ -559,4 +559,7 @@ fn hash_password_without_a_terminal_is_a_usage_error() {
     assert_eq!(out.status.code(), Some(2), "{}", text(&out));
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON value");
     assert_eq!(v["error"]["code"], "usage");
+    // --json is refused as such, before any prompt: the password needs a person at a terminal.
+    let message = v["error"]["message"].as_str().unwrap();
+    assert!(message.contains("--json"), "{message}");
 }

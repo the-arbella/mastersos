@@ -664,18 +664,48 @@ async fn key_add_then_remove_edit_only_the_directory() {
     assert!(out.contains("mastersos publish --key-file <file>"), "{out}");
     let m = std::fs::read_to_string(dir.join("manifest.toml")).unwrap();
     assert!(m.contains(&b.trust_key().public_key) && m.contains(&b.escrow_recipient()));
+    // Without the comments that tie each disk-unlocking entry to its key, nothing can match
+    // them offline: they are listed.
+    let untagged: String = m
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("# school key "))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    std::fs::write(dir.join("manifest.toml"), untagged).unwrap();
     // Removing it again is local and needs no server and no sign-in.
     let empty = tempfile::tempdir().unwrap();
     let code = mastersos_bundle::keyid::key_code(&b.key_id()).unwrap();
     let o = run(
         empty.path(),
         None,
-        &[&"key", &"remove", &code, &"--dir", &dir],
+        &[&"key", &"remove", &code, &"--dir", &dir, &"--json"],
     )
     .await;
     assert!(o.status.success(), "{:?}", text(&o));
     let m = std::fs::read_to_string(dir.join("manifest.toml")).unwrap();
     assert!(!m.contains(&b.trust_key().public_key), "{m}");
+    // --json: one JSON value on stdout, nothing else.
+    let v = json_of(&o);
+    let code_a = mastersos_bundle::keyid::key_code(&a.key_id()).unwrap();
+    assert_eq!(v["removed"], code.as_str(), "{v}");
+    assert_eq!(v["trusted"], json!([code_a]), "{v}");
+    assert_eq!(
+        v["manifest"],
+        std::path::absolute(dir.join("manifest.toml"))
+            .unwrap()
+            .display()
+            .to_string()
+    );
+    assert_eq!(v["recipient_removed"], false, "{v}");
+    let unmarked = v["unmarked"].as_array().unwrap();
+    assert!(
+        unmarked
+            .iter()
+            .any(|u| u["recipient"] == b.escrow_recipient()),
+        "{v}"
+    );
+    // Not signed in: the server's word is missing, not guessed.
+    assert!(unmarked.iter().all(|u| u["server_says"].is_null()), "{v}");
     // No write ever reached the server.
     let reqs = s.received_requests().await.unwrap();
     assert!(reqs.iter().all(|r| r.method.as_str() == "GET"), "{reqs:?}");

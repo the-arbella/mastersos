@@ -463,10 +463,10 @@ async fn run(cli: Cli) -> Result<ExitCode, OpError> {
     match cmd {
         // Offline: the pins are read, never created.
         Cmd::Check { dir } => local_check(dir.as_deref(), &pins_read()?, json),
-        Cmd::Diff { dir } => local_diff(dir.as_deref(), &pins_read()?),
+        Cmd::Diff { dir } => local_diff(dir.as_deref(), &pins_read()?, json),
         Cmd::Explain(c) => explain(&c, json),
         Cmd::Migrate { dir, write } => migrate(dir.as_deref(), &pin_dir()?, write, json),
-        Cmd::HashPassword => hash_password(),
+        Cmd::HashPassword => hash_password(json),
         Cmd::Key(KeyCmd::New { out, school_name }) => {
             Ok(finish(key_new(&out, school_name.as_deref(), json), json))
         }
@@ -692,9 +692,14 @@ fn local_check(dir: Option<&Path>, pins: &Path, json: bool) -> Result<ExitCode, 
     })
 }
 
-/// `mastersos diff`.
-fn local_diff(dir: Option<&Path>, pins: &Path) -> Result<ExitCode, OpError> {
-    print!("{}", workdir::diff(&open_dir(dir, pins)?).map_err(fail)?);
+/// `mastersos diff`; with `--json`, `{"text": ...}` holding the same text.
+fn local_diff(dir: Option<&Path>, pins: &Path, json: bool) -> Result<ExitCode, OpError> {
+    let text = workdir::diff(&open_dir(dir, pins)?).map_err(fail)?;
+    if json {
+        println!("{}", json!({ "text": text }));
+    } else {
+        print!("{text}");
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -946,14 +951,21 @@ fn absolute(p: &Path) -> Result<PathBuf, OpError> {
     std::path::absolute(p).map_err(|e| OpError::Failed(format!("Bad path {}: {e}", p.display())))
 }
 
-/// `Trusted keys: 11d9-03eb, 7c42-a915` for this manifest.
-fn trusted_line(manifest_text: &str) -> Result<String, OpError> {
-    let codes: Vec<String> = workdir::trusted_keys(manifest_text)
+/// The key codes of this manifest's trusted keys.
+fn trusted_codes(manifest_text: &str) -> Result<Vec<String>, OpError> {
+    Ok(workdir::trusted_keys(manifest_text)
         .map_err(fail)?
         .iter()
         .map(|k| workdir::shown_code(&k.id))
-        .collect();
-    Ok(format!("Trusted keys: {}", codes.join(", ")))
+        .collect())
+}
+
+/// `Trusted keys: 11d9-03eb, 7c42-a915` for this manifest.
+fn trusted_line(manifest_text: &str) -> Result<String, OpError> {
+    Ok(format!(
+        "Trusted keys: {}",
+        trusted_codes(manifest_text)?.join(", ")
+    ))
 }
 
 const PUBLISH_NEXT: &str =
@@ -1004,9 +1016,31 @@ async fn keys_remove(
         }
     }
     w.write_manifest(&r.text).map_err(fail)?;
+    let said = if file.is_none() && !r.recipient_removed && !r.unmarked.is_empty() {
+        server_says(&w, o).await
+    } else {
+        std::collections::HashMap::new()
+    };
+    if o.json {
+        let unmarked: Vec<Value> = r
+            .unmarked
+            .iter()
+            .map(|u| json!({"recipient": u, "server_says": said.get(u)}))
+            .collect();
+        println!(
+            "{}",
+            json!({
+                "removed": shown,
+                "manifest": path.display().to_string(),
+                "trusted": trusted_codes(&r.text)?,
+                "recipient_removed": r.recipient_removed,
+                "unmarked": unmarked,
+            })
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
     println!("Removed school key {shown} from {}.", path.display());
     if file.is_none() && !r.recipient_removed && !r.unmarked.is_empty() {
-        let said = server_says(&w, o).await;
         println!(
             "manifest.toml has disk-unlocking entries (under [school]) that this command could not match to {shown}:"
         );
@@ -2387,7 +2421,14 @@ fn issues_text(issues: &[Value]) -> String {
 
 /// `mastersos hash-password`: no network. The password is read twice with echo off (a pipe is
 /// refused, so a password is never echoed or left in shell history) and only the hash is printed.
-fn hash_password() -> Result<ExitCode, OpError> {
+/// `--json` is refused before any prompt: a script cannot type the password, and a person
+/// copies the hash from the terminal.
+fn hash_password(json: bool) -> Result<ExitCode, OpError> {
+    if json {
+        return Err(OpError::Usage(
+            "hash-password does not take --json: it needs a person typing the password at a terminal, and prints only the hash".into(),
+        ));
+    }
     let a = prompt_secret("Password: ")?;
     if !crate::itpass::length_ok(&a) {
         return Err(OpError::Failed(format!(
