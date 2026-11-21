@@ -197,15 +197,15 @@ by copy and paste or from the server:
   `secrets.toml` stay strict. Before uploading, `publish` confirms the key is trusted and registered with the server and
   uploads nothing otherwise. It then verifies the chain on this computer, compares the digest it computed itself at upload,
   asks IT to type the version number, signs and commits; on success it quietly signs a 30-day monthly check-in (heartbeat). A
-  failed check-in does not undo the publish; it prints `Computers may soon show "settings may be out of date". Open the admin site to fix it.`
+  failed check-in does not undo the publish; it prints `Computers may soon show "settings may be out of date". Fix it with: mastersos heartbeat --key-file <file>`
   The output is `Checked: no problems`, `Check code: a1b2c3d4`, `Published version N`.
 - `--allow-reroute=<secret name>` (repeatable): see `secret_rerouted` below. Only IT gives it, after running `mastersos diff`
   to see where the secret will be sent.
 
 Other subcommands: `devices list|show`, `key new|register|list|add|remove`, `verify`, `heartbeat`, `recovery read`,
-`seed make|check`, `hash-password` (reads a password twice without echo and prints the IT account's hash for `secrets.toml`),
+`seed make|check`, `hash-password` (reads a password twice without echo at a terminal and prints the IT account's hash for `secrets.toml`; it refuses `--json`),
 `login`, `logout`, `explain`, `migrate`, `spec [SECTION]` (`spec --full` prints all of it). The school's logo is not
-uploaded by the command line: the server does not host logos yet (phase 4). `--json` is for scripts and AI assistants;
+uploaded by the command line: the server does not host logos yet (phase 4). `--json` is for scripts and AI assistants: every command prints one JSON value on stdout;
 global options: `--server <URL>`, `--school <UUID>`, `--pin-dir <DIR>`, `--yes` (nobody answers: nothing is asked) and `--trust-fingerprint <FP>`
 (repeatable). `--key-file` is taken by `init`, `publish`, `heartbeat`, `key register|remove` and `recovery read`; `key add` takes the key file as its argument.
 
