@@ -346,6 +346,9 @@ fn parse_quietly(text: &str) -> Result<Seed, String> {
 pub struct CheckReport {
     /// The latest version verified here.
     pub version: u64,
+    /// The verified version the seed matches: the latest, or an earlier one for an older seed.
+    /// `None` when it does not match (any problem).
+    pub matched: Option<u64>,
     /// The seed's trusted keys (empty when it cannot be read).
     pub trust: Vec<TrustKey>,
     /// Each makes the seed unusable; never a secret.
@@ -447,6 +450,7 @@ pub async fn check(
 ) -> Result<CheckReport, CliError> {
     let mut r = CheckReport {
         version: verified.version,
+        matched: None,
         trust: Vec::new(),
         problems: Vec::new(),
         notes: Vec::new(),
@@ -546,6 +550,7 @@ pub async fn check(
             shown(&expected)
         ));
     }
+    r.matched = r.problems.is_empty().then_some(base);
     r.trust = seed.trust;
     Ok(r)
 }

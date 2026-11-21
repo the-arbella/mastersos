@@ -674,11 +674,36 @@ async fn seed_check_compares_an_older_min_version_with_that_version() {
     s.reset().await;
     publish(&s, &[v1, version(2, &[&k1], &k1)]).await;
 
-    // The honest version 1 seed: older, passes with the note.
+    // The honest version 1 seed: older, passes with the note, and says which version it matched.
     let o = check(home.path(), &s, &pins, &out).await;
     let v = json_of(&o);
     assert_eq!(v["ok"], true, "{v}");
     assert!(v["notes"].to_string().contains("older seed"), "{v}");
+    assert_eq!(v["version"], 2, "{v}");
+    assert_eq!(v["matched"], 1, "{v}");
+    let uri = s.uri();
+    let o = run(
+        home.path(),
+        &[
+            &"--pin-dir",
+            &pins,
+            &"seed",
+            &"check",
+            &out,
+            &"--school",
+            &SID,
+            &"--server",
+            &uri,
+        ],
+    )
+    .await;
+    let (stdout, stderr) = text(&o);
+    assert!(o.status.success(), "{stdout}{stderr}");
+    assert!(
+        stdout.starts_with("The seed matches version 1 verified here"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("matches version 2"), "{stdout}");
 
     // The latest trust with min_version 1: a Device would accept version 1 and trust key 2
     // again. Refused, naming key 2.

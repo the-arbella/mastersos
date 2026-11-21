@@ -2292,7 +2292,7 @@ async fn seed_check_v1(
         return Ok((
             format!(
                 "{}\n",
-                json!({"ok": ok, "version": r.version, "problems": r.problems, "notes": r.notes})
+                json!({"ok": ok, "version": r.version, "matched": r.matched, "problems": r.problems, "notes": r.notes})
             ),
             ok,
         ));
@@ -2300,7 +2300,7 @@ async fn seed_check_v1(
     let mut s = if ok {
         let mut s = format!(
             "The seed matches version {} verified here. Its trusted keys:\n",
-            r.version
+            r.matched.unwrap_or(r.version)
         );
         for k in &r.trust {
             s.push_str(&format!("    {}\n", crate::sign::key_line(k)));
