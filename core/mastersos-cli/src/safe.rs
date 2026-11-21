@@ -90,6 +90,15 @@ pub fn field(s: &str) -> String {
     out
 }
 
+/// One line, not cut: every control and invisible format character escaped, `\n` too, so text
+/// from outside (a server answer, a name inside a package) can never start a line of its own.
+/// For the command line's error messages, whose last words say what to do next.
+pub fn line(s: &str) -> String {
+    let mut out = String::new();
+    escape_into(&mut out, s, false, true);
+    out
+}
+
 /// Multi-line text escaped but not cut: escape first, then diff by line (`similar` takes a lone
 /// `\r` as a line break; after escaping, the lines shown are the lines diffed; nothing is cut, so a
 /// change only in the second half of a long line is not lost).
@@ -262,6 +271,15 @@ mod tests {
         }
         // E0080 is not Cf: kept as it is.
         assert_eq!(field("a\u{e0080}b"), "a\u{e0080}b");
+    }
+
+    #[test]
+    fn line_is_one_line_and_not_cut() {
+        let long = format!("{}\nmastersos: forged{EVIL}", "x".repeat(FIELD_MAX * 3));
+        let l = line(&long);
+        assert!(!l.contains('\n') && !has_raw(&l), "{l:?}");
+        assert!(l.contains("\\nmastersos: forged"), "{l}");
+        assert!(l.starts_with(&"x".repeat(FIELD_MAX * 3)) && !l.contains("(cut;"));
     }
 
     #[test]

@@ -635,6 +635,58 @@ async fn first_pull_without_a_person_or_fingerprints_is_refused() {
     assert!(!err.contains("(cut;"), "{err}");
 }
 
+/// A package whose member name carries a line break: refused as tampered, and the name cannot
+/// add a line of its own to the terminal (no forged `mastersos:` line).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_line_break_in_a_package_name_cannot_forge_a_line() {
+    let forged =
+        mastersos_bundle::testutil::raw_archive(&[("evil\nmastersos: everything is fine", b"x")]);
+    let s = published(&[forged]).await;
+    let home = signed_in(&s.uri());
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path().join("school");
+    let pins = t.path().join("pins");
+    let o = run(
+        home.path(),
+        None,
+        &[
+            &"--yes",
+            &"--pin-dir",
+            &pins,
+            &"pull",
+            &dir,
+            &"--school",
+            &SID,
+        ],
+    )
+    .await;
+    assert_eq!(o.status.code(), Some(1), "{:?}", text(&o));
+    let (out, err) = text(&o);
+    assert!(out.is_empty(), "{out}");
+    assert_eq!(err.lines().count(), 1, "{err}");
+    assert!(err.starts_with("mastersos: "), "{err}");
+    // The name is shown, escaped, inside the one line.
+    assert!(err.contains("nmastersos: everything is fine"), "{err}");
+    assert_eq!(err.matches("mastersos: ").count(), 2, "{err}");
+    let o = run(
+        home.path(),
+        None,
+        &[
+            &"--json",
+            &"--yes",
+            &"--pin-dir",
+            &pins,
+            &"pull",
+            &dir,
+            &"--school",
+            &SID,
+        ],
+    )
+    .await;
+    assert_eq!(json_of(&o)["error"]["code"], "chain_tampered");
+    assert!(!dir.join("mastersos.toml").exists());
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn tampered_version_stops_pull() {
     let k = Ed25519Signer::from_seed("key-1", &[1; 32]);

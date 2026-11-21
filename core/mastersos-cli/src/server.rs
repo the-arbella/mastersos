@@ -78,10 +78,11 @@ pub fn render_error(e: &CliError, json: bool) -> (String, String) {
             "code": e.code, "message": e.message, "problems": e.problems}});
         return (format!("{v}\n"), String::new());
     }
-    // The whole message, line breaks kept: the command line's own guidance ends with what to do
-    // next, so it is never cut. Control and format characters are still escaped; a server's own
-    // message is already without control characters and at most 300 characters (`clean`).
-    let mut err = format!("mastersos: {}\n", safe::escape_lines(&e.message));
+    // The whole message on one line: the command line's own guidance ends with what to do next,
+    // so it is never cut. Every control and format character is escaped, line breaks too, so text
+    // from outside inside a message cannot forge a line; a server's own message is also without
+    // control characters and at most 300 characters (`clean`).
+    let mut err = format!("mastersos: {}\n", safe::line(&e.message));
     // Devices (a feature gate refusal): one row each, in columns.
     if !e.problems.is_empty() && e.problems.iter().all(|p| p.get("device_id").is_some()) {
         const COLUMNS: [(&str, &str); 4] = [

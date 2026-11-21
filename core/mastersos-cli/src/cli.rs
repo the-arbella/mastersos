@@ -333,7 +333,8 @@ pub async fn main() -> ExitCode {
                     print_issues(i);
                 }
                 // The message never holds a token: only the address and the server's error text.
-                eprintln!("mastersos: {}", e.message());
+                // One line, every control character escaped (names from files may carry any).
+                eprintln!("mastersos: {}", crate::safe::line(e.message()));
             }
             ExitCode::from(e.exit_code())
         }

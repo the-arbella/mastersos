@@ -718,10 +718,18 @@ async fn first_use(
         )));
     }
     let archive = src.version_archive(latest).await?;
-    let unpacked = read_archive(&archive)
-        .map_err(|e| tamper(format!("The latest package cannot be opened: {e}")))?;
-    let m = Manifest::parse(&unpacked.contents.manifest_text)
-        .map_err(|e| tamper(format!("The latest manifest cannot be read: {e}")))?;
+    let unpacked = read_archive(&archive).map_err(|e| {
+        tamper(format!(
+            "The latest package cannot be opened: {}",
+            crate::safe::field(&e.to_string())
+        ))
+    })?;
+    let m = Manifest::parse(&unpacked.contents.manifest_text).map_err(|e| {
+        tamper(format!(
+            "The latest manifest cannot be read: {}",
+            crate::safe::field(&e.to_string())
+        ))
+    })?;
     writeln!(
         out,
         "This computer has not checked {} before. The server's latest is version {latest}; it names these keys as the ones computers accept:",
