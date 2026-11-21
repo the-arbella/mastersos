@@ -918,7 +918,7 @@ fn key_new_refuses_a_folder_others_can_write() {
     assert!(message.contains("USB stick"), "{message}");
     assert!(!message.contains("seed"), "{message}");
     assert!(!open.join("school.kit").exists());
-    // Group-writable but sticky: nobody else can replace the file.
+    // Writable by everyone but sticky (1777, like /tmp): nobody else can replace the file.
     std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o1777)).unwrap();
     let o = key_new(home.path(), &open.join("school.kit"), &[]);
     assert!(o.status.success(), "{:?}", text(&o));

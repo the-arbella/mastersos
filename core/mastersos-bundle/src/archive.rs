@@ -75,7 +75,7 @@ fn top_name(path: &str) -> &str {
     path.split('/').next().unwrap_or("")
 }
 
-/// `files/…` 或 `scripts/…` 下的成员路径：只允许普通分量，且至少两层。
+/// A member path under `files/…` or `scripts/…`: plain components only, at least two levels.
 pub fn check_member_path(path: &str) -> Result<(), BundleError> {
     let unsafe_path = || BundleError::UnsafePath(path.to_string());
     let mut comps = Path::new(path).components();
@@ -95,8 +95,8 @@ pub fn check_member_path(path: &str) -> Result<(), BundleError> {
             _ => return Err(unsafe_path()),
         }
     }
-    // components() 会悄悄吞掉 "."、空分量和结尾的 "/"；要求路径与规范形式逐字节相同，
-    // 否则不同的键会指向磁盘上同一个文件。
+    // components() silently drops ".", empty components and a trailing "/": the path must equal
+    // its canonical form byte for byte, or different keys would name the same file on disk.
     if rest == 0 || canonical != path || path.contains('\\') || path.contains('\0') {
         return Err(unsafe_path());
     }
