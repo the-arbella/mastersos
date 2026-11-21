@@ -107,6 +107,14 @@ impl Credentials {
         }
     }
 
+    /// Drop a kept ordinary token after the server refused it (`401`, not `step_up_required`):
+    /// the next call fetches a new one.
+    pub fn forget(&self) {
+        if let Credentials::Arbella { cache, .. } = self {
+            *cache.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        }
+    }
+
     /// A token from a fresh sign-in, for a call the server wants stepped up.
     pub async fn step_up(&self) -> Result<String, CliError> {
         match self {
@@ -386,8 +394,13 @@ mod tests {
         /// A fake arbella that counts its runs in `dir/n` and answers a token for
         /// https://server.example ending at `expires_at`.
         fn counting(dir: &Path, expires_at: &str) -> PathBuf {
+            counting_for(dir, "https://server.example", expires_at)
+        }
+
+        /// [`counting`] for the server `url`.
+        fn counting_for(dir: &Path, url: &str, expires_at: &str) -> PathBuf {
             let answer = format!(
-                r#"{{"fleet_url":"https://server.example","access_token":"t","expires_at":"{expires_at}"}}"#
+                r#"{{"fleet_url":"{url}","access_token":"t","expires_at":"{expires_at}"}}"#
             );
             fake(
                 dir,
@@ -426,6 +439,46 @@ mod tests {
             // The ordinary token is still the cached one.
             assert_eq!(c.token().await.unwrap(), "t");
             assert_eq!(runs(t.path()), after_resolve + 3);
+        }
+
+        /// A `401` other than `step_up_required` drops the kept token: a revoked token is not
+        /// sent again, the next call runs arbella for a new one.
+        #[tokio::test]
+        async fn arbella_token_is_dropped_after_a_401() {
+            use wiremock::{Mock, MockServer, ResponseTemplate};
+            let mock = MockServer::start().await;
+            Mock::given(wiremock::matchers::any())
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+                .mount(&mock)
+                .await;
+            let t = tempfile::tempdir().unwrap();
+            let exe = counting_for(t.path(), &mock.uri(), "2099-01-01T00:00:00Z");
+            let p = t.path().join("m").join(FILE_NAME);
+            let (c, _) = resolve_with(Some(exe), &p, None, false).await.unwrap();
+            let s = crate::server::Server::new(
+                &mock.uri(),
+                Some("0192f3a4-5b6c-7d8e-9f00-112233445566"),
+                c,
+            )
+            .unwrap();
+            let start = runs(t.path());
+            for _ in 0..2 {
+                s.get_json::<serde_json::Value>("keys").await.unwrap();
+            }
+            assert_eq!(runs(t.path()), start + 1);
+            mock.reset().await;
+            Mock::given(wiremock::matchers::any())
+                .respond_with(ResponseTemplate::new(401).set_body_json(
+                    serde_json::json!({"error": {"code": "not_logged_in", "message": "revoked"}}),
+                ))
+                .mount(&mock)
+                .await;
+            let e = s.get_json::<serde_json::Value>("keys").await.unwrap_err();
+            assert_eq!(e.code, "not_logged_in");
+            // The refused token came from the cache; the next call asks arbella again.
+            assert_eq!(runs(t.path()), start + 1);
+            let _ = s.get_json::<serde_json::Value>("keys").await;
+            assert_eq!(runs(t.path()), start + 2);
         }
 
         /// A token that ends within a minute (or has an unreadable end) is never reused.

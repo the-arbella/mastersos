@@ -382,6 +382,8 @@ impl Server {
         if res.status().as_u16() == 401 {
             let err = read_error(res).await;
             if err.code != "step_up_required" {
+                // The token was refused (revoked, ended early): the next call gets a new one.
+                self.creds.forget();
                 return Err(err);
             }
             // A cached step-up token the server no longer accepts is replaced like any other.
@@ -395,7 +397,12 @@ impl Server {
         if res.status().is_success() {
             Ok(res)
         } else {
-            Err(read_error(res).await)
+            let unauthorized = res.status().as_u16() == 401;
+            let err = read_error(res).await;
+            if unauthorized && err.code != "step_up_required" {
+                self.creds.forget();
+            }
+            Err(err)
         }
     }
 
