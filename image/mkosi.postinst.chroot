@@ -244,6 +244,23 @@ got=$(cd /usr/share/wayland-sessions && LC_ALL=C && echo *.desktop)
 	echo "postinst: /usr/share/wayland-sessions should hold mastersos-kiosk.desktop mastersos.desktop, has: $got" >&2
 	exit 1
 }
+# A new account's session is named, not left to GDM's fallback. With no saved session GDM tries "gnome" (gone) and then the
+# first session file by name in all its directories, which include the login screen's own (/usr/share/gdm/greeter/
+# wayland-sessions): gnome-greeter sorts before mastersos, so a person's first sign-in started the login screen's session
+# as their desktop. AccountsService gives a new account's record the template's Session; a locked-app account's record is
+# written by the agent (Session=mastersos-kiosk).
+for t in standard administrator; do
+	f=/usr/share/accountsservice/user-templates/$t
+	[ "$(grep -c '^Session=' "$f")" = 1 ] || {
+		echo "postinst: $f should have one Session= line" >&2
+		exit 1
+	}
+	sed -i 's/^Session=.*$/Session=mastersos/' "$f" || exit 1
+	grep -qxF 'Session=mastersos' "$f" || {
+		echo "postinst: $f does not name the mastersos session" >&2
+		exit 1
+	}
+done
 if [ -d /usr/share/xsessions ] && [ -n "$(ls -A /usr/share/xsessions)" ]; then
 	echo "postinst: /usr/share/xsessions should be empty, has: $(ls -A /usr/share/xsessions)" >&2
 	exit 1

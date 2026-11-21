@@ -18,6 +18,14 @@ mode_file=/var/lib/mastersos-public/session-mode
 # it always reads `learning` (what an older image after a rollback sees).
 session_dir=/var/lib/mastersos-public/session
 orig=/usr/lib/systemd/user-environment-generators/30-systemd-environment-d-generator
+# The login screen is not a person's session. gdm runs it as an account of its own whose home it creates under
+# /run/gdm3/home at start, and hands it DCONF_PROFILE=gdm and its data directories through that home's environment.d.
+# Without them the login screen reads the ordinary profile, starts as a desktop (gnome-shell --mode=user) and nobody can
+# sign in. So that account runs the generator unchanged in every mode. The home comes from the account database, never
+# from $HOME: only root makes accounts, and no person's home is under gdm's runtime directory.
+greeter_home=/run/gdm3/home
+acct_home=$(getent passwd "$UID" | cut -d: -f6) || acct_home=
+case "$acct_home" in "$greeter_home"/?*) exec "$orig" "$@" ;; esac
 mode=
 if [ -L "$session_dir" ] || [ -e "$session_dir" ]; then
 	mode=learning
