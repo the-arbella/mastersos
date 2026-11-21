@@ -17,8 +17,7 @@ use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 const SID: &str = "0192f3a4-5b6c-7d8e-9f00-112233445566";
 const PID: &str = "0192f3a4-0000-4000-8000-0000000000aa";
-const STALE: &str =
-    "Computers may soon show \"settings may be out of date\". Open the admin site to fix it.";
+const STALE: &str = "Computers may soon show \"settings may be out of date\". Fix it with: mastersos heartbeat --key-file <file>";
 
 fn prefix() -> String {
     format!("/api/cli/v1/schools/{SID}/mastersos/")

@@ -40,8 +40,7 @@ use crate::workdir::{self, Snapshot, UploadInfo, Workdir};
 pub const CHECKIN_DAYS: i64 = 30;
 
 /// What people read when the check-in after a publish fails.
-pub const CHECKIN_FAILED_TEXT: &str =
-    "Computers may soon show \"settings may be out of date\". Open the admin site to fix it.";
+pub const CHECKIN_FAILED_TEXT: &str = "Computers may soon show \"settings may be out of date\". Fix it with: mastersos heartbeat --key-file <file>";
 
 /// How many characters of the digest are printed: as many as the check code shows.
 pub const DIGEST_SHOWN: usize = 8;
@@ -232,14 +231,21 @@ fn key_not_trusted(me: &TrustKey, why: &str) -> CliError {
     )
 }
 
-/// A refusal of the server, in words that say what to do. The code and status stay the server's;
-/// the message is ours, or the server's with secret values replaced and control characters
-/// escaped. `details` are not passed on except the devices of a feature gate refusal (cleaned).
+/// A refusal of the server, in words that say what to do. The status stays the server's, and so
+/// does the code, except a `version_conflict` naming a latest version older than the base: that
+/// is a rolled-back or wrong server, `chain_tampered` as when this computer sees it first. The
+/// message is ours, or the server's with secret values replaced and control characters escaped.
+/// `details` are not passed on except the devices of a feature gate refusal (cleaned).
 fn refusal(mut e: CliError, base: u64, secrets: &BTreeMap<String, String>) -> CliError {
     let detail = |k: &str| e.details.get(k).and_then(Value::as_str).map(safe::field);
-    let message = match e.code.as_str() {
+    let code = e.code.clone();
+    let message = match code.as_str() {
         "version_conflict" => match e.details.get("latest_version").and_then(Value::as_u64) {
-            Some(n) => newer(n, base).message,
+            Some(n) => {
+                let ours = newer(n, base);
+                e.code = ours.code;
+                ours.message
+            }
             None => format!(
                 "Someone published a newer version after your base v{base}. Your edits are not published. Save your changes elsewhere, then run `mastersos pull --force` (this discards local edits) and redo them."
             ),
@@ -657,7 +663,7 @@ async fn publish_with(
     let snap = w.freeze().map_err(local)?;
     if w.equals_base(&snap).map_err(local)? {
         return Err(CliError::new(
-            "unchanged",
+            "nothing_to_publish",
             &format!(
                 "Nothing to publish: the directory equals version {}",
                 meta.base_version
@@ -781,10 +787,11 @@ async fn publish_with(
     )
     .map_err(local)?;
     let stamped = secret_ref::fill(&stamped_refs, &snap.secrets).map_err(|l| check_failed(&l))?;
+    // The filled text holds the secrets: a parser message quoting a line is redacted.
     let manifest = Manifest::parse(&stamped).map_err(|e| {
         CliError::new(
             "check_failed",
-            &format!("Not published: {}", safe::field(&e.to_string())),
+            &format!("Not published: {}", clean(&e.to_string(), &snap.secrets)),
         )
     })?;
     if !manifest.trust.contains(me) {
@@ -804,7 +811,7 @@ async fn publish_with(
     let frame = frame_of(&stamped).map_err(|e| {
         CliError::new(
             "check_failed",
-            &format!("Not published: {}", safe::field(&e.to_string())),
+            &format!("Not published: {}", clean(&e.to_string(), &snap.secrets)),
         )
     })?;
     frame_matches(&frame, &meta.school_id, version)?;
@@ -1707,6 +1714,47 @@ mod tests {
         assert!(e
             .message
             .contains("Someone published v2 after your base v1"));
+        assert!(school.held.lock().unwrap().uploads.is_empty());
+    }
+
+    /// A `version_conflict` naming a latest version older than the base is a rolled-back or
+    /// wrong server: its code says so, as the message does.
+    #[tokio::test]
+    async fn version_conflict_behind_the_base_is_chain_tampered() {
+        let (s, school) = new_school().await;
+        let t = tempfile::tempdir().unwrap();
+        let k = kit();
+        let w = published_dir(t.path(), &s, &school, &k);
+        *school.refuse_upload.lock().unwrap() = Some((
+            409,
+            envelope("version_conflict", json!({"latest_version": 0})),
+        ));
+        let signer = Counting::of(&k);
+        let (r, _) = run(&s, &w, &signer, true, "").await;
+        let e = r.unwrap_err();
+        assert_eq!(e.code, "chain_tampered", "{}", e.message);
+        assert!(e.message.contains("rolled back"), "{}", e.message);
+        assert_eq!(signer.signed(), 0);
+    }
+
+    /// A directory equal to its base: nothing is uploaded, with the plan's code.
+    #[tokio::test]
+    async fn unchanged_directory_is_nothing_to_publish() {
+        let (s, school) = new_school().await;
+        let t = tempfile::tempdir().unwrap();
+        let k = kit();
+        let w = published_dir(t.path(), &s, &school, &k);
+        let edited = w.manifest().unwrap();
+        std::fs::write(
+            w.root.join("manifest.toml"),
+            edited.replace("name = \"Everyone\"", "name = \"Ungrouped\""),
+        )
+        .unwrap();
+        let signer = Counting::of(&k);
+        let (r, _) = run(&s, &w, &signer, true, "").await;
+        let e = r.unwrap_err();
+        assert_eq!(e.code, "nothing_to_publish", "{}", e.message);
+        assert_eq!(signer.signed(), 0);
         assert!(school.held.lock().unwrap().uploads.is_empty());
     }
 

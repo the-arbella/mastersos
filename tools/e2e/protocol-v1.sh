@@ -476,7 +476,7 @@ gen_uuid() {
 }
 
 # A comment line appended to a settings folder's manifest.toml: publishing refuses a folder equal
-# to its base (`unchanged`), and a comment is a byte change that alters nothing else.
+# to its base (`nothing_to_publish`), and a comment is a byte change that alters nothing else.
 touch_manifest() {
 	if ! printf '# e2e: %s\n' "$2" >>"$1/manifest.toml"; then
 		DETAIL="cannot append to $1/manifest.toml"
