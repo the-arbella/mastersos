@@ -578,6 +578,34 @@ async fn first_pull_without_a_person_or_fingerprints_is_refused() {
         assert!(pinned.is_empty(), "{pinned:?}");
     }
     assert!(!dir.join("mastersos.toml").exists());
+
+    // At a terminal the whole refusal is printed, with its last instruction and line breaks
+    // kept: the command line's own guidance is never cut.
+    let o = run(
+        home.path(),
+        None,
+        &[
+            &"--yes",
+            &"--pin-dir",
+            &pins,
+            &"pull",
+            &dir,
+            &"--school",
+            &SID,
+        ],
+    )
+    .await;
+    assert_eq!(o.status.code(), Some(1));
+    let (_, err) = text(&o);
+    let line = err.lines().next().unwrap();
+    assert!(line.chars().count() > 370, "{err}");
+    assert!(
+        line.ends_with(
+            "pass --trust-fingerprint once for each key that is not your school key file"
+        ),
+        "{err}"
+    );
+    assert!(!err.contains("(cut;"), "{err}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
