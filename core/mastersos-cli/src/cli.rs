@@ -1162,7 +1162,9 @@ async fn v1_command(o: &V1, cmd: Cmd) -> Result<String, CliError> {
             "nobody can confirm here (--json, or stdin is not a terminal): pass --yes to go on without the confirmation",
         ));
     }
-    let mut confirm = stdin.lock();
+    // Without a person nothing is ever read from stdin, whatever a command asks.
+    let (mut lock, mut nobody) = (stdin.lock(), std::io::empty());
+    let confirm: &mut dyn std::io::BufRead = if interactive { &mut lock } else { &mut nobody };
     let (mut stdout, mut stderr) = (std::io::stdout(), std::io::stderr());
     let out: &mut dyn std::io::Write = if o.json { &mut stderr } else { &mut stdout };
     match cmd {
@@ -1173,7 +1175,7 @@ async fn v1_command(o: &V1, cmd: Cmd) -> Result<String, CliError> {
                 keys,
                 o.school.as_deref(),
                 interactive,
-                &mut confirm,
+                confirm,
                 out,
             )
             .await
@@ -1184,18 +1186,9 @@ async fn v1_command(o: &V1, cmd: Cmd) -> Result<String, CliError> {
             force,
         } => {
             let dir = dir.unwrap_or_else(|| PathBuf::from("."));
-            pull_v1(
-                o,
-                &dir,
-                version,
-                force,
-                o.school.as_deref(),
-                &mut confirm,
-                out,
-            )
-            .await
+            pull_v1(o, &dir, version, force, o.school.as_deref(), confirm, out).await
         }
-        Cmd::Verify => verify_v1(o, o.school.as_deref(), &mut confirm, out).await,
+        Cmd::Verify => verify_v1(o, o.school.as_deref(), confirm, out).await,
         Cmd::Key(KeyCmd::Register { label, .. }) => {
             let ctx = KeyCtx {
                 o,
@@ -1203,7 +1196,7 @@ async fn v1_command(o: &V1, cmd: Cmd) -> Result<String, CliError> {
                 school: o.school.as_deref(),
                 interactive,
             };
-            key_register(&ctx, &keys, &label, &mut confirm, out).await
+            key_register(&ctx, &keys, &label, confirm, out).await
         }
         Cmd::Key(KeyCmd::List { dir }) => {
             let ctx = KeyCtx {
@@ -1212,7 +1205,7 @@ async fn v1_command(o: &V1, cmd: Cmd) -> Result<String, CliError> {
                 school: o.school.as_deref(),
                 interactive,
             };
-            key_list(&ctx, &mut confirm, out).await
+            key_list(&ctx, confirm, out).await
         }
         Cmd::Key(KeyCmd::Add { dir, .. }) => {
             let ctx = KeyCtx {
@@ -1221,7 +1214,7 @@ async fn v1_command(o: &V1, cmd: Cmd) -> Result<String, CliError> {
                 school: o.school.as_deref(),
                 interactive,
             };
-            key_add(&ctx, &keys, &mut confirm, out).await
+            key_add(&ctx, &keys, confirm, out).await
         }
         Cmd::Publish {
             dir, allow_reroute, ..
@@ -1230,7 +1223,7 @@ async fn v1_command(o: &V1, cmd: Cmd) -> Result<String, CliError> {
                 .first()
                 .ok_or_else(|| CliError::usage("no school key"))?
                 .kit;
-            publish_v1(o, dir.as_deref(), kit, &allow_reroute, &mut confirm, out).await
+            publish_v1(o, dir.as_deref(), kit, &allow_reroute, confirm, out).await
         }
         Cmd::Heartbeat { days, .. } => {
             let kit = &keys
@@ -1243,7 +1236,7 @@ async fn v1_command(o: &V1, cmd: Cmd) -> Result<String, CliError> {
                 school: o.school.as_deref(),
                 interactive,
             };
-            heartbeat_v1(&ctx, kit, days, &mut confirm, out).await
+            heartbeat_v1(&ctx, kit, days, confirm, out).await
         }
         Cmd::Recovery(RecoveryCmd::Read { device, .. }) => {
             let ctx = KeyCtx {
@@ -1252,7 +1245,7 @@ async fn v1_command(o: &V1, cmd: Cmd) -> Result<String, CliError> {
                 school: o.school.as_deref(),
                 interactive,
             };
-            recovery_read_v1(&ctx, &keys, &device, &mut confirm, out).await
+            recovery_read_v1(&ctx, &keys, &device, confirm, out).await
         }
         Cmd::Devices(c) => {
             let ctx = KeyCtx {
@@ -1261,7 +1254,7 @@ async fn v1_command(o: &V1, cmd: Cmd) -> Result<String, CliError> {
                 school: o.school.as_deref(),
                 interactive,
             };
-            devices_v1(&ctx, c, &mut confirm, out).await
+            devices_v1(&ctx, c, confirm, out).await
         }
         Cmd::Key(KeyCmd::Remove {
             code,
@@ -1275,7 +1268,7 @@ async fn v1_command(o: &V1, cmd: Cmd) -> Result<String, CliError> {
                 school: o.school.as_deref(),
                 interactive,
             };
-            key_unregister(&ctx, &code, keys.first(), &mut confirm, out).await
+            key_unregister(&ctx, &code, keys.first(), confirm, out).await
         }
         Cmd::Seed(SeedCmd::Make {
             group,
@@ -1287,13 +1280,6 @@ async fn v1_command(o: &V1, cmd: Cmd) -> Result<String, CliError> {
                 dir: dir.as_deref(),
                 school: o.school.as_deref(),
                 interactive,
-            };
-            // Without a person nothing is read from stdin.
-            let mut nobody = std::io::empty();
-            let confirm: &mut dyn std::io::BufRead = if interactive {
-                &mut confirm
-            } else {
-                &mut nobody
             };
             seed_make_v1(&ctx, group.as_deref(), &path, confirm, out).await
         }
