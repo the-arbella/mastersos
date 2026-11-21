@@ -1018,7 +1018,8 @@ s_containment() {
 # ---- The CLI and device APIs with curl, past the command line's local checks ----
 
 # The tokens and fetch tokens below stay in these functions: never printed, logged or written to
-# a file, and tracing is off while one is in scope (`quiet`).
+# a file, and tracing is off while one is in scope (`quiet`). Device secrets and recovery keys
+# made here are written to their files through `quiet` too.
 quiet() {
 	local traced=0 rc=0
 	if [[ $- == *x* ]]; then traced=1; fi
@@ -1026,6 +1027,22 @@ quiet() {
 	"$@" || rc=$?
 	if [[ $traced == 1 ]]; then set -x; fi
 	return "$rc"
+}
+
+# write_private FILE TEXT: TEXT and a newline into FILE, mode 0600 (run through quiet: TEXT is a
+# secret).
+write_private() {
+	(umask 077 && printf '%s\n' "$2" >"$1") && chmod 600 "$1"
+}
+
+# new_identity FILE DEVICE_ID: an identity.json for DEVICE_ID with a new device secret, as the
+# agent makes one (32 random bytes, URL-safe base64 without padding), mode 0600. Run through
+# quiet: the secret exists only inside this function.
+new_identity() {
+	local secret
+	secret=$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n') || return 1
+	[[ $secret =~ ^[A-Za-z0-9_-]{43}$ ]] || return 1
+	write_private "$1" "{\"device_id\":\"$2\",\"escrow_secret\":\"$secret\"}"
 }
 
 # cli_path SCHOOL REST: the path of a CLI API route of SCHOOL.
@@ -1120,9 +1137,9 @@ versions_of() {
 	[[ $V_BY != 0 ]] || V_BY=""
 }
 
-# frame_json VERSION OUT: a pending upload's body for the first school, {frame, digest_hex}, with
-# the frame of the server's latest trust and escrow recipients (from GET keys and GET
-# escrow-recipients) at VERSION, issued now, using nothing new (features_used empty), and
+# frame_json VERSION OUT [KEY_ID]: a pending upload's body for the first school, {frame, digest_hex},
+# with the frame of the server's latest trust (plus the registered key KEY_ID) and escrow
+# recipients (from GET keys and GET escrow-recipients) at VERSION, issued now, using nothing new (features_used empty), and
 # digest_hex $FRAME_DIGEST. The command line computes the frame from the text it signs; here it
 # is built by hand so the server, not the command line, decides.
 frame_json() {
@@ -1133,10 +1150,10 @@ frame_json() {
 		DETAIL="GET keys: HTTP $HTTP (log ${LOG##*/})"
 		return 1
 	fi
-	trust=$(awk -F'\t' '
+	trust=$(awk -F'\t' -v extra="${3:-}" '
 		{ n = split($1, a, "."); if (n == 2) { v[a[1], a[2]] = $3; if (a[1] + 1 > m) m = a[1] + 1 } }
 		END {
-			for (i = 0; i < m; i++) if (v[i, "in_latest_trust"] == "true") {
+			for (i = 0; i < m; i++) if (v[i, "in_latest_trust"] == "true" || (extra != "" && v[i, "key_id"] == extra)) {
 				printf "%s{\"id\":\"%s\",\"alg\":\"%s\",\"public_key\":\"%s\"}", sep, v[i, "key_id"], v[i, "alg"], v[i, "public_key"]
 				sep = ","
 			}
@@ -1201,7 +1218,13 @@ s_server_refuses_untrusted_signature() {
 		return 1
 	fi
 	FRAME_DIGEST=$V_BY_DIGEST
-	frame_json $((latest + 1)) "$W/api/untrusted-pending.json" || return 1
+	# The new trust holds k1 too, so the signer passes the new-trust rule (commit step 5) and only
+	# the latest trust (step 4) can refuse it.
+	frame_json $((latest + 1)) "$W/api/untrusted-pending.json" "${KID[1]}" || return 1
+	if ! grep -q "\"${KID[1]}\"" "$W/api/untrusted-pending.json"; then
+		DETAIL="GET keys: k1 (${KID[1]}) is not registered, so the new trust cannot hold it"
+		return 1
+	fi
 	cli_path "$SCHOOL" publish/pending
 	api untrusted-pending first POST "$REPLY" "$W/api/untrusted-pending.json"
 	if [[ $HTTP != 201 ]] || ! fget "$LOG.flat" pending_id || [[ ! $REPLY =~ ^[0-9a-f-]{36}$ ]]; then
@@ -1232,12 +1255,14 @@ s_server_refuses_untrusted_signature() {
 		return 1
 	fi
 	case $code in
-	digest_mismatch | archive_invalid | version_conflict | pending_expired | invalid | not_found | too_large | feature_unsupported | unauthenticated | step_up_required)
-		DETAIL="commit refused before the signature was judged: HTTP $status $code (log $commit_log)"
+	digest_mismatch | archive_invalid | version_conflict | pending_expired | invalid | not_found | too_large | feature_unsupported | unauthenticated | step_up_required | forbidden | too_many | trust_rule)
+		DETAIL="commit refused for another reason than the signer: HTTP $status $code (log $commit_log)"
 		return 1
 		;;
 	esac
-	DETAIL="commit of v$old's archive (a real signature of k1, out of trust since v3) as version $((latest + 1)): HTTP $status $code (protocol 4.4 commit step 4 names 422 signature_invalid); latest still $latest"
+	local note="as protocol 4.4 commit step 4 names it"
+	[[ "$status $code" == "422 signature_invalid" ]] || note="NOTE: protocol 4.4 commit step 4 names 422 signature_invalid"
+	DETAIL="commit of v$old's archive (a real signature of k1, out of the latest trust since v3; the new trust holds k1) as version $((latest + 1)): HTTP $status $code ($note); latest still $latest"
 }
 
 # A pending upload whose version is the latest (a stale base: not latest+1), sent with curl: the
@@ -1427,7 +1452,7 @@ s_cross_school_device_isolated() {
 			return 1
 		fi
 	done
-	DETAIL="second school: k4 ($k4id) registered, init and version 1 by its admin; its seed (trust {k4}) gave device $devs2 version 1 and 204 after 1; listed only by its school; the first school's token gets its own v$latest (after 0 and 1 too), never the second school's archive"
+	DETAIL="second school: k4 ($k4id) registered, init and version 1 by its admin; its seed (trust {k4}) gave device $devs2 version 1 and 204 after 1; listed only by its school; the first school's token gets its own v$latest, and with after=0 and 1 a 200 that is not the second school's archive"
 }
 
 # A device secret reset (protocol 3.1, 4.8, 5.6): before it, another secret for the same device id
@@ -1439,8 +1464,8 @@ s_escrow_secret_reset() {
 		DETAIL="cannot make a recovery key"
 		return 1
 	}
-	local rkey3=$REPLY luks3 dev3 secret2
-	if ! { (umask 077 && printf '%s\n' "$rkey3" >"$W/recovery3.key") && chmod 600 "$W/recovery3.key"; }; then
+	local rkey3=$REPLY luks3 dev3
+	if ! quiet write_private "$W/recovery3.key" "$rkey3"; then
 		DETAIL="cannot write $W/recovery3.key"
 		return 1
 	fi
@@ -1459,17 +1484,11 @@ s_escrow_secret_reset() {
 		return 1
 	fi
 	# 2. The same device id with another secret (a second DIR holding its identity.json).
-	secret2=$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n') || secret2=""
-	if [[ ! $secret2 =~ ^[A-Za-z0-9_-]{43}$ ]]; then
-		DETAIL="cannot make a device secret"
-		return 1
-	fi
 	if ! { mkdir -p "$W/dev3b/seed-partition" && chmod 700 "$W/dev3b" "$W/dev3b/seed-partition" &&
-		(umask 077 && printf '{"device_id":"%s","escrow_secret":"%s"}\n' "$dev3" "$secret2" >"$W/dev3b/seed-partition/identity.json"); }; then
+		quiet new_identity "$W/dev3b/seed-partition/identity.json" "$dev3"; }; then
 		DETAIL="cannot write $W/dev3b/seed-partition/identity.json"
 		return 1
 	fi
-	secret2=""
 	agent protocol-check-dev3b-before protocol-check --seed "$W/seed3.toml" --state "$W/dev3b" --json
 	if ! { call_get "$LOG.flat" status error_code && [[ $REPLY == secret_mismatch ]] &&
 		call_get "$LOG.flat" status status && [[ $REPLY == 403 ]]; }; then
