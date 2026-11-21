@@ -360,6 +360,11 @@ VM 166；或被人手工改过）agent 只回报 `luks:tpm` 失败「数据分�
 
 ### Remote (from the server)
 
+**Not available yet.** In protocol phase 1 the device API's `GET inbox` is reserved: a protocol v1 server answers
+`404 not_available`, so it cannot queue or hand out a `factory-reset` command, and a machine cannot be reset remotely
+yet. Until the inbox is defined, use the boot menu (below) or reinstall from the USB stick. The agent side described
+here is in place for when it is.
+
 A remote factory reset is a `factory-reset` command in the machine's inbox (push spec §6.3): the server queues it, the agent
 fetches it over HTTPS with the device credential (MQTT only rings the doorbell) and runs it. It is not in the settings
 bundle: there is no `[[device]].reset`, no `reset-done` file and no `requested_at` any more, and neither the draft nor
