@@ -376,7 +376,7 @@ Order, per message (`core/mastersos-agent/src/inbox.rs`, `reset.rs`):
    Not met: acked `failed` with the reason, no data is touched.
 3. Ack `running` and make sure the server recorded it. After `running` the server stops handing the message out, which is
    what keeps the reset from running twice. Not acked (network error, 5xx): run nothing and retry the sync later. Refused
-   with 409 (already final there, e.g. expired by the server's clock): run nothing, pass the `seq`.
+   with 409 (already final there, e.g. expired by the server's clock): the message is skipped, nothing runs, and the `seq` is passed.
 4. Write the `seq` to the seed partition file `inbox-reset-seq` (the reset wipes `state.json`; the seed partition stays), so the
    new system acks `done` for it.
 5. `/usr/lib/systemd/systemd-factory-reset request` (sets the `FactoryResetRequest` EFI variable), then `systemctl reboot`.

@@ -763,8 +763,8 @@ mod tests {
         let recipes = include_str!("../../../skills/mastersos-admin/reference/recipes.md");
         let flat = skill.split_whitespace().collect::<Vec<_>>().join(" ");
         for rule in [
-            "holds real Wi-Fi keys and the IT account's password hash",
-            "You never print, quote, summarise or copy their values",
+            "the real Wi-Fi keys and the IT account's password hash are in `secrets.toml`",
+            "You never read, print, quote, summarise or copy `secrets.toml` or any secret value",
             "You never paste `manifest.toml` wholesale",
             "You never run `mastersos publish` or `mastersos seed make`",
             "Never read, print or paste `credentials.json`",

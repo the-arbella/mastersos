@@ -1,5 +1,5 @@
 //! 种子分区（Ruling 10、16）：不加密、恢复出厂时保留，放种子、最近一次验过的包的缓存、
-//! `identity.json` 与执行过的远程恢复出厂请求的 id（`reset-done`，[`crate::reset`]，Ruling 22）。它**不是权威**：agent 的信任、版本下限与脚本记录都在加密根分区的
+//! `identity.json` 与远程恢复出厂正在执行的收件箱命令的 `seq`（`inbox-reset-seq`，[`crate::inbox`]）。它**不是权威**：agent 的信任、版本下限与脚本记录都在加密根分区的
 //! `/var/lib/mastersos`；种子分区只在那里没有状态（新装、恢复出厂）时被读取，读到的缓存包
 //! 照常按种子的 `trust` 与 `min_version` 验签。所有写入都经 [`safefs`]，文件 0600。
 

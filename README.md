@@ -16,7 +16,7 @@
 
 ## Getting started for school IT (macOS, Linux, Windows)
 
-You need the address of your school's admin site, an admin account there, and a USB stick. The words used below
+You need the address of your school's MastersOS server, an administrator account on it, and a USB stick. The words used below
 are explained in [docs/glossary.md](docs/glossary.md).
 
 ### 1. Install the command line
@@ -116,7 +116,7 @@ mastersos publish ./school --key-file <school key file>
 run `mastersos pull ./school`.
 
 Computers want a **monthly check-in** ("nothing new; what you have is current"). `publish --key-file` does it for
-you; if you have not published for a while, the admin site reminds you. Publish again with `mastersos publish --key-file <file>`, or run `mastersos heartbeat --key-file <file>`.
+you; if you have not published for a while, you are reminded. Publish again with `mastersos publish --key-file <file>`, or run `mastersos heartbeat --key-file <file>`.
 
 ### 6. Add or remove a school key
 
@@ -132,8 +132,7 @@ mastersos publish --key-file <a school key that is already trusted>
 
 ### 7. Firewall
 
-Computers upload diagnostics and help-request attachments straight to storage, not through the admin site. If your
-network filters outbound traffic, allow the upload domain shown on the admin site's **Install** page.
+If your network filters outbound traffic, allow the address of the school's MastersOS server. Diagnostics uploads are a later phase.
 
 ## 测试
 
@@ -208,7 +207,7 @@ Other subcommands: `devices list|show`, `key new|register|list|add|remove`, `ver
 `login`, `logout`, `explain`, `migrate`, `spec [SECTION]` (`spec --full` prints all of it). The school's logo is not
 uploaded by the command line: the server does not host logos yet (phase 4). `--json` is for scripts and AI assistants;
 global options: `--server <URL>`, `--school <UUID>`, `--pin-dir <DIR>`, `--yes` (nobody answers: nothing is asked) and `--trust-fingerprint <FP>`
-(repeatable). `--key-file` is taken by `init`, `publish`, `heartbeat`, `key register|add|remove` and `recovery read`.
+(repeatable). `--key-file` is taken by `init`, `publish`, `heartbeat`, `key register|remove` and `recovery read`; `key add` takes the key file as its argument.
 
 The credentials are the `arbella` sign-in when it exists, else the one `mastersos login` saved (`credentials.json` in the config
 folder, 0600). There are no token files. **Never hand `credentials.json` to an AI assistant.** An AI assistant runs only
@@ -378,7 +377,7 @@ mastersos seed check seed.toml
 mastersos seed make --out seed.toml [--group <id>]
 # Monthly check-in (heartbeat): version and digest come from the latest version verified here; --days is 1 to 31, default 30.
 # This computer's clock must be right: a difference of more than 10 minutes from the server is refused.
-# `mastersos publish` does it with every publish and the admin site reminds IT after a long gap, so this command is for special cases
+# `mastersos publish` does it with every publish and IT is reminded after a long gap, so this command is for special cases
 mastersos heartbeat --key-file <file> --days 30
 # Read a computer's escrowed disk recovery code: the ciphertext is fetched and opened on this computer with the school key (the server records every read)
 mastersos recovery read <device_id> --key-file <file>
