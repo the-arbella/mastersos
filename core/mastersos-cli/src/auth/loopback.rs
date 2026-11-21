@@ -142,13 +142,13 @@ pub(crate) async fn run(
     super::oidc::exchange_code(d, &cfg.client_id, &code, &verifier, &redirect).await
 }
 
-/// Serve connections until one is a `GET /callback`; its verdict ends the wait.
 /// What the callback must carry.
 struct Expected {
     state: String,
     issuer: String,
 }
 
+/// Serve connections until one is a `GET /callback`; its verdict ends the wait.
 async fn wait_for_callback(listener: TcpListener, expected: Expected) -> Result<String, CliError> {
     let state = Arc::new(expected);
     let (tx, mut rx) = mpsc::channel::<Result<String, CliError>>(1);

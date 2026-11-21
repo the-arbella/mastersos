@@ -1,7 +1,11 @@
-//! 种子分区（Ruling 10、16）：不加密、恢复出厂时保留，放种子、最近一次验过的包的缓存、
-//! `identity.json` 与远程恢复出厂正在执行的收件箱命令的 `seq`（`inbox-reset-seq`，[`crate::inbox`]）。它**不是权威**：agent 的信任、版本下限与脚本记录都在加密根分区的
-//! `/var/lib/mastersos`；种子分区只在那里没有状态（新装、恢复出厂）时被读取，读到的缓存包
-//! 照常按种子的 `trust` 与 `min_version` 验签。所有写入都经 [`safefs`]，文件 0600。
+//! The seed partition (Rulings 10, 16): not encrypted and kept by a factory reset. It holds the
+//! seed, a cache of the last verified bundle, `identity.json`, and the `seq` of the inbox command
+//! of a remote factory reset being run (`inbox-reset-seq`, [`crate::inbox`]). It is **not
+//! authoritative**: the agent's trust, version floor and script records live in
+//! `/var/lib/mastersos` on the encrypted root partition; the seed partition is read only when
+//! there is no state there (a new install, a factory reset), and a cached bundle read from it is
+//! verified against the seed's `trust` and `min_version` as usual. Every write goes through
+//! [`safefs`]; files are 0600.
 
 use std::path::Path;
 
