@@ -1354,8 +1354,11 @@ async fn resolve_v1(
     if let (Some(f), Some(m)) = (&flag, meta) {
         if *f != m.server {
             return Err(CliError::new(
-                "school_mismatch",
-                &format!("the directory belongs to {}, not to {f}", m.server),
+                "server_mismatch",
+                &format!(
+                    "the directory belongs to the server {}, not to {f} given with --server: leave out --server, or use a directory of {f}",
+                    m.server
+                ),
             ));
         }
     }
