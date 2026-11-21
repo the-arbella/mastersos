@@ -590,15 +590,20 @@ async fn key_list_json_shape() {
 async fn key_list_table_has_the_columns_and_no_control_characters() {
     let t = tempfile::tempdir().unwrap();
     let (_, a) = school_key(t.path(), "a.kit");
-    let mut ka = key_entry(&a, "l\u{1b}[31mabel", true);
+    let mut ka = key_entry(&a, "l\u{1b}[31mabel\u{202e}", true);
     ka["last_used_at"] = json!("2026-11-10T01:02:03Z");
-    let s = listing_server(vec![ka], vec![]).await;
+    let recipient = json!({"recipient": a.escrow_recipient(), "bound_key_id": a.key_id(),
+        "label": "r\u{202e}gnp", "created_at": "2026-11-03T09:00:00Z", "in_latest": true});
+    let s = listing_server(vec![ka], vec![recipient]).await;
     let home = signed_in(&s.uri());
     let dir = folder_with(t.path(), &s.uri(), &a);
     let o = run(home.path(), None, &[&"key", &"list", &"--dir", &dir]).await;
     let (out, err) = text(&o);
     assert!(o.status.success(), "{out}{err}");
-    assert!(!out.contains(['\u{1b}', '\u{7}']), "{out:?}");
+    assert!(!out.contains(['\u{1b}', '\u{7}', '\u{202e}']), "{out:?}");
+    // A bidi override is shown escaped, not obeyed.
+    assert!(out.contains("abel\\u{202e}"), "{out:?}");
+    assert!(out.contains("r\\u{202e}gnp"), "{out:?}");
     let header = out.lines().next().unwrap();
     for c in [
         "KEY CODE",

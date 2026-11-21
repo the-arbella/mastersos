@@ -1060,11 +1060,6 @@ async fn keys_remove(
     Ok(ExitCode::SUCCESS)
 }
 
-/// Text from the server, without control characters, for a terminal.
-fn printable(s: &str) -> String {
-    s.chars().filter(|c| !c.is_control()).collect()
-}
-
 /// Best effort, for display only: the key code the server binds each disk-unlocking entry to,
 /// when this computer is signed in and the folder belongs to the server `--server` names (if any).
 /// Any failure gives nothing.
@@ -1084,7 +1079,8 @@ async fn server_says(w: &Workdir, o: &V1) -> std::collections::HashMap<String, S
                 .iter()
                 .filter_map(|l| {
                     let recipient = l.get("recipient")?.as_str()?;
-                    let code = printable(&workdir::shown_code(l.get("bound_key_id")?.as_str()?));
+                    let code =
+                        crate::safe::field(&workdir::shown_code(l.get("bound_key_id")?.as_str()?));
                     (!code.is_empty()).then(|| (recipient.to_owned(), code))
                 })
                 .collect(),
@@ -1550,7 +1546,15 @@ async fn key_list(
     let (server, _) = ctx.server(meta.as_ref(), confirm, out).await?;
     let mut keys: Vec<Value> = server.get_json("keys").await?;
     let recipients: Vec<Value> = server.get_json("escrow-recipients").await?;
-    let text_of = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(printable);
+    // Server text, as it came: escaped (control and format characters) only when shown.
+    let text_of = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned);
+    let code_of = |v: &Value, k: &str| {
+        text_of(v, k).map_or("-".into(), |id| {
+            crate::safe::field(&workdir::shown_code(&id))
+        })
+    };
+    let label_of =
+        |v: &Value| text_of(v, "label").map_or(String::new(), |l| crate::safe::field(&l));
     let in_directory = |v: &Value| {
         let pk = v.get("public_key").and_then(Value::as_str);
         match (&local, pk) {
@@ -1572,14 +1576,16 @@ async fn key_list(
     }
     let yes_no = |b: Option<bool>| b.map_or("-", |b| if b { "yes" } else { "no" }).to_owned();
     let day = |v: &Value, k: &str| {
-        text_of(v, k).map_or("-".to_owned(), |t| t.chars().take(10).collect::<String>())
+        text_of(v, k).map_or("-".to_owned(), |t| {
+            crate::safe::field(&t.chars().take(10).collect::<String>())
+        })
     };
     let rows = keys
         .iter()
         .map(|k| {
             vec![
-                text_of(k, "key_id").map_or("-".into(), |id| printable(&workdir::shown_code(&id))),
-                text_of(k, "label").unwrap_or_default(),
+                code_of(k, "key_id"),
+                label_of(k),
                 day(k, "created_at"),
                 yes_no(k.get("in_latest_trust").and_then(Value::as_bool)),
                 yes_no(local.as_ref().map(|_| in_directory(k))),
@@ -1604,9 +1610,8 @@ async fn key_list(
             .iter()
             .map(|r| {
                 vec![
-                    text_of(r, "bound_key_id")
-                        .map_or("-".into(), |id| printable(&workdir::shown_code(&id))),
-                    text_of(r, "label").unwrap_or_default(),
+                    code_of(r, "bound_key_id"),
+                    label_of(r),
                     day(r, "created_at"),
                     yes_no(r.get("in_latest").and_then(Value::as_bool)),
                 ]

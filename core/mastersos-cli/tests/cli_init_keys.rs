@@ -441,7 +441,7 @@ async fn keys_remove_shows_what_the_server_says_but_removes_nothing_more() {
     );
     let la = line(&a.escrow_recipient());
     assert!(
-        la.contains("(the server says: school key evil[2Jid)"),
+        la.contains("(the server says: school key evil\\x1b[2J\\x07id)"),
         "{out}"
     );
     assert!(!out.contains(['\u{1b}', '\u{7}']), "{out:?}");
