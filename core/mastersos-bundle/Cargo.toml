@@ -34,4 +34,4 @@ test-util = []
 
 [dev-dependencies]
 # The spec consistency tests (`spec.rs`) need the schema.
-mastersos-bundle = { path = ".", features = ["schema"] }
+mastersos-bundle = { path = ".", features = ["schema", "test-util"] }

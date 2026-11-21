@@ -34,7 +34,7 @@ use crate::{keyid, Ed25519Signer, Signer as _, TrustKey};
 /// The kit text's human-readable part.
 pub const KIT_HRP: &str = "masterskit";
 const HKDF_SALT: &[u8] = b"mastersos-kit-v1";
-const INFO_SIGN: &[u8] = b"ed25519-sign";
+pub(crate) const INFO_SIGN: &[u8] = b"ed25519-sign";
 const INFO_ESCROW: &[u8] = b"x25519-escrow";
 /// age's secret key HRP (`AGE-SECRET-KEY-1…`, plain bech32).
 const AGE_SECRET_HRP: &str = "age-secret-key-";
@@ -77,7 +77,7 @@ impl fmt::Debug for Kit {
 }
 
 /// HKDF-SHA256 of the master with the kit salt and `info`, 32 bytes.
-fn derive(master: &[u8; 32], info: &[u8]) -> Zeroizing<[u8; 32]> {
+pub(crate) fn derive(master: &[u8; 32], info: &[u8]) -> Zeroizing<[u8; 32]> {
     let mut okm = Zeroizing::new([0u8; 32]);
     Hkdf::<Sha256>::new(Some(HKDF_SALT), master)
         .expand(info, &mut okm[..])
@@ -168,6 +168,12 @@ impl Kit {
         out
     }
 
+    /// The master secret (the vector files only).
+    #[cfg(any(test, feature = "test-util"))]
+    pub(crate) fn master_bytes(&self) -> &[u8; 32] {
+        &self.master
+    }
+
     /// The recovery key's signer; its id is [`Kit::key_id`].
     pub fn signer(&self) -> Ed25519Signer {
         let seed = derive(&self.master, INFO_SIGN);
@@ -221,9 +227,8 @@ pub fn recipient_binding_message(recipient: &str, nonce: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{trust_fingerprint, verify_signature, KeyAlg, SignatureFile};
+    use crate::{verify_signature, KeyAlg, SignatureFile};
     use bech32::{ByteIterExt as _, Fe32, Fe32IterExt as _};
-    use serde::{Deserialize, Serialize};
 
     const CHARSET: &str = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 
@@ -248,90 +253,23 @@ mod tests {
         }
     }
 
-    /// Cross-language vectors (`testdata/kit-vectors.json`); the masters are fixed test-only
-    /// values. `MASTERSOS_REGEN_VECTORS=1` rewrites the file instead of comparing.
-    #[derive(Debug, PartialEq, Serialize, Deserialize)]
-    struct Vector {
-        name: String,
-        master_hex: String,
-        text: String,
-        display: String,
-        ed25519_seed_hex: String,
-        key_id: String,
-        public_key: String,
-        fingerprint: String,
-        escrow_identity: String,
-        escrow_recipient: String,
-        binding_nonce_b64: String,
-        binding_message_b64: String,
-        binding_sig_b64: String,
-    }
-
-    #[derive(Debug, PartialEq, Serialize, Deserialize)]
-    struct VectorFile {
-        note: String,
-        vectors: Vec<Vector>,
-    }
-
     fn hex(b: &[u8]) -> String {
         b.iter().map(|x| format!("{x:02x}")).collect()
     }
 
-    fn vector(name: &str, master: [u8; 32]) -> Vector {
-        use age::secrecy::ExposeSecret as _;
-        let k = Kit::from_master(&master);
-        let tk = k.trust_key();
-        let nonce = [0x5au8; 32];
-        let recipient = k.escrow_recipient();
-        let msg = recipient_binding_message(&recipient, &nonce);
-        Vector {
-            name: name.into(),
-            master_hex: hex(&master),
-            text: k.to_text().to_string(),
-            display: k.to_display().to_string(),
-            ed25519_seed_hex: hex(&derive(&master, INFO_SIGN)[..]),
-            key_id: k.key_id(),
-            fingerprint: trust_fingerprint(&tk),
-            public_key: tk.public_key,
-            escrow_identity: k.escrow_identity().to_string().expose_secret().to_owned(),
-            escrow_recipient: recipient,
-            binding_nonce_b64: STANDARD.encode(nonce),
-            binding_sig_b64: STANDARD.encode(k.signer().sign(&msg)),
-            binding_message_b64: STANDARD.encode(msg),
-        }
-    }
-
+    /// Cross-language vectors (`testdata/kit-vectors.json`, checked by
+    /// [`crate::vectors::check_kit_vectors`]); the masters are fixed test-only values.
+    /// `MASTERSOS_REGEN_VECTORS=1` rewrites the file instead of comparing.
     #[test]
     fn kit_vectors_match() {
-        let mut counting = [0u8; 32];
-        for (i, b) in counting.iter_mut().enumerate() {
-            *b = i as u8;
-        }
-        let file = VectorFile {
-            note: "TEST-ONLY masters: fixed, public values. Never use these kits for a school."
-                .into(),
-            vectors: vec![
-                vector("test-only-zero", [0u8; 32]),
-                vector("test-only-counting", counting),
-                vector("test-only-ff", [0xffu8; 32]),
-            ],
-        };
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/kit-vectors.json");
-        if std::env::var_os("MASTERSOS_REGEN_VECTORS").is_some_and(|v| v == "1") {
-            std::fs::write(path, serde_json::to_string_pretty(&file).unwrap() + "\n").unwrap();
+        if crate::vectors::regen() {
+            let text = crate::vectors::file_text(&crate::vectors::kit_vectors());
+            std::fs::write(path, text).unwrap();
             return;
         }
-        let stored: VectorFile =
-            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-        assert_eq!(stored, file);
-        assert_eq!(stored.vectors.len(), 3);
-        for v in &stored.vectors {
-            // Parsing the stored text gives the same master back.
-            let k = Kit::parse(&v.text).unwrap();
-            assert_eq!(hex(&k.master[..]), v.master_hex);
-            assert!(v.escrow_identity.starts_with("AGE-SECRET-KEY-1"));
-            assert!(v.escrow_recipient.starts_with("age1"));
-        }
+        let n = crate::vectors::check_kit_vectors(&std::fs::read_to_string(path).unwrap());
+        assert_eq!(n, 3);
     }
 
     #[test]

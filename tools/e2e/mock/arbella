@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# A stub of the umbrella CLI `arbella` for tools/e2e/mock (our mock run only): it answers
+# `arbella auth token --json [--step-up]` with a token minted by the mock's control endpoint.
+#
+#   arbella auth token --json [--step-up]
+#     POST $FLEET_E2E_CONTROL/token ({"step_up":true} for --step-up) and print its answer,
+#     {"fleet_url","access_token","expires_at"}, on stdout; exit 0.
+#   FLEET_E2E_SIGNED_OUT=1: exit 3 with {"error":{"code":"not_signed_in",...}} on stdout.
+#   Anything else: exit 2 (usage) with a message on stderr.
+set -euo pipefail
+
+usage() {
+	echo "usage: arbella auth token --json [--step-up]" >&2
+	exit 2
+}
+
+[[ $# -ge 3 && $1 == auth && $2 == token ]] || usage
+shift 2
+json=0 step_up=0
+for a in "$@"; do
+	case $a in
+	--json) json=1 ;;
+	--step-up) step_up=1 ;;
+	*) usage ;;
+	esac
+done
+[[ $json == 1 ]] || usage
+
+if [[ ${FLEET_E2E_SIGNED_OUT:-} == 1 ]]; then
+	printf '%s\n' '{"error":{"code":"not_signed_in","message":"not signed in (stub)","problems":[]}}'
+	exit 3
+fi
+[[ -n ${FLEET_E2E_CONTROL:-} ]] || {
+	echo "arbella (stub): FLEET_E2E_CONTROL is not set" >&2
+	exit 1
+}
+body='{}'
+[[ $step_up == 1 ]] && body='{"step_up":true}'
+exec curl -fsS --max-time 30 -X POST -H 'Content-Type: application/json' --data "$body" \
+	"${FLEET_E2E_CONTROL%/}/token"

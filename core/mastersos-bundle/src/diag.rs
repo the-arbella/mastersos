@@ -3,11 +3,11 @@
 //!
 //! Endpoints (all authenticated with the device credential, machine → cloud over HTTPS):
 //!
-//! - `POST /v1/support` with a [`SupportRequest`]: `201` or `200` with a [`SupportResponse`];
+//! - `POST /api/device/v1/support` with a [`SupportRequest`]: `201` or `200` with a [`SupportResponse`];
 //!   the two mean the same. The same `client_id` always gets the same ticket (offline resends
 //!   are idempotent); unknown categories are taken as `other`, unknown user kinds as
 //!   `unknown`. Over the server's limit ([`SUPPORT_SERVER_MAX_PER_HOUR`]): `429`.
-//! - `POST /v1/diagnostics` with a [`DiagUploadRequest`]: `201` with a [`DiagUploadResponse`]
+//! - `POST /api/device/v1/diagnostics` with a [`DiagUploadRequest`]: `201` with a [`DiagUploadResponse`]
 //!   carrying a presigned S3 `PUT` ([`PresignedUpload`]); `200` `{"id","complete":true}`
 //!   without `upload` when that seq or ticket is already complete (the machine skips the `PUT`
 //!   and the complete call); an incomplete one gets the same id and a new URL. `422`
@@ -16,10 +16,10 @@
 //!   sent to this machine or the ticket is not this machine's; `410` [`ERR_EXPIRED`] when the
 //!   ticket is older than [`TICKET_ATTACH_WINDOW_HOURS`].
 //! - The machine `PUT`s the archive to `upload.url` with `upload.headers` exactly as given.
-//!   An expired URL ([`PresignedUpload::expires_in`]): back to `POST /v1/diagnostics`.
-//! - `POST /v1/diagnostics/{id}/complete`: the cloud checks size and SHA-256; `204` when they
+//!   An expired URL ([`PresignedUpload::expires_in`]): back to `POST /api/device/v1/diagnostics`.
+//! - `POST /api/device/v1/diagnostics/{id}/complete`: the cloud checks size and SHA-256; `204` when they
 //!   match (only then has the archive arrived). `409` [`ERR_UPLOAD_MISMATCH`] means the object
-//!   was deleted: start again with `POST /v1/diagnostics`.
+//!   was deleted: start again with `POST /api/device/v1/diagnostics`.
 //!
 //! Errors carry an [`ApiError`] body; [`error_action`] says what the machine does with one.
 //!
@@ -51,7 +51,7 @@ pub const SUPPORT_MAX_PER_HOUR: u32 = 3;
 /// [`SUPPORT_MAX_PER_HOUR`] so that a queue sent after a long time offline still gets through.
 pub const SUPPORT_SERVER_MAX_PER_HOUR: u32 = 10;
 /// How long after a ticket is created its attachment is still accepted, measured by the
-/// server's receive times (of the ticket and of `POST /v1/diagnostics`), not the machine's
+/// server's receive times (of the ticket and of `POST /api/device/v1/diagnostics`), not the machine's
 /// clock.
 pub const TICKET_ATTACH_WINDOW_HOURS: i64 = 48;
 /// Lifetime of a presigned upload URL as the cloud issues it today; the machine goes by
@@ -119,7 +119,7 @@ impl CollectDiagnostics {
     }
 }
 
-/// `POST /v1/diagnostics`: what the machine is about to upload.
+/// `POST /api/device/v1/diagnostics`: what the machine is about to upload.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -196,7 +196,7 @@ const CLIENT_ID_ERROR: &str =
 /// A presigned S3 request: the machine sends the archive with exactly this method, URL and
 /// headers, adding nothing and converting nothing.
 ///
-/// Each `POST /v1/diagnostics` is a new attempt: the object path in the URL changes, so a URL
+/// Each `POST /api/device/v1/diagnostics` is a new attempt: the object path in the URL changes, so a URL
 /// from an earlier answer is never reused.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -212,7 +212,7 @@ pub struct PresignedUpload {
     #[cfg_attr(feature = "openapi", schema(value_type = String, format = DateTime))]
     pub expires_at: DateTime<Utc>,
     /// Seconds the URL stays valid from when this answer arrived. The machine must not judge
-    /// expiry by its own wall clock (it may be wrong): it goes back to `POST /v1/diagnostics`
+    /// expiry by its own wall clock (it may be wrong): it goes back to `POST /api/device/v1/diagnostics`
     /// once this many seconds have passed on a monotonic clock started when the response
     /// arrived, or when S3 answers `AccessDenied` with "Request has expired".
     pub expires_in: u64,
@@ -235,9 +235,9 @@ impl fmt::Debug for PresignedUpload {
     }
 }
 
-/// Answer to `POST /v1/diagnostics`: `201` with `upload`, or `200` `{"id","complete":true}`
+/// Answer to `POST /api/device/v1/diagnostics`: `201` with `upload`, or `200` `{"id","complete":true}`
 /// when that upload is already complete (the machine then skips the `PUT` and the complete
-/// call). Then `POST /v1/diagnostics/{id}/complete` gives `204`; `409` [`ERR_UPLOAD_MISMATCH`]
+/// call). Then `POST /api/device/v1/diagnostics/{id}/complete` gives `204`; `409` [`ERR_UPLOAD_MISMATCH`]
 /// means the object was deleted and the machine starts again.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -251,8 +251,7 @@ pub struct DiagUploadResponse {
 
 /// Body of an error answer, the server's usual nested form
 /// `{"error": {"code": "<code>", "message": "<English sentence>"}}` (the same as the inbox and
-/// the other machine endpoints). The flat form `{"error": "<code>"}` is read too. Fields a newer
-/// cloud adds are ignored. Serialized in the nested form.
+/// the other machine endpoints). Fields a newer cloud adds are ignored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ApiError {
@@ -282,13 +281,6 @@ struct ApiErrorInner {
     message: Option<String>,
 }
 
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum ApiErrorField {
-    Nested(ApiErrorInner),
-    Flat(String),
-}
-
 impl Serialize for ApiError {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         #[derive(Serialize)]
@@ -309,17 +301,12 @@ impl<'de> Deserialize<'de> for ApiError {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
         struct Wire {
-            error: ApiErrorField,
+            error: ApiErrorInner,
         }
-        Ok(match Wire::deserialize(d)?.error {
-            ApiErrorField::Nested(i) => ApiError {
-                code: i.code,
-                message: i.message,
-            },
-            ApiErrorField::Flat(code) => ApiError {
-                code,
-                message: None,
-            },
+        let i = Wire::deserialize(d)?.error;
+        Ok(ApiError {
+            code: i.code,
+            message: i.message,
         })
     }
 }
@@ -346,7 +333,7 @@ pub const ERR_NOT_YOURS: &str = "not_yours";
 /// `410`: the command or the ticket's attachment window has passed. The machine gives up.
 pub const ERR_EXPIRED: &str = "expired";
 /// `409` from the complete call: size or SHA-256 did not match and the object was deleted.
-/// The machine starts again from `POST /v1/diagnostics`.
+/// The machine starts again from `POST /api/device/v1/diagnostics`.
 pub const ERR_UPLOAD_MISMATCH: &str = "upload_mismatch";
 /// `403`: the device check failed (for example the device is not enrolled any more). The
 /// machine keeps what it has and backs off.
@@ -381,7 +368,7 @@ pub enum ErrorAction {
     Backoff,
     /// Give up this upload.
     GiveUp,
-    /// Start the upload again from `POST /v1/diagnostics`.
+    /// Start the upload again from `POST /api/device/v1/diagnostics`.
     Restart,
 }
 
@@ -397,7 +384,7 @@ pub enum ErrorAction {
 /// | [`ERR_DIAGNOSTICS_UNAVAILABLE`]   | 503    | keep; back off                                |
 /// | [`ERR_NOT_YOURS`]                 | 409    | give up this upload                           |
 /// | [`ERR_EXPIRED`]                   | 410    | give up this upload                           |
-/// | [`ERR_UPLOAD_MISMATCH`]           | 409    | start again from `POST /v1/diagnostics`       |
+/// | [`ERR_UPLOAD_MISMATCH`]           | 409    | start again from `POST /api/device/v1/diagnostics`       |
 /// | [`ERR_FORBIDDEN`]                 | 403    | device check failed: keep; back off           |
 /// | [`ERR_UNAUTHORIZED`]              | 401    | fetch token wrong: keep; back off             |
 /// | [`ERR_DEVICE_AUTH_MISSING`]       | 401    | machine bug: keep; log an error; back off     |
@@ -692,7 +679,7 @@ pub struct SupportSnapshot {
     pub status: Option<crate::StatusReport>,
 }
 
-/// `POST /v1/support`: a student's or staff member's "Get help" request.
+/// `POST /api/device/v1/support`: a student's or staff member's "Get help" request.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -747,7 +734,7 @@ impl SupportRequest {
     }
 }
 
-/// Answer to `POST /v1/support`.
+/// Answer to `POST /api/device/v1/support`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct SupportResponse {
@@ -1333,10 +1320,8 @@ mod tests {
         .unwrap();
         assert_eq!(e.code, ERR_INVALID);
         assert_eq!(e.message, None);
-        // The flat string form is read too.
-        let e: ApiError = serde_json::from_value(json!({"error": "not_ready"})).unwrap();
-        assert_eq!(e.code, ERR_NOT_READY);
-        // Anything else is not an ApiError.
+        // Anything else is not an ApiError, the flat string form included.
+        assert!(serde_json::from_value::<ApiError>(json!({"error": "not_ready"})).is_err());
         assert!(serde_json::from_value::<ApiError>(json!({"error": 5})).is_err());
         assert!(serde_json::from_value::<ApiError>(json!({"message": "x"})).is_err());
         assert!(ApiError::parse(b"not json").is_none());

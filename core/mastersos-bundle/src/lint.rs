@@ -129,6 +129,7 @@ fn about(l: Lint, c: &ConfigLayer) -> Lint {
 /// value is inherited, and one `(code, path)` is reported once, naming every Config it concerns.
 pub fn lint_at(m: &Manifest, present: &BTreeSet<String>, today: chrono::NaiveDate) -> Vec<Lint> {
     let mut out = Vec::new();
+    lint_trust_keys(m, &mut out);
     lint_shape(m, &mut out);
     let configs: Vec<(&ConfigLayer, Config)> = m
         .configs
@@ -1208,6 +1209,37 @@ fn lint_kiosk_semantics(m: &Manifest, configs: &[(&ConfigLayer, Config)], out: &
 
 fn err(code: &'static str, message: String, path: String) -> Lint {
     Lint::new(LintLevel::Error, code, message).at(path)
+}
+
+/// Two trust entries holding one public key, whatever their ids: the key would count twice, and
+/// its fingerprint could not name one entry. Not part of `validate` (a Device that already holds
+/// such a trust keeps working); `mastersos check` and `publish` refuse it before an upload.
+fn lint_trust_keys(m: &Manifest, out: &mut Vec<Lint>) {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    let mut seen: BTreeMap<(&'static str, Vec<u8>), &str> = BTreeMap::new();
+    for k in &m.trust {
+        // Compared as bytes, so that spelling differences of one base64 text do not hide a repeat.
+        let raw = STANDARD
+            .decode(k.public_key.trim())
+            .unwrap_or_else(|_| k.public_key.trim().as_bytes().to_vec());
+        // The same id as well is `trust_duplicate_id`'s, reported by `validate_all`: once is enough.
+        if let Some(first) = seen
+            .insert((k.alg.as_str(), raw), k.id.as_str())
+            .filter(|first| *first != k.id)
+        {
+            out.push(
+                err(
+                    "trust_duplicate_key",
+                    format!(
+                        "trust: keys {first} and {} hold the same public key; list each key once",
+                        k.id
+                    ),
+                    "trust".into(),
+                )
+                .param("id", k.id.as_str()),
+            );
+        }
+    }
 }
 
 /// The shape checks (config profiles design §3, §5): a legacy text is an error in a Draft; a
@@ -4209,5 +4241,41 @@ name = "b"
             paused[0].path.as_deref(),
             Some("defaults.chrome.pause_until")
         );
+    }
+
+    #[test]
+    fn a_repeated_trust_key_is_one_issue() {
+        let m = |ids: [&str; 2]| {
+            Manifest::parse(&format!(
+                r#"
+version = 1
+[[trust]]
+id = "{}"
+alg = "ed25519"
+public_key = "KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio="
+[[trust]]
+id = "{}"
+alg = "ed25519"
+public_key = "KioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio="
+[[config]]
+id = "c"
+name = "c"
+[[group]]
+id = "g"
+name = "g"
+config = "c"
+"#,
+                ids[0], ids[1]
+            ))
+            .unwrap()
+        };
+        let codes = |m: &Manifest| -> Vec<&'static str> {
+            let mut out = Vec::new();
+            lint_trust_keys(m, &mut out);
+            out.iter().map(|l| l.code).collect()
+        };
+        assert_eq!(codes(&m(["a", "b"])), ["trust_duplicate_key"]);
+        // The same id as well: `trust_duplicate_id` says it, this one stays quiet.
+        assert!(codes(&m(["a", "a"])).is_empty());
     }
 }

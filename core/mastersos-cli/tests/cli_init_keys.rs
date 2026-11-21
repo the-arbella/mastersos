@@ -1,18 +1,19 @@
-//! `mastersos init --key-file` and `mastersos key add|remove|list`: the trusted keys and the
-//! disk-unlocking recipients come only from school key files; the server is only asked whether
-//! they are registered.
+//! `mastersos key add|remove`: the trusted keys and the disk-unlocking recipients of the local
+//! manifest.toml come only from school key files; the server is only asked whether a key is
+//! registered (and, for display, which key a recipient is bound to).
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 use mastersos_bundle::keyid::key_code;
 use mastersos_bundle::kit::Kit;
-use mastersos_bundle::TrustKey;
+use mastersos_bundle::{trust_fingerprint, TrustKey};
+use mastersos_cli::auth::store::{save_to, StoredLogin};
 use serde_json::{json, Value};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-const SID: &str = "11111111-1111-1111-1111-111111111111";
+const SID: &str = "0192f3a4-5b6c-7d8e-9f00-112233445566";
 
 fn config_dir(home: &Path) -> PathBuf {
     if cfg!(windows) {
@@ -22,19 +23,26 @@ fn config_dir(home: &Path) -> PathBuf {
     }
 }
 
-/// A home folder connected to `uri` (the files `mastersos connect` writes).
-fn connected_home(uri: &str) -> tempfile::TempDir {
+fn prefix() -> String {
+    format!("/api/cli/v1/schools/{SID}/mastersos/")
+}
+
+/// A home folder signed in to `uri` with `mastersos login` (no arbella on PATH).
+fn signed_in(uri: &str) -> tempfile::TempDir {
     let home = tempfile::tempdir().unwrap();
-    let dir = config_dir(home.path());
-    std::fs::create_dir_all(&dir).unwrap();
-    let token = dir.join("token");
-    mastersos_cli::platform::write_private(&token, b"t\n").unwrap();
-    let cfg = toml::to_string(&json!({
-        "server": uri,
-        "token_file": token,
-    }))
-    .unwrap();
-    mastersos_cli::platform::write_private(&dir.join("config.toml"), cfg.as_bytes()).unwrap();
+    let login = StoredLogin {
+        version: 1,
+        server_url: uri.to_owned(),
+        issuer: "https://issuer.example".into(),
+        client_id: "mastersos-cli".into(),
+        audience: "fleet".into(),
+        scopes: vec!["openid".into()],
+        step_up_acr: String::new(),
+        access_token: "SECRET-ACCESS".into(),
+        expires_at: "2099-01-01T00:00:00Z".into(),
+        refresh_token: None,
+    };
+    save_to(&config_dir(home.path()).join("credentials.json"), &login).unwrap();
     home
 }
 
@@ -52,69 +60,37 @@ fn code(kit: &Kit) -> String {
 
 /// A school whose registered school keys are `registered`.
 async fn server(registered: &[&Kit]) -> MockServer {
-    server_with(signing_keys(registered), registered).await
+    server_listing(keys_json(registered), json!([])).await
 }
 
-/// The server's list of signing keys with `registered`.
-fn signing_keys(registered: &[&Kit]) -> Value {
+/// The server's list of keys with `registered`.
+fn keys_json(registered: &[&Kit]) -> Value {
     let keys: Vec<Value> = registered
         .iter()
         .enumerate()
         .map(|(i, k)| {
             let tk = k.trust_key();
             json!({
-                "key_id": tk.id, "kind": "recovery", "alg": "ed25519",
-                "fingerprint": mastersos_bundle::trust_fingerprint(&tk),
-                "public_key": tk.public_key, "previously_trusted": false,
-                "label": format!("key {i}"), "rp_id": null, "synced": false,
-                "in_published_trust": false, "created_by": "it",
-                "created_at": "2026-11-03T09:00:00Z"
+                "key_id": tk.id, "alg": "ed25519", "public_key": tk.public_key,
+                "fingerprint": trust_fingerprint(&tk), "label": format!("key {i}"),
+                "created_at": "2026-11-03T09:00:00Z", "in_latest_trust": false,
+                "last_used_at": null
             })
         })
         .collect();
     Value::Array(keys)
 }
 
-/// A school listing `keys` as its signing keys and the recipients of `recipients`.
-async fn server_with(keys: Value, recipients: &[&Kit]) -> MockServer {
-    let recipients: Vec<Value> = recipients
-        .iter()
-        .map(|k| {
-            json!({
-                "recipient": k.escrow_recipient(), "bound_key_id": k.key_id(),
-                "label": "key", "created_by": "it", "created_at": "2026-11-03T09:00:00Z",
-                "in_published": false
-            })
-        })
-        .collect();
-    server_listing(keys, Value::Array(recipients)).await
-}
-
-/// A school listing `keys` as its signing keys and `recipients` as its recipients.
+/// A school listing `keys` and `recipients`.
 async fn server_listing(keys: Value, recipients: Value) -> MockServer {
     let s = MockServer::start().await;
-    let get = |p: &str, body: Value| {
+    for (route, body) in [("keys", keys), ("escrow-recipients", recipients)] {
         Mock::given(method("GET"))
-            .and(path(p.to_owned()))
+            .and(path(format!("{}{route}", prefix())))
             .respond_with(ResponseTemplate::new(200).set_body_json(body))
-    };
-    get(
-        "/v1/admin/whoami",
-        json!({ "label": "cli:IT", "kind": "token", "scopes": ["read", "draft"], "school_name": "Alpha School" }),
-    )
-    .mount(&s)
-    .await;
-    get(
-        "/v1/auth/config",
-        json!({ "name": "Alpha School", "slug": "alpha", "school_id": SID }),
-    )
-    .mount(&s)
-    .await;
-    get("/v1/admin/versions", json!([])).mount(&s).await;
-    get("/v1/admin/signing-keys", keys).mount(&s).await;
-    get("/v1/admin/escrow-recipients", recipients)
-        .mount(&s)
-        .await;
+            .mount(&s)
+            .await;
+    }
     s
 }
 
@@ -123,6 +99,8 @@ fn mastersos(home: &Path, args: &[&std::ffi::OsStr]) -> Output {
         .args(args)
         .env("HOME", home)
         .env("APPDATA", home)
+        // No arbella: the saved sign-in is used.
+        .env("PATH", home)
         .stdin(Stdio::null())
         .output()
         .unwrap()
@@ -173,107 +151,23 @@ fn plain_words(out: &str) {
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn init_writes_trust_from_school_keys() {
-    let t = tempfile::tempdir().unwrap();
-    let (pa, a) = school_key(t.path(), "a.key");
-    let (pb, b) = school_key(t.path(), "b.key");
-    let s = server(&[&a, &b]).await;
-    let home = connected_home(&s.uri());
-    let dir = t.path().join("school");
-    let o = run(
-        home.path(),
-        args(&[&"init", &dir, &"--key-file", &pa, &"--key-file", &pb]),
-    )
-    .await;
-    let (out, err) = text(&o);
-    assert!(o.status.success(), "{out}{err}");
-    let (trust, recipients) = manifest(&dir);
-    assert_eq!(trust, [a.trust_key(), b.trust_key()]);
-    assert_eq!(recipients, [a.escrow_recipient(), b.escrow_recipient()]);
-    assert!(
-        out.contains(&format!("Trusted keys: {}, {}", code(&a), code(&b))),
-        "{out}"
-    );
-    let abs = std::path::absolute(&dir).unwrap().display().to_string();
-    assert!(out.contains(&abs), "{out}");
-    assert!(
-        out.contains("manifest.toml") && out.contains("secrets.toml"),
-        "{out}"
-    );
-    plain_words(&out.replace(&abs, ""));
-    // The new folder passes its own check.
-    let o = run(home.path(), args(&[&"check", &dir])).await;
-    let (out, err) = text(&o);
-    assert!(o.status.success(), "{out}{err}");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn init_refuses_unregistered_key() {
-    let t = tempfile::tempdir().unwrap();
-    let (pa, _a) = school_key(t.path(), "a.key");
-    let (_, other) = school_key(t.path(), "other.key");
-    let s = server(&[&other]).await;
-    let home = connected_home(&s.uri());
-    let dir = t.path().join("school");
-    let o = run(home.path(), args(&[&"init", &dir, &"--key-file", &pa])).await;
-    let (out, err) = text(&o);
-    assert!(!o.status.success(), "{out}{err}");
-    assert!(
-        err.contains("is not registered for")
-            && err.contains("mastersos key register")
-            && !err.contains("signing page"),
-        "{err}"
-    );
-    assert!(err.contains("Alpha School"), "{err}");
-    assert!(!dir.exists(), "nothing may be written");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn init_refuses_key_registered_with_another_public_key() {
-    // The server lists the key's id, but with a different public key: not registered.
-    let t = tempfile::tempdir().unwrap();
-    let (pa, a) = school_key(t.path(), "a.key");
-    let (_, other) = school_key(t.path(), "other.key");
-    // `a`'s id and recipient are listed, but with `other`'s public key.
-    let tk = other.trust_key();
-    let s = server_with(
-        json!([{
-            "key_id": a.key_id(), "kind": "recovery", "alg": "ed25519", "fingerprint": "x",
-            "public_key": tk.public_key, "label": "a", "in_published_trust": false,
-            "created_at": "2026-11-03T09:00:00Z"
-        }]),
-        &[&a],
-    )
-    .await;
-    let home = connected_home(&s.uri());
-    let dir = t.path().join("school");
-    let o = run(home.path(), args(&[&"init", &dir, &"--key-file", &pa])).await;
-    assert!(!o.status.success());
-    assert!(text(&o).1.contains("is not registered for"));
-    assert!(!dir.exists());
-}
-
-#[test]
-fn init_without_key_points_to_key_new() {
-    let home = tempfile::tempdir().unwrap();
-    let dir = home.path().join("school");
-    let o = mastersos(home.path(), &["init".as_ref(), dir.as_os_str()]);
-    assert!(!o.status.success());
-    let err = String::from_utf8_lossy(&o.stderr);
-    assert!(err.contains("--key-file"), "{err}");
-    assert!(err.contains("mastersos key new"), "{err}");
-    assert!(err.contains("mastersos key register"), "{err}");
-    assert!(!err.contains("signing page"), "{err}");
-    assert!(!dir.exists(), "nothing may be created");
-}
-
-/// A folder made by `init` trusting `a`.
-async fn folder_with(home: &Path, t: &Path, pa: &Path) -> PathBuf {
+/// A folder as `init` makes it, trusting the school key at `pa`, for the school on `uri` (built
+/// here: `init` itself is tested in cli_init_pull.rs).
+async fn folder_with(uri: &str, t: &Path, pa: &Path) -> PathBuf {
+    use mastersos_cli::workdir::{set_trusted_keys, template, Meta, Workdir};
+    let kit = mastersos_cli::sign::kit::load_kit(pa).unwrap();
     let dir = t.join("school");
-    let o = run(home, args(&[&"init", &dir, &"--key-file", &pa])).await;
-    let (out, err) = text(&o);
-    assert!(o.status.success(), "{out}{err}");
+    let text = set_trusted_keys(
+        &template(SID).unwrap(),
+        &[(kit.trust_key(), kit.escrow_recipient())],
+    )
+    .unwrap();
+    let meta = Meta {
+        server: uri.to_owned(),
+        school_id: SID.to_owned(),
+        base_version: 0,
+    };
+    Workdir::init(&dir, meta, &text).unwrap();
     dir
 }
 
@@ -283,8 +177,8 @@ async fn keys_add_then_remove_round_trip() {
     let (pa, a) = school_key(t.path(), "a.key");
     let (pb, b) = school_key(t.path(), "b.key");
     let s = server(&[&a, &b]).await;
-    let home = connected_home(&s.uri());
-    let dir = folder_with(home.path(), t.path(), &pa).await;
+    let home = signed_in(&s.uri());
+    let dir = folder_with(&s.uri(), t.path(), &pa).await;
     // A comment elsewhere in manifest.toml survives the edits.
     let m = std::fs::read_to_string(dir.join("manifest.toml")).unwrap();
     std::fs::write(
@@ -334,8 +228,8 @@ async fn keys_add_refuses_unregistered_key() {
     let (pa, a) = school_key(t.path(), "a.key");
     let (pb, _b) = school_key(t.path(), "b.key");
     let s = server(&[&a]).await;
-    let home = connected_home(&s.uri());
-    let dir = folder_with(home.path(), t.path(), &pa).await;
+    let home = signed_in(&s.uri());
+    let dir = folder_with(&s.uri(), t.path(), &pa).await;
     let before = std::fs::read_to_string(dir.join("manifest.toml")).unwrap();
     let o = run(home.path(), args(&[&"key", &"add", &pb, &"--dir", &dir])).await;
     assert!(!o.status.success());
@@ -351,8 +245,8 @@ async fn keys_remove_refuses_last_key() {
     let t = tempfile::tempdir().unwrap();
     let (pa, a) = school_key(t.path(), "a.key");
     let s = server(&[&a]).await;
-    let home = connected_home(&s.uri());
-    let dir = folder_with(home.path(), t.path(), &pa).await;
+    let home = signed_in(&s.uri());
+    let dir = folder_with(&s.uri(), t.path(), &pa).await;
     let before = std::fs::read_to_string(dir.join("manifest.toml")).unwrap();
     let o = run(
         home.path(),
@@ -369,44 +263,13 @@ async fn keys_remove_refuses_last_key() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn keys_list_marks_local_trust() {
-    let t = tempfile::tempdir().unwrap();
-    let (pa, a) = school_key(t.path(), "a.key");
-    let (_, b) = school_key(t.path(), "b.key");
-    let s = server(&[&a, &b]).await;
-    let home = connected_home(&s.uri());
-    let dir = folder_with(home.path(), t.path(), &pa).await;
-    let o = run(home.path(), args(&[&"key", &"list", &"--dir", &dir])).await;
-    let (out, err) = text(&o);
-    assert!(o.status.success(), "{out}{err}");
-    let row = |c: &str| {
-        out.lines()
-            .find(|l| l.starts_with(c))
-            .unwrap_or_else(|| panic!("no row for {c}: {out}"))
-            .split_whitespace()
-            .map(str::to_owned)
-            .collect::<Vec<_>>()
-    };
-    let header = out.lines().next().unwrap();
-    assert!(
-        header.contains("KEY CODE") && header.contains("IN THIS FOLDER"),
-        "{out}"
-    );
-    let ra = row(&code(&a));
-    assert!(ra.contains(&"2026-11-03".to_owned()), "{ra:?}");
-    assert_eq!(ra.last().unwrap(), "yes", "{ra:?}");
-    assert_eq!(row(&code(&b)).last().unwrap(), "no", "{out}");
-    plain_words(&out);
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn keys_remove_keeps_unmarked_recipients_and_needs_no_server() {
     let t = tempfile::tempdir().unwrap();
     let (pa, a) = school_key(t.path(), "a.key");
     let (pb, b) = school_key(t.path(), "b.key");
     let s = server(&[&a, &b]).await;
-    let home = connected_home(&s.uri());
-    let dir = folder_with(home.path(), t.path(), &pa).await;
+    let home = signed_in(&s.uri());
+    let dir = folder_with(&s.uri(), t.path(), &pa).await;
     let o = run(home.path(), args(&[&"key", &"add", &pb, &"--dir", &dir])).await;
     assert!(o.status.success(), "{:?}", text(&o));
     // Written by hand: nothing ties b's recipient to b any more.
@@ -446,8 +309,15 @@ async fn keys_remove_keeps_unmarked_recipients_and_needs_no_server() {
 
 /// A folder trusting `a` and `b` whose recipients carry no `# school key` comment (as written
 /// before key codes were noted there).
-async fn untagged_folder(home: &Path, t: &Path, pa: &Path, pb: &Path, kits: &[&Kit]) -> PathBuf {
-    let dir = folder_with(home, t, pa).await;
+async fn untagged_folder(
+    home: &Path,
+    uri: &str,
+    t: &Path,
+    pa: &Path,
+    pb: &Path,
+    kits: &[&Kit],
+) -> PathBuf {
+    let dir = folder_with(uri, t, pa).await;
     let o = run(home, args(&[&"key", &"add", &pb, &"--dir", &dir])).await;
     assert!(o.status.success(), "{:?}", text(&o));
     let mut m = std::fs::read_to_string(dir.join("manifest.toml")).unwrap();
@@ -466,8 +336,8 @@ async fn keys_remove_with_school_key_file_removes_its_untagged_recipient() {
     let (pa, a) = school_key(t.path(), "a.key");
     let (pb, b) = school_key(t.path(), "b.key");
     let s = server(&[&a, &b]).await;
-    let home = connected_home(&s.uri());
-    let dir = untagged_folder(home.path(), t.path(), &pa, &pb, &[&a, &b]).await;
+    let home = signed_in(&s.uri());
+    let dir = untagged_folder(home.path(), &s.uri(), t.path(), &pa, &pb, &[&a, &b]).await;
     // Offline: the file alone says which entry is b's.
     let empty = tempfile::tempdir().unwrap();
     drop(s);
@@ -501,8 +371,8 @@ async fn keys_remove_refuses_school_key_file_of_another_key() {
     let (pa, a) = school_key(t.path(), "a.key");
     let (pb, b) = school_key(t.path(), "b.key");
     let s = server(&[&a, &b]).await;
-    let home = connected_home(&s.uri());
-    let dir = untagged_folder(home.path(), t.path(), &pa, &pb, &[&a, &b]).await;
+    let home = signed_in(&s.uri());
+    let dir = untagged_folder(home.path(), &s.uri(), t.path(), &pa, &pb, &[&a, &b]).await;
     let before = std::fs::read_to_string(dir.join("manifest.toml")).unwrap();
     let o = run(
         home.path(),
@@ -537,15 +407,15 @@ async fn keys_remove_shows_what_the_server_says_but_removes_nothing_more() {
     let (pb, b) = school_key(t.path(), "b.key");
     // The server ties b's entry to b, and a's entry to a name with control characters.
     let s = server_listing(
-        signing_keys(&[&a, &b]),
+        keys_json(&[&a, &b]),
         json!([
             { "recipient": b.escrow_recipient(), "bound_key_id": b.key_id() },
             { "recipient": a.escrow_recipient(), "bound_key_id": "evil\u{1b}[2J\u{7}id" },
         ]),
     )
     .await;
-    let home = connected_home(&s.uri());
-    let dir = untagged_folder(home.path(), t.path(), &pa, &pb, &[&a, &b]).await;
+    let home = signed_in(&s.uri());
+    let dir = untagged_folder(home.path(), &s.uri(), t.path(), &pa, &pb, &[&a, &b]).await;
     let before = s.received_requests().await.unwrap().len();
     let o = run(
         home.path(),
@@ -571,7 +441,7 @@ async fn keys_remove_shows_what_the_server_says_but_removes_nothing_more() {
     );
     let la = line(&a.escrow_recipient());
     assert!(
-        la.contains("(the server says: school key evil[2Jid)"),
+        la.contains("(the server says: school key evil\\x1b[2J\\x07id)"),
         "{out}"
     );
     assert!(!out.contains(['\u{1b}', '\u{7}']), "{out:?}");
@@ -583,41 +453,4 @@ async fn keys_remove_shows_what_the_server_says_but_removes_nothing_more() {
         reqs[before..].iter().all(|r| r.method.as_str() == "GET"),
         "{reqs:?}"
     );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn keys_list_filters_control_characters() {
-    let t = tempfile::tempdir().unwrap();
-    let (_, a) = school_key(t.path(), "a.key");
-    let tk = a.trust_key();
-    let s = server_listing(
-        json!([{
-            "key_id": "k\u{1b}[31mid", "alg": "ed25519", "public_key": tk.public_key,
-            "label": "l\u{1b}[0m", "in_published_trust": false,
-            "created_at": "\u{1b}\u{7}2026-11-03T09:00:00Z"
-        }]),
-        json!([]),
-    )
-    .await;
-    let home = connected_home(&s.uri());
-    let o = run(home.path(), args(&[&"key", &"list"])).await;
-    let (out, err) = text(&o);
-    assert!(o.status.success(), "{out}{err}");
-    assert!(!out.contains(['\u{1b}', '\u{7}']), "{out:?}");
-    assert!(out.contains("k[31mid"), "{out}");
-    assert!(out.contains("2026-11-03"), "{out}");
-}
-
-#[cfg(unix)]
-#[tokio::test(flavor = "multi_thread")]
-async fn loose_token_file_says_how_to_fix_it() {
-    use std::os::unix::fs::PermissionsExt;
-    let s = server(&[]).await;
-    let home = connected_home(&s.uri());
-    let token = config_dir(home.path()).join("token");
-    std::fs::set_permissions(&token, std::fs::Permissions::from_mode(0o644)).unwrap();
-    let o = run(home.path(), args(&[&"key", &"list"])).await;
-    let (out, err) = text(&o);
-    assert!(!o.status.success(), "{out}{err}");
-    assert!(err.contains("mastersos connect"), "{err}");
 }

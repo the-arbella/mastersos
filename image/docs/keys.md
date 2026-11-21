@@ -356,39 +356,40 @@ VM 166；或被人手工改过）agent 只回报 `luks:tpm` 失败「数据分�
 恢复出厂由 IT 控制（4b Ruling 22，不依赖 BIOS 锁定）：**主路径是面板远程发起**；本机从启动菜单发起时，受管的机器要先输
 **这台的恢复密钥**。两条路都在 TPM 用不了时不清数据——repart 会在删掉旧分区之后建不出新的，机器就开不了机了。
 恢复出厂删掉并重建加密的根分区（`/etc`、`/var`、`/home`、本机账号都没了，新的 LUKS UUID，TPM 槽绑签名 PCR 11）；
-种子分区（种子、缓存的设置包、`identity.json`、`reset-done`）保留，所以回来之后分组与设置按学校的回来、面板上还是同一台。
+种子分区（种子、缓存的设置包、`identity.json`、`inbox-reset-seq`）保留，所以回来之后分组与设置按学校的回来、面板上还是同一台。
 
-### 远程（面板）
+### Remote (from the server)
 
-机器列表上每台一个「远程恢复出厂」按钮，要照着键入这台的序列号才能确认；它调
-`PUT /v1/admin/devices/{device_id}/reset`（请求体 `true`，`draft` 范围），在草稿里这台的 `[[device]]` 写
-`reset = { id = "<UUIDv4>", requested_at = "<服务端此刻>" }`——与挂失锁定一样**只改草稿、发布才生效，签名覆盖它**。
-发布页的 lint 以 `device_reset_requested` 警告列出每台要恢复出厂的机器；`reset.id` 不是 1–64 个字母、数字或 `-` 时是
-`device_reset_id_invalid` 错误（带换行的 id 永远对不上 `reset-done` 里的行，会每次开机都恢复出厂）。发布前可以撤销
-（请求体 `null`）。`mastersos` 命令行没有这个操作。这**不是**说 AI 排不了恢复出厂——
-它照样能起草一个 `when = "apply"`（以 root 运行）的分组脚本，里面自己调 `systemd-factory-reset request`。真正的关口仍是
-人看过再发布（发布要 IT 用学校钥匙批准，AI 拿不到；发布页列出 lint 与差异），所以发布时要细看脚本与 `[[device]]` 的改动。
+**Not available yet.** In protocol phase 1 the device API's `GET inbox` is reserved: a protocol v1 server answers
+`404 not_available`, so it cannot queue or hand out a `factory-reset` command, and a machine cannot be reset remotely
+yet. Until the inbox is defined, use the boot menu (below) or reinstall from the USB stick. The agent side described
+here is in place for when it is.
 
-agent 在接受新包之后、以及常驻启动时载入本地的包之后检查（`apply-local` 不检查：GDM 之前不做破坏性的事），按序：
+A remote factory reset is a `factory-reset` command in the machine's inbox (push spec §6.3): the server queues it, the agent
+fetches it over HTTPS with the device credential (MQTT only rings the doorbell) and runs it. It is not in the settings
+bundle: there is no `[[device]].reset`, no `reset-done` file and no `requested_at` any more, and neither the draft nor
+a publish nor the `mastersos` command line has this operation. (This does not mean an AI cannot draft one:
+it could still write a Group script with `when = "apply"` (it runs as root) that calls `systemd-factory-reset request` itself.
+The gate is the same as for any script: a person looks at the diff and IT publishes with the school key, which an AI does not have.)
 
-1. `id` 不在种子分区的 `reset-done` 里，且 `requested_at` 晚于这块数据分区开始的时刻（`state.seed_import.at`，回报里的
-   `imported_from_seed_at`；没有记录时只看 `reset-done`）。两道防重复：`reset-done` 挡住恢复出厂之后再执行（种子分区保留），
-   `requested_at` 挡住重装之后再执行（重装重写种子分区）。重装时本机时钟比服务端慢，最多多执行一次，之后 `reset-done` 挡住；
-   反过来本机时钟**快**（导入时刻记在将来）时，在真实时间追上之前发起的远程恢复出厂都回报「早于这次安装，不执行」——
-   不清数据，面板上看得见；IT 等时钟走过那个时刻之后在面板上重新发起即可（每次重新发起都是新的 id 与新的 `requested_at`）。
-2. 种子分区挂着、写得进（写不进就记不下这个 id、挡不住下一次，不执行）。
-3. `tpm::probe` 是「能用」（判断不了也不执行）。
-4. 立即回报 `reset`「正在恢复出厂（请求 <id>）」，最多等 10 秒，回报不出去也继续。
-5. 把 id 追加进 `reset-done`（0600；临时文件 + `renameat` + fsync 文件与目录）。
-6. `/usr/lib/systemd/systemd-factory-reset request`（设 `FactoryResetRequest` EFI 变量）→ `systemctl reboot`。initrd 的确认
-   单元只看内核命令行，EFI 变量发起的恢复出厂**不问任何东西**，repart 直接重建。
+Order, per message (`core/mastersos-agent/src/inbox.rs`, `reset.rs`):
 
-第 1–3、5 步不成立时回报 `reset` 失败并写明哪一条，不重启。标记写在请求之前：请求设成了而重启失败时，下次重启照样恢复出厂；
-`request` 本身失败时这个 id 已记为执行过、不再重试，要在面板上重新发起（新 id）。第 2、3 步失败（例如开机早期种子分区还没挂上、
-TPM 一时判断不了）不会自己反复重试：同一个请求只在下一次接受新包、或 agent 重启（含机器重启）时再检查一次——IT 看到
-「恢复出厂失败」后重启那台机器或再发布一次即可。面板上：草稿里有请求而回报还没说执行过这个
-id 的显示「恢复出厂待发布」；回报里 `reset` 成功的显示「正在 / 已恢复出厂」与时间，失败的显示「恢复出厂失败」与原因。
-旧的 agent（4a）不认 `reset` 字段会拒收整个包——只有 lab 的 4a 机器受影响，没有出过货的。
+1. The machine's clock must be sane (not before 2026-01-01) and the message not expired by the machine's clock; otherwise
+   the message is acked `failed` and nothing runs.
+2. `reset::precheck`: the seed partition is mounted and writable (the command's `seq` must be recorded there), and
+   `tpm::probe` is usable (without a usable TPM repart cannot create the new data partition after deleting the old one).
+   Not met: acked `failed` with the reason, no data is touched.
+3. Ack `running` and make sure the server recorded it. After `running` the server stops handing the message out, which is
+   what keeps the reset from running twice. Not acked (network error, 5xx): run nothing and retry the sync later. Refused
+   with 409 (already final there, e.g. expired by the server's clock): the message is skipped, nothing runs, and the `seq` is passed.
+4. Write the `seq` to the seed partition file `inbox-reset-seq` (the reset wipes `state.json`; the seed partition stays), so the
+   new system acks `done` for it.
+5. `/usr/lib/systemd/systemd-factory-reset request` (sets the `FactoryResetRequest` EFI variable), then `systemctl reboot`.
+   The initrd's confirmation unit only looks at the kernel command line, so a reset started by the EFI variable asks nothing
+   and repart rebuilds at once. A failing step is acked `failed` naming it. Once the reset started, later messages wait.
+
+`apply-local` does not run it (nothing destructive before GDM). The seed partition (seed, cached settings bundle,
+`identity.json`, `inbox-reset-seq`) survives, so the machine comes back in the school's Group with the school's settings.
 
 ### 本机（启动菜单）
 

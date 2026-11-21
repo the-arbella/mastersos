@@ -9,11 +9,13 @@
 # Carries its own copy of the helpers it needs; dedupe with 4b's lab/accept-common.sh once plan 4b is merged.
 #
 # Lab parameters (env, defaults = the second builder VM 164 and its VM group 170–173):
-#   A5_BUILD_HOST (mastersos@192.0.2.121)  A5_SERVER (http://192.0.2.121:8480)  A5_LAB_ROOT (/var/www/html/mastersos)
+#   A5_BUILD_HOST (mastersos@192.0.2.121)  A5_LAB_ROOT (/var/www/html/mastersos)
 #   A5_SNAPSHOT (20261017T000000Z)  A5_V_BASE (20261017.100)  A5_V_NEW (20261017.102, the build with this task)
 #   A5_SNAP_OLD (p5-old-shim)  A5_SNAP_BASE (p5-base)  A5_DATE  A5_STATE
-# Secrets: API tokens only from ~/.config/testlab/mastersos/mastersos-lab-{ops,recovery}.token, passed over stdin to curl on
-# the builder; recovery keys only over stdin / the serial console; never printed.
+# Settings, devices and recovery keys go through the protocol v1 `mastersos` command line on the builder (accept-cli.sh).
+# Required environment: LAB_SERVER_URL, LAB_SCHOOL_ID, LAB_CONTROL_URL, LAB_ARBELLA_STUB (the server team's lab harness).
+# Secrets: the lab school key file (0600 on the Mac, see accept-cli.sh) reaches the builder over stdin only; recovery keys
+# only over stdin / the serial console; never printed.
 # shellcheck disable=SC2029,SC2329,SC2016,SC2015,SC2001 # local expansion is intended (arguments are validated first); checks are called as "c_$c"; remote commands are single-quoted on purpose; pass cannot fail; sed prefixes read better
 set -euo pipefail
 
@@ -39,7 +41,6 @@ export SHOT_DIR=$out
 
 snapshot=${A5_SNAPSHOT:-20261017T000000Z}
 bhost=${A5_BUILD_HOST:-mastersos@192.0.2.121}
-server=${A5_SERVER:-http://192.0.2.121:8480}
 broot=${A5_LAB_ROOT:-/var/www/html/mastersos}
 lab=/var/lib/vz/mastersos-lab
 cfg=$HOME/.config/testlab/mastersos
@@ -174,31 +175,10 @@ print(\"\\n\".join([l for l in txt.splitlines() if l.strip()][:6]))
 	return "$rc"
 }
 
-# --- lab server admin API (tokens over stdin to curl on the builder) ---------------------
-api() { # api <ops|recovery> <METHOD> <path> [local request body file]
-	local tok body_remote="" ct=""
-	case "$3" in */draft/manifest) ct=text/plain ;; */commit-server) ct=application/json ;; esac
-	tok=$(tr -d '\n' <"$cfg/mastersos-lab-$1.token")
-	if [ -n "${4:-}" ]; then
-		body_remote=p5-server/tmp/body.$$
-		bld "mkdir -p -m 700 p5-server/tmp && cat > $body_remote" <"$4"
-	fi
-	printf 'Authorization: Bearer %s\n' "$tok" |
-		bld "curl -sS --fail-with-body -X $2 -H @- ${ct:+-H 'content-type: $ct'} ${body_remote:+--data-binary @$body_remote} '$server$3'; rc=\$?; ${body_remote:+rm -f $body_remote;} exit \$rc"
-}
-publish_manifest() {
-	local m=$1 p pend dig
-	api ops PUT /v1/admin/draft/manifest "$m" >/dev/null
-	p=$(api ops POST /v1/admin/publish/prepare) || {
-		log "bundle pre-publish check failed: $p"
-		return 1
-	}
-	pend=$(jq -r .pending_id <<<"$p")
-	dig=$(jq -c .digest_hex <<<"$p")
-	printf '{"confirm_digest": %s}' "$dig" >"$state/commit.json"
-	api ops POST "/v1/admin/publish/pending/$pend/commit-server" "$state/commit.json" >/dev/null
-	log "published settings bundle v$(jq -r .version <<<"$p") (channel $(sed -n 's/^update_channel = "\(.*\)"/\1/p' "$m"))"
-}
+# --- lab server: the protocol v1 command line on the builder (accept-cli.sh) ---------------
+LAB_RUN=bld
+# shellcheck source-path=SCRIPTDIR source=accept-cli.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/accept-cli.sh"
 manifest() { # manifest <channel> → local file
 	local f=$state/manifest-$1.toml
 	printf '[school]\ntimezone = "Asia/Bangkok"\nupdate_channel = "%s"\n\n[[config]]\nid = "default"\nname = "default"\nlogin_methods = ["local"]\n\n[[group]]\nid = "default"\nname = "default"\nconfig = "default"\n' "$1" >"$f"
@@ -209,7 +189,7 @@ luks_uuid() { gx 'cryptsetup luksUUID /dev/gpt-auto-root-luks' | tr -d '\n'; }
 # Read the current recovery key from the server and type it on the serial console (never stored or printed)
 type_recovery_key() { # type_recovery_key <device id> <luks uuid> [1 = prompt already shown]
 	local key
-	key=$(api recovery GET "/v1/admin/devices/$1/recovery-keys" | jq -r --arg u "$2" '[.[] | select(.luks_uuid == $u)][0].recovery_key // empty')
+	key=$(recovery_key "$1" "$2")
 	[ -n "$key" ] || return 1
 	printf '%s\n' "$key" | serial_answer 'Please enter recovery key' 240 "${3:-0}"
 	unset key
@@ -254,7 +234,7 @@ agent_round() {
 	sleep "${1:-75}"
 }
 luks_item() { # the device's last reported luks:pcrlock item (JSON)
-	api ops GET /v1/admin/devices | jq -c --arg id "$1" '.[] | select(.device_id == $id) | .last_report.items[]? | select(.item == "luks:pcrlock")'
+	device_json "$1" | jq -c '.results[]? | select(.item == "luks:pcrlock")'
 }
 
 # --- builds -----------------------------------------------------------------------
@@ -450,7 +430,7 @@ ensure_new_published() {
 }
 # luks:pcrlock in the device's latest report on the server
 pcrlock_report() {
-	api ops GET /v1/admin/devices | jq -c --arg id "$1" '.[] | select(.device_id == $id) | .results[]? | select(.item == "luks:pcrlock")'
+	device_json "$1" | jq -c '.results[]? | select(.item == "luks:pcrlock")'
 }
 
 c_shim_update_no_prompt() {
@@ -583,6 +563,7 @@ c_shim_unchanged_no_prepare() {
 # main
 # ==================================================================================
 [ -n "${A5_LIB:-}" ] && return 0
+lab_env_check || exit 2
 checks=("$@")
 [ "${checks[*]}" = all ] && checks=(shim_update_no_prompt shim_update_predict_fail_falls_back shim_unchanged_no_prepare)
 log "accept-5.sh VM $vmid: ${checks[*]} (base $V_BASE, new $V_NEW)"

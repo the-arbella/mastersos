@@ -522,9 +522,10 @@ image/lab/accept-4a.sh 168 offline_first_boot online_first_boot unmanaged local_
   「坏版本开机时引导程序更新没跑」，`local_password_change` 要 `unmanaged` 建的 owner。
 - 要的版本由脚本在 VM 161 上构建（`MASTERSOS_SNAPSHOT` 固定为 `A4_SNAPSHOT`，默认 `20261013T000000Z`），只发 lab 根的 **beta**
   （坏版本也只进 beta），发完删掉构建产物；版本号见脚本开头的 `A4_V_*`。U 盘镜像做在 PVE 的 `/var/lib/vz/mastersos-lab/a4-<版本>-{seeded,plain}.img`。
-- 管理 API 的令牌从 Mac 的 `~/.config/testlab/mastersos/mastersos-lab-{ops,recovery}.token` 读、经 stdin 交给构建机上的 curl；
-  恢复密钥只经 stdin（`qm guest exec --pass-stdin`、串口）。跨 check 的中间值（种子 sha256、试验口令）在仓库外的
-  `~/.cache/mastersos-accept-4a/<日期>/`。lab 服务端是 VM 161 上的 mastersos-server（`:8480`，用之前要起好）。
+- 设置、设备、恢复密钥与种子经 VM 161 上的 protocol v1 命令行 `mastersos`（`lab/accept-cli.sh`）；环境变量 `LAB_SERVER_URL`、
+  `LAB_SCHOOL_ID`、`LAB_CONTROL_URL`、`LAB_ARBELLA_STUB` 必填，指向服务端团队的 lab harness（用之前要起好）。学校钥匙文件从 Mac 的
+  `~/.config/testlab/mastersos/mastersos-lab-school.kit` 读、经 stdin 交给构建机（0600）；恢复密钥只经 stdin（`qm guest exec --pass-stdin`、串口）。
+  跨 check 的中间值（种子 sha256、试验口令）在仓库外的 `~/.cache/mastersos-accept-4a/<日期>/`。
 - **不带种子的 lab 机器没有 `student`**（也没有 root 口令、ssh 进不去）：`unmanaged` 的第一个用户 `owner` 由 `mastersos-firstrun`
   在 tty1 上建（脚本用 `keys.sh` 敲），之后的检查都经 guest agent。
 - 断网用 `qm set <vmid> --net0 …,link_down=1`；恢复密钥提示与恢复出厂的 `ERASE` 确认从串口读（lab 命令行最后是

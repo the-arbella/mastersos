@@ -77,6 +77,110 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Whether a secret file for another computer (a seed) may be written at `path`, and whether one
+/// is there already. Its folder may be on a USB stick, so it is not made private; it is refused
+/// when another account could swap the file in it ([`check_out_dir`]). An existing path is
+/// refused unless `replace`, and then only when it is a regular file of the current user, not a
+/// link (never followed).
+pub fn check_out_file(path: &Path, replace: bool) -> Result<bool> {
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    check_out_dir(parent, "the seed")?;
+    let Some(f) = sys::open_no_follow(path)? else {
+        return Ok(false);
+    };
+    if !replace {
+        bail!(
+            "{} already exists; pass --yes to replace it",
+            path.display()
+        );
+    }
+    let meta = f
+        .metadata()
+        .with_context(|| format!("cannot read the metadata of {}", path.display()))?;
+    if !meta.is_file() {
+        bail!(
+            "{} is not a regular file; refusing to replace it",
+            path.display()
+        );
+    }
+    sys::check_owner(&f, path)?;
+    Ok(true)
+}
+
+/// Write a secret file for another computer: [`check_out_file`], then a new file
+/// ([`create_private`]: owner-only, exclusive, never through a link) or, with `replace`, a
+/// replacement of the current user's file ([`write_private`]: a new file renamed over it).
+pub fn write_out_file(path: &Path, bytes: &[u8], replace: bool) -> Result<()> {
+    if check_out_file(path, replace)? {
+        return write_private(path, bytes);
+    }
+    let mut f = create_private(path)?;
+    let written = f.write_all(bytes).and_then(|()| f.sync_all());
+    if let Err(e) = written {
+        drop(f);
+        let _ = std::fs::remove_file(path);
+        bail!("cannot write {}: {e}", path.display());
+    }
+    Ok(())
+}
+
+/// The folder a secret file goes into, `what` naming the file (`the seed`, `the school key`)
+/// for the refusal (Unix): it must belong to the current user or root, and other users must not
+/// be able to write to it unless it is sticky (like /tmp, where nobody can replace another's
+/// file; the file itself is always created new, never through a link). A folder of root that
+/// others cannot write to, such as a USB stick mounted by the system, is accepted. A link to a
+/// folder counts as that folder. Elsewhere nothing is checked here: on Windows the file's own
+/// owner-only DACL protects it.
+#[cfg(unix)]
+pub fn check_out_dir(dir: &Path, what: &str) -> Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+    let f = File::open(dir).with_context(|| format!("cannot open {}", dir.display()))?;
+    let meta = f
+        .metadata()
+        .with_context(|| format!("cannot read the metadata of {}", dir.display()))?;
+    if !meta.is_dir() {
+        bail!("{} is not a directory", dir.display());
+    }
+    match out_dir_problem(
+        meta.uid(),
+        nix::unistd::getuid().as_raw(),
+        meta.mode(),
+        what,
+    ) {
+        Some(why) => bail!("{}{why}", dir.display()),
+        None => Ok(()),
+    }
+}
+
+#[cfg(not(unix))]
+pub fn check_out_dir(_dir: &Path, _what: &str) -> Result<()> {
+    Ok(())
+}
+
+/// Why a folder of owner `uid` and `mode` must not hold a secret file of user `me`: the text
+/// after the folder's name, or `None` when it may.
+#[cfg(unix)]
+fn out_dir_problem(uid: u32, me: u32, mode: u32, what: &str) -> Option<String> {
+    let instead = format!(
+        "write {what} into a folder only you can change, then copy {what} to the USB stick"
+    );
+    if uid != me && uid != 0 {
+        return Some(format!(
+            " belongs to uid {uid}, not to the current user (uid {me}): that account could replace the file; {instead}"
+        ));
+    }
+    if mode & 0o022 != 0 && mode & 0o1000 == 0 {
+        return Some(format!(
+            ": other users can write to it (mode {:o}) and could replace the file; {instead}",
+            mode & 0o7777
+        ));
+    }
+    None
+}
+
 /// Refuse a file other accounts can read or change. Unix: another owner, or any group/other mode
 /// bit. Windows: an owner other than the current user or Administrators, no DACL, or an allow
 /// entry that grants read, write or control of the file to anyone but the current user, SYSTEM
@@ -113,6 +217,49 @@ fn open(path: &Path) -> Result<File> {
     let f = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
     sys::check_owner(&f, path)?;
     Ok(f)
+}
+
+/// Make sure `dir` is a private settings directory and say whether it exists. With `create` a
+/// missing one is made with mode 0700 (its parents the usual way). It is refused when it is a
+/// link, not a directory, or (Unix) belongs to another user; an existing one of ours that other
+/// users can enter is narrowed to 0700 on the opened directory. Its parents may be links (dotfile
+/// managers link `~/.config`). For the credentials file, the school key file and the seed.
+pub fn private_dir(dir: &Path, create: bool) -> Result<bool> {
+    sys::private_dir(dir, create)
+}
+
+/// Read a private file without following a link at its last part: `None` when it does not exist.
+/// Refused when it is a link, not a regular file, not the current user's, open to other users
+/// ([`check_private`]) or larger than `max` bytes. The bytes are wiped when dropped.
+pub fn read_private(path: &Path, max: u64) -> Result<Option<Zeroizing<Vec<u8>>>> {
+    use std::io::Read as _;
+    let Some(f) = sys::open_no_follow(path)? else {
+        return Ok(None);
+    };
+    let meta = f
+        .metadata()
+        .with_context(|| format!("cannot read the metadata of {}", path.display()))?;
+    if !meta.is_file() {
+        bail!(
+            "{} is not a regular file; refusing to read it",
+            path.display()
+        );
+    }
+    sys::check_owner(&f, path)?;
+    if let Some(why) = sys::not_private(&f, path)? {
+        bail!("{why}");
+    }
+    if meta.len() > max {
+        bail!("{} is larger than {max} bytes", path.display());
+    }
+    let mut out = Zeroizing::new(Vec::with_capacity(meta.len() as usize));
+    f.take(max + 1)
+        .read_to_end(&mut out)
+        .with_context(|| format!("cannot read {}", path.display()))?;
+    if out.len() as u64 > max {
+        bail!("{} is larger than {max} bytes", path.display());
+    }
+    Ok(Some(out))
 }
 
 /// Whether `path`, whose [`std::fs::symlink_metadata`] is `meta`, is a link that a settings
@@ -218,6 +365,67 @@ mod sys {
         meta.file_type().is_symlink()
     }
 
+    fn refused_link(e: &std::io::Error) -> bool {
+        use nix::errno::Errno;
+        matches!(e.raw_os_error(), Some(c) if c == Errno::ELOOP as i32 || c == Errno::ENOTDIR as i32)
+    }
+
+    /// Created with mode 0700; opened with O_DIRECTORY | O_NOFOLLOW, so the checks and the
+    /// narrowing (fchmod) apply to the directory itself, not to where a link points.
+    pub fn private_dir(dir: &Path, create: bool) -> Result<bool> {
+        use nix::fcntl::OFlag;
+        use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
+        if create {
+            if let Some(parent) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("cannot create {}", parent.display()))?;
+            }
+            match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => bail!("cannot create {}: {e}", dir.display()),
+            }
+        }
+        let flags = (OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW).bits();
+        let f = match std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(flags)
+            .open(dir)
+        {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !create => return Ok(false),
+            Err(e) if refused_link(&e) => bail!(
+                "{} is a symbolic link or not a directory; refusing to use it",
+                dir.display()
+            ),
+            Err(e) => bail!("cannot open {}: {e}", dir.display()),
+        };
+        check_owner(&f, dir)?;
+        if meta(&f, dir)?.mode() & 0o077 != 0 {
+            f.set_permissions(std::fs::Permissions::from_mode(0o700))
+                .with_context(|| format!("cannot make {} private", dir.display()))?;
+        }
+        Ok(true)
+    }
+
+    /// O_NOFOLLOW (a link is refused) and O_NONBLOCK (a FIFO put there cannot hang the open).
+    pub fn open_no_follow(path: &Path) -> Result<Option<File>> {
+        use nix::fcntl::OFlag;
+        use std::os::unix::fs::OpenOptionsExt as _;
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags((OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK).bits())
+            .open(path)
+        {
+            Ok(f) => Ok(Some(f)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) if refused_link(&e) => {
+                bail!("{} is a symbolic link; refusing to read it", path.display())
+            }
+            Err(e) => bail!("cannot open {}: {e}", path.display()),
+        }
+    }
+
     /// Echo off on stdin until dropped.
     pub struct EchoOff(rustix::termios::Termios);
 
@@ -272,7 +480,7 @@ mod sys {
         FILE_APPEND_DATA, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
         FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
         FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-        FILE_WRITE_DATA, WRITE_DAC, WRITE_OWNER,
+        FILE_WRITE_DATA, READ_CONTROL, WRITE_DAC, WRITE_OWNER,
     };
     use windows_sys::Win32::System::Console::{
         GetConsoleMode, GetStdHandle, SetConsoleMode, CONSOLE_MODE, ENABLE_ECHO_INPUT,
@@ -541,6 +749,63 @@ mod sys {
         }
     }
 
+    /// A missing directory inherits the owner-only access of `%APPDATA%`; a link is refused.
+    pub fn private_dir(dir: &Path, create: bool) -> Result<bool> {
+        if create {
+            if let Some(parent) = dir.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| anyhow::anyhow!("cannot create {}: {e}", parent.display()))?;
+            }
+            match std::fs::create_dir(dir) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => anyhow::bail!("cannot create {}: {e}", dir.display()),
+            }
+        }
+        let meta = match std::fs::symlink_metadata(dir) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !create => return Ok(false),
+            Err(e) => anyhow::bail!("cannot read {}: {e}", dir.display()),
+        };
+        if is_link(dir, &meta) || !meta.is_dir() {
+            anyhow::bail!(
+                "{} is a link or not a directory; refusing to use it",
+                dir.display()
+            );
+        }
+        // The directory itself (not followed), checked like a private file: owned by the current
+        // user or Administrators, and no other account may list or change it.
+        let f = std::fs::OpenOptions::new()
+            .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(dir)
+            .map_err(|e| anyhow::anyhow!("cannot open {}: {e}", dir.display()))?;
+        if let Some(why) = not_private(&f, dir)? {
+            anyhow::bail!("{why}");
+        }
+        Ok(true)
+    }
+
+    /// Open for reading, refusing a symbolic link or junction at the last part.
+    pub fn open_no_follow(path: &Path) -> Result<Option<File>> {
+        let meta = match std::fs::symlink_metadata(path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => anyhow::bail!("cannot read {}: {e}", path.display()),
+        };
+        if is_link(path, &meta) {
+            anyhow::bail!("{} is a link; refusing to read it", path.display());
+        }
+        // FILE_FLAG_OPEN_REPARSE_POINT: a link put there since the check is opened, not followed
+        // (and then fails the regular-file check).
+        let f = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+            .map_err(|e| anyhow::anyhow!("cannot open {}: {e}", path.display()))?;
+        Ok(Some(f))
+    }
+
     /// A symbolic link or junction, by its reparse tag; other reparse points are files.
     pub fn is_link(path: &Path, meta: &std::fs::Metadata) -> bool {
         if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0 {
@@ -606,6 +871,49 @@ mod tests {
             vars.iter()
                 .find(|(n, _)| *n == k)
                 .map(|(_, v)| OsString::from(v))
+        }
+    }
+
+    /// The folder of a secret file: root's (a USB stick the system mounted) or ours is fine
+    /// unless others can write to it without the sticky bit; another account's is refused. Each
+    /// refusal says what to do instead.
+    #[cfg(unix)]
+    #[test]
+    fn out_dir_accepts_root_and_own_folders_others_cannot_write() {
+        let me = 1000;
+        for (uid, mode) in [
+            (0, 0o40755),
+            (0, 0o41777),
+            (me, 0o40700),
+            (me, 0o40755),
+            (me, 0o41777),
+        ] {
+            assert_eq!(
+                out_dir_problem(uid, me, mode, "the seed"),
+                None,
+                "{uid} {mode:o}"
+            );
+        }
+        for (uid, mode, why) in [
+            (0, 0o40777, "other users can write"),
+            (0, 0o40775, "other users can write"),
+            (me, 0o40757, "other users can write"),
+            (1001, 0o40700, "belongs to uid 1001"),
+        ] {
+            let p = out_dir_problem(uid, me, mode, "the school key file").unwrap();
+            assert!(p.contains(why), "{p}");
+            assert!(
+                p.ends_with(
+                    "write the school key file into a folder only you can change, then copy the school key file to the USB stick"
+                ),
+                "{p}"
+            );
+        }
+        // The real check on a folder of root that others cannot write to.
+        let root = std::fs::metadata("/").unwrap();
+        use std::os::unix::fs::MetadataExt as _;
+        if root.uid() == 0 && root.mode() & 0o022 == 0 {
+            check_out_dir(Path::new("/"), "the seed").unwrap();
         }
     }
 
@@ -859,5 +1167,129 @@ mod tests {
         drop(create_private(&p).unwrap());
         icacls_grant(&p, "S-1-5-32-544", "F");
         check_private(&p).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn mode(p: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::symlink_metadata(p).unwrap().permissions().mode() & 0o777
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_dir_is_made_0700_and_narrowed() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let t = tempfile::tempdir().unwrap();
+        let d = t.path().join("a").join("mastersos");
+        assert!(!private_dir(&d, false).unwrap());
+        assert!(!d.exists());
+        assert!(private_dir(&d, true).unwrap());
+        assert_eq!(mode(&d), 0o700);
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(private_dir(&d, false).unwrap());
+        assert_eq!(mode(&d), 0o700);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_dir_refuses_a_link_and_a_file() {
+        let t = tempfile::tempdir().unwrap();
+        let target = t.path().join("elsewhere");
+        std::fs::create_dir(&target).unwrap();
+        let link = t.path().join("mastersos");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        for create in [false, true] {
+            let e = private_dir(&link, create).unwrap_err().to_string();
+            assert!(e.contains("refusing"), "{e}");
+        }
+        let file = t.path().join("file");
+        std::fs::write(&file, "x").unwrap();
+        assert!(private_dir(&file, true).is_err());
+        // A linked parent is fine (dotfile managers link ~/.config).
+        let inside = link.join("sub");
+        assert!(private_dir(&inside, true).unwrap());
+        assert_eq!(mode(&target.join("sub")), 0o700);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_private_refuses_links_broad_files_and_big_files() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let t = tempfile::tempdir().unwrap();
+        let p = t.path().join("credentials.json");
+        assert!(read_private(&p, 100).unwrap().is_none());
+        write_private(&p, b"{}").unwrap();
+        assert_eq!(&**read_private(&p, 100).unwrap().unwrap(), b"{}");
+        assert!(read_private(&p, 1)
+            .unwrap_err()
+            .to_string()
+            .contains("larger"));
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(read_private(&p, 100)
+            .unwrap_err()
+            .to_string()
+            .contains("chmod 600"));
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let link = t.path().join("link.json");
+        std::os::unix::fs::symlink(&p, &link).unwrap();
+        let e = read_private(&link, 100).unwrap_err().to_string();
+        assert!(e.contains("link"), "{e}");
+        let e = read_private(t.path(), 100).unwrap_err().to_string();
+        assert!(e.contains("not a regular file"), "{e}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_private_dir_refuses_links_and_open_directories() {
+        let t = tempfile::tempdir().unwrap();
+        let d = t.path().join("a").join("mastersos");
+        assert!(!private_dir(&d, false).unwrap());
+        assert!(private_dir(&d, true).unwrap());
+        assert!(private_dir(&d, false).unwrap());
+        // A junction as the directory.
+        let target = t.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        let junction = t.path().join("junction");
+        mklink_junction(&junction, &target);
+        for create in [false, true] {
+            let e = private_dir(&junction, create).unwrap_err().to_string();
+            assert!(e.contains("refusing"), "{e}");
+        }
+        // A symbolic link as the directory (needs the right to make one).
+        let link = t.path().join("dirlink");
+        match std::os::windows::fs::symlink_dir(&target, &link) {
+            Ok(()) => {
+                let e = private_dir(&link, false).unwrap_err().to_string();
+                assert!(e.contains("refusing"), "{e}");
+            }
+            Err(e) if e.raw_os_error() == Some(1314) => {
+                eprintln!("skipped: this account cannot create symbolic links");
+            }
+            Err(e) => panic!("cannot create {}: {e}", link.display()),
+        }
+        // A directory every account may write to.
+        let open = t.path().join("open");
+        std::fs::create_dir(&open).unwrap();
+        icacls_grant(&open, "S-1-1-0", "W");
+        let e = private_dir(&open, false).unwrap_err().to_string();
+        assert!(e.contains("other accounts"), "{e}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_read_private_refuses_links_and_broad_files() {
+        let t = tempfile::tempdir().unwrap();
+        let p = t.path().join("credentials.json");
+        assert!(read_private(&p, 100).unwrap().is_none());
+        write_private(&p, b"{}").unwrap();
+        assert_eq!(&**read_private(&p, 100).unwrap().unwrap(), b"{}");
+        let link = t.path().join("link.json");
+        if symlink_file_or_skip(&p, &link) {
+            let e = read_private(&link, 100).unwrap_err().to_string();
+            assert!(e.contains("link"), "{e}");
+        }
+        icacls_grant(&p, "S-1-5-32-545", "R");
+        let e = read_private(&p, 100).unwrap_err().to_string();
+        assert!(e.contains("other accounts"), "{e}");
     }
 }

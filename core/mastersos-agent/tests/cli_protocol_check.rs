@@ -258,3 +258,64 @@ async fn protocol_check_escrows_a_throwaway_key() {
         assert!(!all.contains(s), "output holds a secret");
     }
 }
+
+/// `--omit-feature` with a name the agent does not report: the JSON report is still printed
+/// (one `status` call, `bad_input`) and the exit code is 1; nothing reaches the server.
+#[tokio::test(flavor = "multi_thread")]
+async fn unknown_omit_feature_is_bad_input() {
+    let a = Kit::generate();
+    let srv = server(&a, 200).await;
+    let f = files(&srv.uri(), &a, &recovery_key());
+    let mut args = base(&f);
+    args.extend([
+        "--json".into(),
+        "--omit-feature".into(),
+        "kiosk".into(),
+        "--omit-feature".into(),
+        "no_such_feature".into(),
+    ]);
+    let out = run(args).await;
+    assert_eq!(out.status.code(), Some(1));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["ok"], false);
+    assert_eq!(v["calls"][0]["step"], "status");
+    assert_eq!(v["calls"][0]["error_code"], "bad_input");
+    assert!(srv.received_requests().await.unwrap().is_empty());
+}
+
+/// `--omit-feature` is repeatable and a known name runs the whole check.
+#[tokio::test(flavor = "multi_thread")]
+async fn omit_feature_is_repeatable() {
+    let a = Kit::generate();
+    let srv = server(&a, 200).await;
+    let f = files(&srv.uri(), &a, &recovery_key());
+    let mut args = base(&f);
+    args.extend([
+        "--json".into(),
+        "--omit-feature".into(),
+        "kiosk".into(),
+        "--omit-feature".into(),
+        "config".into(),
+    ]);
+    let out = run(args).await;
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let reqs = srv.received_requests().await.unwrap();
+    let status = reqs
+        .iter()
+        .find(|r| r.url.path() == "/api/device/v1/status")
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&status.body).unwrap();
+    let features: Vec<&str> = body["manifest_features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f.as_str().unwrap())
+        .collect();
+    assert!(!features.contains(&"kiosk") && !features.contains(&"config"));
+    assert!(features.contains(&"format_3"));
+}

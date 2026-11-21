@@ -189,7 +189,7 @@ function Install-MastersOS([string]$Version) {
         $env:Path = "$env:Path;$dir"
     }
     Write-Output ''
-    Write-Output "Next: mastersos connect <your school's admin address>"
+    Write-Output "Next: sign in with arbella, or run: mastersos login --server <your school's server address>"
 }
 
 try {

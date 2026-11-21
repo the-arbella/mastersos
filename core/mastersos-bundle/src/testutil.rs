@@ -383,3 +383,28 @@ pub fn spec_example_present() -> BTreeSet<String> {
     .map(String::from)
     .collect()
 }
+
+/// A `.tar.gz` holding `members` (name, content) as regular files, each name written into the
+/// tar header as it is, unchecked: for tests of what a reader refuses. Names are shorter than
+/// 100 bytes.
+pub fn raw_archive(members: &[(&str, &[u8])]) -> Vec<u8> {
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+    let mut b = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::default()));
+    for (name, data) in members {
+        let mut h = tar::Header::new_gnu();
+        assert!(
+            name.len() < 100,
+            "{name:?} is too long for a plain tar header"
+        );
+        h.as_old_mut().name[..name.len()].copy_from_slice(name.as_bytes());
+        h.set_entry_type(tar::EntryType::Regular);
+        h.set_size(data.len() as u64);
+        h.set_mode(0o644);
+        h.set_cksum();
+        b.append(&h, *data).expect("append to an in-memory tar");
+    }
+    b.into_inner()
+        .and_then(|gz| gz.finish())
+        .expect("finish an in-memory tar.gz")
+}

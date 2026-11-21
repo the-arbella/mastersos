@@ -201,4 +201,4 @@ case ":${PATH:-}:" in
     ;;
 esac
 say ""
-say "Next: mastersos connect <your school's admin address>"
+say "Next: sign in with arbella, or run: mastersos login --server <your school's server address>"

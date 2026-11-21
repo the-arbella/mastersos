@@ -35,11 +35,11 @@ pub fn stamp(
 }
 
 /// The `[school] name` publishing writes (phase B §15): the school's display name, only when the
-/// draft is already format 2 and the name passes [`crate::checks::school_name`]. The name never
-/// raises the format by itself: a format 1 draft is published without it, so old Devices keep
-/// accepting it.
+/// draft is already format 2 or later (format 3 keeps `[school] name`) and the name passes
+/// [`crate::checks::school_name`]. The name never raises the format by itself: a format 1 draft
+/// is published without it, so old Devices keep accepting it.
 pub fn school_name_to_write<'a>(text: &str, display_name: &'a str) -> Option<&'a str> {
-    (text_format(text) == 2 && crate::checks::school_name(display_name).is_ok())
+    (text_format(text) >= 2 && crate::checks::school_name(display_name).is_ok())
         .then_some(display_name)
 }
 
@@ -61,9 +61,13 @@ mod tests {
     }
 
     #[test]
-    fn school_name_only_for_format_2() {
+    fn school_name_from_format_2_on() {
+        // The name never raises a format 1 text.
         assert_eq!(school_name_to_write("version = 1\n", "Name"), None);
         assert_eq!(school_name_to_write("format = 1\n", "Name"), None);
         assert_eq!(school_name_to_write("format = 2\n", "Name"), Some("Name"));
+        assert_eq!(school_name_to_write("format = 3\n", "Name"), Some("Name"));
+        // A name the checks refuse is not written.
+        assert_eq!(school_name_to_write("format = 3\n", ""), None);
     }
 }

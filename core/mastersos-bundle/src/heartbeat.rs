@@ -1,21 +1,25 @@
-//! 签名心跳（Ruling 11、C3）：对「最新版仍是第 version 版、内容摘要是 X，在 not_after 之前都算数」
-//! 的签名。机器靠它分辨「真的没有新设置」和「有人扣住了更新」。
+//! The signed heartbeat (Rulings 11, C3): a signature over "the latest version is still version
+//! `version`, its content digest is X, and this holds until `not_after`". Machines use it to tell
+//! "there really are no new settings" from "someone is holding back an update".
 //!
-//! 消息：`b"mastersos-heartbeat-v1\n" || version(u64 大端) || 摘要(32 字节) || issued_at(i64 大端)
-//! || not_after(i64 大端)`，时间都是 Unix 秒。前缀与设置包（`mastersos-bundle-v1\n`）、登记探针
-//! （`mastersos-keyprobe-v1\n`）在第 8 个字节就不同，且都以唯一的 `\n` 结尾，谁也不是谁的前缀：
-//! 一种用途的签名顶替不了另一种。
+//! Message: `b"mastersos-heartbeat-v1\n" || version (u64 big-endian) || digest (32 bytes) ||
+//! issued_at (i64 big-endian) || not_after (i64 big-endian)`, times in Unix seconds. The prefix
+//! differs from the settings bundle's (`mastersos-bundle-v1\n`) and the registration probe's
+//! (`mastersos-keyprobe-v1\n`) at the 8th byte, and each ends with its only `\n`, so none is a
+//! prefix of another: a signature for one use cannot stand in for another.
 //!
-//! 有效期写在签名内容里：`not_after <= issued_at` 或长于 [`MAX_HEARTBEAT_DAYS`] 天的心跳
-//! 一律不收。这只看签名内容、不看机器时钟，所以 IT 被骗签下一个 2099 年到期的心跳，也不会让
-//! 被攻破的服务端拿它无限续命。「`issued_at` 不晚于本机时间 1 天」由 agent 自己按时钟判断。
+//! The validity is inside the signed content: a heartbeat with `not_after <= issued_at`, or
+//! longer than [`MAX_HEARTBEAT_DAYS`] days, is refused. This looks only at the signed content,
+//! not at the machine's clock, so even if IT is tricked into signing a heartbeat that ends in
+//! 2099, a compromised server cannot use it to hold back updates forever. "`issued_at` is no
+//! later than 1 day after the local time" is judged by the agent with its own clock.
 //!
-//! 文件格式（TOML，服务端的 `/v1/heartbeat` 原样给）：
+//! File format (TOML, served as is by the heartbeat endpoint of the server's `/api/device/v1/`):
 //!
 //! ```toml
 //! [statement]
 //! version = 3
-//! digest_hex = "…64 位小写十六进制…"
+//! digest_hex = "…64 lowercase hex digits…"
 //! issued_at = 1791000000
 //! not_after = 1793592000
 //!

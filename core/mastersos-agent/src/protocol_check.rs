@@ -51,6 +51,10 @@ pub struct CheckInput {
     pub recovery_key: Option<PathBuf>,
     /// The LUKS UUID escrowed with the recovery key (`--luks-uuid`).
     pub luks_uuid: Option<String>,
+    /// Features left out of the status report's `manifest_features` (`--omit-feature`, a test
+    /// tool: a Device that does not report a feature, for the server's feature gate). Each must
+    /// be one of [`crate::report::SUPPORTED_FEATURES`].
+    pub omit_features: Vec<String>,
 }
 
 /// The report (pinned: the server team consumes `protocol_check`, `ok` and
@@ -183,9 +187,22 @@ struct Device {
 }
 
 /// Runs the steps in order and reports each call. Never panics on a server's answer; a failed
-/// `seed_import` ends the run.
+/// `seed_import` ends the run. An `--omit-feature` name that is not a supported feature ends it
+/// first, as one `status` entry with `bad_input`: nothing is written or sent.
 pub async fn run_check(input: &CheckInput, now: DateTime<Utc>) -> CheckReport {
     let mut calls = Vec::new();
+    // Before anything is written or sent: a name this agent does not report cannot be omitted.
+    if let Some(name) = input
+        .omit_features
+        .iter()
+        .find(|f| !crate::report::SUPPORTED_FEATURES.contains(&f.as_str()))
+    {
+        calls.push(Call::new("status").fail(
+            "bad_input",
+            format!("--omit-feature {name:?}: not a feature this agent reports"),
+        ));
+        return finish(String::new(), None, calls, &[]);
+    }
     let (dev, server_url) = match seed_import(input) {
         Ok((dev, detail)) => {
             calls.push(Call::new("seed_import").detail(detail));
@@ -222,7 +239,7 @@ pub async fn run_check(input: &CheckInput, now: DateTime<Utc>) -> CheckReport {
         calls.push(heartbeat(&f, &dev.seed, latest.as_ref(), now, &take).await);
         latest
     };
-    calls.push(status(&f, &dev, latest.as_ref(), lab, &take).await);
+    calls.push(status(&f, &dev, latest.as_ref(), &input.omit_features, lab, &take).await);
     calls.push(escrow(&f, input, &dev, latest.as_ref(), lab, &take, &mut secrets).await);
     renewal(&f, &dev, lab, &take, &mut calls, &mut secrets).await;
     finish(
@@ -583,11 +600,13 @@ async fn heartbeat(
     c.detail(format!("verified; not_after {not_after}"))
 }
 
-/// Step 4: a status report sent with the device credential.
+/// Step 4: a status report sent with the device credential; `manifest_features` lists every
+/// supported feature but `omit`.
 async fn status(
     f: &Fetcher,
     dev: &Device,
     latest: Option<&Bundle>,
+    omit: &[String],
     lab: bool,
     take: &impl Fn() -> Option<Exchange>,
 ) -> Call {
@@ -629,6 +648,7 @@ async fn status(
         imported_from_seed_at: None,
         manifest_features: crate::report::SUPPORTED_FEATURES
             .iter()
+            .filter(|f| !omit.iter().any(|o| o == *f))
             .map(|f| (*f).to_owned())
             .collect(),
         os_pending_version: None,
