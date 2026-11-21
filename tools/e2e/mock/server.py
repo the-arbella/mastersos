@@ -6,15 +6,22 @@ it on the remote build runner (tools/e2e/mock/run.sh) so the driving script can 
 real `mastersos` and `mastersos-agent` binaries. Python 3.11 or later, standard library only;
 run it with `python3 -I`.
 
-    python3 -I tools/e2e/mock/server.py [--ready-file PATH] [--school-id UUID]
+    python3 -I tools/e2e/mock/server.py [--ready-file PATH] [--school-id UUID] [--second-school-id UUID]
     python3 -I tools/e2e/mock/server.py --self-test VECTOR_DIR
 
 It serves two origins on 127.0.0.1 (random free ports) and prints one JSON ready line on stdout:
-{"server_url","school_id","control_url","arbella_stub"} (also written to --ready-file).
+{"server_url","school_id","second_school_id","control_url","arbella_stub"} (also written to
+--ready-file).
 
-- The server: `/api/cli/v1/` (auth-config, schools, and the school's mastersos routes) and
+Two schools, each with its own admin: a token belongs to the first admin, or to the second with
+`?admin=second` on the control endpoint's `/token`. Neither administers the other's school
+(`403 forbidden`); `GET schools` lists only the admin's own. Device routes pick the school from
+the fetch token. `fetch-token/rotate` and `drop-retired` act on the first school only.
+
+- The server: `/api/cli/v1/` (auth-config, schools, and the school's mastersos routes, with
+  `DELETE devices/{id}/escrow-secret`) and
   `/api/device/v1/` (bundle, heartbeat, status, escrow, fetch-token, the reserved routes).
-- The control endpoint: `POST /token` (`{"step_up":true}` for a fresh sign-in; answers
+- The control endpoint: `POST /token[?admin=second]` (`{"step_up":true}` for a fresh sign-in; answers
   `{"fleet_url","access_token","expires_at"}`, what the stub `arbella` prints),
   `POST /fetch-token/rotate`, `POST /fetch-token/drop-retired`, `GET /healthz`.
 
@@ -65,7 +72,8 @@ except ImportError:  # pragma: no cover - checked at start
     tomllib = None
 
 DEFAULT_SCHOOL = "0192f3a4-5b6c-7d8e-9f00-112233445566"
-SCHOOL_NAME = "E2E School"
+DEFAULT_SECOND_SCHOOL = "0192f3a4-5b6c-7d8e-9f00-665544332211"
+SCHOOL_NAMES = ("E2E School", "E2E Second School")
 STEP_UP_MAX_AGE = 300
 TOKEN_LIFE = 3600
 PROBE_LIFE = 300
@@ -408,13 +416,36 @@ def now():
     return time.time()
 
 
-class State:
-    def __init__(self, school_id, server_url):
+class Mock:
+    """The whole mock: the access tokens and the schools. Each token belongs to one admin, who
+    administers exactly one school (the first or the second); neither administers the other."""
+
+    def __init__(self, school_ids, server_url):
         self.lock = threading.Lock()
-        self.school = school_id
         self.server_url = server_url
+        self.tokens = {}  # access token -> {"auth_time", "expires", "school"}
+        self.schools = {sid: School(sid, name, self) for sid, name in zip(school_ids, SCHOOL_NAMES)}
+        self.first = school_ids[0]
+
+    def by_fetch_token(self, tok):
+        """(school, stale) of a fetch token among every school's current and retired tokens."""
+        for sc in self.schools.values():
+            if hmac.compare_digest(tok, sc.fetch_current):
+                return sc, False
+        for sc in self.schools.values():
+            if any(hmac.compare_digest(tok, r) for r in sc.fetch_retired):
+                return sc, True
+        return None, False
+
+
+class School:
+    """One school's state. Its attribute names are what the request handlers use as `st`."""
+
+    def __init__(self, school_id, name, mock):
+        self.mock = mock
+        self.school = school_id
+        self.name = name
         self.hmac_key = secrets.token_bytes(32)
-        self.tokens = {}  # access token -> {"auth_time", "expires"}
         self.probes = {}  # nonce_b64 -> expiry
         self.keys = {}  # key id -> dict
         self.recipients = {}  # recipient -> dict
@@ -429,6 +460,10 @@ class State:
         self.cutoff = None
 
     # -- helpers --
+    @property
+    def server_url(self):
+        return self.mock.server_url
+
     def latest(self):
         return self.versions[-1] if self.versions else None
 
@@ -543,24 +578,30 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- routing --
     def route(self, method):
-        st = self.server.state
+        mock = self.server.state
         parts = urlsplit(self.path)
         path = parts.path
         query = parse_qs(parts.query, keep_blank_values=True)
-        with st.lock:
+        with mock.lock:
             if self.server.role == "control":
-                return self.control(st, method, path)
+                return self.control(mock, method, path, query)
             if path.startswith("/api/device/v1/"):
-                return self.device(st, method, path[len("/api/device/v1/") :], query)
+                return self.device(mock, method, path[len("/api/device/v1/") :], query)
             if path.startswith("/api/cli/v1/"):
-                return self.cli(st, method, path[len("/api/cli/v1/") :])
+                return self.cli(mock, method, path[len("/api/cli/v1/") :])
             raise Refuse(404, "not_found", "no such route")
 
     # ---- control ----
-    def control(self, st, method, path):
+    def control(self, mock, method, path, query):
+        # fetch-token/rotate and drop-retired act on the first school only (as the real harness).
+        st = mock.schools[mock.first]
         if method == "GET" and path == "/healthz":
             return answer_json(200, {"ok": True})
         if method == "POST" and path == "/token":
+            admin = query.get("admin", ["first"])
+            if admin not in (["first"], ["second"]) or (admin == ["second"] and len(mock.schools) < 2):
+                raise invalid("admin is first or second")
+            school = list(mock.schools)[0 if admin == ["first"] else 1]
             body = self.read_body(4096)
             step_up = False
             if body.strip():
@@ -572,9 +613,10 @@ class Handler(BaseHTTPRequestHandler):
                 step_up = obj.get("step_up") is True
             token = b64url(secrets.token_bytes(32))
             t = now()
-            st.tokens[token] = {
+            mock.tokens[token] = {
                 "auth_time": t if step_up else t - 3 * 3600,
                 "expires": t + TOKEN_LIFE,
+                "school": school,
             }
             return answer_json(200, {"fleet_url": st.server_url, "access_token": token, "expires_at": rfc3339(t + TOKEN_LIFE)})
         if method == "POST" and path == "/fetch-token/rotate":
@@ -592,11 +634,11 @@ class Handler(BaseHTTPRequestHandler):
         raise Refuse(404, "not_found", "no such control route")
 
     # ---- CLI API ----
-    def bearer(self, st):
+    def bearer(self, mock):
         h = self.headers.get("Authorization", "")
         if not h.startswith("Bearer "):
             raise Refuse(401, "unauthenticated", "no bearer token")
-        tok = st.tokens.get(h[len("Bearer ") :])
+        tok = mock.tokens.get(h[len("Bearer ") :])
         if tok is None or tok["expires"] < now():
             raise Refuse(401, "unauthenticated", "unknown or expired token")
         return tok
@@ -613,7 +655,7 @@ class Handler(BaseHTTPRequestHandler):
                 },
             )
 
-    def cli(self, st, method, rest):
+    def cli(self, mock, method, rest):
         if rest == "auth-config" and method == "GET":
             return answer_json(
                 200,
@@ -625,12 +667,16 @@ class Handler(BaseHTTPRequestHandler):
                     "step_up_acr": "",
                 },
             )
-        tok = self.bearer(st)
+        tok = self.bearer(mock)
         if rest == "schools" and method == "GET":
-            return answer_json(200, [{"id": st.school, "name": SCHOOL_NAME, "time_zone": "Asia/Bangkok"}])
+            own = mock.schools[tok["school"]]
+            return answer_json(200, [{"id": own.school, "name": own.name, "time_zone": "Asia/Bangkok"}])
         m = re.fullmatch(r"schools/([^/]+)/mastersos/(.*)", rest)
-        if not m or m.group(1) != st.school:
+        if not m or m.group(1) not in mock.schools:
             raise Refuse(404, "not_found", "no such school or route")
+        if m.group(1) != tok["school"]:
+            raise Refuse(403, "forbidden", "you do not administer this school")
+        st = mock.schools[m.group(1)]
         r = m.group(2)
         segs = [unquote(s) for s in r.split("/")]
 
@@ -713,6 +759,16 @@ class Handler(BaseHTTPRequestHandler):
                     }
                 )
             return answer_json(200, out)
+        if len(segs) == 3 and segs[0] == "devices" and segs[2] == "escrow-secret" and method == "DELETE":
+            # Section 4.8: clears the secret; the next request registers again (3.1); the
+            # recovery-key rows stay (5.6).
+            need_step_up()
+            d = st.devices.get(segs[1])
+            if d is None:
+                raise Refuse(404, "not_found", "no such device")
+            d["secret"] = None
+            d["registered_at"] = None
+            return empty()
         if r == "seed" and method == "POST":
             need_step_up()
             self.read_body(4096)
@@ -928,11 +984,6 @@ class Handler(BaseHTTPRequestHandler):
         manifest, files, sig = read_archive(data)
         if content_digest(manifest, files).hex() != p["digest_hex"]:
             raise Refuse(422, "digest_mismatch", "the archive's content digest is not the uploaded one")
-        diff = frame_differences(p["frame"], manifest)
-        if diff:
-            # Not a protocol refusal: a bug in the command line. run.sh fails on this log line.
-            sys.stderr.write(f"[mock] INTERNAL ERROR frame differs from the signed manifest.toml: {', '.join(diff)}\n")
-            raise Refuse(500, "internal", "the frame differs from the signed manifest.toml (mock check)")
         frame = p["frame"]
         if st.latest_no() != frame["version"] - 1:
             raise Refuse(409, "version_conflict", "another version was published meanwhile", details={"latest_version": st.latest_no()})
@@ -943,6 +994,13 @@ class Handler(BaseHTTPRequestHandler):
             raise Refuse(422, "signature_invalid", "the signer is not in the latest trust")
         if signer not in {t["id"] for t in frame["trust"]}:
             raise Refuse(422, "trust_rule", "the signer is not in the new trust")
+        # After the signer checks: an archive signed by a key outside the latest trust is refused
+        # as the server refuses it, whatever its manifest says.
+        diff = frame_differences(frame, manifest)
+        if diff:
+            # Not a protocol refusal: a bug in the command line. run.sh fails on this log line.
+            sys.stderr.write(f"[mock] INTERNAL ERROR frame differs from the signed manifest.toml: {', '.join(diff)}\n")
+            raise Refuse(500, "internal", "the frame differs from the signed manifest.toml (mock check)")
         refusal, _ = self.gate(st, frame)
         if refusal:
             raise refusal
@@ -1012,17 +1070,19 @@ class Handler(BaseHTTPRequestHandler):
         }
 
     # ---- Device API ----
-    def fetch_token(self, st):
+    def fetch_token(self, mock):
+        """The school of the request's fetch token (device routes pick the school from the
+        credential) and whether the token is retired."""
         h = self.headers.get("Authorization", "")
         tok = h[len("Bearer ") :] if h.startswith("Bearer ") else None
         if tok is None or not is_fetch_token(tok):
             raise Refuse(401, "unauthorized", "no valid fetch token")
-        if hmac.compare_digest(tok, st.fetch_current):
-            return False
-        if any(hmac.compare_digest(tok, r) for r in st.fetch_retired):
+        st, stale = mock.by_fetch_token(tok)
+        if st is None:
+            raise Refuse(401, "unauthorized", "unknown fetch token")
+        if stale:
             self.extra_headers["X-Mastersos-Fetch-Token"] = "stale"
-            return True
-        raise Refuse(401, "unauthorized", "unknown fetch token")
+        return st, stale
 
     def register_or_verify(self, st, device_id, secret):
         """Section 3.1: the first request with a secret registers it; later ones must match.
@@ -1037,8 +1097,8 @@ class Handler(BaseHTTPRequestHandler):
             raise Refuse(403, "secret_mismatch", "the device secret does not match")
         return False
 
-    def device(self, st, method, rest, query):
-        stale = self.fetch_token(st)
+    def device(self, mock, method, rest, query):
+        st, stale = self.fetch_token(mock)
         for m, rx in RESERVED:
             if method == m and rx.fullmatch(rest):
                 raise Refuse(404, "not_available", "not offered by this server yet")
@@ -1310,21 +1370,29 @@ def main(argv):
     args = argv[1:]
     ready_file = None
     school = DEFAULT_SCHOOL
+    second = DEFAULT_SECOND_SCHOOL
     while args:
         a = args.pop(0)
         if a == "--self-test" and args:
             return self_test(args.pop(0))
         if a == "--ready-file" and args:
             ready_file = args.pop(0)
-        elif a == "--school-id" and args:
-            school = args.pop(0)
-            if not UUID_RE.match(school):
-                sys.stderr.write("--school-id must be a lowercase UUID\n")
+        elif a in ("--school-id", "--second-school-id") and args:
+            v = args.pop(0)
+            if not UUID_RE.match(v):
+                sys.stderr.write(f"{a} must be a lowercase UUID\n")
                 return 2
+            if a == "--school-id":
+                school = v
+            else:
+                second = v
         else:
             sys.stderr.write(__doc__)
             return 2
-    state = State(school, "")
+    if school == second:
+        sys.stderr.write("--school-id and --second-school-id must differ\n")
+        return 2
+    state = Mock([school, second], "")
     api = Server("server", state)
     control = Server("control", state)
     state.server_url = f"http://127.0.0.1:{api.server_address[1]}"
@@ -1333,6 +1401,7 @@ def main(argv):
     ready = {
         "server_url": state.server_url,
         "school_id": school,
+        "second_school_id": second,
         "control_url": f"http://127.0.0.1:{control.server_address[1]}",
         "arbella_stub": os.path.dirname(os.path.realpath(__file__)),
     }

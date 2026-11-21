@@ -5,6 +5,7 @@
 #   arbella auth token --json [--step-up]
 #     POST $FLEET_E2E_CONTROL/token ({"step_up":true} for --step-up) and print its answer,
 #     {"fleet_url","access_token","expires_at"}, on stdout; exit 0.
+#   FLEET_E2E_ADMIN=second: signed in as the second school's admin (POST $FLEET_E2E_CONTROL/token?admin=second).
 #   FLEET_E2E_SIGNED_OUT=1: exit 3 with {"error":{"code":"not_signed_in",...}} on stdout.
 #   Anything else: exit 2 (usage) with a message on stderr.
 set -euo pipefail
@@ -34,7 +35,16 @@ fi
 	echo "arbella (stub): FLEET_E2E_CONTROL is not set" >&2
 	exit 1
 }
+query=""
+case ${FLEET_E2E_ADMIN:-} in
+"") ;;
+second) query="?admin=second" ;;
+*)
+	echo "arbella (stub): FLEET_E2E_ADMIN must be unset or \"second\"" >&2
+	exit 2
+	;;
+esac
 body='{}'
 [[ $step_up == 1 ]] && body='{"step_up":true}'
 exec curl -fsS --max-time 30 -X POST -H 'Content-Type: application/json' --data "$body" \
-	"${FLEET_E2E_CONTROL%/}/token"
+	"${FLEET_E2E_CONTROL%/}/token$query"
