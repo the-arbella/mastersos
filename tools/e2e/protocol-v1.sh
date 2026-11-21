@@ -5,7 +5,7 @@
 #
 # Usage:
 #   tools/e2e/protocol-v1.sh --server-url URL --school-id UUID --arbella-stub DIR \
-#       --control-url URL --bin-dir DIR --work-dir DIR
+#       --control-url URL --bin-dir DIR --work-dir DIR [--second-school-id UUID]
 #   tools/e2e/protocol-v1.sh --dry-run      the step names, one per line on stdout; exit 0
 #   tools/e2e/protocol-v1.sh --self-test    tests of the JSON helpers; a summary on stdout
 #   tools/e2e/protocol-v1.sh --help
@@ -17,15 +17,20 @@
 #   --bin-dir       holds `mastersos` and `mastersos-agent` (Linux x86_64 builds)
 #   --work-dir      absent or empty; everything is written under it (HOME, XDG_*, TMPDIR, pin
 #                   folders, school keys, settings folders, seeds, logs/)
+#   --second-school-id  optional: the harness's second school, a lowercase UUID administered only
+#                   by the second admin (the stub signs in as that admin when FLEET_E2E_ADMIN=second
+#                   is in its environment). Without it the cross_school_* steps are reported
+#                   "skipped":true and ok:true.
 #
 # Dependencies: bash, coreutils, grep, sed, awk and curl. No jq, python or node.
 #
 # Output: stdout holds exactly one JSON value, the summary:
 #   {"ok":true|false,"server_url":"...","school_id":"...",
-#    "steps":[{"name":"...","ok":true|false,"detail":"..."}, ...]}
+#    "steps":[{"name":"...","ok":true|false,"detail":"..."[,"skipped":true]}, ...]}
 # Progress goes to stderr; each command's stdout, stderr and flattened JSON go to
 # <work-dir>/logs/. A step whose dependency failed is reported ok:false with
-# "skipped: <dependency> failed"; independent steps still run.
+# "skipped: <dependency> failed"; independent steps still run. A step that does not apply to
+# this run (a second school was not given) is reported ok:true with "skipped":true.
 #
 # Exit codes: 0 every step ok; 1 a step failed (or a dependency is missing); 2 usage error
 # (message on stderr, nothing on stdout).
@@ -63,12 +68,18 @@ STEPS=(
 	fail_feature_gate:publish_v3_new_key
 	fail_step_up_required:preflight
 	fail_signed_out:preflight
+	server_refuses_untrusted_signature:publish_v3_new_key
+	server_refuses_stale_base:publish_v3_new_key
+	cross_school_cli_refused:preflight
+	cross_school_device_isolated:publish_v3_new_key
+	escrow_secret_reset:publish_v3_new_key
 	containment:
 )
 
 # What the script writes directly under the work dir (the containment check looks for these in the
 # caller's directory).
-OUR_NAMES="a b c d e home tmp logs keys seed.toml seed2.toml recovery.key dev1 dev2 pins-a pins-b"
+OUR_NAMES="a b c d e s2 home tmp logs keys api seed.toml seed2.toml seed3.toml seed-iso.toml seed-s2.toml
+recovery.key recovery3.key dev1 dev2 dev3 dev3b dev-s2 pins-a pins-b pins-s2"
 
 # A public Ed25519 key that is registered nowhere: RFC 8032 section 7.1, test 1. The command line
 # cannot show a school key file's public key without registering it (`key add` and `init` refuse
@@ -80,6 +91,7 @@ UNREG_KEY_ID=rk-21fe31df
 usage() {
 	cat <<'EOF'
 Usage: protocol-v1.sh --server-url URL --school-id UUID --arbella-stub DIR --control-url URL --bin-dir DIR --work-dir DIR
+                      [--second-school-id UUID]
        protocol-v1.sh --dry-run | --self-test | --help
 
 Drives the mastersos command line and mastersos-agent protocol-check against a running protocol v1
@@ -284,13 +296,19 @@ calls_line() {
 S_NAME=()
 S_OK=()
 S_DETAIL=()
+S_SKIP=()
 DETAIL=""
+SKIPPED=0
 
+# record NAME OK DETAIL [skipped]
 record() {
 	S_NAME+=("$1")
 	S_OK+=("$2")
 	S_DETAIL+=("$3")
-	if [[ $2 == true ]]; then log "ok   $1: $3"; else log "FAIL $1: $3"; fi
+	S_SKIP+=("${4:-}")
+	if [[ -n ${4:-} ]]; then
+		log "skip $1: $3"
+	elif [[ $2 == true ]]; then log "ok   $1: $3"; else log "FAIL $1: $3"; fi
 }
 
 ok_of() {
@@ -305,7 +323,8 @@ ok_of() {
 }
 
 # run_step NAME [DEPENDENCY...] -- FUNCTION: runs FUNCTION unless a dependency failed; FUNCTION
-# returns 0 or 1 and leaves its detail in DETAIL.
+# returns 0 or 1 and leaves its detail in DETAIL. A FUNCTION that sets SKIPPED=1 and returns 0
+# did not apply to this run: ok:true with "skipped":true.
 run_step() {
 	local name=$1 d
 	shift
@@ -323,9 +342,14 @@ run_step() {
 	done
 	log "---- $name"
 	DETAIL=""
+	SKIPPED=0
 	# fd 3 is the summary's: closed for the step and everything it runs.
 	if "$@" 3>&-; then
-		record "$name" true "$DETAIL"
+		if [[ $SKIPPED == 1 ]]; then
+			record "$name" true "$DETAIL" skipped
+		else
+			record "$name" true "$DETAIL"
+		fi
 	else
 		record "$name" false "${DETAIL:-failed}"
 	fi
@@ -350,7 +374,9 @@ print_summary() {
 		json_escape "${S_NAME[$i]}"
 		out+="$sep{\"name\":\"$REPLY\",\"ok\":$ok"
 		json_escape "$detail"
-		out+=",\"detail\":\"$REPLY\"}"
+		out+=",\"detail\":\"$REPLY\""
+		[[ -z ${S_SKIP[$i]:-} ]] || out+=",\"skipped\":true"
+		out+="}"
 		sep=","
 	done
 	out+="]}"
@@ -376,15 +402,15 @@ next_log() {
 	LOG=$(printf '%s/%02d-%s' "$LOGS" "$N_LOG" "$1")
 }
 
-# ms [-C DIR] LABEL PIN_DIR [VAR=VALUE...] -- ARGS...: one `mastersos` call with the fixed global
-# options, run in DIR (default: the work dir, which is not a settings folder), stdin from
-# /dev/null. Sets RC and LOG (LOG.out, LOG.err, LOG.flat).
+# ms [-C DIR] [-S SCHOOL] LABEL PIN_DIR [VAR=VALUE...] -- ARGS...: one `mastersos` call with the
+# fixed global options, run in DIR (default: the work dir, which is not a settings folder), for
+# SCHOOL (default: --school-id), stdin from /dev/null. Sets RC and LOG (LOG.out, LOG.err, LOG.flat).
 ms() {
-	local cwd=$W
-	if [[ $1 == -C ]]; then
-		cwd=$2
+	local cwd=$W school=$SCHOOL
+	while [[ $1 == -C || $1 == -S ]]; do
+		if [[ $1 == -C ]]; then cwd=$2; else school=$2; fi
 		shift 2
-	fi
+	done
 	local label=$1 pins=$2
 	shift 2
 	local envs=()
@@ -394,9 +420,9 @@ ms() {
 	done
 	shift
 	next_log "$label"
-	log "mastersos $* (pins ${pins##*/}, in ${cwd#"$W"/})"
+	log "mastersos $* (pins ${pins##*/}, in ${cwd#"$W"/}${envs[*]:+, ${envs[*]}})"
 	(cd "$cwd" && exec env ${envs[@]+"${envs[@]}"} "$BIN/mastersos" --json --yes \
-		--server "$SERVER" --school "$SCHOOL" --pin-dir "$pins" "$@") \
+		--server "$SERVER" --school "$school" --pin-dir "$pins" "$@") \
 		>"$LOG.out" 2>"$LOG.err" </dev/null && RC=0 || RC=$?
 	json_flat <"$LOG.out" >"$LOG.flat" 2>/dev/null || true
 }
@@ -513,7 +539,7 @@ listing() {
 
 s_preflight() {
 	local missing=() c
-	for c in awk sed grep curl od tr head stat cksum env ls mkdir chmod mv cat; do
+	for c in awk sed grep curl od tr head stat cksum env ls mkdir chmod mv cat cp base64 date; do
 		command -v "$c" >/dev/null 2>&1 || missing+=("$c")
 	done
 	if [[ ${#missing[@]} -gt 0 ]]; then
@@ -547,7 +573,7 @@ s_preflight() {
 		DETAIL="GET $CONTROL/healthz failed"
 		return 1
 	fi
-	DETAIL="$v1; $v2; control endpoint healthy; work dir $W"
+	DETAIL="$v1; $v2; control endpoint healthy; work dir $W; second school ${SECOND:-not given}"
 }
 
 KCODE=()
@@ -989,6 +1015,535 @@ s_containment() {
 	DETAIL="HOME, XDG_* and TMPDIR were under the work dir; the caller's ~/.config/mastersos unchanged; $pwd_note (best effort)"
 }
 
+# ---- The CLI and device APIs with curl, past the command line's local checks ----
+
+# The tokens and fetch tokens below stay in these functions: never printed, logged or written to
+# a file, and tracing is off while one is in scope (`quiet`). Device secrets and recovery keys
+# made here are written to their files through `quiet` too.
+quiet() {
+	local traced=0 rc=0
+	if [[ $- == *x* ]]; then traced=1; fi
+	set +x
+	"$@" || rc=$?
+	if [[ $traced == 1 ]]; then set -x; fi
+	return "$rc"
+}
+
+# write_private FILE TEXT: TEXT and a newline into FILE, mode 0600 (run through quiet: TEXT is a
+# secret).
+write_private() {
+	(umask 077 && printf '%s\n' "$2" >"$1") && chmod 600 "$1"
+}
+
+# new_identity FILE DEVICE_ID: an identity.json for DEVICE_ID with a new device secret, as the
+# agent makes one (32 random bytes, URL-safe base64 without padding), mode 0600. Run through
+# quiet: the secret exists only inside this function.
+new_identity() {
+	local secret
+	secret=$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n') || return 1
+	[[ $secret =~ ^[A-Za-z0-9_-]{43}$ ]] || return 1
+	write_private "$1" "{\"device_id\":\"$2\",\"escrow_secret\":\"$secret\"}"
+}
+
+# cli_path SCHOOL REST: the path of a CLI API route of SCHOOL.
+cli_path() {
+	REPLY="/api/cli/v1/schools/$1/mastersos/$2"
+}
+
+# api LABEL WHO METHOD PATH [BODY_FILE [CONTENT_TYPE]]: one CLI API request with a token from the
+# stub `arbella`. WHO: first or second (the admin; second runs the stub with FLEET_E2E_ADMIN=second),
+# with `+` for a step-up token (first+, second+). Sets HTTP (the status, or `(none)`) and LOG
+# (LOG.out holds the body as received, LOG.flat its flattened JSON when it is JSON).
+api() {
+	next_log "$1"
+	quiet api_send "$@"
+}
+
+api_send() {
+	local who=$2 method=$3 path=$4 body=${5:-} ctype=${6:-application/json} out tok
+	local envs=() args=(auth token --json)
+	[[ $who == second* ]] && envs+=(FLEET_E2E_ADMIN=second)
+	[[ $who == *+ ]] && args+=(--step-up)
+	local how=""
+	[[ $who == *+ ]] && how=" (step-up)"
+	log "curl $method $path as the ${who%+} admin$how"
+	HTTP="(none)"
+	: >"$LOG.out"
+	: >"$LOG.flat"
+	out=$(env ${envs[@]+"${envs[@]}"} arbella "${args[@]}" 2>>"$LOG.err") || {
+		log "arbella auth token failed (log ${LOG##*/})"
+		return 0
+	}
+	tok=$(printf '%s' "$out" | json_flat | awk -F'\t' '$1 == "access_token" && $2 == "s" { print $3; exit }')
+	out=""
+	if [[ -z $tok || ! $tok =~ ^[A-Za-z0-9._~+/=-]+$ ]]; then
+		log "arbella auth token gave no usable access_token"
+		return 0
+	fi
+	local data=()
+	if [[ -n $body ]]; then data=(-H "Content-Type: $ctype" --data-binary "@$body"); fi
+	HTTP=$(printf 'header = "Authorization: Bearer %s"\n' "$tok" |
+		curl -sS --max-time 60 -o "$LOG.out" -w '%{http_code}' -X "$method" ${data[@]+"${data[@]}"} \
+			--config - "$SERVER$path" 2>>"$LOG.err") || HTTP="(none)"
+	tok=""
+	json_flat <"$LOG.out" >"$LOG.flat" 2>/dev/null || : >"$LOG.flat"
+}
+
+# dev_get LABEL SEED PATH: GET a device API route (PATH after /api/device/v1/) with the fetch
+# token of the seed file SEED. Sets HTTP and LOG as api does (LOG.out: the body as received).
+dev_get() {
+	next_log "$1"
+	quiet dev_send "$@"
+}
+
+dev_send() {
+	local tok
+	HTTP="(none)"
+	: >"$LOG.out"
+	tok=$(awk '/^fetch_token[ \t]*=/ { sub(/^[^=]*=[ \t]*"/, ""); sub(/"[ \t]*$/, ""); print; exit }' "$2" 2>/dev/null) || tok=""
+	if [[ -z $tok || ! $tok =~ ^[!-~]+$ || $tok == *'"'* || $tok == *\\* ]]; then
+		log "no usable fetch_token in $2"
+		return 0
+	fi
+	log "curl GET /api/device/v1/$3 with the fetch token of ${2##*/}"
+	HTTP=$(printf 'header = "Authorization: Bearer %s"\n' "$tok" |
+		curl -sS --max-time 60 -o "$LOG.out" -w '%{http_code}' --config - "$SERVER/api/device/v1/$3" 2>>"$LOG.err") || HTTP="(none)"
+	tok=""
+}
+
+# The error code of the last api call in REPLY (`(none)` when it has none).
+api_code() {
+	fget "$LOG.flat" error.code && [[ -n $REPLY ]] || REPLY="(none)"
+}
+
+# versions_of FLAT KEY_ID: from a `GET versions` answer, the latest version in V_LATEST and its
+# digest in V_LATEST_DIGEST; the newest version signed by KEY_ID in V_BY and its digest in
+# V_BY_DIGEST (empty when it signed none).
+versions_of() {
+	local line
+	line=$(awk -F'\t' -v who="$2" '
+		{ n = split($1, a, "."); if (n == 2) v[a[1], a[2]] = $3; if (n == 2 && a[1] + 1 > m) m = a[1] + 1 }
+		END {
+			for (i = 0; i < m; i++) {
+				x = v[i, "version"] + 0
+				if (x > lat) { lat = x; latd = v[i, "digest_hex"] }
+				if (v[i, "signed_by"] == who && x > by) { by = x; byd = v[i, "digest_hex"] }
+			}
+			printf "%d %s %d %s\n", lat, (latd == "" ? "-" : latd), by, (byd == "" ? "-" : byd)
+		}' "$1") || return 1
+	read -r V_LATEST V_LATEST_DIGEST V_BY V_BY_DIGEST <<<"$line"
+	[[ $V_LATEST_DIGEST != - ]] || V_LATEST_DIGEST=""
+	[[ $V_BY_DIGEST != - ]] || V_BY_DIGEST=""
+	[[ $V_BY != 0 ]] || V_BY=""
+}
+
+# frame_json VERSION OUT [KEY_ID]: a pending upload's body for the first school, {frame, digest_hex},
+# with the frame of the server's latest trust (plus the registered key KEY_ID) and escrow
+# recipients (from GET keys and GET escrow-recipients) at VERSION, issued now, using nothing new (features_used empty), and
+# digest_hex $FRAME_DIGEST. The command line computes the frame from the text it signs; here it
+# is built by hand so the server, not the command line, decides.
+frame_json() {
+	local trust recipients format
+	cli_path "$SCHOOL" keys
+	api frame-keys first GET "$REPLY"
+	if [[ $HTTP != 200 ]]; then
+		DETAIL="GET keys: HTTP $HTTP (log ${LOG##*/})"
+		return 1
+	fi
+	trust=$(awk -F'\t' -v extra="${3:-}" '
+		{ n = split($1, a, "."); if (n == 2) { v[a[1], a[2]] = $3; if (a[1] + 1 > m) m = a[1] + 1 } }
+		END {
+			for (i = 0; i < m; i++) if (v[i, "in_latest_trust"] == "true" || (extra != "" && v[i, "key_id"] == extra)) {
+				printf "%s{\"id\":\"%s\",\"alg\":\"%s\",\"public_key\":\"%s\"}", sep, v[i, "key_id"], v[i, "alg"], v[i, "public_key"]
+				sep = ","
+			}
+		}' "$LOG.flat")
+	local trust_re='^[][{}":,A-Za-z0-9+/=_-]+$' rec_re='^[",a-z0-9]*$'
+	if [[ -z $trust || ! $trust =~ $trust_re ]]; then
+		DETAIL="GET keys: no usable key in the latest trust (log ${LOG##*/})"
+		return 1
+	fi
+	cli_path "$SCHOOL" escrow-recipients
+	api frame-recipients first GET "$REPLY"
+	if [[ $HTTP != 200 ]]; then
+		DETAIL="GET escrow-recipients: HTTP $HTTP (log ${LOG##*/})"
+		return 1
+	fi
+	recipients=$(awk -F'\t' '
+		{ n = split($1, a, "."); if (n == 2) { v[a[1], a[2]] = $3; if (a[1] + 1 > m) m = a[1] + 1 } }
+		END { for (i = 0; i < m; i++) if (v[i, "in_latest"] == "true") { printf "%s\"%s\"", sep, v[i, "recipient"]; sep = "," } }' "$LOG.flat")
+	if [[ ! $recipients =~ $rec_re ]]; then
+		DETAIL="GET escrow-recipients: an unexpected recipient (log ${LOG##*/})"
+		return 1
+	fi
+	format=$(awk '/^format[ \t]*=[ \t]*[0-9]+[ \t]*$/ { sub(/^[^=]*=[ \t]*/, ""); print $1; exit }' "$W/a/manifest.toml" 2>/dev/null)
+	printf '{"frame":{"format":%s,"version":%s,"issued_at":"%s","school_id":"%s","trust":[%s],"escrow_recipients":[%s],"features_used":[]},"digest_hex":"%s"}\n' \
+		"${format:-1}" "$1" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SCHOOL" "$trust" "$recipients" "$FRAME_DIGEST" >"$2"
+}
+
+# drop_pending ID: delete a pending upload (best effort).
+drop_pending() {
+	cli_path "$SCHOOL" "publish/pending/$1"
+	api drop-pending first DELETE "$REPLY"
+}
+
+# ---- Steps against the server's own checks ----
+
+# A version's archive signed by key 1, which is registered but left the trust at version 3, is
+# committed as the next version: the pending upload names that archive's content digest, and the
+# archive is sent byte for byte as stored. Its signature is a real one of key 1 (nothing here can
+# sign); the command line refuses the same locally (`key_not_trusted`, fail_wrong_key).
+s_server_refuses_untrusted_signature() {
+	cli_path "$SCHOOL" versions
+	api versions first GET "$REPLY"
+	if [[ $HTTP != 200 ]]; then
+		DETAIL="GET versions: HTTP $HTTP (log ${LOG##*/})"
+		return 1
+	fi
+	versions_of "$LOG.flat" "${KID[1]}" || {
+		DETAIL="GET versions: not readable (log ${LOG##*/})"
+		return 1
+	}
+	if [[ -z $V_BY || ! $V_BY_DIGEST =~ ^[0-9a-f]{64}$ ]]; then
+		DETAIL="GET versions: no version signed by k1 (${KID[1]}) with a digest (log ${LOG##*/})"
+		return 1
+	fi
+	local latest=$V_LATEST old=$V_BY archive pid code
+	mkdir -p "$W/api"
+	archive=$W/api/v$old-by-k1.tar.gz
+	cli_path "$SCHOOL" "versions/$old/archive"
+	api "archive-v$old" first GET "$REPLY"
+	if [[ $HTTP != 200 ]] || ! cp "$LOG.out" "$archive"; then
+		DETAIL="GET versions/$old/archive: HTTP $HTTP (log ${LOG##*/})"
+		return 1
+	fi
+	FRAME_DIGEST=$V_BY_DIGEST
+	# The new trust holds k1 too, so the signer passes the new-trust rule (commit step 5) and only
+	# the latest trust (step 4) can refuse it.
+	frame_json $((latest + 1)) "$W/api/untrusted-pending.json" "${KID[1]}" || return 1
+	if ! grep -q "\"${KID[1]}\"" "$W/api/untrusted-pending.json"; then
+		DETAIL="GET keys: k1 (${KID[1]}) is not registered, so the new trust cannot hold it"
+		return 1
+	fi
+	cli_path "$SCHOOL" publish/pending
+	api untrusted-pending first POST "$REPLY" "$W/api/untrusted-pending.json"
+	if [[ $HTTP != 201 ]] || ! fget "$LOG.flat" pending_id || [[ ! $REPLY =~ ^[0-9a-f-]{36}$ ]]; then
+		api_code
+		DETAIL="POST publish/pending (version $((latest + 1)), digest of v$old): expected 201 with a pending_id, got HTTP $HTTP $REPLY (log ${LOG##*/})"
+		return 1
+	fi
+	pid=$REPLY
+	if ! want digest_hex "$V_BY_DIGEST" "POST publish/pending echo"; then
+		drop_pending "$pid"
+		return 1
+	fi
+	cli_path "$SCHOOL" "publish/pending/$pid/commit"
+	api untrusted-commit first POST "$REPLY" "$archive" application/gzip
+	local status=$HTTP commit_log=${LOG##*/}
+	api_code
+	code=$REPLY
+	drop_pending "$pid"
+	cli_path "$SCHOOL" versions
+	api versions-after first GET "$REPLY"
+	versions_of "$LOG.flat" "${KID[1]}" || V_LATEST="?"
+	if [[ $V_LATEST != "$latest" ]]; then
+		DETAIL="commit answered HTTP $status $code, and the latest version is now $V_LATEST, not $latest (log $commit_log)"
+		return 1
+	fi
+	if [[ ! $status =~ ^4[0-9][0-9]$ || $code == "(none)" ]]; then
+		DETAIL="commit of v$old's archive (signed by k1) as version $((latest + 1)): expected a 4xx with an error code, got HTTP $status $code (log $commit_log)"
+		return 1
+	fi
+	case $code in
+	digest_mismatch | archive_invalid | version_conflict | pending_expired | invalid | not_found | too_large | feature_unsupported | unauthenticated | step_up_required | forbidden | too_many | trust_rule)
+		DETAIL="commit refused for another reason than the signer: HTTP $status $code (log $commit_log)"
+		return 1
+		;;
+	esac
+	local note="as protocol 4.4 commit step 4 names it"
+	[[ "$status $code" == "422 signature_invalid" ]] || note="NOTE: protocol 4.4 commit step 4 names 422 signature_invalid"
+	DETAIL="commit of v$old's archive (a real signature of k1, out of the latest trust since v3; the new trust holds k1) as version $((latest + 1)): HTTP $status $code ($note); latest still $latest"
+}
+
+# A pending upload whose version is the latest (a stale base: not latest+1), sent with curl: the
+# command line refuses it locally first (fail_stale_version).
+s_server_refuses_stale_base() {
+	cli_path "$SCHOOL" versions
+	api versions first GET "$REPLY"
+	if [[ $HTTP != 200 ]] || ! versions_of "$LOG.flat" "${KID[2]}" || [[ ! $V_LATEST_DIGEST =~ ^[0-9a-f]{64}$ ]]; then
+		DETAIL="GET versions: HTTP $HTTP, no latest version (log ${LOG##*/})"
+		return 1
+	fi
+	local latest=$V_LATEST
+	FRAME_DIGEST=$V_LATEST_DIGEST
+	mkdir -p "$W/api"
+	frame_json "$latest" "$W/api/stale-pending.json" || return 1
+	cli_path "$SCHOOL" publish/pending
+	api stale-pending first POST "$REPLY" "$W/api/stale-pending.json"
+	api_code
+	local code=$REPLY
+	if [[ $HTTP == 201 ]]; then
+		fget "$LOG.flat" pending_id && drop_pending "$REPLY"
+		DETAIL="POST publish/pending with version $latest (latest $latest): accepted (201), expected 409 version_conflict"
+		return 1
+	fi
+	if [[ $HTTP != 409 || $code != version_conflict ]]; then
+		DETAIL="POST publish/pending with version $latest: expected 409 version_conflict, got HTTP $HTTP $code (log ${LOG##*/})"
+		return 1
+	fi
+	want error.details.latest_version "$latest" "409 version_conflict" n || return 1
+	DETAIL="POST publish/pending with version $latest (latest $latest): HTTP 409 version_conflict, details.latest_version $latest"
+}
+
+# expect_http WANT_STATUS WANT_CODE WHAT: the last api call answered so; DETAIL on failure.
+expect_http() {
+	api_code
+	if [[ $HTTP == "$1" && $REPLY == "$2" ]]; then return 0; fi
+	DETAIL="$3: expected $1 $2, got HTTP $HTTP $REPLY (log ${LOG##*/})"
+	return 1
+}
+
+# Each admin on the other school's routes, with curl (routes without step-up, so the answer is
+# about the school) and with the command line.
+s_cross_school_cli_refused() {
+	if [[ -z $SECOND ]]; then
+		SKIPPED=1
+		DETAIL="no --second-school-id"
+		return 0
+	fi
+	local route who school checked=()
+	for who in first second; do
+		if [[ $who == first ]]; then school=$SECOND; else school=$SCHOOL; fi
+		for route in keys versions; do
+			cli_path "$school" "$route"
+			api "cross-$who-$route" "$who" GET "$REPLY"
+			expect_http 403 forbidden "the $who admin: GET $route of the other school" || return 1
+			checked+=("$who admin GET $route: 403 forbidden")
+		done
+	done
+	ms -S "$SECOND" cross-cli-first "$W/pins-s2" -- key list
+	expect_refusal forbidden || {
+		DETAIL="mastersos key list as the first admin on the second school: $DETAIL"
+		return 1
+	}
+	ms cross-cli-second "$W/pins-a" FLEET_E2E_ADMIN=second -- key list
+	expect_refusal forbidden || {
+		DETAIL="mastersos key list as the second admin on the first school: $DETAIL"
+		return 1
+	}
+	DETAIL="$(
+		IFS=';'
+		printf "%s" "${checked[*]}"
+	); mastersos key list refused with forbidden both ways"
+}
+
+# The second school with its own key and version 1; its seed reaches only its versions, and the
+# first school's fetch token never yields its archive.
+s_cross_school_device_isolated() {
+	if [[ -z $SECOND ]]; then
+		SKIPPED=1
+		DETAIL="no --second-school-id"
+		return 0
+	fi
+	local f k4id k4fp
+	ms -S "$SECOND" key-new-k4 "$W/pins-s2" -- key new --out "$W/keys/k4.kit"
+	[[ $RC -eq 0 ]] || {
+		failed_call "key new k4"
+		return
+	}
+	for f in key_id fingerprint; do
+		if ! fget "$LOG.flat" "$f" || [[ -z $REPLY ]]; then
+			DETAIL="key new k4: no $f in its answer (log ${LOG##*/})"
+			return 1
+		fi
+		if [[ $f == key_id ]]; then k4id=$REPLY; else k4fp=$REPLY; fi
+	done
+	ms -S "$SECOND" key-register-k4 "$W/pins-s2" FLEET_E2E_ADMIN=second -- key register --key-file "$W/keys/k4.kit" --label "e2e second school key"
+	[[ $RC -eq 0 ]] || {
+		failed_call "key register k4 (second admin)"
+		return
+	}
+	ms -S "$SECOND" init-s2 "$W/pins-s2" FLEET_E2E_ADMIN=second -- init "$W/s2" --key-file "$W/keys/k4.kit"
+	[[ $RC -eq 0 ]] || {
+		failed_call "init of the second school"
+		return
+	}
+	ms -S "$SECOND" publish-s2 "$W/pins-s2" FLEET_E2E_ADMIN=second -- publish "$W/s2" --key-file "$W/keys/k4.kit"
+	[[ $RC -eq 0 ]] || {
+		failed_call "publish of the second school"
+		return
+	}
+	want version 1 "publish of the second school" || return 1
+	ms -S "$SECOND" seed-make-s2 "$W/pins-s2" FLEET_E2E_ADMIN=second -- seed make --out "$W/seed-s2.toml"
+	[[ $RC -eq 0 ]] || {
+		failed_call "seed make for the second school"
+		return
+	}
+	want min_version 1 "seed make for the second school" || return 1
+	want trust_fingerprints.0.fingerprint "$k4fp" "seed make for the second school" || return 1
+	absent trust_fingerprints.1 "seed make for the second school (only k4)" || return 1
+	agent protocol-check-s2 protocol-check --seed "$W/seed-s2.toml" --state "$W/dev-s2" --json
+	check_report "protocol-check of a second-school device" || return 1
+	local devs2=$DEVICE
+	if ! { call_get "$LOG.flat" bundle version && [[ $REPLY == 1 ]]; }; then
+		DETAIL="protocol-check of a second-school device: its first bundle is not version 1 (got ${REPLY:-none}): $CALLS (log ${LOG##*/})"
+		return 1
+	fi
+	# The device is listed by its own school only.
+	cli_path "$SECOND" devices
+	api devices-s2 second GET "$REPLY"
+	if [[ $HTTP != 200 ]] || ! fhas "$LOG.flat" '[0-9]+\.device_id' "$devs2"; then
+		DETAIL="GET devices of the second school: HTTP $HTTP, device $devs2 not listed (log ${LOG##*/})"
+		return 1
+	fi
+	cli_path "$SCHOOL" devices
+	api devices-first first GET "$REPLY"
+	if [[ $HTTP != 200 ]] || fhas "$LOG.flat" '[0-9]+\.device_id' "$devs2"; then
+		DETAIL="GET devices of the first school: HTTP $HTTP, or it lists the second school's device $devs2 (log ${LOG##*/})"
+		return 1
+	fi
+	# Archives as published, to compare with what each fetch token gets.
+	mkdir -p "$W/api"
+	cli_path "$SECOND" versions/1/archive
+	api archive-s2-v1 second GET "$REPLY"
+	if [[ $HTTP != 200 ]] || ! cp "$LOG.out" "$W/api/s2-v1.tar.gz"; then
+		DETAIL="GET versions/1/archive of the second school: HTTP $HTTP (log ${LOG##*/})"
+		return 1
+	fi
+	cli_path "$SCHOOL" versions
+	api versions-first first GET "$REPLY"
+	if [[ $HTTP != 200 ]] || ! versions_of "$LOG.flat" "${KID[2]}"; then
+		DETAIL="GET versions of the first school: HTTP $HTTP (log ${LOG##*/})"
+		return 1
+	fi
+	local latest=$V_LATEST
+	cli_path "$SCHOOL" "versions/$latest/archive"
+	api archive-first-latest first GET "$REPLY"
+	if [[ $HTTP != 200 ]] || ! cp "$LOG.out" "$W/api/first-latest.tar.gz"; then
+		DETAIL="GET versions/$latest/archive of the first school: HTTP $HTTP (log ${LOG##*/})"
+		return 1
+	fi
+	local s2sum firstsum
+	s2sum=$(cksum <"$W/api/s2-v1.tar.gz")
+	firstsum=$(cksum <"$W/api/first-latest.tar.gz")
+	# The second school's token: its v1, and nothing after v1 although the first school is at v$latest.
+	dev_get bundle-s2 "$W/seed-s2.toml" bundle
+	if [[ $HTTP != 200 || $(cksum <"$LOG.out") != "$s2sum" ]]; then
+		DETAIL="GET bundle with the second school's fetch token: HTTP $HTTP, not its version 1 archive (log ${LOG##*/})"
+		return 1
+	fi
+	dev_get bundle-s2-after-1 "$W/seed-s2.toml" "bundle?after=1"
+	if [[ $HTTP != 204 ]]; then
+		DETAIL="GET bundle?after=1 with the second school's fetch token: expected 204, got HTTP $HTTP (log ${LOG##*/})"
+		return 1
+	fi
+	# The first school's current fetch token (a new seed: seed.toml's token was dropped).
+	seed_make seed-make-iso "$W/seed-iso.toml" || return 1
+	dev_get bundle-first "$W/seed-iso.toml" bundle
+	if [[ $HTTP != 200 || $(cksum <"$LOG.out") != "$firstsum" ]]; then
+		DETAIL="GET bundle with the first school's fetch token: HTTP $HTTP, not the first school's version $latest archive (log ${LOG##*/})"
+		return 1
+	fi
+	local after
+	for after in 0 1; do
+		dev_get "bundle-first-after-$after" "$W/seed-iso.toml" "bundle?after=$after"
+		if [[ $HTTP != 200 || $(cksum <"$LOG.out") == "$s2sum" ]]; then
+			DETAIL="GET bundle?after=$after with the first school's fetch token: HTTP $HTTP, or the second school's archive (log ${LOG##*/})"
+			return 1
+		fi
+	done
+	DETAIL="second school: k4 ($k4id) registered, init and version 1 by its admin; its seed (trust {k4}) gave device $devs2 version 1 and 204 after 1; listed only by its school; the first school's token gets its own v$latest, and with after=0 and 1 a 200 that is not the second school's archive"
+}
+
+# A device secret reset (protocol 3.1, 4.8, 5.6): before it, another secret for the same device id
+# is refused; the reset needs step-up; after it the next request registers again (here a new
+# secret, sent first), the old secret is then refused, and the recovery-key rows stay.
+s_escrow_secret_reset() {
+	seed_make seed-make-3 "$W/seed3.toml" || return 1
+	gen_recovery_key || {
+		DETAIL="cannot make a recovery key"
+		return 1
+	}
+	local rkey3=$REPLY luks3 dev3
+	if ! quiet write_private "$W/recovery3.key" "$rkey3"; then
+		DETAIL="cannot write $W/recovery3.key"
+		return 1
+	fi
+	gen_uuid || {
+		DETAIL="cannot make a LUKS UUID"
+		return 1
+	}
+	luks3=$REPLY
+	# 1. The device registers its secret (status) and escrows a recovery key.
+	agent protocol-check-dev3 protocol-check --seed "$W/seed3.toml" --state "$W/dev3" --json \
+		--recovery-key "$W/recovery3.key" --luks-uuid "$luks3"
+	check_report "protocol-check of device 3" || return 1
+	dev3=$DEVICE
+	if ! { call_get "$LOG.flat" escrow skipped && [[ $REPLY == false ]]; }; then
+		DETAIL="protocol-check of device 3: the escrow call did not run ($CALLS)"
+		return 1
+	fi
+	# 2. The same device id with another secret (a second DIR holding its identity.json).
+	if ! { mkdir -p "$W/dev3b/seed-partition" && chmod 700 "$W/dev3b" "$W/dev3b/seed-partition" &&
+		quiet new_identity "$W/dev3b/seed-partition/identity.json" "$dev3"; }; then
+		DETAIL="cannot write $W/dev3b/seed-partition/identity.json"
+		return 1
+	fi
+	agent protocol-check-dev3b-before protocol-check --seed "$W/seed3.toml" --state "$W/dev3b" --json
+	if ! { call_get "$LOG.flat" status error_code && [[ $REPLY == secret_mismatch ]] &&
+		call_get "$LOG.flat" status status && [[ $REPLY == 403 ]]; }; then
+		calls_line "$LOG.flat"
+		DETAIL="before the reset, another secret for device $dev3: expected status 403 secret_mismatch, got $REPLY (log ${LOG##*/})"
+		return 1
+	fi
+	# 3. The reset: refused without step-up, then done with it.
+	cli_path "$SCHOOL" "devices/$dev3/escrow-secret"
+	local route=$REPLY
+	api reset-plain first DELETE "$route"
+	expect_http 401 step_up_required "DELETE escrow-secret with a plain token" || return 1
+	api reset-step-up first+ DELETE "$route"
+	local reset_status=$HTTP
+	if [[ ! $HTTP =~ ^2[0-9][0-9]$ ]]; then
+		api_code
+		DETAIL="DELETE escrow-secret with a step-up token: expected 2xx, got HTTP $HTTP $REPLY (log ${LOG##*/})"
+		return 1
+	fi
+	# 4. The next request registers again: the new secret, sent first.
+	agent protocol-check-dev3b-after protocol-check --seed "$W/seed3.toml" --state "$W/dev3b" --json
+	check_report "after the reset, the same device id with a new secret" || return 1
+	if [[ $DEVICE != "$dev3" ]] || ! { call_get "$LOG.flat" status ok && [[ $REPLY == true ]] &&
+		call_get "$LOG.flat" status skipped && [[ $REPLY == false ]]; }; then
+		DETAIL="after the reset, device $dev3 with a new secret: status not sent and accepted ($CALLS)"
+		return 1
+	fi
+	local after=$CALLS
+	# 5. The old secret is refused now.
+	agent protocol-check-dev3-old protocol-check --seed "$W/seed3.toml" --state "$W/dev3" --json
+	if ! { call_get "$LOG.flat" status error_code && [[ $REPLY == secret_mismatch ]] &&
+		call_get "$LOG.flat" status status && [[ $REPLY == 403 ]]; }; then
+		calls_line "$LOG.flat"
+		DETAIL="after the reset and re-registration, the old secret: expected status 403 secret_mismatch, got $REPLY (log ${LOG##*/})"
+		return 1
+	fi
+	# 6. The recovery-key rows stay.
+	ms recovery-read-3 "$W/pins-a" -- recovery read "$dev3" --key-file "$W/keys/k2.kit"
+	local found=1
+	if [[ $RC -eq 0 ]] && fhas "$LOG.flat" '[0-9]+\.recovery_key' "$rkey3"; then found=0; fi
+	if ! redact "$rkey3" "$LOG.out" "$LOG.flat"; then
+		DETAIL="recovery read: removing the recovery key from the logs failed (the logs were emptied)"
+		return 1
+	fi
+	[[ $RC -eq 0 ]] || {
+		failed_call "recovery read after the reset"
+		return
+	}
+	if [[ $found -ne 0 ]]; then
+		DETAIL="after the reset the escrowed recovery key of $dev3 is gone (log ${LOG##*/})"
+		return 1
+	fi
+	DETAIL="device $dev3: another secret refused (403 secret_mismatch); DELETE escrow-secret 401 step_up_required, then $reset_status with step-up; a new secret registered again ($after); the old secret then 403 secret_mismatch; the recovery key still opens with k2"
+}
+
 # ---- Self-test of the helpers ----
 
 ST_N=0
@@ -1114,6 +1669,27 @@ self_test() {
 		DETAIL="fd 3 is closed in a step"
 	}
 	run_step fd3-closed -- fd3_closed
+	# versions_of: the latest version, and the newest one a key signed.
+	tmp=$(mktemp)
+	printf '%s' '[{"version":1,"signed_by":"rk-a","digest_hex":"d1"},{"version":3,"signed_by":"rk-b","digest_hex":"d3"},{"version":2,"signed_by":"rk-a","digest_hex":"d2"}]' | json_flat >"$tmp"
+	versions_of "$tmp" rk-a
+	st versions-of "$V_LATEST $V_LATEST_DIGEST $V_BY $V_BY_DIGEST" '3 d3 2 d2' 'versions_of: latest, and the newest a key signed'
+	versions_of "$tmp" rk-z
+	st versions-of-none "[$V_BY][$V_BY_DIGEST]" '[][]' 'versions_of: a key that signed nothing'
+	rm -f "$tmp"
+	# A step that does not apply is ok and marked skipped; the summary stays ok.
+	not_here() {
+		SKIPPED=1
+		DETAIL="not here"
+	}
+	local sum
+	sum=$(
+		S_NAME=() S_OK=() S_DETAIL=() S_SKIP=()
+		run_step a -- not_here 2>/dev/null
+		record b true "fine" 2>/dev/null
+		print_summary 3>&1 || echo " rc=1"
+	)
+	st skipped-summary "$sum" '{"ok":true,"server_url":"self-test","school_id":"","steps":[{"name":"a","ok":true,"detail":"not here","skipped":true},{"name":"b","ok":true,"detail":"fine"}]}' 'a skipped step is ok:true with "skipped":true'
 
 	if command -v sha256sum >/dev/null && command -v base64 >/dev/null; then
 		local bin="" i id b64
@@ -1128,7 +1704,7 @@ self_test() {
 
 # ---- Main ----
 
-SERVER="" SCHOOL="" STUB="" CONTROL="" BIN="" W=""
+SERVER="" SCHOOL="" STUB="" CONTROL="" BIN="" W="" SECOND=""
 MODE=run
 while [[ $# -gt 0 ]]; do
 	case $1 in
@@ -1138,7 +1714,7 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--dry-run) MODE=dry ;;
 	--self-test) MODE=self ;;
-	--server-url | --school-id | --arbella-stub | --control-url | --bin-dir | --work-dir)
+	--server-url | --school-id | --arbella-stub | --control-url | --bin-dir | --work-dir | --second-school-id)
 		[[ $# -ge 2 && -n $2 ]] || die_usage "$1 needs a value"
 		case $1 in
 		--server-url) SERVER=$2 ;;
@@ -1147,10 +1723,11 @@ while [[ $# -gt 0 ]]; do
 		--control-url) CONTROL=$2 ;;
 		--bin-dir) BIN=$2 ;;
 		--work-dir) W=$2 ;;
+		--second-school-id) SECOND=$2 ;;
 		esac
 		shift
 		;;
-	--server-url=* | --school-id=* | --arbella-stub=* | --control-url=* | --bin-dir=* | --work-dir=*)
+	--server-url=* | --school-id=* | --arbella-stub=* | --control-url=* | --bin-dir=* | --work-dir=* | --second-school-id=*)
 		set -- "${1%%=*}" "${1#*=}" "${@:2}"
 		continue
 		;;
@@ -1188,6 +1765,11 @@ CONTROL=${CONTROL%/}
 [[ $CONTROL =~ ^https?://[^[:space:]]+$ ]] || die_usage "--control-url must be an http(s) URL"
 [[ $SCHOOL =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] ||
 	die_usage "--school-id must be a lowercase UUID"
+if [[ -n $SECOND ]]; then
+	[[ $SECOND =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] ||
+		die_usage "--second-school-id must be a lowercase UUID"
+	[[ $SECOND != "$SCHOOL" ]] || die_usage "--second-school-id must differ from --school-id"
+fi
 [[ -d $STUB ]] || die_usage "--arbella-stub $STUB is not a directory"
 [[ -d $BIN ]] || die_usage "--bin-dir $BIN is not a directory"
 STUB=$(cd "$STUB" && pwd -P)

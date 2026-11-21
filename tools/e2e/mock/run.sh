@@ -13,7 +13,8 @@
 #
 # Checks: the mock's own self-test against the shared vectors; protocol-v1.sh --self-test under
 # the default awk (and mawk and gawk when found); then the full run: exit 0, stdout one JSON value
-# with "ok":true and every step of --dry-run present and ok; and containment, best effort: the
+# with "ok":true and every step of --dry-run present, ok and not skipped (the mock has a second
+# school, given with --second-school-id); and containment, best effort: the
 # fake HOME and the starting folder (both read-only) are unchanged. Writes elsewhere (/tmp, other
 # folders the user may write) are not seen. The mock is stopped on every exit.
 # Exit 0 when all pass, 1 otherwise, 2 on a usage error.
@@ -126,6 +127,7 @@ done
 ready() { python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$t/mock/ready.json" "$1"; }
 server_url=$(ready server_url)
 school_id=$(ready school_id)
+second_school_id=$(ready second_school_id)
 control_url=$(ready control_url)
 stub=$(ready arbella_stub)
 
@@ -137,7 +139,7 @@ before=$(snapshot)
 rc=0
 (cd "$t/start" && HOME=$t/home TMPDIR=$t/start bash "$script" \
 	--server-url "$server_url" --school-id "$school_id" --arbella-stub "$stub" \
-	--control-url "$control_url" --bin-dir "$bin" --work-dir "$t/work") \
+	--control-url "$control_url" --bin-dir "$bin" --work-dir "$t/work" --second-school-id "$second_school_id") \
 	>"$t/summary.json" 2>"$t/e2e.err" || rc=$?
 after=$(snapshot)
 
@@ -149,7 +151,8 @@ text = open(sys.argv[1], encoding="ascii").read()
 v = json.loads(text)  # one JSON value, or this raises
 names = [s for s in sys.argv[2].split("\n") if s]
 got = {s["name"]: s for s in v["steps"]}
-bad = [n for n in names if n not in got or got[n]["ok"] is not True]
+# The mock has a second school: no step may be skipped.
+bad = [n for n in names if n not in got or got[n]["ok"] is not True or got[n].get("skipped", False) is not False]
 extra = [n for n in got if n not in names]
 for s in v["steps"]:
     print(("ok   " if s["ok"] is True else "FAIL ") + s["name"] + ": " + s["detail"], file=sys.stderr)
