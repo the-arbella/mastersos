@@ -127,6 +127,36 @@ rm -r "$sd"
 check "format 3, dangling link: DCONF_PROFILE left out" no "$(has '^DCONF_PROFILE=' "$(run "$tmp/gen/30-systemd-environment-d-generator")")"
 rm "$tmp/public/session"
 
+# The login screen's account (its home, from the account database, is under gdm's runtime directory) keeps its own
+# environment.d in every mode: gdm passes DCONF_PROFILE=gdm through it, and without it there is no login screen. Any
+# other account stays locked (every check above ran with the real directory, which holds nobody's home here).
+grep -qxF 'greeter_home=/run/gdm3/home' "$gens/30-systemd-environment-d-generator" || {
+	echo "user-env-test: 30-systemd-environment-d-generator has no line greeter_home=/run/gdm3/home" >&2
+	exit 1
+}
+acct_home=$(getent passwd "$(id -u)" | cut -d: -f6)
+[ -n "$acct_home" ] || {
+	echo "user-env-test: this user has no home in the account database" >&2
+	exit 1
+}
+sed "s|^greeter_home=/run/gdm3/home$|greeter_home=${acct_home%/*}|" "$tmp/gen/30-systemd-environment-d-generator" >"$tmp/gen/greeter"
+chmod +x "$tmp/gen/greeter"
+mkdir -p "$sd"
+ln -s user-layer/u-0123456789abcdef "$tmp/public/session"
+printf 'learning\n' >"$sd/session-mode"
+for m in learning full none; do
+	mode "$m"
+	check "login screen account, legacy mode $m, format 3 link: its environment.d is read" "$(run "$sysd")" "$(run "$tmp/gen/greeter")"
+done
+rm -r "$sd" "$tmp/public/session"
+mode learning
+check "login screen account, learning without the link: its environment.d is read" "$(run "$sysd")" "$(run "$tmp/gen/greeter")"
+check "another account in the same mode stays locked" no "$(has '^DCONF_PROFILE=' "$(run "$tmp/gen/30-systemd-environment-d-generator")")"
+# A home that only starts with the same text is not under the directory
+sed "s|^greeter_home=/run/gdm3/home$|greeter_home=${acct_home%?}|" "$tmp/gen/30-systemd-environment-d-generator" >"$tmp/gen/prefix"
+chmod +x "$tmp/gen/prefix"
+check "a home that merely shares the prefix stays locked" no "$(has '^DCONF_PROFILE=' "$(run "$tmp/gen/prefix")")"
+
 # The session's xdg dir (format 3) is the first data directory, before the device's
 envd=$here/../mkosi.extra/usr/lib/environment.d/40-mastersos.conf
 dirs=$(sed -n 's/^XDG_DATA_DIRS=//p' "$envd")

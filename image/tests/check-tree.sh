@@ -2123,6 +2123,13 @@ if grep -qF 'ubuntu.json' "$rel/mkosi.postinst.chroot" || ! grep -qF 'modes/mast
 	bad 47 "mkosi.postinst.chroot should check modes/mastersos.json (not touch ubuntu.json) and leave only mastersos-kiosk.desktop and mastersos.desktop as sessions"
 	r=1
 fi
+# shellcheck disable=SC2016 # the postinst's own text
+if ! grep -qF 'for t in standard administrator; do' "$rel/mkosi.postinst.chroot" ||
+	! grep -qF "sed -i 's/^Session=.*\$/Session=mastersos/' \"\$f\" || exit 1" "$rel/mkosi.postinst.chroot" ||
+	! grep -qF "grep -qxF 'Session=mastersos' \"\$f\" || {" "$rel/mkosi.postinst.chroot"; then
+	bad 47 "mkosi.postinst.chroot should name the mastersos session in both AccountsService user templates (GDM's fallback is the login screen's own session)"
+	r=1
+fi
 [ "$r" = 0 ] && ok 47 "gnome-shell extensions: both in /usr (uuid = directory, shell-version 50), greeter mode mastersos-gdm with drop-in, desktop session mastersos with mode mastersos.json, no other sessions"
 
 # 48. AppArmor waits for /etc (device trial 2026-10-31): /etc/apparmor.d is a tmpfiles symlink into the factory tree, so apparmor.service
