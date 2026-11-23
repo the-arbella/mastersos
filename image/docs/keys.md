@@ -64,7 +64,7 @@ openssl pkey -in kiosk-ext.pem -pubout -outform DER | sha256sum | cut -c1-32 | t
 ```
 
 lab 的考试扩展钥匙只在 VM 164（`mastersos-build-b`）上：2026-10-26 生成，扩展 id **`kbgmpkcmikppnmecaigamibbafkckicf`**；
-crx 与 `updates.xml` 放在 `https://oslab.khundavid.com/chrome/`（栈 `mastersos-lab-cert`、`mastersos-lab-origin`，`infra/stacks.conf`）。
+The lab crx and `updates.xml` were served from a separate lab https host until 2026-11-23, when that host was retired: a lab image carries both files itself (`build.sh`, `file:///usr/lib/mastersos/kiosk-ext`).
 VM 161 上还没有：在 VM 161 构建 lab 镜像前，从 VM 164 拷同一份过去（id 不变），或生成新的再把 id 记在这里。
 
 `~/mastersos-keys/lab-local/`（试验用户的口令哈希与 authorized_keys）不是签名钥匙，仍在原处。
