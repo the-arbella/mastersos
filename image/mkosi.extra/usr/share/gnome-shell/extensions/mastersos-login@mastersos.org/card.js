@@ -27,8 +27,10 @@ const CARD_INSET = 5;
 const TITLE_BAR = 37;
 const IDLE_CANCEL_MS = 3 * 60 * 1000;
 // However busy the person is, a card that has not signed anyone in after this long closes: the card may open any https
-// page the sign-in pages lead to (card_navigation "open"), and it is not a browser to stay in.
-const CARD_LIFETIME_S = 10 * 60;
+// page the sign-in pages lead to (card_navigation "open"), and it is not a browser to stay in. Half a minute short of the
+// broker's own limit for a sign-in (ten minutes, started just before the card opens): the card closes first and the
+// person is back at the name step, instead of the broker giving up first and reporting a failed sign-in.
+const CARD_LIFETIME_S = 10 * 60 - 30;
 const WINDOW_TIMEOUT_S = 30;
 // The way out from the keyboard. Focus is inside Chrome, so only a compositor-level grab sees it, and a grab swallows the
 // key: plain Esc belongs to the page (open lists, dialogs), Ctrl+Esc is unused by Chrome and web pages never get it.

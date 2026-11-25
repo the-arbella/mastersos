@@ -3585,7 +3585,7 @@ grep -qF 'include_str!("../../../../image/tests/deb-apps-apt-test.sh")' core/mas
 
 # 80. The sign-in card (2026-11-18, card_navigation): the policies the agent renders are checked in a real Chrome
 #     (tests/card-policy-chrome-test.sh, in CI and as the .labtest.yml suite card-chrome) from fixtures the agent's own test keeps
-#     equal to the code, each with its cases; the login screen closes a card that has been open CARD_LIFETIME_S (10 minutes)
+#     equal to the code, each with its cases; the login screen closes a card that has been open CARD_LIFETIME_S (half a minute short of the broker's 10 minutes)
 #     and disarms that timer when the card closes
 r=0
 # shellcheck disable=SC2016 # the workflow's text, $PATH unexpanded
@@ -3616,14 +3616,15 @@ done
 	r=1
 }
 card=image/mkosi.extra/usr/share/gnome-shell/extensions/mastersos-login@mastersos.org/card.js
-if ! { grep -qxF 'const CARD_LIFETIME_S = 10 * 60;' "$card" &&
+if ! { grep -qxF 'const CARD_LIFETIME_S = 10 * 60 - 30;' "$card" &&
+	grep -qF 'authCodeTimeout  = 10 * time.Minute' image/patches/authd-oidc/0003-authorization-code-on-greeter.patch &&
 	grep -qF 'this._lifetimeId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, CARD_LIFETIME_S, () => {' "$card" &&
 	grep -A4 -F 'this._lifetimeId = GLib.timeout_add_seconds' "$card" | grep -qF 'this._cancelled();' &&
 	grep -qF 'GLib.source_remove(this._lifetimeId);' "$card"; }; then
-	bad 80 "card.js should close the card after CARD_LIFETIME_S = 10 * 60 and disarm the timer in close()"
+	bad 80 "card.js should close the card after CARD_LIFETIME_S = 10 * 60 - 30, before the broker's authCodeTimeout of 10 minutes, and disarm the timer in close()"
 	r=1
 fi
-[ "$r" = 0 ] && ok 80 "sign-in card: its policies are checked in a real Chrome from fixtures kept equal to the agent's code; it closes after 10 minutes"
+[ "$r" = 0 ] && ok 80 "sign-in card: its policies are checked in a real Chrome from fixtures kept equal to the agent's code; it closes just before the broker's 10 minutes"
 
 # 81. The broker's facts directory (2026-11-19, user layer plan C): tmpfiles makes /run/mastersos/facts root 0700, and the
 #     broker's drop-in lets the broker write there. The "-" prefix: a missing directory must not stop the broker, so school
