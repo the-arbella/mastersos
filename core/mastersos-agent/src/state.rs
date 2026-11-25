@@ -24,7 +24,7 @@ use crate::safefs;
 const SEED_FILE: &str = "seed.toml";
 const STATE_FILE: &str = "state.json";
 const STATE_CORRUPT: &str = "state.json.corrupt";
-const BUNDLE_FILE: &str = "current.bundle";
+pub(crate) const BUNDLE_FILE: &str = "current.bundle";
 const CURRENT: &str = "current";
 /// 旧布局（`current/` 是真实目录）中途断电留下的，见到就删。
 const CURRENT_NEW: &str = "current.new";

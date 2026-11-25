@@ -86,8 +86,8 @@ const FETCH_OK_SAVE_EVERY: chrono::TimeDelta = chrono::TimeDelta::hours(1);
 const HEARTBEAT_FUTURE_SLACK: TimeDelta = TimeDelta::days(1);
 /// `apply-local` 等网络加拉取最多这么久（Ruling 15；单元的 TimeoutStartSec=60 是硬上限）。
 const LOCAL_NET_BUDGET: Duration = Duration::from_secs(45);
-/// `apply-local` 等网络：`nm-online -t` 的秒数。
-const LOCAL_NM_ONLINE_SECS: &str = "30";
+/// `apply-local` 等网络：`nm-online -t` 的秒数（上限；预算剩得少时更短）。
+const LOCAL_NM_ONLINE_SECS: u64 = 30;
 /// `apply-local` 单次拉取的上限。
 const LOCAL_FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 /// `apply-local` 连不上服务端（路由还没到）时两次试拉之间停多久。
@@ -353,8 +353,23 @@ pub async fn once(cfg: AgentConfig, applier: Arc<dyn Applier>) -> Result<()> {
 /// 验过的包时先等网络（`nm-online -q -t 30`）并试拉一次（单次 15 秒，合计不超过 45 秒），拉到
 /// 并接受了再应用；然后只调用 applier（`Phase::Boot`，`SystemApplier` 只跑快速步骤），保存
 /// state。不放文件、不跑脚本、不回报——完整的应用由常驻的 `run` 做。
+///
+/// The first start after an install or a factory reset that found settings cached on the seed
+/// partition: those are applied first (their Wi-Fi networks are what brings the machine online),
+/// then the server is asked once within the same budget, and what it had newer is applied before
+/// GDM. Without a network the machine goes on with the cached settings, as before.
 pub async fn apply_local(cfg: AgentConfig, applier: Arc<dyn Applier>) -> Result<()> {
     apply_local_with(cfg, applier, Arc::new(RealRunner)).await
+}
+
+fn warn_boot_failures(results: &[ItemResult]) {
+    for r in results.iter().filter(|r| !r.ok) {
+        log::warn!(
+            "boot apply of {} failed: {}",
+            r.item,
+            r.detail.as_deref().unwrap_or("")
+        );
+    }
 }
 
 /// 同 `apply_local`，等网络的命令经 `runner` 跑（测试用 `FakeRunner`）。
@@ -365,15 +380,29 @@ pub async fn apply_local_with(
 ) -> Result<()> {
     let deadline = Instant::now() + LOCAL_NET_BUDGET;
     let mut agent = Agent::start(cfg, applier, Mode::Local, false).await?;
-    if agent.bundle.is_none() {
-        let wait = Cmd::new("nm-online", &["-q", "-t", LOCAL_NM_ONLINE_SECS])
-            .timeout(LOCAL_NET_BUDGET - LOCAL_FETCH_TIMEOUT);
+    let recheck = agent.fresh && agent.bundle.is_some();
+    if recheck {
+        let results = agent.apply_direct(Phase::Boot).await;
+        warn_boot_failures(&results);
+    }
+    let had = agent.state.version;
+    // Whole seconds for nm-online, leaving one fetch's time within the budget.
+    let net_wait = deadline
+        .saturating_duration_since(Instant::now())
+        .saturating_sub(LOCAL_FETCH_TIMEOUT)
+        .as_secs_f64()
+        .ceil()
+        .min(LOCAL_NM_ONLINE_SECS as f64) as u64;
+    if (agent.bundle.is_none() || recheck) && net_wait > 0 {
+        let secs = net_wait.to_string();
+        let wait = Cmd::new("nm-online", &["-q", "-t", secs.as_str()])
+            .timeout(Duration::from_secs(net_wait));
         let r = runner.clone();
         let online = match tokio::task::spawn_blocking(move || r.run(&wait)).await {
             Ok(Ok(o)) if o.code == 0 => true,
             Ok(Ok(o)) => {
                 log::warn!(
-                    "network not ready (nm-online exit code {}); booting with the seed defaults",
+                    "network not ready (nm-online exit code {}); booting with what this machine has",
                     o.code
                 );
                 false
@@ -447,13 +476,10 @@ pub async fn apply_local_with(
             }
         }
     }
-    let results = agent.apply_direct(Phase::Boot).await;
-    for r in results.iter().filter(|r| !r.ok) {
-        log::warn!(
-            "boot apply of {} failed: {}",
-            r.item,
-            r.detail.as_deref().unwrap_or("")
-        );
+    // Already applied above unless the server had something newer.
+    if !recheck || agent.state.version != had {
+        let results = agent.apply_direct(Phase::Boot).await;
+        warn_boot_failures(&results);
     }
     agent.save();
     // After the boot apply rendered neutral, before GDM: the files the last session switched in survived the reboot.
@@ -588,6 +614,9 @@ struct Agent {
     fetch_token: Option<ItemResult>,
     /// 上次拉取成功以来被 401 过的令牌（sha256）：401 时只换用没被拒过的，不来回切换。
     rejected_tokens: std::collections::BTreeSet<String>,
+    /// This start imported the seed partition (a new install or the first start after a factory
+    /// reset): `apply-local` then asks the server once even when a cached bundle was accepted.
+    fresh: bool,
     /// 已经开始恢复出厂（请求已设、重启已发出）：不再交应用请求。
     resetting: bool,
     /// Settings must be synced (`fetch_now`): set at startup, by a doorbell, a (re)connect, a wake
@@ -802,6 +831,7 @@ impl Agent {
             last_renew: None,
             fetch_token: None,
             rejected_tokens: Default::default(),
+            fresh: matches!(imported, Imported::Fresh { .. }),
             resetting: false,
             sync_settings: false,
             sync_inbox: false,
@@ -846,7 +876,45 @@ impl Agent {
             agent.take_incoming().await;
         }
         agent.remove_incoming();
+        agent.record_cache_trust();
         Ok(agent)
+    }
+
+    /// Makes the seed partition's cache hold the current bundle together with the keys that
+    /// verified it, when it does not yet: a machine that took its bundle before the record existed
+    /// (an older OS version), or whose cache was lost, has it from this start on and not only
+    /// after the school publishes again. Nothing is written when the record already fits the
+    /// bundle and the cache holds that bundle, when there is no bundle, or when the keys that
+    /// verified it are not known: `state.bundle_trust` is those keys only for the version the
+    /// state names, so a bundle on disk of another version is left alone.
+    fn record_cache_trust(&mut self) {
+        let current = self.bundle.as_deref().map(|b| b.manifest.version);
+        if current.is_none() || current != self.state.version || self.state.bundle_trust.is_empty()
+        {
+            return;
+        }
+        let archive = match std::fs::read(self.cfg.state_dir.join(state::BUNDLE_FILE)) {
+            Ok(b) => b,
+            Err(e) => {
+                log::warn!("reading the current settings bundle failed: {e}");
+                return;
+            }
+        };
+        // Both must fit: a power cut between the two writes of `store_cache` leaves a record for
+        // this bundle beside an older cached bundle.
+        if seedpart::cache_holds(&self.cfg.seed_dir, &archive)
+            && seedpart::load_cache_trust(&self.cfg.seed_dir, &archive).is_some()
+        {
+            return;
+        }
+        match self.seed_writable().and_then(|()| {
+            seedpart::store_cache(&self.cfg.seed_dir, &archive, &self.state.bundle_trust)
+        }) {
+            Ok(()) => log::info!(
+                "recorded the keys that verified the current settings on the seed partition"
+            ),
+            Err(e) => self.seed_cache = Some(failed("system:seed-cache", format!("{e:#}"))),
+        }
     }
 
     /// 种子分区缓存的包（已复制为 `incoming.bundle`）当作刚拉到的包处理：种子的 `trust`、
@@ -861,6 +929,28 @@ impl Agent {
             }
         };
         let claimed = claimed_version(&archive);
+        // A machine that is reset continues from the settings it had: when the keys recorded with
+        // the cached bundle verify it, they stand in for the seed's `trust` (the school may have
+        // replaced its keys since the seed was written). The seed's school and `min_version` hold
+        // as usual. Checked here first, so that a record that does not verify the bundle leaves
+        // no refusal behind and the seed's own keys are tried below as before.
+        if let Some(keys) = seedpart::load_cache_trust(&self.cfg.seed_dir, &archive) {
+            if state::accept_bundle(
+                &archive,
+                &keys,
+                self.floor(),
+                self.seed.school_id.as_deref(),
+                self.state.school_id.as_deref(),
+                state::Prior::Nothing,
+            )
+            .is_ok()
+            {
+                log::info!(
+                    "the settings bundle cached on the seed partition is verified by the keys recorded with it"
+                );
+                self.state.trust = keys;
+            }
+        }
         match self.take_new(&archive, claimed, true).await {
             Ok(true) => log::info!("accepted settings bundle v{claimed} cached on the seed partition"),
             Ok(false) => log::warn!("the settings bundle cached on the seed partition failed verification; discarding it and fetching as usual"),
@@ -1615,7 +1705,9 @@ impl Agent {
                 // 种子分区的缓存只为恢复出厂后离线也有设置；写不进去只回报，不影响别的。
                 self.seed_cache = self
                     .seed_writable()
-                    .and_then(|()| seedpart::store_cache(&self.cfg.seed_dir, archive))
+                    .and_then(|()| {
+                        seedpart::store_cache(&self.cfg.seed_dir, archive, &self.state.bundle_trust)
+                    })
                     .err()
                     .map(|e| failed("system:seed-cache", format!("{e:#}")));
                 self.request_apply();
@@ -2477,5 +2569,318 @@ mod tests {
             assert!(!rejected_reason(&e).contains("555"), "{e:?}");
         }
         assert_eq!(rejected_reason(&E::BadSignature), "bad signature");
+    }
+
+    // --- settings kept through a factory reset ---------------------------------------------
+
+    const RESET_SCHOOL: &str = "0b6c1a52-3d1e-4f7a-9c2b-1a2b3c4d5e6f";
+
+    fn reset_signer(id: &str) -> mastersos_bundle::Ed25519Signer {
+        mastersos_bundle::Ed25519Signer::from_pkcs8(
+            id,
+            &mastersos_bundle::Ed25519Signer::generate_pkcs8(),
+        )
+        .unwrap()
+    }
+
+    /// A settings bundle of `version` whose trust is `trust`, signed by `by`.
+    fn reset_settings(
+        version: u64,
+        trust: &[&mastersos_bundle::Ed25519Signer],
+        by: &mastersos_bundle::Ed25519Signer,
+    ) -> Vec<u8> {
+        let mut text = format!("version = {version}\n\n[school]\nid = \"{RESET_SCHOOL}\"\n");
+        for k in trust.iter().map(|s| s.trust_key()) {
+            text += &format!(
+                "\n[[trust]]\nid = \"{}\"\nalg = \"{}\"\npublic_key = \"{}\"\n",
+                k.id,
+                k.alg.as_str(),
+                k.public_key
+            );
+        }
+        text += "\n[[group]]\nid = \"default\"\nname = \"x\"\n";
+        mastersos_bundle::pack(
+            &mastersos_bundle::Contents {
+                manifest_text: text,
+                files: Default::default(),
+            },
+            by,
+        )
+        .unwrap()
+    }
+
+    /// Writes the seed (trust `k1`) to the seed partition of `dir`, as an install does.
+    fn reset_seed(
+        dir: &Path,
+        server: &str,
+        k1: &mastersos_bundle::Ed25519Signer,
+        min_version: Option<u64>,
+    ) {
+        std::fs::create_dir_all(dir.join("seed")).unwrap();
+        let s = mastersos_bundle::Seed {
+            server_url: server.into(),
+            trust: vec![k1.trust_key()],
+            fetch_token: Some("ft".into()),
+            group: None,
+            oidc: None,
+            min_version,
+            school_id: Some(RESET_SCHOOL.into()),
+            wifi: vec![],
+            school_name: None,
+            it_account: None,
+        };
+        std::fs::write(dir.join("seed/seed.toml"), s.to_toml()).unwrap();
+        let profile = dir
+            .join("root")
+            .join(crate::luks::IMAGE_PROFILE.trim_start_matches('/'));
+        std::fs::create_dir_all(profile.parent().unwrap()).unwrap();
+        std::fs::write(profile, "lab\n").unwrap();
+    }
+
+    /// The machine of `dir` with the state directory `state`: a name not used before is the
+    /// state after a factory reset (the state is gone, the seed partition is kept).
+    fn reset_cfg(dir: &Path, state: &str) -> AgentConfig {
+        AgentConfig {
+            state_dir: dir.join(state),
+            seed_dir: dir.join("seed"),
+            seed_requires_mount: false,
+            dmi_dir: dir.join("dmi"),
+            os_release: dir.join("os-release"),
+            root: dir.join("root"),
+            ..AgentConfig::default()
+        }
+    }
+
+    async fn reset_start(dir: &Path, state: &str) -> Agent {
+        Agent::start(
+            reset_cfg(dir, state),
+            Arc::new(NullApplier),
+            Mode::Local,
+            false,
+        )
+        .await
+        .unwrap()
+    }
+
+    fn trust_ids(a: &Agent) -> Vec<String> {
+        a.state.trust.iter().map(|k| k.id.clone()).collect()
+    }
+
+    /// The school replaced its key after the machine was installed: v1 {k1}, v2 {k1, k2} signed
+    /// by k1, v3 {k2} signed by k2. The seed still names k1 only.
+    async fn reset_machine_at_v3(dir: &Path) {
+        let (k1, k2) = (reset_signer("k1"), reset_signer("k2"));
+        reset_seed(dir, "http://127.0.0.1:9", &k1, Some(1));
+        let mut a = reset_start(dir, "state-installed").await;
+        assert!(a.fresh && a.bundle.is_none());
+        for (v, archive) in [
+            (1, reset_settings(1, &[&k1], &k1)),
+            (2, reset_settings(2, &[&k1, &k2], &k1)),
+            (3, reset_settings(3, &[&k2], &k2)),
+        ] {
+            assert!(a.take_new(&archive, v, false).await.unwrap(), "v{v}");
+        }
+        assert_eq!(a.state.version, Some(3));
+        assert!(a.seed_cache.is_none(), "{:?}", a.seed_cache);
+    }
+
+    #[tokio::test]
+    async fn a_reset_machine_continues_from_the_settings_it_had() {
+        let d = tempfile::tempdir().unwrap();
+        reset_machine_at_v3(d.path()).await;
+
+        let b = reset_start(d.path(), "state-after-reset").await;
+        assert!(b.fresh);
+        assert_eq!(b.state.version, Some(3));
+        assert!(b.bundle.is_some());
+        // The replaced key is not trusted again, and the version cannot go back.
+        assert_eq!(trust_ids(&b), ["k2"]);
+        assert_eq!(b.floor(), Some(3));
+        // What the machine reports about its seed is still the seed's own keys.
+        assert_eq!(
+            b.state
+                .seed_import
+                .as_ref()
+                .unwrap()
+                .trust_fingerprints
+                .len(),
+            1
+        );
+        drop(b);
+
+        // A start with existing state reads nothing from the seed partition.
+        let again = reset_start(d.path(), "state-after-reset").await;
+        assert!(!again.fresh);
+        assert_eq!(again.state.version, Some(3));
+    }
+
+    /// A machine installed before the record existed: its next start writes the record, so a
+    /// reset keeps its settings without waiting for the school to publish again.
+    #[tokio::test]
+    async fn a_start_writes_the_missing_record_for_the_current_settings() {
+        let d = tempfile::tempdir().unwrap();
+        reset_machine_at_v3(d.path()).await;
+        let record = d.path().join("seed/cache/verified-by.json");
+        let written = std::fs::read(&record).unwrap();
+        std::fs::remove_file(&record).unwrap();
+        // The cache itself was lost too.
+        std::fs::remove_file(d.path().join("seed/cache/current.bundle")).unwrap();
+
+        let a = reset_start(d.path(), "state-installed").await;
+        assert!(!a.fresh);
+        assert!(a.seed_cache.is_none(), "{:?}", a.seed_cache);
+        assert_eq!(std::fs::read(&record).unwrap(), written);
+        drop(a);
+
+        let b = reset_start(d.path(), "state-after-reset").await;
+        assert_eq!(b.state.version, Some(3));
+        assert_eq!(trust_ids(&b), ["k2"]);
+    }
+
+    /// A power cut between the two writes of the cache: the record is for the new bundle, the
+    /// cached bundle is still the old one. The next start writes the new bundle too.
+    #[tokio::test]
+    async fn a_start_repairs_a_cache_that_holds_an_older_bundle_than_its_record() {
+        let d = tempfile::tempdir().unwrap();
+        reset_machine_at_v3(d.path()).await;
+        let cached = d.path().join("seed/cache/current.bundle");
+        let v3 = std::fs::read(&cached).unwrap();
+        std::fs::write(&cached, b"the bundle of an older version").unwrap();
+
+        drop(reset_start(d.path(), "state-installed").await);
+        assert_eq!(std::fs::read(&cached).unwrap(), v3);
+
+        let b = reset_start(d.path(), "state-after-reset").await;
+        assert_eq!(b.state.version, Some(3));
+        assert_eq!(trust_ids(&b), ["k2"]);
+    }
+
+    #[tokio::test]
+    async fn without_the_record_the_cached_settings_are_checked_against_the_seed() {
+        let d = tempfile::tempdir().unwrap();
+        reset_machine_at_v3(d.path()).await;
+        std::fs::remove_file(d.path().join("seed/cache/verified-by.json")).unwrap();
+
+        // v3 is signed by k2, which the seed does not name: discarded, the seed's keys stay.
+        let b = reset_start(d.path(), "state-after-reset").await;
+        assert!(b.bundle.is_none());
+        assert_eq!(b.state.version, None);
+        assert_eq!(trust_ids(&b), ["k1"]);
+    }
+
+    #[tokio::test]
+    async fn the_record_does_not_lower_the_seeds_min_version() {
+        let d = tempfile::tempdir().unwrap();
+        reset_machine_at_v3(d.path()).await;
+        // A newer seed was written to the seed partition since: it asks for version 5 at least.
+        let text = std::fs::read_to_string(d.path().join("seed/seed.toml")).unwrap();
+        let mut seed = mastersos_bundle::Seed::parse(&text).unwrap();
+        seed.min_version = Some(5);
+        std::fs::write(d.path().join("seed/seed.toml"), seed.to_toml()).unwrap();
+
+        let b = reset_start(d.path(), "state-after-reset").await;
+        assert!(b.bundle.is_none());
+        assert_eq!(b.state.version, None);
+        assert_eq!(trust_ids(&b), ["k1"]);
+    }
+
+    #[tokio::test]
+    async fn a_record_that_does_not_verify_the_bundle_leaves_the_seeds_keys_in_charge() {
+        let d = tempfile::tempdir().unwrap();
+        let (k1, other) = (reset_signer("k1"), reset_signer("other"));
+        reset_seed(d.path(), "http://127.0.0.1:9", &k1, None);
+        // v1 is signed by k1 (the seed's key); the record beside it names a key that did not sign it.
+        let v1 = reset_settings(1, &[&k1], &k1);
+        seedpart::store_cache(&d.path().join("seed"), &v1, &[other.trust_key()]).unwrap();
+
+        let b = reset_start(d.path(), "state-after-reset").await;
+        assert_eq!(b.state.version, Some(1));
+        assert!(b.bundle.is_some());
+        assert_eq!(trust_ids(&b), ["k1"]);
+        assert!(b.rejected.is_none());
+    }
+
+    #[tokio::test]
+    async fn the_first_boot_after_a_reset_asks_the_server_once() {
+        let d = tempfile::tempdir().unwrap();
+        let k1 = reset_signer("k1");
+        let srv = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/device/v1/bundle"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("X-Mastersos-Version", "2")
+                    .set_body_bytes(reset_settings(2, &[&k1], &k1)),
+            )
+            .mount(&srv)
+            .await;
+        reset_seed(d.path(), &srv.uri(), &k1, None);
+        // The machine had version 1 when it was reset; the school published 2 while it was off.
+        let v1 = reset_settings(1, &[&k1], &k1);
+        seedpart::store_cache(&d.path().join("seed"), &v1, &[k1.trust_key()]).unwrap();
+
+        let bundle_calls = |reqs: Vec<wiremock::Request>| -> Vec<String> {
+            reqs.iter()
+                .filter(|r| r.url.path() == "/api/device/v1/bundle")
+                .map(|r| r.url.query().unwrap_or("").to_string())
+                .collect()
+        };
+        let runner = Arc::new(crate::runner::FakeRunner::new());
+        apply_local_with(
+            reset_cfg(d.path(), "state-after-reset"),
+            Arc::new(NullApplier),
+            runner.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            bundle_calls(srv.received_requests().await.unwrap()),
+            ["after=1"]
+        );
+        assert!(runner.calls().iter().any(|c| c.starts_with("nm-online")));
+        let (_, state) = state::load(&d.path().join("state-after-reset")).unwrap();
+        assert_eq!(state.version, Some(2));
+
+        // Later boots have their own state and do not wait for the network before GDM.
+        let runner = Arc::new(crate::runner::FakeRunner::new());
+        apply_local_with(
+            reset_cfg(d.path(), "state-after-reset"),
+            Arc::new(NullApplier),
+            runner.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            bundle_calls(srv.received_requests().await.unwrap()).len(),
+            1
+        );
+        assert!(!runner.calls().iter().any(|c| c.starts_with("nm-online")));
+    }
+
+    #[tokio::test]
+    async fn the_first_boot_after_a_reset_goes_on_without_a_network() {
+        let d = tempfile::tempdir().unwrap();
+        let k1 = reset_signer("k1");
+        reset_seed(d.path(), "http://127.0.0.1:9", &k1, None);
+        let v1 = reset_settings(1, &[&k1], &k1);
+        seedpart::store_cache(&d.path().join("seed"), &v1, &[k1.trust_key()]).unwrap();
+
+        let runner = Arc::new(crate::runner::FakeRunner::new());
+        runner.respond(
+            "nm-online",
+            crate::runner::Output {
+                code: 1,
+                ..crate::runner::Output::ok("")
+            },
+        );
+        apply_local_with(
+            reset_cfg(d.path(), "state-after-reset"),
+            Arc::new(NullApplier),
+            runner,
+        )
+        .await
+        .unwrap();
+        let (_, state) = state::load(&d.path().join("state-after-reset")).unwrap();
+        assert_eq!(state.version, Some(1));
     }
 }
