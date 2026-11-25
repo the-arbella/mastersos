@@ -57,9 +57,10 @@ VM 161 的试验网根 `/var/www/html/mastersos/mastersos-root.conf` 是 `base=h
 正式更新源是 `https://os.arbellalabs.com`（S3，Ruling 23）：`build.sh` 正式 profile 的 `MASTERSOS_UPDATE_BASE` 默认就是它。
 S3 的桶与 CDN 见 `infra/`（计划 5 Task 1），同步见下一节；校内缓存不在计划 5。
 
-2026-11-15 起默认值是 `os.arbellalabs.com`（同一个桶、同样的目录结构）。旧名 `https://os.khundavid.com` 继续提供**完全相同的内容**：
-2026-11-15 之前构建的机器镜像里写着旧地址，它们照常从旧名更新，装上下一版镜像就换成新地址，不需要任何额外操作。
-旧名保留到所有机器都更新之后，最晚到 2027-09-12。
+The default has been `os.arbellalabs.com` since 2026-11-15 (the same bucket, the same directory layout). Images built
+before that date carry the old name `https://os.khundavid.com`. The old name was retired on 2026-11-24 and no longer resolves: a machine
+that is still on such an image and has not taken `20261123.28` or a later version cannot update itself any more and is
+reinstalled from USB. `20261123.28` and every later image update from `os.arbellalabs.com`.
 
 ### 正式更新源：本地根镜像到 S3（计划 5 Task 3，裁定 4、5）
 
