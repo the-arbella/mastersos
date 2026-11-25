@@ -1,17 +1,20 @@
 //! The seed partition (Rulings 10, 16): not encrypted and kept by a factory reset. It holds the
-//! seed, a cache of the last verified bundle, `identity.json`, and the `seq` of the inbox command
+//! seed, a cache of the last verified bundle with the trust keys that verified it
+//! (`cache/verified-by.json`, [`store_cache`]), `identity.json`, and the `seq` of the inbox command
 //! of a remote factory reset being run (`inbox-reset-seq`, [`crate::inbox`]). It is **not
 //! authoritative**: the agent's trust, version floor and script records live in
 //! `/var/lib/mastersos` on the encrypted root partition; the seed partition is read only when
 //! there is no state there (a new install, a factory reset), and a cached bundle read from it is
-//! verified against the seed's `trust` and `min_version` as usual. Every write goes through
-//! [`safefs`]; files are 0600.
+//! verified as usual: against the keys recorded beside it when they belong to these exact bytes
+//! ([`load_cache_trust`]), so that a machine reset after the school changed its keys continues from
+//! the settings it had, and otherwise against the seed's `trust`; the seed's `min_version` and
+//! school hold either way. Every write goes through [`safefs`]; files are 0600.
 
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 use base64::Engine;
-use mastersos_bundle::Seed;
+use mastersos_bundle::{Seed, TrustKey};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +30,18 @@ const SEED_FILE: &str = "seed.toml";
 const STATE_FILE: &str = "state.json";
 const CACHE_DIR: &str = "cache";
 const CACHE_FILE: &str = "current.bundle";
+const CACHE_TRUST_FILE: &str = "verified-by.json";
+/// More trust keys than any settings may hold are not read back.
+const MAX_CACHE_TRUST_BYTES: usize = 256 * 1024;
+
+/// `cache/verified-by.json`: the trust keys that verified the cached bundle, bound to its bytes.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CacheTrust {
+    /// Lowercase hex SHA-256 of `cache/current.bundle` as it was written with this record.
+    sha256: String,
+    trust: Vec<TrustKey>,
+}
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Identity {
@@ -173,14 +188,71 @@ pub fn load_identity(seed_dir: &Path) -> Result<Option<Identity>> {
     Ok(Some(id))
 }
 
-/// 接受新包之后写 `cache/current.bundle`（同目录临时文件 + `renameat`，0600；`cache/` 0700）。
-pub fn store_cache(seed_dir: &Path, bundle: &[u8]) -> Result<()> {
+/// After a bundle is accepted: writes `cache/verified-by.json` (the keys in `verified_by`, bound to
+/// the SHA-256 of `bundle`) and then `cache/current.bundle`, each as a temporary file in the same
+/// directory and a `renameat` (0600; `cache/` 0700). The record goes first: a power cut between the
+/// two leaves a record that names other bytes than the cached bundle, which [`load_cache_trust`]
+/// ignores, so the bundle is then verified against the seed as before.
+pub fn store_cache(seed_dir: &Path, bundle: &[u8], verified_by: &[TrustKey]) -> Result<()> {
     // 种子分区本身不建：它是挂载点，不在就是没挂上。
     safefs::open_abs_dir(seed_dir, false).context("opening the seed partition")?;
     let cache = safefs::open_dir(seed_dir, Path::new(CACHE_DIR), true)?;
     safefs::set_mode(&cache, 0o700)?;
+    let record = serde_json::to_vec(&CacheTrust {
+        sha256: crate::apply::sha256_hex(bundle),
+        trust: verified_by.to_vec(),
+    })
+    .context("serializing the cached bundle's trust record failed")?;
+    safefs::write_at(&cache, CACHE_TRUST_FILE, &record, 0o600)?;
     safefs::write_at(&cache, CACHE_FILE, bundle, 0o600)?;
     Ok(())
+}
+
+/// Whether `cache/current.bundle` holds exactly `bundle`. Missing or unreadable: false.
+pub fn cache_holds(seed_dir: &Path, bundle: &[u8]) -> bool {
+    safefs::open_dir(seed_dir, Path::new(CACHE_DIR), false)
+        .and_then(|cache| safefs::read_at(&cache, CACHE_FILE))
+        .is_ok_and(|b| b.as_deref() == Some(bundle))
+}
+
+/// The keys recorded as having verified the cached bundle, when the record belongs to exactly
+/// `bundle` (same SHA-256) and names at least one key. Missing, unreadable, oversized, unparsable
+/// or for other bytes: `None` (logged, except when missing), and the caller verifies against the
+/// seed. The record is no authority, like everything on this partition: the bundle's signature is
+/// still checked against these keys.
+pub fn load_cache_trust(seed_dir: &Path, bundle: &[u8]) -> Option<Vec<TrustKey>> {
+    let read = || -> Result<Option<Vec<u8>>> {
+        let cache = match safefs::open_dir(seed_dir, Path::new(CACHE_DIR), false) {
+            Ok(c) => c,
+            Err(e) if crate::apply::is_not_found(&e) => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        safefs::read_at(&cache, CACHE_TRUST_FILE)
+    };
+    let bytes = match read() {
+        Ok(Some(b)) => b,
+        Ok(None) => return None,
+        Err(e) => {
+            log::warn!("reading the cached bundle's trust record failed: {e:#}");
+            return None;
+        }
+    };
+    if bytes.len() > MAX_CACHE_TRUST_BYTES {
+        log::warn!("the cached bundle's trust record is too large; ignoring it");
+        return None;
+    }
+    let record: CacheTrust = match serde_json::from_slice(&bytes) {
+        Ok(r) => r,
+        Err(e) => {
+            log::warn!("the cached bundle's trust record does not parse; ignoring it: {e}");
+            return None;
+        }
+    };
+    if record.sha256 != crate::apply::sha256_hex(bundle) {
+        log::warn!("the cached bundle's trust record is for another bundle; ignoring it");
+        return None;
+    }
+    (!record.trust.is_empty()).then_some(record.trust)
 }
 
 #[cfg(test)]
@@ -247,7 +319,7 @@ mod tests {
         // 带缓存包。
         let (_d2, state2, seed2) = dirs();
         fs::write(seed2.join("seed.toml"), &text).unwrap();
-        store_cache(&seed2, b"bundle-bytes").unwrap();
+        store_cache(&seed2, b"bundle-bytes", &[]).unwrap();
         assert_eq!(mode(&seed2.join("cache")), 0o700);
         assert_eq!(mode(&seed2.join(CACHE_BUNDLE)), 0o600);
         assert_eq!(
@@ -348,10 +420,62 @@ mod tests {
         assert!(is_mount_point(&d.path().join("absent")).is_err());
     }
 
+    fn key(id: &str) -> TrustKey {
+        TrustKey {
+            id: id.into(),
+            alg: mastersos_bundle::KeyAlg::Ed25519,
+            public_key: "AAAA".into(),
+            rp_id: None,
+        }
+    }
+
+    #[test]
+    fn cache_trust_is_read_back_only_for_the_same_bundle() {
+        let (_d, _state, seed) = dirs();
+        // Nothing cached yet.
+        assert!(load_cache_trust(&seed, b"v1").is_none());
+        store_cache(&seed, b"v1", &[key("k1"), key("k2")]).unwrap();
+        assert_eq!(mode(&seed.join("cache/verified-by.json")), 0o600);
+        let got = load_cache_trust(&seed, b"v1").unwrap();
+        assert_eq!(
+            got.iter().map(|k| k.id.as_str()).collect::<Vec<_>>(),
+            ["k1", "k2"]
+        );
+        // Other bytes than the record names (a power cut between the two writes, or a swapped bundle).
+        assert!(load_cache_trust(&seed, b"v2").is_none());
+        // A later bundle replaces both.
+        store_cache(&seed, b"v2", &[key("k2")]).unwrap();
+        assert!(load_cache_trust(&seed, b"v1").is_none());
+        assert_eq!(load_cache_trust(&seed, b"v2").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn cache_trust_that_is_empty_broken_or_too_large_is_ignored() {
+        let (_d, _state, seed) = dirs();
+        store_cache(&seed, b"v1", &[]).unwrap();
+        assert!(load_cache_trust(&seed, b"v1").is_none());
+        fs::write(seed.join("cache/verified-by.json"), b"{oops").unwrap();
+        assert!(load_cache_trust(&seed, b"v1").is_none());
+        // An unknown field is not read past.
+        let sha = crate::apply::sha256_hex(b"v1");
+        fs::write(
+            seed.join("cache/verified-by.json"),
+            format!(r#"{{"sha256":"{sha}","trust":[],"extra":1}}"#),
+        )
+        .unwrap();
+        assert!(load_cache_trust(&seed, b"v1").is_none());
+        fs::write(
+            seed.join("cache/verified-by.json"),
+            vec![b' '; MAX_CACHE_TRUST_BYTES + 1],
+        )
+        .unwrap();
+        assert!(load_cache_trust(&seed, b"v1").is_none());
+    }
+
     #[test]
     fn store_cache_requires_mounted_seed_dir() {
         let (d, _state, _seed) = dirs();
-        assert!(store_cache(&d.path().join("absent"), b"x").is_err());
+        assert!(store_cache(&d.path().join("absent"), b"x", &[]).is_err());
         assert!(!d.path().join("absent").exists());
     }
 }

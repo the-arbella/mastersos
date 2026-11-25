@@ -390,6 +390,12 @@ Order, per message (`core/mastersos-agent/src/inbox.rs`, `reset.rs`):
 
 `apply-local` does not run it (nothing destructive before GDM). The seed partition (seed, cached settings bundle,
 `identity.json`, `inbox-reset-seq`) survives, so the machine comes back in the school's Group with the school's settings.
+The cached bundle is the last version the machine accepted, kept with the keys that verified it
+(`cache/verified-by.json`): after the reset the machine accepts it with those keys and goes on from that version and that
+trust, also when the school replaced its keys after the install; without that record, or when it does not fit the cached
+bundle, the bundle is checked against the seed's keys. On the first boot after the reset `apply-local` applies the cached
+settings, then asks the server once within its 45-second budget and applies a newer version before the login screen
+(`docs/specs/2026-11-25-reset-keeps-settings-design.md`).
 
 ### 本机（启动菜单）
 
