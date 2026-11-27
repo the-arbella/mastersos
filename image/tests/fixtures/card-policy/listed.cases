@@ -13,3 +13,7 @@ block chrome://settings/
 block chrome://version/
 block chrome://flags/
 block chrome://policy/
+
+# The camera and the microphone: the issuer's own pages, not a listed card host.
+media https://sso.school.ac.th/signin
+nomedia https://cdn.school.ac.th/app.js

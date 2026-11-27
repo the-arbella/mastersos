@@ -2179,6 +2179,19 @@ if ! grep -qxF 'profile mastersos-login-browser flags=(attach_disconnected) {' "
 	bad 49 "$lbp should exist in enforce mode with no way out (no complain, unconfined or px/ux rule, no blanket path)"
 	r=1
 fi
+# The issuer's sign-in page may use the camera, the microphone and the speakers (the agent's policy names it alone): the
+# browser reaches the greeter's sound server and the cameras, and no sound device directly.
+for want in '  owner /run/user/[0-9]*/pulse/ r,' '  owner /run/user/[0-9]*/pulse/native rw,' '  /etc/pulse/ r,' \
+	'  /etc/pulse/** r,' '  /dev/video[0-9]* rw,' '  /run/udev/data/c81:* r,'; do
+	grep -qxF -- "$want" "$lbp" 2>/dev/null || {
+		bad 49 "$lbp should let the card's browser reach the sound server and the cameras: missing '$want'"
+		r=1
+	}
+done
+if grep -qE '^ *[^#]*/dev/snd' "$lbp" 2>/dev/null; then
+	bad 49 "$lbp should not open /dev/snd: sound goes through the greeter's sound server"
+	r=1
+fi
 grep -qE '^ +image/mkosi\.extra/usr/lib/mastersos/login-browser$' .github/workflows/mastersos.yml || {
 	bad 49 "the workflow should shellcheck login-browser"
 	r=1

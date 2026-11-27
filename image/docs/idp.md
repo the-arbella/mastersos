@@ -7,6 +7,8 @@
 - 学校账号在本机**没有密码**，没有离线登录，也不用手机扫码或设备码。每次登录、每次解锁都走完整验证；学校开了两步验证就每次都要做。
 - 卡片里的 Chrome 每次都是一次性配置，不留登录状态。没有地址栏和标签页，登录界面关掉它开出的任何别的窗口；3 分钟没有操作或打开满 10 分钟就自动关闭。
 - 默认（`card_navigation = "open"`）卡片能打开登录页链接或跳转到的任何 `https` 页面（上游身份系统、人机验证、CDN 都不用配置），设备 Config 的 `chrome_policy` `URLBlocklist` 在卡片里同样生效；`"listed"` 时只放行 issuer 和 `card_hosts`。
+- Camera, microphone and sound (2026-11-27): the issuer's own pages, and only they, get the camera and the microphone without a question and may play sound without a click, so the sign-in page can read a QR code or speak. Chrome's policy names the issuer's origin (`VideoCaptureAllowedUrls`, `AudioCaptureAllowedUrls`, `AutoplayAllowlist`: this host and port, no subdomain); every other page the card reaches is refused, an open card's included, and an issuer on plain http gets none. The sign-in page learns what the machine has from the browser itself (`navigator.mediaDevices.enumerateDevices()`); there is no MastersOS-specific interface. Bluetooth is not opened.
+- The card closes after 9 minutes 30 seconds (2026-11-25), half a minute before the sign-in service's own limit.
 - 设计：`docs/superpowers/specs/2026-11-01-mastersos-login-screen-design.md`。
 
 MastersOS 只认标准 OIDC，判断账号一律看 `email`，不写任何一家身份系统的专用逻辑。差异全部收在下面的配置项里。

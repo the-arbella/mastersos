@@ -18,3 +18,9 @@ block chrome://version/
 block chrome://flags/
 block chrome://policy/
 block ftp://example.org/file
+
+# The camera and the microphone: the issuer's own pages without a question, nobody else.
+media https://sso.school.ac.th/signin
+nomedia https://accounts.google.com/signin
+nomedia https://sso.school.ac.th.example.net/signin
+nomedia https://login.sso.school.ac.th/signin

@@ -1,8 +1,14 @@
 {
   "AllowFileSelectionDialogs": false,
   "AudioCaptureAllowed": false,
+  "AudioCaptureAllowedUrls": [
+    "https://sso.school.ac.th:443"
+  ],
   "AutofillAddressEnabled": false,
   "AutofillCreditCardEnabled": false,
+  "AutoplayAllowlist": [
+    "https://sso.school.ac.th:443"
+  ],
   "BrowserAddPersonEnabled": false,
   "BrowserGuestModeEnabled": false,
   "BrowserSignin": 0,
@@ -32,5 +38,8 @@
     "*",
     "chrome://*"
   ],
-  "VideoCaptureAllowed": false
+  "VideoCaptureAllowed": false,
+  "VideoCaptureAllowedUrls": [
+    "https://sso.school.ac.th:443"
+  ]
 }

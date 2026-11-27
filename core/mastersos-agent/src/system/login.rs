@@ -781,6 +781,17 @@ pub fn issuer_url_filter(issuer: &str) -> Option<String> {
     checks::is_dns_name(host).then(|| format!("{scheme}://.{host}:{port}"))
 }
 
+/// The issuer's origin as Chrome's per-site policies take it (`https://host:port`): this host only, no subdomain. `None`
+/// for an issuer on plain http (Chrome gives a camera to secure pages only) or one [`issuer_url_filter`] refuses.
+pub fn issuer_media_origin(issuer: &str) -> Option<String> {
+    let filter = issuer_url_filter(issuer)?;
+    let rest = filter.strip_prefix("https://")?;
+    Some(format!(
+        "https://{}",
+        rest.strip_prefix('.').unwrap_or(rest)
+    ))
+}
+
 /// The same pinned form for a `card_hosts` entry: https on 443, this host only. `None` for an invalid entry.
 pub fn card_host_url_filter(host: &str) -> Option<String> {
     checks::card_host(host)
@@ -833,7 +844,9 @@ pub fn card_device_blocks(chrome_policy: &toml::Table) -> Option<Vec<String>> {
 /// - [`CardNavigation::Listed`]: only the identity provider, the signed `card_hosts` and the redirect.
 ///
 /// Either way nothing a website could use to leave the card (downloads, new windows, printing, file dialogs, developer
-/// tools, extensions, a search engine for selected text) is available. `None` when the issuer gives no filter
+/// tools, extensions, a search engine for selected text) is available. The camera, the microphone and sound that starts
+/// by itself are the issuer's alone ([`issuer_media_origin`]), without a question: its sign-in page may read a QR code
+/// or speak. Every other page the card reaches is refused them, an open card's included. `None` when the issuer gives no filter
 /// ([`issuer_url_filter`]).
 pub fn render_login_browser_policy(
     oidc: &Oidc,
@@ -863,7 +876,7 @@ pub fn render_login_browser_policy(
         );
     }
     allow.push(LOGIN_REDIRECT_FILTER.into());
-    let policy = serde_json::json!({
+    let mut policy = serde_json::json!({
         "URLBlocklist": block,
         "URLAllowlist": allow,
         "DefaultSearchProviderEnabled": false,
@@ -890,6 +903,15 @@ pub fn render_login_browser_policy(
         "TranslateEnabled": false,
         "MetricsReportingEnabled": false,
     });
+    if let Some(origin) = issuer_media_origin(&oidc.issuer) {
+        for key in [
+            "VideoCaptureAllowedUrls",
+            "AudioCaptureAllowedUrls",
+            "AutoplayAllowlist",
+        ] {
+            policy[key] = serde_json::json!([origin]);
+        }
+    }
     serde_json::to_string_pretty(&policy).ok()
 }
 
@@ -4024,6 +4046,40 @@ client_id = "laptops"
             ("listed", render(&cdn(listed(sso())), NO_DEVICE_BLOCKS)),
             ("device-blocks-all", render(&cdn(sso()), None)),
         ]
+    }
+
+    /// The camera, the microphone and sound without a click are for the issuer's own pages (a QR code, a spoken
+    /// prompt), without a question and never for another page the open card reaches. An issuer on plain http gets none:
+    /// Chrome gives no camera to such a page anyway.
+    #[test]
+    fn card_policy_gives_the_camera_and_microphone_to_the_issuer_only() {
+        let render = |issuer: &str| -> serde_json::Value {
+            let text = render_login_browser_policy(&oidc(issuer), NO_DEVICE_BLOCKS).unwrap();
+            serde_json::from_str(&text).unwrap()
+        };
+        let v = render("https://sso.school.ac.th");
+        let origin = serde_json::json!(["https://sso.school.ac.th:443"]);
+        assert_eq!(v["VideoCaptureAllowed"], false);
+        assert_eq!(v["AudioCaptureAllowed"], false);
+        assert_eq!(v["VideoCaptureAllowedUrls"], origin);
+        assert_eq!(v["AudioCaptureAllowedUrls"], origin);
+        assert_eq!(v["AutoplayAllowlist"], origin);
+
+        let v = render("https://sso.school.ac.th:8443/realms/school");
+        assert_eq!(
+            v["VideoCaptureAllowedUrls"],
+            serde_json::json!(["https://sso.school.ac.th:8443"])
+        );
+
+        let v = render("http://127.0.0.5:5556");
+        for key in [
+            "VideoCaptureAllowedUrls",
+            "AudioCaptureAllowedUrls",
+            "AutoplayAllowlist",
+        ] {
+            assert!(v.get(key).is_none(), "{key} for an http issuer");
+        }
+        assert_eq!(v["VideoCaptureAllowed"], false);
     }
 
     #[test]
