@@ -2182,7 +2182,7 @@ fi
 # The issuer's sign-in page may use the camera, the microphone and the speakers (the agent's policy names it alone): the
 # browser reaches the greeter's sound server and the cameras, and no sound device directly.
 for want in '  owner /run/user/[0-9]*/pulse/ r,' '  owner /run/user/[0-9]*/pulse/native rw,' '  /etc/pulse/ r,' \
-	'  /etc/pulse/** r,' '  /dev/video[0-9]* rw,' '  /run/udev/data/** r,'; do
+	'  /etc/pulse/** r,' '  /dev/video[0-9]* rw,' '  /run/udev/data/c81:* r,'; do
 	grep -qxF -- "$want" "$lbp" 2>/dev/null || {
 		bad 49 "$lbp should let the card's browser reach the sound server and the cameras: missing '$want'"
 		r=1
