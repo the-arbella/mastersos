@@ -34,6 +34,12 @@ Erratum 5 (2026-11-23; no wire change): the production server is served on the o
 `https://cloud.arbellalabs.com`. §1.3, §3.7 and §3.8 hold as written: `server_url` is that origin, devices use
 `/api/device/v1/` and the CLI uses `/api/cli/v1/` on it.
 
+Erratum 6 (2026-11-27; no wire change): Erratum 4's sentence "the old name remains an alias" is withdrawn.
+`arbella fleet ...` is not a command, and neither are `devices` and `device` as old names for `list` and `show`
+inside the `arbella devices` group: each is a usage error (exit 2). Reason: every operator installs the `arbella`
+command line again at the cutover, so no installed command line survives that would need the old names. Where §4
+and §7 write `arbella fleet devices ...`, read `arbella devices ...`. Nothing on the wire changes.
+
 Scope: phase 1 of the server rewrite: keys, two-step publish, versions, heartbeat, bundle delivery, fetch
 token, device secret, status, escrow, fetch-token renewal, seeds, and the `mastersos` CLI's use of the server.
 Inbox/push (phase 2), diagnostics and help requests (phase 3) and logos (phase 4) are only reserved here (§3.9).
