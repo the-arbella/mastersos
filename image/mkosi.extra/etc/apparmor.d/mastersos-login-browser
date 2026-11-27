@@ -95,6 +95,15 @@ profile mastersos-login-browser flags=(attach_disconnected) {
   /sys/class/** r,
   /sys/fs/cgroup/** r,
 
+  # The issuer's sign-in page may use the camera, the microphone and the speakers; Chrome's policy (written by the agent)
+  # gives them to that page alone. Sound goes through the greeter's sound server, never to a sound device directly.
+  owner /run/user/[0-9]*/pulse/ r,
+  owner /run/user/[0-9]*/pulse/native rw,
+  /etc/pulse/ r,
+  /etc/pulse/** r,
+  /dev/video[0-9]* rw,
+  /run/udev/data/** r,
+
   # Spelled out for the review: none of this is in the list above anyway.
   deny /home/** rwlkmx,
   deny /root/** rwlkmx,

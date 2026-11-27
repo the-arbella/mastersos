@@ -8,3 +8,7 @@ block http://example.org/
 block file:///etc/passwd
 block chrome://settings/
 block chrome://version/
+
+# An issuer on plain http gets no camera.
+nomedia http://127.0.0.5:5556/signin
+nomedia https://example.net/other
