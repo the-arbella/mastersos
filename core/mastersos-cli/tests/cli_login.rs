@@ -47,7 +47,7 @@ async fn server() -> MockServer {
     Mock::given(method("GET"))
         .and(path("/api/cli/v1/auth-config"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "issuer": uri, "client_id": "mastersos-cli", "audience": "fleet-api",
+            "issuer": uri, "client_id": "mastersos-cli", "audience": "devices",
             "scopes": ["openid", "offline_access"], "step_up_acr": ""})))
         .mount(&s)
         .await;

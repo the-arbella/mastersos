@@ -662,7 +662,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "issuer": "https://issuer.example",
                     "client_id": "mastersos-cli",
-                    "audience": "fleet",
+                    "audience": "devices",
                     "scopes": ["openid", "offline_access"],
                     "step_up_acr": "",
                 },

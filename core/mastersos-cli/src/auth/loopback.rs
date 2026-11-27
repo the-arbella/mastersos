@@ -365,7 +365,7 @@ mod tests {
         assert_eq!(p("scope").as_deref(), Some("openid offline_access"));
         assert_eq!(p("prompt").as_deref(), Some("login"));
         assert_eq!(p("max_age").as_deref(), Some("0"));
-        assert_eq!(p("resource").as_deref(), Some("fleet-api"));
+        assert_eq!(p("resource").as_deref(), Some("devices"));
         assert_eq!(p("audience"), None);
         assert_eq!(p("acr_values"), None);
         assert_eq!(p("code_challenge_method").as_deref(), Some("S256"));
@@ -413,7 +413,7 @@ mod tests {
             param(&auth, "acr_values").as_deref(),
             Some("urn:example:mfa")
         );
-        assert_eq!(param(&auth, "resource").as_deref(), Some("fleet-api"));
+        assert_eq!(param(&auth, "resource").as_deref(), Some("devices"));
         assert_eq!(param(&auth, "audience"), None);
     }
 
