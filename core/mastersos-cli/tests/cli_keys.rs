@@ -35,7 +35,7 @@ fn signed_in(uri: &str) -> tempfile::TempDir {
         server_url: uri.to_owned(),
         issuer: "https://issuer.example".into(),
         client_id: "mastersos-cli".into(),
-        audience: "fleet".into(),
+        audience: "devices".into(),
         scopes: vec!["openid".into()],
         step_up_acr: String::new(),
         access_token: "SECRET-ACCESS".into(),

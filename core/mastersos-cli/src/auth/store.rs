@@ -258,7 +258,7 @@ mod tests {
             server_url: server.into(),
             issuer: issuer.into(),
             client_id: "mastersos-cli".into(),
-            audience: "fleet-api".into(),
+            audience: "devices".into(),
             scopes: vec!["openid".into()],
             step_up_acr: String::new(),
             access_token: "SECRET-ACCESS".into(),

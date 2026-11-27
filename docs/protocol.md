@@ -2,8 +2,8 @@
 
 Status: **agreed and frozen** (2026-11-19, draft 2), signed by both parties and implemented exactly as written.
 Parties: **the settings server** and **mastersos** (agent, `mastersos` CLI, seed, Rust). Each party signed off
-only when it was sure it could implement its side; since both signed, the text is frozen and a change is made
-only as an erratum.
+only when it was sure it could implement its side; since both signed, the text is frozen. Until the
+protocol's first release the text is edited in place; from then on a change is made only as an erratum.
 
 This is the public copy. The frozen text is kept with the settings server; this copy leaves out its section 0
 (the server operator's own notes) and names the server-side products by their roles: "the settings server",

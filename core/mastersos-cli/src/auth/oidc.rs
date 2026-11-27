@@ -453,7 +453,7 @@ pub(crate) mod tests {
         AuthConfig {
             issuer: issuer.to_string(),
             client_id: "mastersos-cli".into(),
-            audience: "fleet-api".into(),
+            audience: "devices".into(),
             scopes: vec!["openid".into(), "offline_access".into()],
             step_up_acr: acr.into(),
         }
@@ -574,7 +574,7 @@ pub(crate) mod tests {
         assert_eq!(get(&dev, "client_id"), Some("mastersos-cli"));
         assert_eq!(get(&dev, "scope"), Some("openid offline_access"));
         // RFC 8707: the audience is a resource, never `audience=`.
-        assert_eq!(get(&dev, "resource"), Some("fleet-api"));
+        assert_eq!(get(&dev, "resource"), Some("devices"));
         assert_eq!(get(&dev, "audience"), None);
         for r in &reqs[1..] {
             let f = form(r);
