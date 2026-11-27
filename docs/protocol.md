@@ -8,8 +8,7 @@ only as an erratum.
 This is the public copy. The frozen text is kept with the settings server; this copy leaves out its section 0
 (the server operator's own notes) and names the server-side products by their roles: "the settings server",
 "the identity provider", and `arbella`, the optional credential helper. The meaning is identical. Names on the
-wire that contain the word `fleet` (the access-token audience `fleet`, the field `fleet_url`) are part of the
-protocol and are written as they are.
+wire that contain the word `fleet` (the field `fleet_url`) are part of the protocol and are written as they are.
 
 Erratum 1 (2026-11-19; clarifies §4.1 and §6, no wire change): the identity provider decides the sign-in
 factors, and the server trusts it. "Step-up" means a fresh sign-in: a token whose `auth_time` is at most 5 minutes
@@ -25,14 +24,10 @@ operator commands of §5 keep their arguments and meaning and are subcommands of
 `mastersos fetch-token drop-retired <school>`.
 
 Erratum 4 (2026-11-23; no wire change): nothing on the wire is renamed by Erratum 3: paths under `/api/cli/v1/`
-and `/api/device/v1/`, the access-token audience `fleet`, the field `fleet_url` of `arbella auth token --json`,
+and `/api/device/v1/`, the field `fleet_url` of `arbella auth token --json`,
 the error envelope and codes, and `schools/{school}` (the identity provider's organisation id) stay as written.
 `arbella fleet devices ...` in §4 and §7 is `arbella devices ...`; the old name remains an alias. The `arbella`
 command line and the cross-language harness of §8 are kept with the settings server.
-
-Erratum 5 (2026-11-23; no wire change): the production server is served on the origin
-`https://cloud.arbellalabs.com`. §1.3, §3.7 and §3.8 hold as written: `server_url` is that origin, devices use
-`/api/device/v1/` and the CLI uses `/api/cli/v1/` on it.
 
 Erratum 6 (2026-11-27; no wire change): Erratum 4's sentence "the old name remains an alias" is withdrawn.
 `arbella fleet ...` is not a command, and neither are `devices` and `device` as old names for `list` and `show`
@@ -51,8 +46,10 @@ Inbox/push (phase 2), diagnostics and help requests (phase 3) and logos (phase 4
    can (digest, signatures, registered keys, order) and trusts the frame for the rest; devices verify
    everything themselves, so a wrong frame can stall a rollout but never make a device accept a bad version.
 2. **The server never signs** settings or heartbeats and never sees a private key or a recovery key.
-3. **One origin, two prefixes**: devices use `/api/device/v1/`, the CLI uses `/api/cli/v1/`. The school is
-   identified by the credential, never by the URL path for devices.
+3. **One origin, two prefixes**: devices use `/api/device/v1/`, the CLI uses `/api/cli/v1/`, both on the server
+   origin (`server_url`). The school is identified by the credential, never by the URL path for devices. The
+   issuer is a separate origin: the server names it in `auth-config` (§6), and a school's settings name it in
+   `[school.oidc] issuer`. Nothing derives one origin from the other.
 4. **Formats are byte-exact and shared**: archive, content digest, signed messages, heartbeat, key ids,
    fingerprints, escrow envelope and `recipients_fp` are defined in `mastersos-bundle` and its `testdata/`
    vectors; the server reimplements them and runs the same vectors.
@@ -173,7 +170,7 @@ code. A 404 with any other code keeps its current meaning.
 
 ### 4.1 Auth
 
-- `Authorization: Bearer <access token>` from the identity provider (audience `fleet`); the caller must be an admin of
+- `Authorization: Bearer <access token>` from the identity provider (audience `devices`, as `auth-config` states it); the caller must be an admin of
   `{school}` (the server's rules for people). `{school}` is the identity provider's organisation id (lowercase UUID); a school that has
   not been enabled for MastersOS (§5.1) answers `404 not_found` on every path below.
 - **Step-up** (fresh sign-in, Erratum 1; `401 step_up_required` with the RFC 9470 challenge)
